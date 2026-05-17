@@ -1,0 +1,288 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Roomba+",
+        "description": "Select a discovered Roomba or add one manually.",
+        "data": {
+          "host": "Select robot"
+        }
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter the IP address of your Roomba. You can find credentials at [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "host": "IP address"
+        },
+        "data_description": {
+          "host": "Local IP address of your Roomba"
+        }
+      },
+      "link": {
+        "title": "Link robot",
+        "description": "Press and hold the **HOME** button on your {name} until it plays a series of tones (about 2 seconds), then release. The Wi-Fi LED will flash."
+      },
+      "link_manual": {
+        "title": "Enter password",
+        "description": "Automatic password retrieval failed. Enter your Roomba password manually. Instructions: [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the robot. Verify it is powered on and reachable.",
+      "invalid_auth": "Invalid credentials. Check your BLID and password.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This robot is already configured.",
+      "not_irobot_device": "The discovered device is not an iRobot device.",
+      "short_blid": "A configuration flow for this robot is already in progress.",
+      "cannot_connect": "Cannot reach the robot at the specified address."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Roomba+ connection settings",
+        "data": {
+          "continuous": "Continuous connection",
+          "delay": "Reconnect delay (seconds)",
+          "map_enabled": "Live-Karte aktivieren",
+          "map_size_px": "Kartengröße (Pixel)",
+          "map_scale_mm_per_px": "Maßstab (mm/Pixel)"
+        },
+        "data_description": {
+          "continuous": "Persistente MQTT-Verbindung zum Roboter halten.",
+          "delay": "Wartezeit zwischen Wiederverbindungsversuchen in Sekunden.",
+          "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung.",
+          "map_size_px": "Bildgröße der Karte (400–1200 px). Standard: 600.",
+          "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 = 6m × 6m bei 600 px."
+        }
+      },
+      "zones": {
+        "title": "Erkannte Räume benennen",
+        "description": "{zone_count} neue Bereiche wurden erkannt. Bitte Namen vergeben:"
+      },
+      "calibration": {
+        "title": "Karten-Kalibrierung",
+        "description": "Gemessene Türbreite: {measured_cm} cm. Tatsächliche Breite auswählen:",
+        "data": {
+          "door_width_mm": "Türbreite"
+        }
+      },
+      "smart_zones": {
+        "title": "Name Smart Map zones",
+        "description": "{zone_count} zone(s) have no name yet (IDs: {zone_ids}). Assign names so you can clean them individually:"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_cycles": {
+        "name": "Maintenance – Battery cycles"
+      },
+      "total_cleaning_time": {
+        "name": "Missions – Total time"
+      },
+      "average_mission_time": {
+        "name": "Missions – Avg. duration"
+      },
+      "total_missions": {
+        "name": "Missions total"
+      },
+      "successful_missions": {
+        "name": "Missions successful"
+      },
+      "canceled_missions": {
+        "name": "Missions canceled"
+      },
+      "failed_missions": {
+        "name": "Missions failed"
+      },
+      "total_cleaned_area": {
+        "name": "Missions – Cleaned area"
+      },
+      "last_mission": {
+        "name": "Missions – Last"
+      },
+      "phase": {
+        "name": "Status"
+      },
+      "error": {
+        "name": "Status – Error"
+      },
+      "job_initiator": {
+        "name": "Status – Started by"
+      },
+      "clean_mode": {
+        "name": "Setting – Cleaning passes"
+      },
+      "scrubs_count": {
+        "name": "Dirt detect events"
+      },
+      "rssi": {
+        "name": "Wi-Fi signal"
+      },
+      "filter_remaining_hours": {
+        "name": "Maintenance – Filter"
+      },
+      "brush_remaining_hours": {
+        "name": "Maintenance – Brushes"
+      },
+      "carpet_boost_mode": {
+        "name": "Setting – Carpet boost"
+      },
+      "clean_base_status": {
+        "name": "Clean Base status"
+      },
+      "dock_tank_level": {
+        "name": "Dock tank level"
+      },
+      "tank_level": {
+        "name": "Tank level"
+      },
+      "mop_pad": {
+        "name": "Mop pad"
+      },
+      "mop_behavior": {
+        "name": "Mop behavior"
+      },
+      "mop_tank_level": {
+        "name": "Mop tank level"
+      },
+      "readiness": {
+        "name": "Status – Readiness"
+      },
+      "next_clean": {
+        "name": "Status – Next clean"
+      },
+      "nav_quality": {
+        "name": "Navigation quality"
+      },
+      "snr": {
+        "name": "SNR"
+      },
+      "signal_noise": {
+        "name": "Signal noise"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "mission_start_time": {
+        "name": "Mission start"
+      },
+      "mission_elapsed_time": {
+        "name": "Mission elapsed time"
+      },
+      "mission_recharge_time": {
+        "name": "Recharge time"
+      },
+      "mission_expire_time": {
+        "name": "Mission expire time"
+      }
+    },
+    "binary_sensor": {
+      "bin_full": {
+        "name": "Bin full"
+      },
+      "connected": {
+        "name": "Connected"
+      },
+      "bin_present": {
+        "name": "Bin present"
+      },
+      "mop_ready": {
+        "name": "Mop problem"
+      }
+    },
+    "button": {
+      "evac": {
+        "name": "Action – Empty bin"
+      },
+      "locate": {
+        "name": "Action – Find robot"
+      },
+      "reset_filter": {
+        "name": "Maintenance – Confirm filter replacement"
+      },
+      "reset_brush": {
+        "name": "Maintenance – Confirm brush replacement"
+      },
+      "reset_battery": {
+        "name": "Maintenance – Confirm battery replacement"
+      },
+      "clean_zone": {
+        "name": "Clean zone"
+      },
+      "repeat_mission": {
+        "name": "Repeat last mission"
+      },
+      "clean_smart_zone": {
+        "name": "Clean zone (Smart Map)"
+      }
+    },
+    "switch": {
+      "edge_clean": {
+        "name": "Setting – Edge cleaning"
+      },
+      "always_finish": {
+        "name": "Setting – Always finish"
+      },
+      "schedule_hold": {
+        "name": "Setting – Schedule hold"
+      }
+    },
+    "select": {
+      "cleaning_passes": {
+        "name": "Setting – Cleaning passes"
+      },
+      "zone_select": {
+        "name": "Select zone"
+      },
+      "smart_zone_select": {
+        "name": "Select Smart Map zone"
+      }
+    },
+    "image": {
+      "map": {
+        "name": "Cleaning map"
+      }
+    }
+  },
+  "issues": {
+    "zones_need_naming": {
+      "title": "New rooms detected",
+      "description": "Roomba+ has detected new areas. Please name them in the integration settings.",
+      "fix_flow": {
+        "step": {
+          "zones": {
+            "title": "Name rooms"
+          }
+        }
+      }
+    },
+    "smart_zones_need_naming": {
+      "title": "New Smart Map zones discovered",
+      "description": "Roomba+ has discovered {zone_count} new zone(s) ({zone_ids}) that have no name yet. Please name them in the integration settings.",
+      "fix_flow": {
+        "step": {
+          "smart_zones": {
+            "title": "Name Smart Map zones"
+          }
+        }
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "cleaning_started": "Cleaning started",
+      "cleaning_finished": "Cleaning finished",
+      "stuck": "Robot stuck",
+      "bin_full": "Bin full",
+      "docked": "Docked",
+      "error": "Error reported"
+    }
+  }
+}
