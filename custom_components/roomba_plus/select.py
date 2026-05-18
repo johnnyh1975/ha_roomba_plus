@@ -239,12 +239,26 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         return sorted(region_ids, key=lambda x: x.zfill(4))
 
     def _unlabelled_region_ids(self) -> list[str]:
-        """Return region_ids that have no user-assigned label yet."""
+        """Return region_ids that have no user-assigned label yet.
+
+        Checks smart_zone_data first (new storage), then falls back to
+        smart_zone_labels (legacy) so existing installs aren't re-prompted.
+        """
+        zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
         labels: dict = self._config_entry.options.get("smart_zone_labels", {})
-        return [rid for rid in self._collect_region_ids() if rid not in labels]
+        named = set(zone_data) | set(labels)
+        return [rid for rid in self._collect_region_ids() if rid not in named]
 
     def _region_label(self, region_id: str) -> str:
-        """Return user-assigned name or auto-generated label."""
+        """Return user-assigned name or auto-generated label.
+
+        Reads smart_zone_data first (written by the new config_flow step),
+        falls back to the older flat smart_zone_labels dict for entries
+        created before this version.
+        """
+        zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
+        if region_id in zone_data:
+            return zone_data[region_id].get("name", f"Zone {region_id}")
         labels: dict = self._config_entry.options.get("smart_zone_labels", {})
         return labels.get(region_id, f"Zone {region_id}")
 

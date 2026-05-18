@@ -15,6 +15,17 @@ import types
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
+# ── voluptuous stub ───────────────────────────────────────────────────────────
+# __init__.py now imports voluptuous for service schema validation.
+# Stub it minimally so that module-level imports succeed in test env.
+_vol = types.ModuleType("voluptuous")
+_vol.Schema = lambda *a, **kw: (lambda x: x)
+_vol.Required = lambda key, **kw: key
+_vol.Optional = lambda key, **kw: key
+_vol.Any = lambda *a, **kw: a[0] if a else None
+_vol.All = lambda *a, **kw: a[0] if a else None
+sys.modules["voluptuous"] = _vol
+
 # ── 2. Stub: roombapy ─────────────────────────────────────────────────────────
 roombapy = types.ModuleType("roombapy")
 
@@ -41,7 +52,7 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
     return m
 
 # homeassistant.core
-ha_core = _make_module("homeassistant.core", HomeAssistant=object, callback=lambda f: f, CALLBACK_TYPE=object)
+ha_core = _make_module("homeassistant.core", HomeAssistant=object, callback=lambda f: f, CALLBACK_TYPE=object, ServiceCall=object)
 
 # homeassistant.const
 ha_const = _make_module("homeassistant.const",
@@ -68,7 +79,11 @@ ha_const = _make_module("homeassistant.const",
 )
 
 # homeassistant.exceptions
-_make_module("homeassistant.exceptions", HomeAssistantError=Exception, ConfigEntryNotReady=Exception)
+_make_module("homeassistant.exceptions",
+    HomeAssistantError=Exception,
+    ConfigEntryNotReady=Exception,
+    ServiceValidationError=Exception,
+)
 
 # homeassistant.helpers.storage
 class _Store:
@@ -93,13 +108,19 @@ ha_dr = _make_module("homeassistant.helpers.device_registry",
 
 # homeassistant.helpers (parent)
 ha_typing = _make_module("homeassistant.helpers.typing", StateType=type(None))
-_make_module("homeassistant.helpers.config_validation", ensure_list=list)
+_make_module("homeassistant.helpers.config_validation",
+    ensure_list=list,
+    string=str,
+    boolean=bool,
+    entity_ids=list,
+)
 
 ha_helpers = _make_module("homeassistant.helpers",
     storage=ha_storage,
     entity_registry=ha_er,
     device_registry=ha_dr,
     typing=ha_typing,
+    config_validation=sys.modules["homeassistant.helpers.config_validation"],
 )
 
 # homeassistant.util.dt

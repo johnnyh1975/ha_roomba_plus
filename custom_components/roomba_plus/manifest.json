@@ -1,7 +1,7 @@
 {
   "domain": "roomba_plus",
   "name": "Roomba+",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "codeowners": [
     "@johnnyh1975"
   ],
@@ -19,6 +19,7 @@
     "paho_mqtt",
     "roombapy"
   ],
+  "services": "services.yaml",
   "requirements": [
     "roombapy==1.9.1"
   ],

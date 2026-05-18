@@ -49,6 +49,15 @@ DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
 
 ROOMBA_SESSION: Final = "roomba_session"
 
+# ── clean_room action ─────────────────────────────────────────────────────────
+SERVICE_CLEAN_ROOM: Final = "clean_room"
+ATTR_ROOM_NAME: Final = "room_name"
+ATTR_ORDERED: Final = "ordered"
+# Options key — stores {region_id: {name, pmap_id}} for smart-map robots.
+# Replaces the older flat smart_zone_labels dict; both are written on save
+# so that a rollback to an older version still sees the label names.
+CONF_SMART_ZONE_DATA: Final = "smart_zone_data"
+
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width
 

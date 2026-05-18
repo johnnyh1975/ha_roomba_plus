@@ -1,6 +1,7 @@
 """Base entity class for Roomba+ integration."""
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any
 
@@ -109,7 +110,7 @@ class IRobotEntity(Entity):
         ts = self.clean_mission_status.get("mssnStrtTm")
         if ts is None or ts == 0:
             return None
-        return dt_util.utc_from_timestamp(ts)
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
 
     # ── Push update wiring ────────────────────────────────────────────────────
 

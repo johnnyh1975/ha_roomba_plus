@@ -29,9 +29,10 @@ Persistence:
 from __future__ import annotations
 
 import collections
+import datetime
 import io
 import logging
-from datetime import datetime
+from datetime import datetime as dt_datetime
 from typing import Any
 
 from homeassistant.components.image import ImageEntity
@@ -130,7 +131,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._mission_points: list[tuple[float, float]] = []
 
         # Initial timestamp so frontend knows an image exists from the start
-        self._attr_image_last_updated: datetime = dt_util.utcnow()
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
 
     # ── HA lifecycle ──────────────────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if self._renderer:
             self._renderer.add_pose(x, y, theta)
         self._mission_points.append((x, y))
-        self._attr_image_last_updated = dt_util.utcnow()
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
     def _handle_mission_end(self) -> None:
         if not self._mission_points:
@@ -222,7 +223,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if (self._map_capability == MapCapability.EPHEMERAL
                 and self._zone_store
                 and len(self._mission_points) >= 20):
-            ts = dt_util.as_timestamp(dt_util.utcnow())
+            ts = dt_util.now(datetime.timezone.utc).timestamp()
             new_zones = self._zone_store.process_mission(self._mission_points, ts)
             if new_zones:
                 self.hass.async_create_task(self._trigger_zone_issue())
@@ -276,7 +277,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         if self._renderer.restore_state(data):
             # Bump image_last_updated so the frontend fetches the restored image
-            self._attr_image_last_updated = dt_util.utcnow()
+            self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
             _LOGGER.debug(
                 "Map: restored %d points from storage",
                 self._renderer.point_count,

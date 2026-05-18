@@ -43,6 +43,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
+import datetime
 import datetime as dt_stdlib
 
 from homeassistant.util import dt as dt_util
@@ -125,7 +126,7 @@ def _mission_elapsed_value(entity: "IRobotEntity") -> float | None:
     if not ts:
         return None
     try:
-        elapsed = dt_util.utcnow() - dt_util.utc_from_timestamp(ts)
+        elapsed = dt_util.now(datetime.timezone.utc) - datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
         return round(elapsed.total_seconds() / 60, 1)
     except (TypeError, ValueError, OSError):
         return None
@@ -136,7 +137,7 @@ def _ts_or_none(ts):
     if not ts or ts == 0:
         return None
     try:
-        return dt_util.utc_from_timestamp(ts)
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
     except (TypeError, ValueError, OSError):
         return None
 
@@ -498,6 +499,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
 )
 
+# Raw state sensor is not in SENSORS tuple — it has a bespoke entity class
+# (RawStateSensor) that exposes the full vacuum_state as extra_state_attributes.
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -509,11 +513,14 @@ async def async_setup_entry(
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
 
-    async_add_entities(
+    entities = [
         RoombaSensor(roomba, blid, description, config_entry)
         for description in SENSORS
         if description.filter_fn(state)
-    )
+    ]
+    # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
+    entities.append(RawStateSensor(roomba, blid))
+    async_add_entities(entities)
 
 
 class RoombaSensor(IRobotEntity, SensorEntity):
@@ -664,3 +671,52 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             candidates.append(candidate)
 
         return min(candidates) if candidates else None
+
+
+class RawStateSensor(IRobotEntity, SensorEntity):
+    """Opt-in sensor that exposes the full MQTT state as extra_state_attributes.
+
+    The sensor state value is a simple count of top-level keys in the reported
+    state — useful as a change indicator. All actual data lives in attributes.
+
+    Disabled by default — must be explicitly enabled in the HA UI.
+    Intended for power users and debugging unknown robot models.
+    """
+
+    _attr_translation_key = "raw_state"
+    _attr_icon = "mdi:code-json"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_raw_state"
+
+    @property
+    def native_value(self) -> int:
+        """Return count of top-level reported state keys."""
+        return len(self.vacuum_state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the full reported state as attributes.
+
+        Complex nested values (dicts, lists) are JSON-serialised to strings
+        so that HA's attribute storage never receives un-serialisable objects.
+        All values are HA-safe primitives after this conversion.
+        """
+        import json as _json
+        result: dict[str, Any] = {}
+        for key, value in self.vacuum_state.items():
+            if isinstance(value, (dict, list)):
+                try:
+                    result[key] = _json.dumps(value, default=str)
+                except Exception:  # noqa: BLE001
+                    result[key] = str(value)
+            else:
+                result[key] = value
+        return result
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        # Update on any MQTT message — this is a catch-all debug sensor
+        return True

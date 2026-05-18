@@ -432,12 +432,45 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             new_labels = dict(existing_labels)
+            new_zone_data: dict = dict(
+                self.config_entry.options.get("smart_zone_data", {})
+            )
+
+            # Capture pmap_id from live state at naming time.
+            # Use lastCommand first (most recent), fall back to cleanSchedule2.
+            current_pmap_id: str = ""
+            last = state.get("lastCommand", {})
+            if last.get("pmap_id"):
+                current_pmap_id = last["pmap_id"]
+            else:
+                for entry in state.get("cleanSchedule2", []):
+                    cmd = entry.get("cmd", {})
+                    if cmd.get("pmap_id"):
+                        current_pmap_id = cmd["pmap_id"]
+                        break
+
             for rid in unlabelled:
                 label = user_input.get(f"zone_{rid}", "").strip()
                 if label:
                     new_labels[rid] = label
+                    # Build per-region pmap_id: prefer a region-specific match
+                    # from lastCommand if available, otherwise use current_pmap_id.
+                    pmap_for_rid = current_pmap_id
+                    if last.get("pmap_id") and any(
+                        r.get("region_id") == rid
+                        for r in last.get("regions", [])
+                    ):
+                        pmap_for_rid = last["pmap_id"]
+                    new_zone_data[rid] = {
+                        "name": label,
+                        "pmap_id": pmap_for_rid,
+                    }
+
             new_options = dict(self.config_entry.options)
+            # Write both keys: smart_zone_labels for backward compat,
+            # smart_zone_data for the clean_room action.
             new_options["smart_zone_labels"] = new_labels
+            new_options["smart_zone_data"] = new_zone_data
             return self.async_create_entry(title="", data=new_options)
 
         if not unlabelled:

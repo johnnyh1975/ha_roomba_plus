@@ -50,6 +50,8 @@ async def async_setup_entry(
     # Mop ready: only for Braava (mopReady dict present in state)
     if "mopReady" in state:
         entities.append(RoombaMopReadyStatus(roomba, blid))
+        entities.append(RoombaMopTankPresentStatus(roomba, blid))
+        entities.append(RoombaMopLidClosedStatus(roomba, blid))
 
     async_add_entities(entities)
 
@@ -178,6 +180,68 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
             "tank_present": mop_ready.get("tankPresent"),
             "lid_closed": mop_ready.get("lidClosed"),
         }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "mopReady" in new_state
+
+
+class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
+    """Binary sensor that is ON when the Braava water tank is inserted.
+
+    Separate from the combined mop_ready sensor to allow automations that
+    specifically check whether the tank has been removed or forgotten.
+    Only created on Braava m6 (mopReady present in state).
+    """
+
+    _attr_translation_key = "mop_tank_present"
+    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when the water tank is inserted."""
+        return bool(
+            roomba_reported_state(self.vacuum)
+            .get("mopReady", {})
+            .get("tankPresent", True)
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "mopReady" in new_state
+
+
+class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
+    """Binary sensor that is ON when the Braava lid is closed.
+
+    Separate from the combined mop_ready sensor to allow automations that
+    specifically alert when the lid has been left open after a pad change.
+    Only created on Braava m6 (mopReady present in state).
+    """
+
+    _attr_translation_key = "mop_lid_closed"
+    _attr_device_class = BinarySensorDeviceClass.OPENING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_lid_closed"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when the lid is OPEN (OPENING device class: ON = open).
+
+        Note the inversion: OPENING is ON when open. The lid being open is
+        the alert condition, consistent with door/window sensors in HA.
+        """
+        return not bool(
+            roomba_reported_state(self.vacuum)
+            .get("mopReady", {})
+            .get("lidClosed", True)
+        )
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "mopReady" in new_state

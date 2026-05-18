@@ -13,6 +13,8 @@ from typing import Any
 
 from roombapy import Roomba, RoombaConnectionError, RoombaFactory
 
+import voluptuous as vol
+
 from homeassistant import exceptions
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -23,14 +25,20 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    ATTR_ORDERED,
+    ATTR_ROOM_NAME,
     CONF_BLID,
     CONF_CONTINUOUS,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
+    CONF_SMART_ZONE_DATA,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
     DEFAULT_MAP_ENABLED,
@@ -39,6 +47,7 @@ from .const import (
     DOMAIN,
     LOCAL_PLATFORMS,
     ROOMBA_SESSION,
+    SERVICE_CLEAN_ROOM,
     has_pose,
     has_smart_map,
 )
@@ -48,6 +57,172 @@ from .models import MapCapability, RoombaConfigEntry, RoombaData
 from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# ── clean_room helpers ────────────────────────────────────────────────────────
+
+def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
+    """Return the current user_pmapv_id for pmap_id from live MQTT state.
+
+    Always reads state.pmaps at call time so the value is never stale.
+    iRobot updates user_pmapv_id whenever the map is edited or retrained;
+    a cached value silently causes the robot to reject the command.
+    """
+    for pmap in state.get("pmaps", []):
+        if pmap_id in pmap:
+            return pmap[pmap_id]
+    return None
+
+
+def _resolve_rooms(
+    zone_data: dict[str, dict],
+    room_names: list[str],
+) -> list[tuple[str, str]]:
+    """Resolve room names to (region_id, pmap_id) tuples.
+
+    Args:
+        zone_data: smart_zone_data from config_entry.options —
+                   {region_id: {"name": str, "pmap_id": str}}
+        room_names: user-supplied room names from the service call.
+
+    Returns:
+        Ordered list of (region_id, pmap_id) matching each room name.
+
+    Raises:
+        ServiceValidationError: if any name is unknown, or if the resolved
+            rooms span more than one pmap_id (different floors).
+    """
+    # Build a case-insensitive name → (region_id, pmap_id) index.
+    index: dict[str, tuple[str, str]] = {
+        meta["name"].casefold(): (rid, meta["pmap_id"])
+        for rid, meta in zone_data.items()
+        if meta.get("name") and meta.get("pmap_id")
+    }
+
+    resolved: list[tuple[str, str]] = []
+    unknown: list[str] = []
+
+    for name in room_names:
+        match = index.get(name.casefold())
+        if match is None:
+            unknown.append(name)
+        else:
+            resolved.append(match)
+
+    if unknown:
+        raise ServiceValidationError(
+            f"Unknown room(s): {', '.join(unknown)}. "
+            f"Known rooms: {', '.join(meta['name'] for meta in zone_data.values() if meta.get('name'))}",
+            translation_domain=DOMAIN,
+            translation_key="rooms_not_found",
+            translation_placeholders={"names": ", ".join(unknown)},
+        )
+
+    pmap_ids = {pmap_id for _, pmap_id in resolved}
+    if len(pmap_ids) > 1:
+        raise ServiceValidationError(
+            "All rooms must be on the same floor (same pmap). "
+            f"Got rooms from maps: {', '.join(pmap_ids)}",
+            translation_domain=DOMAIN,
+            translation_key="rooms_different_floors",
+            translation_placeholders={"pmap_ids": ", ".join(pmap_ids)},
+        )
+
+    return resolved
+
+
+async def _async_handle_clean_room(call: ServiceCall) -> None:
+    """Handle the roomba_plus.clean_room service call.
+
+    Resolves room names → region_ids, looks up the fresh user_pmapv_id from
+    live MQTT state, and fires a region-targeted start command.
+
+    Only works for MapCapability.SMART robots (i7 / s9 / j-series).
+    """
+    hass = call.hass
+    entity_ids: list[str] = call.data["entity_id"]
+    room_names: list[str] = (
+        [call.data[ATTR_ROOM_NAME]]
+        if isinstance(call.data[ATTR_ROOM_NAME], str)
+        else call.data[ATTR_ROOM_NAME]
+    )
+    ordered: bool = call.data[ATTR_ORDERED]
+
+    ent_reg = er.async_get(hass)
+
+    for entity_id in entity_ids:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None:
+            raise ServiceValidationError(f"Entity {entity_id} not found")
+
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
+            entry.config_entry_id
+        )
+        if config_entry is None:
+            raise ServiceValidationError(
+                f"No config entry for {entity_id}"
+            )
+
+        data: RoombaData = config_entry.runtime_data
+
+        if data.map_capability != MapCapability.SMART:
+            raise ServiceValidationError(
+                f"{entity_id} does not support Smart Map room cleaning. "
+                "Only i7, s9, and j-series robots support this action.",
+                translation_domain=DOMAIN,
+                translation_key="not_smart_map",
+            )
+
+        zone_data: dict = config_entry.options.get(CONF_SMART_ZONE_DATA, {})
+        if not zone_data:
+            raise ServiceValidationError(
+                "No rooms configured yet. Run a room-targeted clean via the "
+                "iRobot app first, then assign names in the Roomba+ options.",
+                translation_domain=DOMAIN,
+                translation_key="no_rooms_configured",
+            )
+
+        # Resolve names → (region_id, pmap_id) — raises on unknown or cross-floor.
+        resolved = _resolve_rooms(zone_data, room_names)
+
+        pmap_id = resolved[0][1]  # all share one pmap_id (enforced by _resolve_rooms)
+        state = roomba_reported_state(data.roomba)
+
+        # Always read user_pmapv_id from live MQTT state — never from cache.
+        user_pmapv_id = _resolve_pmapv_id(state, pmap_id)
+        if user_pmapv_id is None:
+            _LOGGER.warning(
+                "clean_room: pmap_id %s not found in live state for %s. "
+                "The map may have been retrained. Re-run a mission via the app.",
+                pmap_id, entity_id,
+            )
+            raise ServiceValidationError(
+                f"Map {pmap_id} not found in robot state. "
+                "The map may have been retrained — re-run a room mission via the app.",
+                translation_domain=DOMAIN,
+                translation_key="pmap_not_found",
+            )
+
+        params = {
+            "ordered": 1 if ordered else 0,
+            "pmap_id": pmap_id,
+            "user_pmapv_id": user_pmapv_id,
+            "regions": [
+                {"region_id": rid, "type": "rid"}
+                for rid, _ in resolved
+            ],
+        }
+
+        _LOGGER.info(
+            "clean_room: %s → regions=%s map=%s",
+            entity_id,
+            [rid for rid, _ in resolved],
+            pmap_id[:12],
+        )
+
+        await hass.async_add_executor_job(
+            data.roomba.send_command, "start", params
+        )
 
 
 async def async_setup_entry(
@@ -141,6 +316,28 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
+    # ── clean_room service ──────────────────────────────────────────────────
+    # Register once on first entry setup; subsequent entries reuse the same
+    # handler which dispatches by entity_id.
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ROOM):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAN_ROOM,
+            _async_handle_clean_room,
+            schema=vol.Schema(
+                {
+                    vol.Required("entity_id"): cv.entity_ids,
+                    vol.Required(ATTR_ROOM_NAME): vol.Any(
+                        cv.string,
+                        vol.All(cv.ensure_list, [cv.string]),
+                    ),
+                    vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
+                }
+            ),
+            supports_response=None,
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
+
     # Reload on options change (continuous/delay require reconnect)
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_reload_on_options_change)
@@ -169,6 +366,9 @@ async def async_unload_entry(
         await async_disconnect_or_timeout(
             hass, roomba=config_entry.runtime_data.roomba
         )
+        # Remove the domain service when the last entry is unloaded.
+        if not hass.config_entries.async_entries(DOMAIN):
+            hass.services.async_remove(DOMAIN, SERVICE_CLEAN_ROOM)
     return unload_ok
 
 

@@ -181,6 +181,9 @@
       },
       "mission_expire_time": {
         "name": "Missionsablauf"
+      },
+      "raw_state": {
+        "name": "Rohzustand (Debug)"
       }
     },
     "binary_sensor": {
@@ -195,6 +198,12 @@
       },
       "mop_ready": {
         "name": "Wischroboter-Problem"
+      },
+      "mop_tank_present": {
+        "name": "Wischwassertank eingesetzt"
+      },
+      "mop_lid_closed": {
+        "name": "Mop-Deckel offen"
       }
     },
     "button": {
@@ -283,6 +292,39 @@
       "bin_full": "Behälter voll",
       "docked": "Angedockt",
       "error": "Fehler gemeldet"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Raum reinigen",
+      "description": "Startet die gezielte Reinigung eines oder mehrerer benannter Räume bei Smart-Map-Robotern.",
+      "fields": {
+        "room_name": {
+          "name": "Raumname",
+          "description": "Raumname oder Liste von Raumnamen. Muss mit den in den Roomba+-Optionen vergebenen Bezeichnungen übereinstimmen. Falls noch keine Räume vorhanden: zuerst eine raumbasierte Reinigung über die iRobot-App starten."
+        },
+        "ordered": {
+          "name": "Geordnete Reihenfolge",
+          "description": "Räume in der angegebenen Reihenfolge reinigen, statt die Reihenfolge dem Roboter zu überlassen."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Unbekannte(r) Raum/Räume: {names}. Bitte Schreibweise mit den Roomba+-Optionen vergleichen."
+    },
+    "rooms_different_floors": {
+      "message": "Alle Räume müssen sich auf demselben Stockwerk befinden. Räume von verschiedenen Karten: {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "Raumreinigung erfordert einen Smart-Map-Roboter (i7, s9, j-Serie). Dieser Roboter unterstützt keine Smart Maps."
+    },
+    "no_rooms_configured": {
+      "message": "Noch keine Räume konfiguriert. Vorgehensweise: (1) iRobot-App öffnen, (2) Für jeden Raum eine raumbasierte Reinigung starten, (3) In Home Assistant öffnen sich die Roomba+-Optionen automatisch, wo die Räume benannt werden können."
+    },
+    "pmap_not_found": {
+      "message": "Karte nicht im Roboterstatus gefunden. Die Karte wurde möglicherweise neu trainiert — bitte eine Raumreinigung über die iRobot-App starten."
     }
   }
 }

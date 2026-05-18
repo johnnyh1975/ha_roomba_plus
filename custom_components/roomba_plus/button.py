@@ -229,16 +229,19 @@ class BatteryResetButton(_MaintenanceResetButton):
 
 
 class ZoneCleanButton(_MaintenanceResetButton):
-    """Button: start cleaning the zone currently selected in ZoneSelect.
+    """Button: start a clean with focus on the zone selected in ZoneSelect.
 
-    Reads the selected zone name from ZoneSelect, finds the matching Zone
-    in ZoneStore, and sends a start command with the zone's bounding-box
-    centre as the target coordinate.
+    For 900-series robots (EPHEMERAL capability), the MQTT API does not
+    support coordinate-based navigation or region targeting. This button
+    sends a standard start command from the robot's current position.
 
-    For 900-series robots without Smart Map (EPHEMERAL capability), we
-    cannot use region_id. Instead we drive to the zone centre and start
-    from there — the robot will clean that area based on its current
-    position and the normal mission logic.
+    The practical effect: if the robot is already docked and the user has
+    selected a zone, the robot will start its normal coverage clean. The
+    zone selection is informational — it does not steer the robot.
+
+    The button is intentionally kept because the zone infrastructure
+    (ZoneStore, ZoneSelect) is still useful for zone visualization,
+    zone-aware automations, and the future serial OI navigation path.
     """
 
     _attr_translation_key = "clean_zone"
@@ -250,20 +253,23 @@ class ZoneCleanButton(_MaintenanceResetButton):
         self._attr_unique_id = f"{self.robot_unique_id}_clean_zone"
 
     async def async_press(self) -> None:
-        """Find selected zone and start a targeted clean."""
+        """Start a clean. Zone selection is informational on 900-series robots."""
         zone_store = self._config_entry.runtime_data.zone_store
         if not zone_store or not zone_store.zones:
-            _LOGGER.warning("ZoneCleanButton: no zones available")
+            _LOGGER.warning("ZoneCleanButton: no zones available yet")
             return
 
-        # Find the ZoneSelect entity to get the selected zone name
+        confirmed = [z for z in zone_store.zones if z.confirmed]
+        if not confirmed:
+            _LOGGER.warning("ZoneCleanButton: no confirmed zones yet — run more missions")
+            return
+
+        # Find selected zone name via ZoneSelect entity state
         from homeassistant.helpers import entity_registry as er
         ent_reg = er.async_get(self.hass)
         blid = self._config_entry.data.get("blid", "")
         select_uid = f"roomba_plus_{blid}_zone_select"
-        select_entry = ent_reg.async_get_entity_id(
-            "select", "roomba_plus", select_uid
-        )
+        select_entry = ent_reg.async_get_entity_id("select", "roomba_plus", select_uid)
 
         selected_name: str | None = None
         if select_entry:
@@ -271,24 +277,18 @@ class ZoneCleanButton(_MaintenanceResetButton):
             if state:
                 selected_name = state.state
 
-        # Fall back to first confirmed zone
-        confirmed = [z for z in zone_store.zones if z.confirmed]
-        if not confirmed:
-            _LOGGER.warning("ZoneCleanButton: no confirmed zones yet")
-            return
-
         zone = next(
             (z for z in confirmed if z.name == selected_name),
             confirmed[0],
         )
 
-        # Send start command — robot will clean from its current position
-        # toward the zone centre using normal mission logic.
-        # For 900-series (no Smart Map), we cannot use region_id.
         _LOGGER.info(
-            "ZoneCleanButton: starting clean for zone '%s' (bbox %.0f,%.0f – %.0f,%.0f mm)",
+            "ZoneCleanButton: starting clean (900-series — no coordinate targeting). "
+            "Selected zone: '%s' bbox %.0f,%.0f – %.0f,%.0f mm",
             zone.name, zone.x_min, zone.y_min, zone.x_max, zone.y_max,
         )
+        # 900-series: send plain start — robot navigates using its own logic.
+        # The zone parameter is noted in the log but cannot be passed to the robot.
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start"
         )
@@ -327,6 +327,19 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
             if key in last:
                 params[key] = last[key]
 
+        # If a pmap_id is present, refresh user_pmapv_id from live state.pmaps
+        # to avoid silent failures after a map retrain.
+        if params.get("pmap_id"):
+            from . import _resolve_pmapv_id
+            fresh = _resolve_pmapv_id(self.vacuum_state, params["pmap_id"])
+            if fresh:
+                params["user_pmapv_id"] = fresh
+            else:
+                _LOGGER.warning(
+                    "RepeatLastMission: pmap %s not in live state — map may have been retrained",
+                    params["pmap_id"],
+                )
+
         _LOGGER.info(
             "RepeatLastMission: sending %s params=%s", command, params or "(none)"
         )
@@ -359,12 +372,15 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         Uses the HA entity_platform helper to look up the SmartZoneSelect
         entity object directly — no hass.data hacks. Falls back to reading
         pmap/region from lastCommand if the select entity is not found.
+
+        user_pmapv_id is always read from live state.pmaps at press time,
+        never from lastCommand, to avoid stale-map silent failures.
         """
         from homeassistant.helpers import entity_platform as ep
-        from homeassistant.helpers import entity_registry as er
+        from . import _resolve_pmapv_id
 
         region_id: str | None = None
-        pmap_info: dict = {}
+        pmap_id: str | None = None
 
         # Walk all entity platforms registered under this domain to find
         # the SmartZoneSelect entity for this specific robot (by unique_id).
@@ -374,37 +390,43 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
                 if getattr(entity, "unique_id", None) == target_uid:
                     region_id = entity.selected_region_id
                     pmap_info = entity.selected_pmap_info
+                    pmap_id = pmap_info.get("pmap_id")
                     break
             if region_id:
                 break
 
         # Fallback: extract pmap/region from lastCommand in the local state.
-        # This covers the case where the select entity is unavailable or has
-        # not yet been updated after the most recent mission.
-        if not region_id or not pmap_info.get("pmap_id"):
+        if not region_id or not pmap_id:
             last = self.vacuum_state.get("lastCommand", {})
             pmap_id = last.get("pmap_id")
             regions = last.get("regions", [])
             if pmap_id and regions:
                 region_id = regions[0].get("region_id")
-                pmap_info = {
-                    "pmap_id": pmap_id,
-                    "user_pmapv_id": last.get("user_pmapv_id", ""),
-                }
 
-        if not region_id or not pmap_info.get("pmap_id"):
-            _LOGGER.warning("SmartZoneButton: no region/pmap available — run a zone mission first")
+        if not region_id or not pmap_id:
+            _LOGGER.warning(
+                "SmartZoneButton: no region/pmap available — run a zone mission first"
+            )
+            return
+
+        # Always resolve user_pmapv_id from live state.pmaps — never cached.
+        user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, pmap_id)
+        if not user_pmapv_id:
+            _LOGGER.warning(
+                "SmartZoneButton: pmap %s not found in live state — map may have been retrained",
+                pmap_id,
+            )
             return
 
         params = {
-            "pmap_id": pmap_info["pmap_id"],
+            "pmap_id": pmap_id,
             "regions": [{"region_id": region_id, "type": "rid"}],
-            "user_pmapv_id": pmap_info.get("user_pmapv_id", ""),
+            "user_pmapv_id": user_pmapv_id,
             "ordered": 1,
         }
         _LOGGER.info(
             "SmartZoneButton: cleaning region %s on map %s",
-            region_id, pmap_info["pmap_id"][:12],
+            region_id, pmap_id[:12],
         )
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start", params

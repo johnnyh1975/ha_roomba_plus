@@ -181,6 +181,9 @@
       },
       "mission_expire_time": {
         "name": "Mission expire time"
+      },
+      "raw_state": {
+        "name": "Raw state (debug)"
       }
     },
     "binary_sensor": {
@@ -195,6 +198,12 @@
       },
       "mop_ready": {
         "name": "Mop problem"
+      },
+      "mop_tank_present": {
+        "name": "Mop tank present"
+      },
+      "mop_lid_closed": {
+        "name": "Mop lid open"
       }
     },
     "button": {
@@ -283,6 +292,39 @@
       "bin_full": "Bin full",
       "docked": "Docked",
       "error": "Error reported"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Clean room",
+      "description": "Start a targeted clean of one or more named rooms on smart-map robots.",
+      "fields": {
+        "room_name": {
+          "name": "Room name",
+          "description": "Room name or list of room names to clean. Must match the labels you assigned in Roomba+ options. Run a room-targeted clean via the iRobot app first if no rooms appear yet."
+        },
+        "ordered": {
+          "name": "Ordered sequence",
+          "description": "Clean rooms in the order supplied rather than letting the robot choose."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Unknown room(s): {names}. Check the names match those assigned in Roomba+ options."
+    },
+    "rooms_different_floors": {
+      "message": "All rooms must be on the same floor. Got rooms from different maps: {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "Room cleaning requires a Smart Map robot (i7, s9, j-series). This robot does not support Smart Maps."
+    },
+    "no_rooms_configured": {
+      "message": "No rooms configured yet. To use this action: (1) Open the iRobot app, (2) Start a room-targeted clean for each room, (3) Return to Home Assistant — the rooms will appear automatically in the Roomba+ options where you can assign names."
+    },
+    "pmap_not_found": {
+      "message": "Map not found in robot state. The map may have been retrained — run a room mission via the iRobot app to refresh."
     }
   }
 }

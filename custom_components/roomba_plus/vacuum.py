@@ -9,6 +9,7 @@ Implements the full iRobot vacuum hierarchy:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 from typing import Any
 
@@ -197,7 +198,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if not cleaning_time:
             start_ts = mission.get("mssnStrtTm")
             if start_ts:
-                now = dt_util.as_timestamp(dt_util.utcnow())
+                now = dt_util.now(datetime.timezone.utc).timestamp()
                 if now > start_ts:
                     cleaning_time = int((now - start_ts) // 60)
 
@@ -280,18 +281,36 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     def _build_region_command(self, params: dict[str, Any]) -> dict[str, Any]:
         """Build the region-cleaning payload for send_command.
 
-        The Roomba requires pmap_id and user_pmapv_id. If not supplied in
-        params, we fall back to the first pmap found in master_state.
+        Resolves pmap_id and user_pmapv_id. user_pmapv_id is always read from
+        live state.pmaps via _resolve_pmapv_id so it is never stale after a
+        map retrain. Falls back to the first pmap in state if pmap_id is absent.
         """
+        from . import _resolve_pmapv_id
+
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
 
-        if not pmap_id:
-            pmaps: list[dict] = self.vacuum_state.get("pmaps", [])
-            if pmaps:
-                first_pmap = pmaps[0]
-                pmap_id = next(iter(first_pmap), None)
-                user_pmapv_id = first_pmap.get(pmap_id) if pmap_id else None
+        pmaps: list[dict] = self.vacuum_state.get("pmaps", [])
+
+        if not pmap_id and pmaps:
+            first_pmap = pmaps[0]
+            pmap_id = next(iter(first_pmap), None)
+
+        # Always refresh user_pmapv_id from live state — override any supplied value.
+        if pmap_id:
+            fresh = _resolve_pmapv_id(self.vacuum_state, pmap_id)
+            if fresh:
+                user_pmapv_id = fresh
+            else:
+                _LOGGER.warning(
+                    "_build_region_command: pmap %s not in live state.pmaps — "
+                    "map may have been retrained",
+                    pmap_id,
+                )
+                # Fall back to whatever was supplied (may be stale)
+                if not user_pmapv_id and pmaps:
+                    first_pmap = pmaps[0]
+                    user_pmapv_id = first_pmap.get(pmap_id)
 
         regions = params.get("regions", [])
         normalised_regions = []
