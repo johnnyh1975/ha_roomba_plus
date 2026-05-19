@@ -1,9 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
+[![Version](https://img.shields.io/badge/Version-1.3.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
+[![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
+[![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Roomba+ replaces the built-in HA Roomba integration and provides significantly more features — fully local, no cloud requirement, no subscription.
+Home Assistant Custom Integration für iRobot Roomba und Braava. Vollständig lokal, kein Cloud-Zwang, kein Abo — deutlich mehr Sensoren, Karte und Zonen als die eingebaute HA-Integration.
 
 ---
 
