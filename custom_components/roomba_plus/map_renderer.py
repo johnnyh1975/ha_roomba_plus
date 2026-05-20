@@ -33,9 +33,13 @@ import io
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
+
+if TYPE_CHECKING:
+    from .geometry_store import GeometryStore
+    from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,12 +53,31 @@ ROBOT_COLOUR    = ( 30, 100, 200, 255)  # Blue — robot position
 ARROW_COLOUR    = (255, 255, 255, 255)  # White — direction arrow on robot
 STUCK_COLOUR    = (220,  60,  60, 255)  # Red — stuck event marker
 
+# ── Geometry layer colours (RGBA) ─────────────────────────────────────────────
+SUGGEST_OUTLINE  = (180, 180, 180, 180)  # Light grey — zone outline suggestion
+SUGGEST_LABEL    = (160, 160, 160, 220)  # Grey — zone name text
+DOOR_MARKER      = ( 24,  95, 165, 200)  # Blue — inferred door crossing marker
+WALL_FILL        = ( 74,  85, 104, 255)  # Dark grey — user wall
+WALL_CENTRE      = (255, 255, 255,  60)  # White tint — wall depth highlight
+DOOR_FILL        = ( 24,  95, 165, 200)  # Blue dashed — user door gap line
+DOOR_ARC_FILL    = ( 24,  95, 165,  35)  # Blue transparent — door swing arc
+DOOR_ARC_OUTLINE = ( 24,  95, 165, 120)  # Blue — door swing arc border
+OBSTACLE_FILL    = (186, 117,  23,  45)  # Amber — obstacle area fill
+OBSTACLE_OUTLINE = (186, 117,  23, 190)  # Amber — obstacle border and hatch
+
 # ── Rendering constants ───────────────────────────────────────────────────────
 DOCK_HALF       = 6    # px half-side of dock square
 ROBOT_RADIUS    = 8    # px robot circle radius
 ARROW_LENGTH    = 16   # px direction arrow length
 STUCK_RADIUS    = 7    # px stuck triangle circumradius
 PATH_WIDTH      = 3    # px path line width
+
+# ── Geometry layer constants ───────────────────────────────────────────────────
+WALL_WIDTH         = 6    # px user wall stroke width
+WALL_CENTRE_WIDTH  = 2    # px wall centre highlight width
+DOOR_MARKER_RADIUS = 5    # px inferred door crossing marker radius
+OBSTACLE_HATCH_GAP = 8    # px obstacle hatching line spacing
+SUGGEST_DASH       = (6, 4)  # px on/off for dashed suggestion outlines
 
 # ── Storage version — bump when dump_state() format changes ──────────────────
 _STATE_VERSION  = 1
@@ -87,8 +110,15 @@ class MapRenderer:
         renderer.restore_state(state)          # after HA restart
     """
 
-    def __init__(self, config: RendererConfig) -> None:
+    def __init__(
+        self,
+        config: RendererConfig,
+        geometry_store: GeometryStore | None = None,
+        zone_store: ZoneStore | None = None,
+    ) -> None:
         self._cfg = config
+        self._geometry_store = geometry_store
+        self._zone_store = zone_store
         self._points: list[tuple[int, int]] = []      # pixel coordinates
         self._stuck_px: list[tuple[int, int]] = []    # pixel coordinates
         self._robot_px: tuple[int, int] | None = None # current robot position
@@ -140,6 +170,13 @@ class MapRenderer:
         img = Image.new("RGBA", (size, size), BG_COLOUR)
         draw = ImageDraw.Draw(img)
         draw.rectangle([0, 0, size - 1, size - 1], outline=FLOOR_BORDER, width=2)
+
+        # Layer 1.5 — inference suggestions (zone outlines + door markers).
+        # Suppressed once user geometry exists, so the two never overlap.
+        self._draw_inference_suggestions(draw)
+
+        # Layer 1.6 — user-authored geometry (walls, doors, obstacles).
+        self._draw_user_geometry(draw)
 
         if self._points:
             self._draw_cleaned_area(draw)
@@ -267,6 +304,197 @@ class MapRenderer:
             "has_cached_image": self._last_png is not None,
             "stuck_event_count": len(self._stuck_px),
         }
+
+    # ── Geometry layers ───────────────────────────────────────────────────────
+
+    def _draw_inference_suggestions(self, draw: ImageDraw.ImageDraw) -> None:
+        """Layer 1.5 — dashed zone outlines and door crossing markers.
+
+        Draws the zone bounding boxes from ZoneStore (expanded by wall_offset_mm)
+        as dashed grey rectangles, and each DoorMarker as a small filled circle.
+        Suppressed entirely when user geometry already exists — the two layers
+        must never overlap to avoid confusion.
+        """
+        if self._zone_store is None:
+            return
+        if self._geometry_store is not None and self._geometry_store.has_user_geometry:
+            return  # user has confirmed layout — suggestions no longer shown
+
+        # Zone outline rectangles (dashed)
+        offset = self._geometry_store.wall_offset_mm if self._geometry_store else 200
+        for zone in self._zone_store.zones:
+            x1, y1 = self._mm_to_px(zone.x_min - offset, zone.y_max + offset)
+            x2, y2 = self._mm_to_px(zone.x_max + offset, zone.y_min - offset)
+            self._draw_dashed_rect(draw, x1, y1, x2, y2, SUGGEST_OUTLINE, SUGGEST_DASH)
+            # Zone name label at bbox centroid
+            if zone.name:
+                lx, ly = self._mm_to_px(
+                    (zone.x_min + zone.x_max) / 2,
+                    (zone.y_min + zone.y_max) / 2,
+                )
+                draw.text((lx, ly), zone.name, fill=SUGGEST_LABEL, anchor="mm")
+
+        # Door crossing markers (filled circles)
+        if self._geometry_store:
+            for marker in self._geometry_store.door_markers:
+                if marker.mission_count < 2:
+                    continue  # only show markers seen in ≥2 missions
+                mx, my = self._mm_to_px(marker.cx, marker.cy)
+                r = DOOR_MARKER_RADIUS
+                draw.ellipse(
+                    [mx - r, my - r, mx + r, my + r],
+                    fill=DOOR_MARKER,
+                    outline=(255, 255, 255, 200),
+                    width=1,
+                )
+
+    def _draw_user_geometry(self, draw: ImageDraw.ImageDraw) -> None:
+        """Layer 1.6 — user-authored walls, doors, and obstacle rectangles.
+
+        Walls are solid dark-grey lines with a faint white centre highlight.
+        Doors are a dashed blue gap line plus a filled quarter-circle swing arc.
+        Obstacles are amber-filled rectangles with dashed border and hatching.
+        All elements render beneath the cleaned-area layer so the cleaning path
+        remains the dominant visual.
+        """
+        if self._geometry_store is None:
+            return
+
+        for wall in self._geometry_store.walls:
+            x1, y1 = self._mm_to_px(wall.x1, wall.y1)
+            x2, y2 = self._mm_to_px(wall.x2, wall.y2)
+            draw.line([x1, y1, x2, y2], fill=WALL_FILL, width=WALL_WIDTH)
+            draw.line([x1, y1, x2, y2], fill=WALL_CENTRE, width=WALL_CENTRE_WIDTH)
+            if wall.label:
+                mx, my = (x1 + x2) // 2, (y1 + y2) // 2
+                draw.text((mx, my - 8), wall.label, fill=WALL_FILL, anchor="mm")
+
+        for door in self._geometry_store.doors:
+            cx, cy = self._mm_to_px(door.cx, door.cy)
+            half_w_px = max(1, int(door.width_mm / 2 / self._cfg.scale))
+            theta_rad = math.radians(door.theta_deg)
+            # Gap line (dashed) along door orientation
+            dx = int(half_w_px * math.cos(theta_rad))
+            dy = int(half_w_px * math.sin(theta_rad))
+            self._draw_dashed_line(
+                draw, cx - dx, cy + dy, cx + dx, cy - dy,
+                DOOR_FILL, (6, 4), width=3,
+            )
+            # Swing arc — quarter circle from gap end, radius = door width
+            self._draw_door_arc(draw, cx - dx, cy + dy, half_w_px * 2, door.theta_deg)
+            if door.label:
+                draw.text((cx, cy - 10), door.label, fill=DOOR_FILL, anchor="mm")
+
+        for obs in self._geometry_store.obstacles:
+            x1, y1 = self._mm_to_px(obs.x, obs.y + obs.h)   # top-left in image
+            x2, y2 = self._mm_to_px(obs.x + obs.w, obs.y)   # bottom-right in image
+            # Clamp to canvas
+            size = self._cfg.size_px
+            x1, x2 = sorted([max(0, min(size - 1, x1)), max(0, min(size - 1, x2))])
+            y1, y2 = sorted([max(0, min(size - 1, y1)), max(0, min(size - 1, y2))])
+            if x2 <= x1 or y2 <= y1:
+                continue
+            draw.rectangle([x1, y1, x2, y2], fill=OBSTACLE_FILL)
+            self._draw_dashed_rect(draw, x1, y1, x2, y2, OBSTACLE_OUTLINE, (5, 3))
+            self._draw_hatch(draw, x1, y1, x2, y2, OBSTACLE_OUTLINE)
+            if obs.label:
+                lx, ly = (x1 + x2) // 2, (y1 + y2) // 2
+                draw.text((lx, ly), obs.label, fill=OBSTACLE_OUTLINE, anchor="mm")
+
+    # ── Geometry drawing primitives ───────────────────────────────────────────
+
+    @staticmethod
+    def _draw_dashed_line(
+        draw: ImageDraw.ImageDraw,
+        x1: int, y1: int, x2: int, y2: int,
+        colour: tuple,
+        dash: tuple[int, int] = (6, 4),
+        width: int = 1,
+    ) -> None:
+        """Draw a dashed line from (x1,y1) to (x2,y2)."""
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 1:
+            return
+        on, off = dash
+        step = on + off
+        steps = max(1, int(length / step))
+        for i in range(steps + 1):
+            t_start = i * step / length
+            t_end = min(1.0, (i * step + on) / length)
+            if t_start >= 1.0:
+                break
+            sx = int(x1 + (x2 - x1) * t_start)
+            sy = int(y1 + (y2 - y1) * t_start)
+            ex = int(x1 + (x2 - x1) * t_end)
+            ey = int(y1 + (y2 - y1) * t_end)
+            draw.line([sx, sy, ex, ey], fill=colour, width=width)
+
+    @classmethod
+    def _draw_dashed_rect(
+        cls,
+        draw: ImageDraw.ImageDraw,
+        x1: int, y1: int, x2: int, y2: int,
+        colour: tuple,
+        dash: tuple[int, int] = (6, 4),
+    ) -> None:
+        """Draw a dashed rectangle by drawing four dashed sides."""
+        cls._draw_dashed_line(draw, x1, y1, x2, y1, colour, dash)  # top
+        cls._draw_dashed_line(draw, x2, y1, x2, y2, colour, dash)  # right
+        cls._draw_dashed_line(draw, x2, y2, x1, y2, colour, dash)  # bottom
+        cls._draw_dashed_line(draw, x1, y2, x1, y1, colour, dash)  # left
+
+    def _draw_door_arc(
+        self,
+        draw: ImageDraw.ImageDraw,
+        hinge_px: int, hinge_py: int,
+        radius_px: int,
+        theta_deg: float,
+    ) -> None:
+        """Draw a quarter-circle door swing arc.
+
+        The arc starts at theta_deg and sweeps 90° counter-clockwise.
+        Filled with DOOR_ARC_FILL and outlined with DOOR_ARC_OUTLINE.
+        Drawn as a polygon of short line segments for broad PIL compatibility.
+        """
+        steps = max(8, radius_px // 2)
+        start_rad = math.radians(theta_deg)
+        end_rad = start_rad + math.pi / 2
+        pts = [(hinge_px, hinge_py)]
+        for i in range(steps + 1):
+            a = start_rad + (end_rad - start_rad) * i / steps
+            pts.append((
+                hinge_px + int(radius_px * math.cos(a)),
+                hinge_py - int(radius_px * math.sin(a)),
+            ))
+        pts.append((hinge_px, hinge_py))
+        if len(pts) >= 3:
+            draw.polygon(pts, fill=DOOR_ARC_FILL, outline=DOOR_ARC_OUTLINE)
+
+    @staticmethod
+    def _draw_hatch(
+        draw: ImageDraw.ImageDraw,
+        x1: int, y1: int, x2: int, y2: int,
+        colour: tuple,
+    ) -> None:
+        """Draw diagonal hatching lines inside a rectangle."""
+        w, h = x2 - x1, y2 - y1
+        span = w + h
+        step = OBSTACLE_HATCH_GAP
+        for offset in range(0, span, step):
+            # Diagonal from top-left area to bottom-right area
+            sx = x1 + offset
+            sy = y1
+            ex = x1
+            ey = y1 + offset
+            # Clamp to rectangle
+            if sx > x2:
+                ey += sx - x2
+                sx = x2
+            if ey > y2:
+                sx -= ey - y2
+                ey = y2
+            if sx >= x1 and ey <= y2 and sx <= x2 and ey >= y1:
+                draw.line([sx, sy, ex, ey], fill=colour, width=1)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

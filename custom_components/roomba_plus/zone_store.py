@@ -188,6 +188,10 @@ class ZoneStore:
         self._next_id: int = 1
         self._gap_threshold_mm: float = GAP_THRESHOLD_MM
         self._scale_factor: float = 1.0   # calibration correction
+        # Transient — populated during process_mission(), reset each mission.
+        # Contains midpoints (x, y) of gap crossings within door-width range.
+        # Read by GeometryStore.update_from_mission(); never persisted.
+        self.last_mission_gap_midpoints: list[tuple[float, float]] = []
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -237,6 +241,7 @@ class ZoneStore:
             _LOGGER.debug("ZoneStore: mission too short (%d points), skipping", len(points_mm))
             return []
 
+        self.last_mission_gap_midpoints = []
         segments = self._gap_split(points_mm)
         _LOGGER.debug("ZoneStore: mission %d points → %d segments", len(points_mm), len(segments))
 
@@ -351,6 +356,11 @@ class ZoneStore:
             p1, p2 = points[i - 1], points[i]
             dist = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
             if dist > self._gap_threshold_mm:
+                # Record midpoint if gap is within door-width range.
+                # GeometryStore reads this list after process_mission() returns.
+                if MIN_DOOR_WIDTH_MM <= dist <= MAX_DOOR_WIDTH_MM:
+                    mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+                    self.last_mission_gap_midpoints.append(mid)
                 segments.append([])
             segments[-1].append(p2)
         return [s for s in segments if s]

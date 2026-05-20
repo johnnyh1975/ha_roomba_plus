@@ -215,14 +215,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if not self._mission_points:
             return
 
-        if self._zone_store:
-            offset = self._zone_store.check_dock_drift(self._mission_points[-1])
-            if offset != (0.0, 0.0):
-                _LOGGER.info("Map: drift %.0f,%.0f mm", *offset)
-
         if (self._map_capability == MapCapability.EPHEMERAL
                 and self._zone_store
                 and len(self._mission_points) >= 20):
+            # Compute drift once — used by both ZoneStore log and GeometryStore.
+            drift_vector = self._zone_store.check_dock_drift(self._mission_points[-1])
+            if drift_vector != (0.0, 0.0):
+                _LOGGER.info("Map: drift %.0f,%.0f mm", *drift_vector)
+
             ts = dt_util.now(datetime.timezone.utc).timestamp()
             new_zones = self._zone_store.process_mission(self._mission_points, ts)
             if new_zones:
@@ -230,6 +230,19 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             self.hass.async_create_task(
                 self._zone_store.async_save(self.hass, self._config_entry.entry_id)
             )
+
+            # Update geometry store from this mission's gap midpoints.
+            # Must run after process_mission() so last_mission_gap_midpoints is set.
+            data = self._config_entry.runtime_data
+            if data.geometry_store:
+                data.geometry_store.update_from_mission(self._zone_store)
+                if drift_vector != (0.0, 0.0):
+                    threshold_exceeded = data.geometry_store.record_drift(*drift_vector)
+                    if threshold_exceeded:
+                        self.hass.async_create_task(self._trigger_drift_issue())
+                self.hass.async_create_task(
+                    data.geometry_store.async_save(self.hass, self._config_entry.entry_id)
+                )
 
         # Persist renderer state so the map survives an HA restart
         if self._renderer and self._renderer.has_data:
@@ -292,6 +305,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             is_fixable=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key="zones_need_naming",
+        )
+
+    async def _trigger_drift_issue(self) -> None:
+        from homeassistant.components import repairs as ir
+        ir.async_create_issue(
+            self.hass, DOMAIN, "geometry_drifted",
+            is_fixable=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="geometry_drifted",
         )
 
     @staticmethod

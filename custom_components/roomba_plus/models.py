@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
     from roombapy import Roomba
+    from .geometry_store import GeometryStore
     from .maintenance_store import MaintenanceStore
     from .map_renderer import MapRenderer
     from .zone_store import ZoneStore
@@ -38,6 +39,7 @@ class RoombaData:
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     zone_store: ZoneStore | None = None
+    geometry_store: GeometryStore | None = None
     maintenance_store: MaintenanceStore | None = None
 
     def roomba_reported_state(self) -> dict[str, Any]:

@@ -55,6 +55,7 @@ from .maintenance_store import MaintenanceStore
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
 from .zone_store import ZoneStore
+from .geometry_store import GeometryStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -272,6 +273,7 @@ async def async_setup_entry(
     map_capability = MapCapability.NONE
     renderer: MapRenderer | None = None
     zone_store: ZoneStore | None = None
+    geometry_store: GeometryStore | None = None
 
     map_enabled = config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)
 
@@ -283,14 +285,20 @@ async def async_setup_entry(
             map_capability = MapCapability.EPHEMERAL
             _LOGGER.debug("Roomba+ map: EPHEMERAL (900-series pose, no pmaps)")
 
-        renderer = MapRenderer(RendererConfig(
-            size_px=config_entry.options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
-            scale=config_entry.options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
-        ))
-
         if map_capability == MapCapability.EPHEMERAL:
             zone_store = ZoneStore()
             await zone_store.async_load(hass, config_entry.entry_id)
+            geometry_store = GeometryStore()
+            await geometry_store.async_load(hass, config_entry.entry_id)
+
+        renderer = MapRenderer(
+            RendererConfig(
+                size_px=config_entry.options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
+                scale=config_entry.options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
+            ),
+            geometry_store=geometry_store,
+            zone_store=zone_store,
+        )
     else:
         _LOGGER.debug(
             "Roomba+ map: NONE (cap.pose=%s, map_enabled=%s)",
@@ -306,6 +314,7 @@ async def async_setup_entry(
         map_capability=map_capability,
         renderer=renderer,
         zone_store=zone_store,
+        geometry_store=geometry_store,
         maintenance_store=maintenance_store,
     )
 
