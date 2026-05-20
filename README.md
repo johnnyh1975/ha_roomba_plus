@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.3.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.4.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -68,12 +68,15 @@ Live map of the current cleaning mission as a HA image entity:
 - Stuck events are marked on the map
 - Map is retained after the mission ends
 - **Map state survives HA restarts** — pose points and stuck markers are persisted to `hass.storage` after each mission and restored on startup
+- **Room outline suggestions** — dashed grey rectangles showing approximate room boundaries derived from zone bounding boxes (900-series, v1.4.0+)
+- **Door crossing markers** — small blue circles showing where the Roomba crossed between rooms, accumulated across missions (900-series, v1.4.0+)
 
 ### Zone detection (Roomba 900)
 
 Automatic room segmentation from travel data:
 
-- Doorway crossings are detected as room boundaries
+- Doorway crossings are detected as room boundaries and shown as markers on the map
+- Door crossing positions are clustered across missions — a marker seen in ≥2 missions is displayed on the map
 - Detected zones are persistently stored across restarts
 - User naming via Options Flow after each mission
 - Calibration via door-width wizard (DIN 875 mm standard)
@@ -88,6 +91,7 @@ The diagnostics download (Settings → Devices & Services → Roomba+ → Downlo
 
 - Map subsystem: renderer configuration, number of recorded pose points, stuck event count, whether a cached image is present
 - Zone subsystem: gap threshold, calibration scale factor, full zone list with bounding boxes and confidence scores
+- Geometry subsystem: door marker count, wall/door/obstacle counts, cumulative drift, wall offset setting
 
 ---
 
@@ -362,7 +366,7 @@ Roomba+ fixes this automatically on the first state update after setup. If it pe
 
 **Map is empty after HA restart**
 
-The map state is persisted to `hass.storage` after each completed mission. It is not available immediately after restart — it will appear once the first mission completes, or it will be restored from the previous mission's persisted data. If the storage file is corrupted, removing and re-adding the integration clears it.
+The map state is persisted to `hass.storage` after each completed mission and restored on startup. If the map appears empty after a restart, check that at least one mission has completed with v1.4.0 installed — the first mission writes the initial storage state. Door markers and zone outlines accumulate across missions and are also persisted separately. If the storage file is corrupted, removing and re-adding the integration clears it.
 
 **Zone detection not working (900-series)**
 
