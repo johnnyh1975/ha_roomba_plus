@@ -233,12 +233,18 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
                 len(unlabelled),
                 sorted(unlabelled),
             )
-            await self._async_raise_naming_issue()
+            await self._async_raise_naming_issue(sorted(unlabelled))
 
     # ── Region ID collection ──────────────────────────────────────────────────
 
     def _collect_region_ids(self) -> list[str]:
-        """Collect all known region_ids from local state."""
+        """Collect all known region_ids from local state and persisted options.
+
+        Reads live vacuum_state first (cleanSchedule2, lastCommand), then
+        merges with discovered_zone_ids from config entry options so that
+        previously seen IDs remain visible even after MQTT connection is lost
+        (e.g. when the iRobot app takes over the local connection).
+        """
         region_ids: set[str] = set()
 
         # From cleanSchedule2
@@ -255,6 +261,10 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             rid = region.get("region_id")
             if rid:
                 region_ids.add(rid)
+
+        # From persisted discovered_zone_ids — survives MQTT disconnection.
+        persisted = self._config_entry.options.get("discovered_zone_ids", [])
+        region_ids.update(persisted)
 
         return sorted(region_ids, key=lambda x: x.zfill(4))
 
@@ -370,9 +380,13 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
                 len(new_unlabelled),
                 sorted(new_unlabelled),
             )
+            # Capture the IDs NOW while vacuum_state is fresh — by the time
+            # the async task runs the MQTT connection may have dropped and
+            # vacuum_state may no longer contain the regions.
+            captured = sorted(new_unlabelled)
             self.hass.loop.call_soon_threadsafe(
-                lambda: self.hass.async_create_task(
-                    self._async_raise_naming_issue()
+                lambda ids=captured: self.hass.async_create_task(
+                    self._async_raise_naming_issue(ids)
                 )
             )
 
@@ -385,29 +399,28 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
                 )
             )
 
-    async def _async_raise_naming_issue(self) -> None:
+    async def _async_raise_naming_issue(self, region_ids: list[str]) -> None:
         """Create (or update) the smart_zones_need_naming Repair Issue.
 
-        Bug 5b fix: persists discovered zone IDs to config entry options so
-        the repair fix flow can read them even when live robot state no
-        longer contains regions (e.g. after a full clean or dock return).
-        Bug 3 fix: uses homeassistant.helpers.issue_registry which works
-        correctly on HA 2026.x; severity passed as plain string.
+        region_ids must be passed in by the caller (on_message or
+        async_added_to_hass) while vacuum_state is guaranteed fresh.
+        Re-computing from vacuum_state here is unsafe because the MQTT
+        connection may have dropped by the time this coroutine runs.
         """
         from homeassistant.helpers import issue_registry as ir
 
-        unlabelled = self._unlabelled_region_ids()
-        if not unlabelled:
-            return  # Labelled in the meantime — nothing to do
+        if not region_ids:
+            return
 
         # Persist discovered IDs to options so the repair fix flow can
         # read them even when live MQTT state no longer has regions.
         new_options = dict(self._config_entry.options)
         existing_ids = set(new_options.get("discovered_zone_ids", []))
-        new_options["discovered_zone_ids"] = sorted(existing_ids | set(unlabelled))
+        new_options["discovered_zone_ids"] = sorted(existing_ids | set(region_ids))
         self.hass.config_entries.async_update_entry(
             self._config_entry, options=new_options
         )
+        unlabelled = new_options["discovered_zone_ids"]
 
         ir.async_create_issue(
             self.hass,

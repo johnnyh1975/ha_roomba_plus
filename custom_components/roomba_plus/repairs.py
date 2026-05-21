@@ -33,16 +33,12 @@ async def async_create_fix_flow(
 ) -> RepairsFlow:
     """Return the correct fix flow for a given issue_id."""
     if issue_id == "smart_zones_need_naming":
-        # Find the config entry that has discovered zone IDs.
-        entry = None
-        for e in hass.config_entries.async_entries(DOMAIN):
-            if e.options.get("discovered_zone_ids"):
-                entry = e
-                break
-        if entry is None:
-            # Fallback: use the first entry (works for single-robot setups).
-            entries = hass.config_entries.async_entries(DOMAIN)
-            entry = entries[0] if entries else None
+        # Always use the first DOMAIN entry — single-robot setups only
+        # have one. Do NOT filter on discovered_zone_ids here: that key
+        # may not yet be written when the user clicks Fix (race between
+        # async_update_entry and the repair dialog opening).
+        entries = hass.config_entries.async_entries(DOMAIN)
+        entry = entries[0] if entries else None
         return SmartZoneNamingRepairFlow(entry)
 
     # Generic fallback for unknown issues.
@@ -70,7 +66,14 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             set(opts.get("smart_zone_data", {}))
             | set(opts.get("smart_zone_labels", {}))
         )
+
+        # Primary source: persisted discovered_zone_ids.
+        # Fallback: read directly from live robot state in case
+        # async_update_entry had not yet flushed when the dialog opened.
         discovered: list[str] = list(opts.get("discovered_zone_ids", []))
+        if not discovered:
+            discovered = self._collect_from_live_state()
+
         unlabelled = [rid for rid in discovered if rid not in named]
 
         if not unlabelled:
@@ -142,6 +145,33 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 "zone_ids": ", ".join(unlabelled),
             },
         )
+
+    def _collect_from_live_state(self) -> list[str]:
+        """Read region IDs directly from live robot state.
+
+        Fallback when discovered_zone_ids has not yet been persisted.
+        Reads cleanSchedule2 and lastCommand from the roomba entity.
+        """
+        region_ids: set[str] = set()
+        try:
+            from . import roomba_reported_state
+            runtime = self._config_entry.runtime_data
+            if not (runtime and runtime.roomba):
+                return []
+            state = roomba_reported_state(runtime.roomba)
+            for entry in state.get("cleanSchedule2", []):
+                for region in (entry.get("cmd", {}).get("regions") or []):
+                    rid = region.get("region_id")
+                    if rid:
+                        region_ids.add(rid)
+            last = state.get("lastCommand", {})
+            for region in (last.get("regions") or []):
+                rid = region.get("region_id")
+                if rid:
+                    region_ids.add(rid)
+        except Exception:  # noqa: BLE001
+            pass
+        return sorted(region_ids)
 
     def _dismiss(self) -> None:
         """Delete the repair issue."""
