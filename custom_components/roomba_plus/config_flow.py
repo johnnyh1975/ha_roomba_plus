@@ -317,18 +317,34 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage connection and map options."""
+        """Options menu — connection settings or Smart Map zone entry."""
+        from .const import has_smart_map
+        from . import roomba_reported_state
+
+        state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+
+        if has_smart_map(state):
+            # Smart Map robots get a menu: connection settings or manual zone entry.
+            return self.async_show_menu(
+                step_id="init",
+                menu_options=["settings", "smart_zones_manual"],
+            )
+
+        # Non-Smart-Map robots go directly to settings form.
+        return await self.async_step_settings(user_input)
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Connection and map settings form."""
         if user_input is not None:
-            # Merge form values into a copy of existing options so that
-            # keys not shown in the form (e.g. smart_zone_labels, zone data)
-            # are preserved and not silently deleted.
             updated = dict(self.config_entry.options)
             updated.update(user_input)
             return self.async_create_entry(title="", data=updated)
 
         options = self.config_entry.options
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
@@ -494,6 +510,109 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 "zone_count": str(len(unlabelled)),
                 "zone_ids": ", ".join(unlabelled),
             },
+        )
+
+    async def async_step_smart_zones_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manual Smart Map zone entry — breaks the bootstrap circular dependency.
+
+        When HA has never seen a room-specific clean via MQTT it has no region
+        IDs and cannot populate the Smart Map select or use clean_room. This
+        step lets the user enter region IDs and names directly from the iRobot
+        app or the HA diagnostics dump, without requiring a connected MQTT session
+        that includes lastCommand with regions.
+
+        The user enters:
+          - region_ids: comma-separated list of region ID strings (e.g. "5,12,7")
+          - one name field per entered region ID (generated on re-entry)
+
+        pmap_id is resolved automatically from live state.pmaps so the user
+        does not need to find it manually.
+        """
+        from .const import has_smart_map
+        from . import roomba_reported_state
+
+        state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+        if not has_smart_map(state):
+            return self.async_create_entry(title="", data=self.config_entry.options)
+
+        errors: dict[str, str] = {}
+        existing_labels: dict = self.config_entry.options.get("smart_zone_labels", {})
+        existing_zone_data: dict = self.config_entry.options.get("smart_zone_data", {})
+
+        # Two-phase flow:
+        # Phase 1 — user enters comma-separated region IDs ("region_ids" key present)
+        # Phase 2 — user names each ID (only "name_*" keys present)
+        # Phases are distinguished by key presence, not value, to avoid ambiguity.
+
+        if user_input is not None and "region_ids" in user_input:
+            # Phase 1 submitted
+            raw = user_input["region_ids"]
+            pending = [r.strip() for r in raw.replace(",", " ").split() if r.strip()]
+            if not pending:
+                errors["region_ids"] = "no_valid_ids"
+            else:
+                # Advance to phase 2 — show one name field per ID
+                schema = vol.Schema({
+                    vol.Optional(f"name_{rid}", default=existing_labels.get(rid, f"Zone {rid}")): str
+                    for rid in pending
+                })
+                return self.async_show_form(
+                    step_id="smart_zones_manual",
+                    data_schema=schema,
+                    description_placeholders={
+                        "zone_ids": ", ".join(pending),
+                        "zone_count": str(len(pending)),
+                    },
+                    last_step=True,
+                )
+
+        elif user_input is not None and any(k.startswith("name_") for k in user_input):
+            # Phase 2 submitted — resolve pmap_id and save
+            current_pmap_id = ""
+            last = state.get("lastCommand", {})
+            if last.get("pmap_id"):
+                current_pmap_id = last["pmap_id"]
+            else:
+                for entry in state.get("cleanSchedule2", []):
+                    if entry.get("cmd", {}).get("pmap_id"):
+                        current_pmap_id = entry["cmd"]["pmap_id"]
+                        break
+            if not current_pmap_id:
+                pmaps: list[dict] = state.get("pmaps", [])
+                if pmaps:
+                    current_pmap_id = next(iter(pmaps[0]), "")
+
+            new_labels = dict(existing_labels)
+            new_zone_data = dict(existing_zone_data)
+            new_discovered = list(self.config_entry.options.get("discovered_zone_ids", []))
+
+            for key, label in user_input.items():
+                if key.startswith("name_"):
+                    rid = key[len("name_"):]
+                    label = label.strip()
+                    if label:
+                        new_labels[rid] = label
+                        new_zone_data[rid] = {"name": label, "pmap_id": current_pmap_id}
+                        if rid not in new_discovered:
+                            new_discovered.append(rid)
+
+            new_options = dict(self.config_entry.options)
+            new_options["smart_zone_labels"] = new_labels
+            new_options["smart_zone_data"] = new_zone_data
+            new_options["discovered_zone_ids"] = sorted(new_discovered)
+            return self.async_create_entry(title="", data=new_options)
+
+        # Phase 1 form — enter region IDs
+        return self.async_show_form(
+            step_id="smart_zones_manual",
+            data_schema=vol.Schema({
+                vol.Required("region_ids"): str,
+            }),
+            description_placeholders={},
+            errors=errors,
+            last_step=False,
         )
 
     async def async_step_calibration(
