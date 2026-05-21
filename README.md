@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.4.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.4.4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -88,6 +88,12 @@ When the robot reports previously unseen room IDs from its Smart Map, a **HA Rep
 The fix flow opens directly in the Repairs dialog where you can assign names to each discovered zone. Zone IDs are persisted to integration storage so they survive robot state changes between discovery and naming. The issue dismisses itself once all zones have a name.
 
 **Robots with multiple Smart Maps** are fully supported — the capability detection now correctly identifies all Smart Map robots regardless of how many maps are configured.
+
+**Manual zone entry for fresh installs**
+
+On a fresh install, HA may not have seen any room-specific cleans yet and therefore has no region IDs to display. To break this circular dependency, open **Settings → Devices & Services → Roomba+ → Configure** and select **Manually enter Smart Map zones**.
+
+Enter your region IDs as a comma-separated list (e.g. `5, 12, 7`). You can find them in the HA diagnostics download under `options → discovered_zone_ids`, or by starting a room-specific clean from the iRobot app while HA is connected and checking the diagnostics afterwards. On the next screen, assign a name to each ID. The `pmap_id` is resolved automatically — you do not need to find it manually.
 
 ### Diagnostics
 
@@ -378,11 +384,17 @@ Zone detection requires at least 20 pose points per segment. Short missions or m
 
 **Smart Map zones not appearing / Repair Issue never fires (i / s / j-series)**
 
-In v1.4.2 the zone check runs at HA startup, so the Repair Issue should appear within seconds of restarting HA if any zones are unnamed — no room-specific clean required. If the issue still does not appear:
+The zone check runs at HA startup — the Repair Issue should appear within seconds of restarting HA if any zones are unnamed. If it does not:
 
-- Check that your robot is reporting `"cap": {"pose": ...}` with a value ≥ 1 in the HA diagnostics download. Robots with multiple Smart Maps previously required exactly `pose == 1` which excluded them — this is fixed in v1.4.2.
-- Ensure `regions` in `lastCommand` is not reported as `null` by your firmware — this is also handled in v1.4.2.
-- If the Repair Issue appears but clicking Fix immediately shows "Problem resolved" without a form, deploy the full v1.4.2 package which includes the required `repairs.py` file.
+- Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. Robots with multiple Smart Maps previously required exactly `pose == 1` — fixed in v1.4.2.
+- Ensure `regions` in `lastCommand` is not `null` in your firmware — handled in v1.4.2.
+- If the Repair Issue appears but clicking Fix shows "Problem resolved" without a form, ensure you have the full v1.4.2+ package including `repairs.py`.
+
+**Fresh install with no zone IDs — circular dependency**
+
+If you have never started a room-specific clean while HA was connected, no region IDs have been captured and the Repair Issue either does not appear or shows an empty form. This happens because the robot only broadcasts region IDs as a one-time MQTT delta when a room-specific clean is commanded — and if the iRobot app initiated the clean, it takes over the MQTT connection first.
+
+Use the **manual entry flow** to break the dependency: Settings → Devices & Services → Roomba+ → Configure → **Manually enter Smart Map zones**. Enter your region IDs as a comma-separated list. Find them in the HA diagnostics download under `options → discovered_zone_ids` (after even one partial MQTT connection) or use the iRobot app to find your room layout. Once entered and named, the select entity populates and `roomba_plus.clean_room` works immediately.
 
 **Migration from Core Roomba integration**
 
