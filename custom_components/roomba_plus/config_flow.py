@@ -437,7 +437,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             )
 
             # Capture pmap_id from live state at naming time.
-            # Use lastCommand first (most recent), fall back to cleanSchedule2.
+            # Priority: lastCommand > cleanSchedule2 > first entry in pmaps.
+            # The pmaps fallback covers the case where the user has only done
+            # full-home cleans so lastCommand contains no pmap_id, but the
+            # robot still reports its map ID in state.pmaps.
             current_pmap_id: str = ""
             last = state.get("lastCommand", {})
             if last.get("pmap_id"):
@@ -448,6 +451,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     if cmd.get("pmap_id"):
                         current_pmap_id = cmd["pmap_id"]
                         break
+            if not current_pmap_id:
+                pmaps: list[dict] = state.get("pmaps", [])
+                if pmaps:
+                    current_pmap_id = next(iter(pmaps[0]), "")
 
             for rid in unlabelled:
                 label = user_input.get(f"zone_{rid}", "").strip()

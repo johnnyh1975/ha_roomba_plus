@@ -90,6 +90,8 @@ class RendererConfig:
     size_px: int   = 600     # Canvas size (square)
     scale: float   = 10.0    # mm per pixel (600px @ 10mm/px → 6m × 6m)
     persist: bool  = True    # Keep last frame between missions
+    auto_fit: bool = True    # Scale and centre map to fill canvas
+    fit_margin: int = 40     # Pixel margin on each side when auto-fitting
 
 
 class MapRenderer:
@@ -124,6 +126,10 @@ class MapRenderer:
         self._robot_px: tuple[int, int] | None = None # current robot position
         self._theta: float = 0.0                      # current heading (degrees)
         self._last_png: bytes | None = None           # cached output (not persisted)
+        # Auto-fit state — recomputed at the start of each render().
+        self._fit_scale: float = self._cfg.scale
+        self._fit_cx: int = self._cfg.size_px // 2
+        self._fit_cy: int = self._cfg.size_px // 2
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -157,6 +163,70 @@ class MapRenderer:
         if self._robot_px:
             self._stuck_px.append(self._robot_px)
 
+    # Minimum content span in mm. Prevents extreme zoom when only a few
+    # points are present (e.g. mission just started).
+    _MIN_FIT_CONTENT_MM: float = 500.0
+
+    def _compute_fit(self) -> tuple[float, float, float, float, int, int]:
+        """Compute pixel-space transform for auto-fit rendering.
+
+        Returns (fit_ratio, tx, ty, new_scale, fit_cx, fit_cy) where:
+          fit_ratio        — multiply stored pixel coords by this to scale content
+          tx, ty           — translate after scaling so content is centred
+          new_scale        — mm-per-pixel scale for geometry layers (_mm_to_px)
+          fit_cx, fit_cy   — canvas pixel position of the dock (0,0 mm)
+
+        No instance state is mutated — callers apply all returned values.
+        Falls back to identity transform when no points or auto_fit is off.
+        """
+        size = self._cfg.size_px
+        orig_cx = orig_cy = size // 2
+        identity = (1.0, 0.0, 0.0, self._cfg.scale, orig_cx, orig_cy)
+        if not self._cfg.auto_fit or not self._points:
+            return identity
+
+        # Build bounding box from all content: path, stuck, robot.
+        all_px = list(self._points)
+        all_px.extend(self._stuck_px)
+        if self._robot_px:
+            all_px.append(self._robot_px)
+
+        xs = [p[0] for p in all_px]
+        ys = [p[1] for p in all_px]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        # Enforce a minimum content span in pixel space to prevent extreme
+        # zoom when only a few points exist (mission just started).
+        min_content_px = self._MIN_FIT_CONTENT_MM / self._cfg.scale
+        if (max_x - min_x) < min_content_px and (max_y - min_y) < min_content_px:
+            return identity
+
+        content_w = max(max_x - min_x, 1)
+        content_h = max(max_y - min_y, 1)
+
+        available = size - 2 * self._cfg.fit_margin
+        if available < 10:
+            return identity
+
+        # Uniform scale so the larger axis fills the available area.
+        fit_ratio = available / max(content_w, content_h)
+
+        # Translation to centre the scaled content on the canvas.
+        scaled_cx = (min_x + max_x) / 2 * fit_ratio
+        scaled_cy = (min_y + max_y) / 2 * fit_ratio
+        tx = size / 2 - scaled_cx
+        ty = size / 2 - scaled_cy
+
+        # Derive mm/px scale for geometry layers.
+        new_scale = self._cfg.scale / fit_ratio
+
+        # Dock position: (0,0 mm) was at orig_cx/cy in original pixel space.
+        fit_cx = int(orig_cx * fit_ratio + tx)
+        fit_cy = int(orig_cy * fit_ratio + ty)
+
+        return fit_ratio, tx, ty, new_scale, fit_cx, fit_cy
+
     def render(self) -> bytes:
         """Render all layers to PNG and return bytes.
 
@@ -165,6 +235,18 @@ class MapRenderer:
         """
         if not self._points and self._last_png:
             return self._last_png
+
+        # Compute auto-fit transform once per render.
+        # All fit state is set atomically here — _compute_fit has no side effects.
+        fit_ratio, tx, ty, new_scale, fit_cx, fit_cy = self._compute_fit()
+        self._fit_scale = new_scale
+        self._fit_cx = fit_cx
+        self._fit_cy = fit_cy
+
+        def _fit_px(px: int, py: int) -> tuple[int, int]:
+            """Transform a stored pixel coordinate to the fit canvas space."""
+            return (int(px * fit_ratio + tx), int(py * fit_ratio + ty))
+
 
         size = self._cfg.size_px
         img = Image.new("RGBA", (size, size), BG_COLOUR)
@@ -179,22 +261,24 @@ class MapRenderer:
         self._draw_user_geometry(draw)
 
         if self._points:
-            self._draw_cleaned_area(draw)
-            self._draw_path(draw)
+            self._draw_cleaned_area(draw, _fit_px)
+            self._draw_path(draw, _fit_px)
 
         for sx, sy in self._stuck_px:
-            self._draw_triangle(draw, sx, sy, STUCK_RADIUS, STUCK_COLOUR)
+            fsx, fsy = _fit_px(sx, sy)
+            self._draw_triangle(draw, fsx, fsy, STUCK_RADIUS, STUCK_COLOUR)
 
-        cx = cy = size // 2
+        dock_px = _fit_px(size // 2, size // 2)
+        dcx, dcy = dock_px
         draw.ellipse(
-            [cx - DOCK_HALF, cy - DOCK_HALF, cx + DOCK_HALF, cy + DOCK_HALF],
+            [dcx - DOCK_HALF, dcy - DOCK_HALF, dcx + DOCK_HALF, dcy + DOCK_HALF],
             fill=DOCK_COLOUR,
             outline=(30, 120, 30, 255),
             width=2,
         )
 
         if self._robot_px:
-            rx, ry = self._robot_px
+            rx, ry = _fit_px(*self._robot_px)
             draw.ellipse(
                 [rx - ROBOT_RADIUS, ry - ROBOT_RADIUS,
                  rx + ROBOT_RADIUS, ry + ROBOT_RADIUS],
@@ -499,26 +583,42 @@ class MapRenderer:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _mm_to_px(self, x_mm: float, y_mm: float) -> tuple[int, int]:
-        cx = cy = self._cfg.size_px // 2
+        """Convert mm dock-relative coordinates to canvas pixel coordinates.
+
+        Uses _fit_scale and _fit_cx/cy which are set by _compute_fit() at
+        the start of each render() call. Outside of render() (e.g. in
+        add_pose()) the default cfg scale and centre are used.
+        """
         return (
-            int(cx + x_mm / self._cfg.scale),
-            int(cy - y_mm / self._cfg.scale),
+            int(self._fit_cx + x_mm / self._fit_scale),
+            int(self._fit_cy - y_mm / self._fit_scale),
         )
 
-    def _draw_cleaned_area(self, draw: ImageDraw.ImageDraw) -> None:
+    def _draw_cleaned_area(
+        self, draw: ImageDraw.ImageDraw,
+        fit_px: Callable[[int, int], tuple[int, int]],
+    ) -> None:
         """Draw a filled circle per pose point to approximate cleaned area."""
-        r = max(4, int(150 / self._cfg.scale))
-        for px, py in self._interpolated(self._points, max_gap_px=r):
+        # Radius in original pixel space (150mm / cfg.scale), then scaled
+        # by fit_ratio so it matches the zoomed content size.
+        # This keeps the cleaned area proportional at all zoom levels.
+        base_r_px = max(4, int(150 / self._cfg.scale))
+        r = max(4, int(base_r_px * (self._cfg.scale / self._fit_scale)))
+        fitted = [fit_px(px, py) for px, py in self._points]
+        for px, py in self._interpolated(fitted, max_gap_px=r):
             draw.ellipse([px - r, py - r, px + r, py + r], fill=CLEANED_COLOUR)
 
-    def _draw_path(self, draw: ImageDraw.ImageDraw) -> None:
+    def _draw_path(
+        self, draw: ImageDraw.ImageDraw,
+        fit_px: Callable[[int, int], tuple[int, int]],
+    ) -> None:
         """Draw the travel path polyline, clipped to canvas bounds."""
         if len(self._points) < 2:
             return
         size = self._cfg.size_px
         clipped = [
             (max(0, min(size - 1, px)), max(0, min(size - 1, py)))
-            for px, py in self._points
+            for px, py in (fit_px(px, py) for px, py in self._points)
         ]
         draw.line(clipped, fill=PATH_COLOUR, width=PATH_WIDTH)
 

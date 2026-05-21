@@ -215,6 +215,26 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         # don't fire async_create_issue on every subsequent MQTT message.
         self._known_unlabelled: set[str] = set()
 
+    async def async_added_to_hass(self) -> None:
+        """Run initial unlabelled check once the entity is registered.
+
+        on_message() only fires on MQTT delta updates, never for the
+        initial state loaded at startup. Region IDs already in
+        cleanSchedule2 at startup would not trigger the Repair Issue
+        until the robot sends a cleanSchedule2 delta. This check
+        ensures the issue fires on every HA startup when needed.
+        """
+        await super().async_added_to_hass()
+        unlabelled = set(self._unlabelled_region_ids())
+        if unlabelled:
+            self._known_unlabelled = unlabelled
+            _LOGGER.info(
+                "SmartZoneSelect: %d unlabelled region_id(s) at startup: %s",
+                len(unlabelled),
+                sorted(unlabelled),
+            )
+            await self._async_raise_naming_issue()
+
     # ── Region ID collection ──────────────────────────────────────────────────
 
     def _collect_region_ids(self) -> list[str]:
