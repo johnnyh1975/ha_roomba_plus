@@ -251,7 +251,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
         # From lastCommand
         last = self.vacuum_state.get("lastCommand", {})
-        for region in last.get("regions", []):
+        for region in (last.get("regions") or []):
             rid = region.get("region_id")
             if rid:
                 region_ids.add(rid)
@@ -370,27 +370,51 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
                 len(new_unlabelled),
                 sorted(new_unlabelled),
             )
-            self.hass.async_create_task(self._async_raise_naming_issue())
+            self.hass.loop.call_soon_threadsafe(
+                lambda: self.hass.async_create_task(
+                    self._async_raise_naming_issue()
+                )
+            )
 
         # Dismiss issue when all region_ids have been labelled
         elif self._known_unlabelled and not unlabelled:
             self._known_unlabelled = set()
-            self.hass.async_create_task(self._async_dismiss_naming_issue())
+            self.hass.loop.call_soon_threadsafe(
+                lambda: self.hass.async_create_task(
+                    self._async_dismiss_naming_issue()
+                )
+            )
 
     async def _async_raise_naming_issue(self) -> None:
-        """Create (or update) the smart_zones_need_naming Repair Issue."""
-        from homeassistant.components import repairs as ir
+        """Create (or update) the smart_zones_need_naming Repair Issue.
+
+        Bug 5b fix: persists discovered zone IDs to config entry options so
+        the repair fix flow can read them even when live robot state no
+        longer contains regions (e.g. after a full clean or dock return).
+        Bug 3 fix: uses homeassistant.helpers.issue_registry which works
+        correctly on HA 2026.x; severity passed as plain string.
+        """
+        from homeassistant.helpers import issue_registry as ir
 
         unlabelled = self._unlabelled_region_ids()
         if not unlabelled:
             return  # Labelled in the meantime — nothing to do
+
+        # Persist discovered IDs to options so the repair fix flow can
+        # read them even when live MQTT state no longer has regions.
+        new_options = dict(self._config_entry.options)
+        existing_ids = set(new_options.get("discovered_zone_ids", []))
+        new_options["discovered_zone_ids"] = sorted(existing_ids | set(unlabelled))
+        self.hass.config_entries.async_update_entry(
+            self._config_entry, options=new_options
+        )
 
         ir.async_create_issue(
             self.hass,
             DOMAIN,
             "smart_zones_need_naming",
             is_fixable=True,
-            severity=ir.IssueSeverity.WARNING,
+            severity="warning",
             translation_key="smart_zones_need_naming",
             translation_placeholders={
                 "zone_count": str(len(unlabelled)),
@@ -404,7 +428,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
     async def _async_dismiss_naming_issue(self) -> None:
         """Dismiss the smart_zones_need_naming issue once all IDs are labelled."""
-        from homeassistant.components import repairs as ir
+        from homeassistant.helpers import issue_registry as ir
 
         ir.async_delete_issue(self.hass, DOMAIN, "smart_zones_need_naming")
         _LOGGER.debug("SmartZoneSelect: repair issue dismissed — all zones labelled")

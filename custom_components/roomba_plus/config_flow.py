@@ -420,7 +420,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 if rid:
                     region_ids.add(rid)
         last = state.get("lastCommand", {})
-        for region in last.get("regions", []):
+        for region in (last.get("regions") or []):
             rid = region.get("region_id")
             if rid:
                 region_ids.add(rid)
@@ -465,7 +465,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     pmap_for_rid = current_pmap_id
                     if last.get("pmap_id") and any(
                         r.get("region_id") == rid
-                        for r in last.get("regions", [])
+                        for r in (last.get("regions") or [])
                     ):
                         pmap_for_rid = last["pmap_id"]
                     new_zone_data[rid] = {

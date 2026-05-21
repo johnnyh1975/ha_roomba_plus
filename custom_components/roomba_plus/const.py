@@ -329,7 +329,7 @@ def has_carpet_boost(state: dict) -> bool:
 
 def has_pose(state: dict) -> bool:
     """Return True if this robot reports pose (position) data."""
-    return state.get("cap", {}).get("pose") == 1
+    return state.get("cap", {}).get("pose", 0) >= 1
 
 
 def has_smart_map(state: dict) -> bool:

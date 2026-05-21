@@ -277,7 +277,7 @@
       "description": "Roomba+ hat {zone_count} neue Zone(n) entdeckt ({zone_ids}), die noch keinen Namen haben. Bitte in den Einstellungen benennen.",
       "fix_flow": {
         "step": {
-          "smart_zones": {
+          "init": {
             "title": "Smart-Map-Zonen benennen"
           }
         }

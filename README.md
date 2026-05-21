@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.4.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.4.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -18,12 +18,12 @@ Home Assistant Custom Integration für iRobot Roomba und Braava. Vollständig lo
 |---|---|---|---|---|---|---|---|
 | **600** (Bump & Run) | Roomba 694, 692 | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ untested |
 | **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ❌ | ❌ | ❌ | ✅ **Roomba 980** |
-| **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ i7+ only | ✅ | ✅ | ⚠️ untested |
+| **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ i7+ only | ✅ | ✅ | ✅ **i7+** |
 | **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ | ✅ | ✅ | ⚠️ untested |
 | **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ j7+ only | ✅ | ✅ | ⚠️ untested |
 | **Braava** | m6 | ✅ | ✅ Smart Map | ❌ | ✅ | ❌ (mop ready ✅) | ⚠️ untested |
 
-> **Tested hardware:** Roomba 980 only. Support for other series is implemented based on protocol documentation, capability flags and the roombapy library — but has not been verified on real hardware. If you own a different model and run into issues, please [open an issue](https://github.com/johnnyh1975/ha_roomba_plus/issues).
+> **Tested hardware:** Roomba 980 and Roomba i7+. Support for other series is implemented based on protocol documentation, capability flags and the roombapy library — but has not been verified on real hardware. If you own a different model and run into issues, please [open an issue](https://github.com/johnnyh1975/ha_roomba_plus/issues).
 
 > "Always finish" requires a Clean Base dock. "Bin present" requires a removable bin (i/s/j-series). Availability is detected automatically from the robot's reported state — no manual configuration needed.
 
@@ -83,7 +83,11 @@ Automatic room segmentation from travel data:
 
 ### Smart Map zone naming (i / s / j / Braava m6)
 
-When the robot reports previously unseen room IDs from its Smart Map (via `cleanSchedule2` or `lastCommand`), a **HA Repair Issue** is automatically raised. The fix flow opens directly in the integration settings where you can assign names to each zone. The issue dismisses itself once all zones have a name.
+When the robot reports previously unseen room IDs from its Smart Map, a **HA Repair Issue** is automatically raised. The check runs both at HA startup and on live MQTT updates — no room-specific clean required to trigger it.
+
+The fix flow opens directly in the Repairs dialog where you can assign names to each discovered zone. Zone IDs are persisted to integration storage so they survive robot state changes between discovery and naming. The issue dismisses itself once all zones have a name.
+
+**Robots with multiple Smart Maps** are fully supported — the capability detection now correctly identifies all Smart Map robots regardless of how many maps are configured.
 
 ### Diagnostics
 
@@ -371,6 +375,14 @@ The map state is persisted to `hass.storage` after each completed mission and re
 **Zone detection not working (900-series)**
 
 Zone detection requires at least 20 pose points per segment. Short missions or missions in very open spaces may not produce enough data for reliable segmentation. Run a full cleaning mission covering the entire floor for best results. Use the door-width calibration wizard (Settings → Devices & Services → Roomba+ → Configure) to improve accuracy.
+
+**Smart Map zones not appearing / Repair Issue never fires (i / s / j-series)**
+
+In v1.4.2 the zone check runs at HA startup, so the Repair Issue should appear within seconds of restarting HA if any zones are unnamed — no room-specific clean required. If the issue still does not appear:
+
+- Check that your robot is reporting `"cap": {"pose": ...}` with a value ≥ 1 in the HA diagnostics download. Robots with multiple Smart Maps previously required exactly `pose == 1` which excluded them — this is fixed in v1.4.2.
+- Ensure `regions` in `lastCommand` is not reported as `null` by your firmware — this is also handled in v1.4.2.
+- If the Repair Issue appears but clicking Fix immediately shows "Problem resolved" without a form, deploy the full v1.4.2 package which includes the required `repairs.py` file.
 
 **Migration from Core Roomba integration**
 
