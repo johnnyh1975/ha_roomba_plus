@@ -160,6 +160,7 @@ ERROR_CODE_LABELS: Final[dict[int, str]] = {
     122: "Charging system error",
     123: "Battery not initialised",
     216: "Charging base bag full",
+    224: "Smart Map localization failed",
     1010: "Clear path",
 }
 

@@ -252,15 +252,15 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             cmd = entry.get("cmd", {})
             for region in cmd.get("regions", []):
                 rid = region.get("region_id")
-                if rid:
-                    region_ids.add(rid)
+                if rid is not None:
+                    region_ids.add(str(rid))
 
         # From lastCommand
         last = self.vacuum_state.get("lastCommand", {})
         for region in (last.get("regions") or []):
             rid = region.get("region_id")
-            if rid:
-                region_ids.add(rid)
+            if rid is not None:
+                region_ids.add(str(rid))
 
         # From persisted discovered_zone_ids — survives MQTT disconnection.
         persisted = self._config_entry.options.get("discovered_zone_ids", [])

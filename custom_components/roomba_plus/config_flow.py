@@ -589,6 +589,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             if not parsed:
                 errors["zone_names"] = "no_valid_ids"
                 pending = getattr(self, "_pending_zone_ids", [])
+            elif not current_pmap_id:
+                errors["zone_names"] = "pmap_not_resolved"
+                pending = getattr(self, "_pending_zone_ids", [])
                 default_text = "\n".join(f"{rid}=" for rid in pending)
                 return self.async_show_form(
                     step_id="smart_zones_manual",

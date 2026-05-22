@@ -95,7 +95,8 @@
           "zone_names": "One entry per line: 21=Corridor, 22=Kitchen, etc."
         },
         "error": {
-          "no_valid_ids": "No valid entries found. Use the format id=Name, one per line."
+          "no_valid_ids": "No valid entries found. Use the format id=Name, one per line.",
+          "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
         }
       }
     },
@@ -314,7 +315,8 @@
           }
         },
         "error": {
-          "no_valid_entries": "No valid entries found. Use the format `id=Name`, one per line."
+          "no_valid_entries": "No valid entries found. Use the format `id=Name`, one per line.",
+          "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
         }
       }
     },

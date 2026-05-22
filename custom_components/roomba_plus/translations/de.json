@@ -95,7 +95,8 @@
           "zone_names": "Eine Zeile pro Zone: 21=Korridor, 22=Küche, usw."
         },
         "error": {
-          "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone."
+          "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone.",
+          "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist."
         }
       }
     },
@@ -314,7 +315,8 @@
           }
         },
         "error": {
-          "no_valid_entries": "Keine gültigen Einträge gefunden. Bitte das Format `ID=Name` verwenden, eine Zeile pro Zone."
+          "no_valid_entries": "Keine gültigen Einträge gefunden. Bitte das Format `ID=Name` verwenden, eine Zeile pro Zone.",
+          "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist, und versuche es erneut."
         }
       }
     }

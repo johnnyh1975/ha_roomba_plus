@@ -107,6 +107,8 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
 
             if not parsed:
                 errors["zones"] = "no_valid_entries"
+            elif not pmap_id:
+                errors["zones"] = "pmap_not_resolved"
             else:
                 new_labels = dict(opts.get("smart_zone_labels", {}))
                 new_zone_data = dict(opts.get("smart_zone_data", {}))
@@ -196,13 +198,13 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             for entry in state.get("cleanSchedule2", []):
                 for region in (entry.get("cmd", {}).get("regions") or []):
                     rid = region.get("region_id")
-                    if rid:
-                        region_ids.add(rid)
+                    if rid is not None:
+                        region_ids.add(str(rid))
             last = state.get("lastCommand", {})
             for region in (last.get("regions") or []):
                 rid = region.get("region_id")
-                if rid:
-                    region_ids.add(rid)
+                if rid is not None:
+                    region_ids.add(str(rid))
         except Exception:  # noqa: BLE001
             pass
         return sorted(region_ids)

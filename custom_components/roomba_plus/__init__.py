@@ -264,10 +264,11 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
         }
 
         _LOGGER.info(
-            "clean_room: %s → regions=%s map=%s",
+            "clean_room: %s → regions=%s pmap=%s pmapv=%s",
             entity_id,
             [rid for rid, _ in resolved],
             pmap_id[:12],
+            user_pmapv_id[:12] if user_pmapv_id else "none",
         )
 
         await hass.async_add_executor_job(
