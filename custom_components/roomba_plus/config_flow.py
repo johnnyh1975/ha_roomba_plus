@@ -328,6 +328,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_show_menu(
                 step_id="init",
                 menu_options=["settings", "smart_zones_manual"],
+                description_placeholders={},
             )
 
         # Non-Smart-Map robots go directly to settings form.

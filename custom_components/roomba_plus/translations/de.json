@@ -45,20 +45,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Roomba+ Verbindungseinstellungen",
-        "data": {
-          "continuous": "Dauerverbindung",
-          "delay": "Wiederverbindungsverzögerung (Sekunden)",
-          "map_enabled": "Live-Karte aktivieren",
-          "map_size_px": "Kartengröße (Pixel)",
-          "map_scale_mm_per_px": "Maßstab (mm/Pixel)"
-        },
-        "data_description": {
-          "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
-          "delay": "Wartezeit in Sekunden zwischen Wiederverbindungsversuchen.",
-          "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
-          "map_size_px": "Bildgröße der Karte in Pixel (400–1200). Standard: 600 px.",
-          "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel."
+        "title": "Roomba+ konfigurieren",
+        "menu_options": {
+          "settings": "Verbindungseinstellungen",
+          "smart_zones_manual": "Smart Map Zonen manuell eingeben"
         }
       },
       "zones": {
@@ -75,7 +65,37 @@
       "smart_zones": {
         "title": "Smart-Map-Zonen benennen",
         "description": "{zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Bitte Namen vergeben:"
+      },
+      "settings": {
+        "title": "Verbindungseinstellungen",
+        "data": {
+          "continuous": "Dauerverbindung",
+          "delay": "Wiederverbindungsverzögerung (Sekunden)",
+          "map_enabled": "Live-Karte aktivieren",
+          "map_size_px": "Kartengröße (Pixel)",
+          "map_scale_mm_per_px": "Maßstab (mm/Pixel)"
+        },
+        "data_description": {
+          "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
+          "delay": "Wartezeit in Sekunden zwischen Wiederverbindungsversuchen.",
+          "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Bildgröße der Karte in Pixel (400–1200). Standard: 600 px.",
+          "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Smart Map Zonen manuell eingeben",
+        "description": "Gib die Zonen-IDs kommagetrennt ein (z. B. 5, 12, 7). Die IDs findest du im HA-Diagnose-Download unter options → discovered_zone_ids, oder du startest einen raumspezifischen Reinigungsauftrag in der iRobot App, während HA verbunden ist.",
+        "data": {
+          "region_ids": "Zonen-IDs (kommagetrennt)"
+        },
+        "data_description": {
+          "region_ids": "Beispiel: 5, 12, 7"
+        }
       }
+    },
+    "errors": {
+      "no_valid_ids": "Keine gültigen IDs gefunden. Bitte kommagetrennte Zahlen eingeben."
     }
   },
   "entity": {
@@ -325,6 +345,9 @@
     },
     "pmap_not_found": {
       "message": "Karte nicht im Roboterstatus gefunden. Die Karte wurde möglicherweise neu trainiert — bitte eine Raumreinigung über die iRobot-App starten."
+    },
+    "pmap_not_resolved": {
+      "message": "Karten-ID konnte für einen oder mehrere Räume nicht aufgelöst werden. Bitte sicherstellen, dass der Roboter seinen Kartenstatus via MQTT übermittelt hat."
     }
   }
 }

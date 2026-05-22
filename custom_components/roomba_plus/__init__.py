@@ -25,7 +25,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -78,6 +78,7 @@ def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
 def _resolve_rooms(
     zone_data: dict[str, dict],
     room_names: list[str],
+    state: dict,
 ) -> list[tuple[str, str]]:
     """Resolve room names to (region_id, pmap_id) tuples.
 
@@ -85,19 +86,24 @@ def _resolve_rooms(
         zone_data: smart_zone_data from config_entry.options —
                    {region_id: {"name": str, "pmap_id": str}}
         room_names: user-supplied room names from the service call.
+        state:      live robot state — used to resolve pmap_id when the stored
+                    value is empty (e.g. zone was entered via manual entry before
+                    any MQTT mission data arrived).
 
     Returns:
         Ordered list of (region_id, pmap_id) matching each room name.
 
     Raises:
-        ServiceValidationError: if any name is unknown, or if the resolved
-            rooms span more than one pmap_id (different floors).
+        ServiceValidationError: if any name is unknown, if pmap_id cannot be
+            resolved, or if the resolved rooms span more than one pmap_id.
     """
     # Build a case-insensitive name → (region_id, pmap_id) index.
+    # Include all zones that have a name — pmap_id may be empty for manually
+    # entered zones and will be resolved from live state below.
     index: dict[str, tuple[str, str]] = {
-        meta["name"].casefold(): (rid, meta["pmap_id"])
+        meta["name"].casefold(): (rid, meta.get("pmap_id", ""))
         for rid, meta in zone_data.items()
-        if meta.get("name") and meta.get("pmap_id")
+        if meta.get("name")
     }
 
     resolved: list[tuple[str, str]] = []
@@ -119,7 +125,28 @@ def _resolve_rooms(
             translation_placeholders={"names": ", ".join(unknown)},
         )
 
+    # Resolve empty pmap_ids from live state.pmaps.
+    # This covers zones entered via manual entry (Alt 1) where pmap_id was not
+    # available at save time, as well as zones with stale pmap_ids after a map
+    # retrain. Smart Map robots always have exactly one pmap per floor.
+    live_pmap_id = next(
+        (next(iter(p)) for p in state.get("pmaps", []) if p),
+        "",
+    )
+    resolved = [
+        (rid, pmap_id if pmap_id else live_pmap_id)
+        for rid, pmap_id in resolved
+    ]
+
+    # Validate that all rooms share the same pmap (same floor).
     pmap_ids = {pmap_id for _, pmap_id in resolved}
+    if "" in pmap_ids:
+        raise ServiceValidationError(
+            "Could not resolve map ID (pmap_id) for one or more rooms. "
+            "Ensure the robot has reported its map state via MQTT.",
+            translation_domain=DOMAIN,
+            translation_key="pmap_not_resolved",
+        )
     if len(pmap_ids) > 1:
         raise ServiceValidationError(
             "All rooms must be on the same floor (same pmap). "
@@ -183,11 +210,13 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
                 translation_key="no_rooms_configured",
             )
 
+        # Read live state before resolving rooms — needed for pmap_id fallback.
+        state = roomba_reported_state(data.roomba)
+
         # Resolve names → (region_id, pmap_id) — raises on unknown or cross-floor.
-        resolved = _resolve_rooms(zone_data, room_names)
+        resolved = _resolve_rooms(zone_data, room_names, state)
 
         pmap_id = resolved[0][1]  # all share one pmap_id (enforced by _resolve_rooms)
-        state = roomba_reported_state(data.roomba)
 
         # Always read user_pmapv_id from live MQTT state — never from cache.
         user_pmapv_id = _resolve_pmapv_id(state, pmap_id)
@@ -224,6 +253,8 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
         await hass.async_add_executor_job(
             data.roomba.send_command, "start", params
         )
+
+    return {}
 
 
 async def async_setup_entry(
@@ -343,7 +374,7 @@ async def async_setup_entry(
                     vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
                 }
             ),
-            supports_response=None,
+            supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
 
@@ -400,7 +431,7 @@ async def async_connect_or_timeout(
     """
     try:
         name: str | None = None
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(16):
             _LOGGER.debug("Connecting to Roomba")
             await hass.async_add_executor_job(roomba.connect)
             while not roomba.roomba_connected or name is None:
@@ -414,6 +445,15 @@ async def async_connect_or_timeout(
             # Without this, capability-gated sensors (carpet boost, dock,
             # mop) are filtered out because 'cap' is not yet in master_state.
             await asyncio.sleep(2)
+            # For Smart Map robots, pmaps may arrive slightly later than cap.
+            # Wait up to 6 additional seconds so capability detection at
+            # async_setup_entry doesn't misclassify an i/s/j robot as NONE.
+            cap = roomba_reported_state(roomba).get("cap", {})
+            if cap.get("pmapUpload") or cap.get("tflmsl"):
+                for _ in range(6):
+                    if roomba_reported_state(roomba).get("pmaps"):
+                        break
+                    await asyncio.sleep(1)
     except RoombaConnectionError as err:
         _LOGGER.debug("Connection error: %s", err)
         raise CannotConnect from err

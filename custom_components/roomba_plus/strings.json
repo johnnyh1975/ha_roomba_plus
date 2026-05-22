@@ -45,20 +45,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Roomba+ connection settings",
-        "data": {
-          "continuous": "Continuous connection",
-          "delay": "Reconnect delay (seconds)",
-          "map_enabled": "Enable live map",
-          "map_size_px": "Map size (pixels)",
-          "map_scale_mm_per_px": "Scale (mm/pixel)"
-        },
-        "data_description": {
-          "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
-          "delay": "Seconds to wait between reconnection attempts.",
-          "map_enabled": "Enable the live cleaning map for robots with position sensing (Roomba 900, i, s, j, Braava m).",
-          "map_size_px": "Map canvas size in pixels (400–1200). Default: 600.",
-          "map_scale_mm_per_px": "Millimetres per pixel (5–30). Default 10 = 6 m × 6 m at 600 px."
+        "title": "Configure Roomba+",
+        "menu_options": {
+          "settings": "Connection settings",
+          "smart_zones_manual": "Manually enter Smart Map zones"
         }
       },
       "zones": {
@@ -75,7 +65,37 @@
       "smart_zones": {
         "title": "Name Smart Map zones",
         "description": "{zone_count} zone(s) have no name yet (IDs: {zone_ids}). Assign names so you can clean them individually:"
+      },
+      "settings": {
+        "title": "Connection settings",
+        "data": {
+          "continuous": "Continuous connection",
+          "delay": "Reconnect delay (seconds)",
+          "map_enabled": "Enable live map",
+          "map_size_px": "Map size (pixels)",
+          "map_scale_mm_per_px": "Scale (mm/pixel)"
+        },
+        "data_description": {
+          "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
+          "delay": "Seconds to wait between reconnection attempts.",
+          "map_enabled": "Enable the live cleaning map for robots with position sensing (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Map canvas size in pixels (400–1200). Default: 600.",
+          "map_scale_mm_per_px": "Millimetres per pixel (5–30). Default 10 = 6 m × 6 m at 600 px."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Manually enter Smart Map zones",
+        "description": "Enter your room region IDs as a comma-separated list (e.g. 5, 12, 7). Find them in the HA diagnostics download under options → discovered_zone_ids, or start a room-specific clean from the iRobot app while HA is connected and check the diagnostics afterwards.",
+        "data": {
+          "region_ids": "Region IDs (comma-separated)"
+        },
+        "data_description": {
+          "region_ids": "Example: 5, 12, 7"
+        }
       }
+    },
+    "errors": {
+      "no_valid_ids": "No valid IDs found. Please enter comma-separated numbers."
     }
   },
   "entity": {
@@ -262,23 +282,34 @@
   },
   "issues": {
     "zones_need_naming": {
-      "title": "Neue Räume erkannt",
-      "description": "Roomba+ hat neue Bereiche erkannt. Bitte in den Einstellungen benennen.",
+      "title": "New rooms detected",
+      "description": "Roomba+ has detected new areas. Open the settings to name them.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Räume benennen"
+            "title": "Name detected rooms"
           }
         }
       }
     },
     "smart_zones_need_naming": {
-      "title": "Neue Smart-Map-Zonen entdeckt",
-      "description": "Roomba+ hat {zone_count} neue Zone(n) entdeckt ({zone_ids}), die noch keinen Namen haben. Bitte in den Einstellungen benennen.",
+      "title": "New Smart Map zones discovered",
+      "description": "Roomba+ discovered {zone_count} new zone(s) ({zone_ids}) with no name yet. Open the settings to name them.",
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Smart-Map-Zonen benennen"
+            "title": "Name Smart Map zones"
+          }
+        }
+      }
+    },
+    "geometry_drifted": {
+      "title": "Map drift detected",
+      "description": "The Roomba’s position map has drifted significantly. Re-confirm your room layout to keep the map accurate.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Re-confirm room layout"
           }
         }
       }
@@ -325,6 +356,9 @@
     },
     "pmap_not_found": {
       "message": "Map not found in robot state. The map may have been retrained — run a room mission via the iRobot app to refresh."
+    },
+    "pmap_not_resolved": {
+      "message": "Could not resolve map ID for one or more rooms. Ensure the robot has reported its map state via MQTT."
     }
   }
 }

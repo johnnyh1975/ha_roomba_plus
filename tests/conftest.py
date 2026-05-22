@@ -52,7 +52,12 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
     return m
 
 # homeassistant.core
-ha_core = _make_module("homeassistant.core", HomeAssistant=object, callback=lambda f: f, CALLBACK_TYPE=object, ServiceCall=object)
+import enum as _enum
+class _SupportsResponse(_enum.Enum):
+    NONE = "none"
+    OPTIONAL = "optional"
+    ONLY = "only"
+ha_core = _make_module("homeassistant.core", HomeAssistant=object, callback=lambda f: f, CALLBACK_TYPE=object, ServiceCall=object, SupportsResponse=_SupportsResponse)
 
 # homeassistant.const
 ha_const = _make_module("homeassistant.const",
@@ -82,7 +87,7 @@ ha_const = _make_module("homeassistant.const",
 _make_module("homeassistant.exceptions",
     HomeAssistantError=Exception,
     ConfigEntryNotReady=Exception,
-    ServiceValidationError=Exception,
+    ServiceValidationError=type("ServiceValidationError", (Exception,), {"__init__": lambda self, msg="", **kw: Exception.__init__(self, msg)}),
 )
 
 # homeassistant.helpers.storage

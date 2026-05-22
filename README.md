@@ -93,7 +93,9 @@ The fix flow opens directly in the Repairs dialog where you can assign names to 
 
 On a fresh install, HA may not have seen any room-specific cleans yet and therefore has no region IDs to display. To break this circular dependency, open **Settings → Devices & Services → Roomba+ → Configure** and select **Manually enter Smart Map zones**.
 
-Enter your region IDs as a comma-separated list (e.g. `5, 12, 7`). You can find them in the HA diagnostics download under `options → discovered_zone_ids`, or by starting a room-specific clean from the iRobot app while HA is connected and checking the diagnostics afterwards. On the next screen, assign a name to each ID. The `pmap_id` is resolved automatically — you do not need to find it manually.
+Enter your region IDs as a comma-separated list (e.g. `5, 12, 7`). You can find them in the HA diagnostics download under `options → discovered_zone_ids`, or by starting a room-specific clean from the iRobot app while HA is connected and checking the diagnostics afterwards. On the next screen, assign a name to each ID. The `pmap_id` is resolved automatically from the robot's live state — you do not need to find it manually.
+
+Once saved, `roomba_plus.clean_room` works immediately — the integration resolves the map ID from the robot's live state at command time, so no prior MQTT clean history is required.
 
 ### Diagnostics
 
@@ -382,6 +384,10 @@ The map state is persisted to `hass.storage` after each completed mission and re
 
 Zone detection requires at least 20 pose points per segment. Short missions or missions in very open spaces may not produce enough data for reliable segmentation. Run a full cleaning mission covering the entire floor for best results. Use the door-width calibration wizard (Settings → Devices & Services → Roomba+ → Configure) to improve accuracy.
 
+**Configure menu shows buttons without labels (Smart Map robots)**
+
+Fixed in v1.4.4. The OptionsFlow menu renderer requires `description_placeholders` to be passed explicitly — without it, HA's frontend skips label resolution and renders empty button text. The `translations/en.json` German-string regression from v1.4.3 is also corrected. Ensure you have deployed the complete v1.4.4 package and cleared your browser's frontend cache (Shift+F5).
+
 **Smart Map zones not appearing / Repair Issue never fires (i / s / j-series)**
 
 The zone check runs at HA startup — the Repair Issue should appear within seconds of restarting HA if any zones are unnamed. If it does not:
@@ -394,7 +400,15 @@ The zone check runs at HA startup — the Repair Issue should appear within seco
 
 If you have never started a room-specific clean while HA was connected, no region IDs have been captured and the Repair Issue either does not appear or shows an empty form. This happens because the robot only broadcasts region IDs as a one-time MQTT delta when a room-specific clean is commanded — and if the iRobot app initiated the clean, it takes over the MQTT connection first.
 
-Use the **manual entry flow** to break the dependency: Settings → Devices & Services → Roomba+ → Configure → **Manually enter Smart Map zones**. Enter your region IDs as a comma-separated list. Find them in the HA diagnostics download under `options → discovered_zone_ids` (after even one partial MQTT connection) or use the iRobot app to find your room layout. Once entered and named, the select entity populates and `roomba_plus.clean_room` works immediately.
+Use the **manual entry flow** to break the dependency: Settings → Devices & Services → Roomba+ → Configure → **Manually enter Smart Map zones**. Enter your region IDs as a comma-separated list. Find them in the HA diagnostics download under `options → discovered_zone_ids` (after even one partial MQTT connection) or use the iRobot app to find your room layout. Once entered and named, the select entity populates and `roomba_plus.clean_room` works immediately — the `pmap_id` is resolved live from the robot's state at call time, so zones entered manually work even before any room-specific MQTT clean has been received.
+
+**Note on capability detection timing:** on a fresh install, `map_capability` is detected during HA startup. If the robot's `pmaps` state delta arrives after the initial 2-second wait, the robot may be misclassified as non-Smart-Map and `clean_room` will raise "does not support Smart Map room cleaning". Fixed in v1.4.4 — the integration now waits up to 6 additional seconds for `pmaps` on robots that report Smart Map capability flags (`pmapUpload` / `tflmsl`). If you see this error on an i/s/j-series robot, reload the integration once (Settings → Devices & Services → Roomba+ → ⋮ → Reload) to re-run capability detection.
+
+**Note:** if `clean_room` raises "Could not resolve map ID", the robot has not yet reported its map state via MQTT. Ensure the robot is docked and connected, wait a few seconds for the state to arrive, then try again.
+
+**`clean_room` raises "Failed to process action response" in Developer Tools**
+
+Fixed in v1.4.4. The handler now declares `SupportsResponse.OPTIONAL` and returns `{}` on success, so HA's action framework always receives a valid response object. In earlier builds the handler returned `None` implicitly, causing HA 2026.x to raise "expected a dictionary, but got NoneType". The underlying clean command was sent correctly in all cases — only the Developer Tools response handling failed.
 
 **Migration from Core Roomba integration**
 
