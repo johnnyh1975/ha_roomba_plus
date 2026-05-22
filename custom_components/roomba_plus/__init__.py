@@ -435,8 +435,19 @@ async def async_unload_entry(
 async def _async_reload_on_options_change(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> None:
-    """Reload the entry when options (continuous/delay) change."""
-    await hass.config_entries.async_reload(config_entry.entry_id)
+    """Reload only when connection-relevant options change.
+
+    continuous and delay are passed to RoombaFactory at setup time and
+    require a full reconnect to take effect. Zone labels, map settings,
+    and discovered_zone_ids do not affect the MQTT connection and must
+    not trigger a reload — doing so disconnects the robot unnecessarily
+    every time the user saves a zone name via the repair flow or options.
+    """
+    _CONNECTION_KEYS = {CONF_CONTINUOUS, CONF_DELAY}
+    old_vals = {k: config_entry.data.get(k) for k in _CONNECTION_KEYS}
+    new_vals = {k: config_entry.options.get(k) for k in _CONNECTION_KEYS}
+    if old_vals != new_vals:
+        await hass.config_entries.async_reload(config_entry.entry_id)
 
 
 # ── Connection helpers ────────────────────────────────────────────────────────

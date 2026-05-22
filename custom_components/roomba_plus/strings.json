@@ -87,10 +87,15 @@
         "title": "Manually enter Smart Map zones",
         "description": "Enter your room region IDs as a comma-separated list (e.g. 5, 12, 7). Find them in the HA diagnostics download under options → discovered_zone_ids, or start a room-specific clean from the iRobot app while HA is connected and check the diagnostics afterwards.",
         "data": {
-          "region_ids": "Region IDs (comma-separated)"
+          "region_ids": "Region IDs (comma-separated)",
+          "zone_names": "Zone name assignments"
         },
         "data_description": {
-          "region_ids": "Example: 5, 12, 7"
+          "region_ids": "Example: 5, 12, 7",
+          "zone_names": "One entry per line: 21=Corridor, 22=Kitchen, etc."
+        },
+        "error": {
+          "no_valid_ids": "No valid entries found. Use the format id=Name, one per line."
         }
       }
     },

@@ -87,10 +87,15 @@
         "title": "Smart Map Zonen manuell eingeben",
         "description": "Gib die Zonen-IDs kommagetrennt ein (z. B. 5, 12, 7). Die IDs findest du im HA-Diagnose-Download unter options → discovered_zone_ids, oder du startest einen raumspezifischen Reinigungsauftrag in der iRobot App, während HA verbunden ist.",
         "data": {
-          "region_ids": "Zonen-IDs (kommagetrennt)"
+          "region_ids": "Zonen-IDs (kommagetrennt)",
+          "zone_names": "Zonennamen"
         },
         "data_description": {
-          "region_ids": "Beispiel: 5, 12, 7"
+          "region_ids": "Beispiel: 5, 12, 7",
+          "zone_names": "Eine Zeile pro Zone: 21=Korridor, 22=Küche, usw."
+        },
+        "error": {
+          "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone."
         }
       }
     },

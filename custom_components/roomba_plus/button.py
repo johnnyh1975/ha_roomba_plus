@@ -102,7 +102,7 @@ async def async_setup_entry(
     # Smart zone button: for Smart Map robots (i/s/j/m-series)
     from .const import has_smart_map
     if has_smart_map(state):
-        entities.append(SmartZoneButton(roomba, blid))
+        entities.append(SmartZoneButton(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -362,9 +362,10 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
     _attr_icon = "mdi:map-marker-check-outline"
     _attr_entity_category = None   # primary action — visible by default
 
-    def __init__(self, roomba, blid):
+    def __init__(self, roomba, blid, config_entry):
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_clean_smart_zone"
+        self._config_entry = config_entry
 
     async def async_press(self) -> None:
         """Find SmartZoneSelect state and start targeted clean.
@@ -402,6 +403,15 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             regions = last.get("regions", [])
             if pmap_id and regions:
                 region_id = regions[0].get("region_id")
+
+        # Second fallback: read pmap_id from smart_zone_data for the selected
+        # region. Covers the edge case where the entity lookup failed AND
+        # lastCommand/cleanSchedule2 are absent (e.g. app clean while HA was
+        # disconnected). region_id is already set from selected_region_id above
+        # if the entity was found, so only pmap_id may still be missing.
+        if region_id and not pmap_id:
+            zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
+            pmap_id = zone_data.get(region_id, {}).get("pmap_id") or None
 
         if not region_id or not pmap_id:
             _LOGGER.warning(

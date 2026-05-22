@@ -548,20 +548,22 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         # Phases are distinguished by key presence, not value, to avoid ambiguity.
 
         if user_input is not None and "region_ids" in user_input:
-            # Phase 1 submitted
+            # Phase 1 submitted — parse IDs and store them for phase 2.
             raw = user_input["region_ids"]
             pending = [r.strip() for r in raw.replace(",", " ").split() if r.strip()]
             if not pending:
                 errors["region_ids"] = "no_valid_ids"
             else:
-                # Advance to phase 2 — show one name field per ID
-                schema = vol.Schema({
-                    vol.Optional(f"name_{rid}", default=existing_labels.get(rid, f"Zone {rid}")): str
-                    for rid in pending
-                })
+                # Store pending IDs so phase 2 can read them on re-entry.
+                self._pending_zone_ids = pending
+                default_text = "\n".join(
+                    f"{rid}={existing_labels.get(rid, '')}" for rid in pending
+                )
                 return self.async_show_form(
                     step_id="smart_zones_manual",
-                    data_schema=schema,
+                    data_schema=vol.Schema(
+                        {vol.Required("zone_names", default=default_text): str}
+                    ),
                     description_placeholders={
                         "zone_ids": ", ".join(pending),
                         "zone_count": str(len(pending)),
@@ -569,8 +571,39 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     last_step=True,
                 )
 
-        elif user_input is not None and any(k.startswith("name_") for k in user_input):
-            # Phase 2 submitted — resolve pmap_id and save
+        elif user_input is not None and "zone_names" in user_input:
+            # Phase 2 submitted — parse textarea and save.
+            # Format: one "id=Name" line per zone; blank or malformed lines skipped.
+            raw = user_input["zone_names"].strip()
+            parsed: dict[str, str] = {}
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                rid_part, _, name_part = line.partition("=")
+                rid = rid_part.strip()
+                name = name_part.strip()
+                if rid and name:
+                    parsed[rid] = name
+
+            if not parsed:
+                errors["zone_names"] = "no_valid_ids"
+                pending = getattr(self, "_pending_zone_ids", [])
+                default_text = "\n".join(f"{rid}=" for rid in pending)
+                return self.async_show_form(
+                    step_id="smart_zones_manual",
+                    data_schema=vol.Schema(
+                        {vol.Required("zone_names", default=default_text): str}
+                    ),
+                    description_placeholders={
+                        "zone_ids": ", ".join(pending),
+                        "zone_count": str(len(pending)),
+                    },
+                    errors=errors,
+                    last_step=True,
+                )
+
+            # Resolve pmap_id with priority: lastCommand → cleanSchedule2 → pmaps[0]
             current_pmap_id = ""
             last = state.get("lastCommand", {})
             if last.get("pmap_id"):
@@ -589,15 +622,11 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             new_zone_data = dict(existing_zone_data)
             new_discovered = list(self.config_entry.options.get("discovered_zone_ids", []))
 
-            for key, label in user_input.items():
-                if key.startswith("name_"):
-                    rid = key[len("name_"):]
-                    label = label.strip()
-                    if label:
-                        new_labels[rid] = label
-                        new_zone_data[rid] = {"name": label, "pmap_id": current_pmap_id}
-                        if rid not in new_discovered:
-                            new_discovered.append(rid)
+            for rid, name in parsed.items():
+                new_labels[rid] = name
+                new_zone_data[rid] = {"name": name, "pmap_id": current_pmap_id}
+                if rid not in new_discovered:
+                    new_discovered.append(rid)
 
             new_options = dict(self.config_entry.options)
             new_options["smart_zone_labels"] = new_labels

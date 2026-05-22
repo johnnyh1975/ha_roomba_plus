@@ -145,13 +145,14 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                     new_labels[rid] = name
                     new_zone_data[rid] = {"name": name, "pmap_id": pmap_id}
 
-                # Remove newly labelled IDs from discovered_zone_ids.
-                new_discovered = [r for r in discovered if r not in parsed]
-
+                # Keep discovered_zone_ids intact — it is the permanent registry
+                # that populates the Smart Map Zone selector even after MQTT
+                # state no longer contains the regions. Unlabelled filtering is
+                # handled separately by _unlabelled_region_ids() in select.py.
                 new_opts = dict(opts)
                 new_opts["smart_zone_labels"] = new_labels
                 new_opts["smart_zone_data"] = new_zone_data
-                new_opts["discovered_zone_ids"] = new_discovered
+                new_opts["discovered_zone_ids"] = discovered
                 self.hass.config_entries.async_update_entry(
                     self._config_entry, options=new_opts
                 )

@@ -427,7 +427,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             DOMAIN,
             "smart_zones_need_naming",
             is_fixable=True,
-            severity="warning",
+            severity=ir.IssueSeverity.WARNING,
             translation_key="smart_zones_need_naming",
             translation_placeholders={
                 "zone_count": str(len(unlabelled)),
