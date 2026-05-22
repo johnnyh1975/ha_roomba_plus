@@ -376,6 +376,9 @@
     },
     "pmap_not_resolved": {
       "message": "Could not resolve map ID for one or more rooms. Ensure the robot has reported its map state via MQTT."
+    },
+    "map_updating": {
+      "message": "The robot is currently updating its Smart Map. Wait for the readiness sensor to show 'Ready', then try again."
     }
   }
 }

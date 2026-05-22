@@ -233,6 +233,21 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
         # Read live state before resolving rooms — needed for pmap_id fallback.
         state = roomba_reported_state(data.roomba)
 
+        # Guard: reject if the robot is currently updating its Smart Map.
+        # notReady bit 6 (64) = map save/upload in progress. Sending a region
+        # clean while this bit is set causes the robot to immediately report
+        # error 224 (Smart Map localization failed) because it cannot localize
+        # during a map update. The iRobot app waits for this bit to clear first.
+        not_ready: int = state.get("cleanMissionStatus", {}).get("notReady", 0)
+        if not_ready & 64:
+            raise ServiceValidationError(
+                "The robot is currently updating its Smart Map. "
+                "Wait for the update to complete (readiness sensor shows 'Ready'), "
+                "then try again.",
+                translation_domain=DOMAIN,
+                translation_key="map_updating",
+            )
+
         # Resolve names → (region_id, pmap_id) — raises on unknown or cross-floor.
         resolved = _resolve_rooms(zone_data, room_names, state)
 
@@ -258,7 +273,11 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
             "pmap_id": pmap_id,
             "user_pmapv_id": user_pmapv_id,
             "regions": [
-                {"region_id": rid, "type": "rid"}
+                # Send region_id as integer when it is numeric.
+                # Older i7 firmware (lewis pre-2024) requires integer region_ids
+                # on the MQTT wire; sending a string causes error 224.
+                # Newer firmware accepts both. int() is always safe here.
+                {"region_id": int(rid) if rid.isdigit() else rid, "type": "rid"}
                 for rid, _ in resolved
             ],
         }
@@ -506,7 +525,10 @@ async def async_connect_or_timeout(
             # Wait up to 6 additional seconds so capability detection at
             # async_setup_entry doesn't misclassify an i/s/j robot as NONE.
             cap = roomba_reported_state(roomba).get("cap", {})
-            if cap.get("pmapUpload") or cap.get("tflmsl"):
+            # cap.pmaps > 0 is the correct flag for Smart Map capability on
+            # lewis/hazel/xavier firmware. cap.pmapUpload and cap.tflmsl are
+            # only present on newer firmware builds and must not be relied on.
+            if cap.get("pmaps", 0) > 0 or cap.get("maps", 0) > 1:
                 for _ in range(6):
                     if roomba_reported_state(roomba).get("pmaps"):
                         break

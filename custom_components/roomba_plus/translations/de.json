@@ -365,6 +365,9 @@
     },
     "pmap_not_resolved": {
       "message": "Karten-ID konnte für einen oder mehrere Räume nicht aufgelöst werden. Bitte sicherstellen, dass der Roboter seinen Kartenstatus via MQTT übermittelt hat."
+    },
+    "map_updating": {
+      "message": "Der Roboter aktualisiert gerade seine Smart Map. Warte, bis der Bereitschaftssensor 'Bereit' anzeigt, und versuche es erneut."
     }
   }
 }

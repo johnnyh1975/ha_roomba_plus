@@ -390,32 +390,47 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             for entity in platform.entities.values():
                 if getattr(entity, "unique_id", None) == target_uid:
                     region_id = entity.selected_region_id
-                    pmap_info = entity.selected_pmap_info
-                    pmap_id = pmap_info.get("pmap_id")
                     break
             if region_id:
                 break
 
-        # Fallback: extract pmap/region from lastCommand in the local state.
+        # Resolve pmap_id from smart_zone_data first — this is the value
+        # persisted at zone-naming time and is correct for the specific region.
+        # lastCommand.pmap_id may reflect a full-home clean and be wrong for
+        # a targeted region clean. Only fall back to lastCommand when
+        # smart_zone_data has no entry for this region_id.
+        if region_id:
+            zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
+            pmap_id = zone_data.get(str(region_id), {}).get("pmap_id") or None
+
+        # Fallback: extract pmap/region from lastCommand when smart_zone_data
+        # has no pmap_id (e.g. zone entered before fix) or entity lookup failed.
         if not region_id or not pmap_id:
             last = self.vacuum_state.get("lastCommand", {})
-            pmap_id = last.get("pmap_id")
-            regions = last.get("regions", [])
-            if pmap_id and regions:
-                region_id = regions[0].get("region_id")
-
-        # Second fallback: read pmap_id from smart_zone_data for the selected
-        # region. Covers the edge case where the entity lookup failed AND
-        # lastCommand/cleanSchedule2 are absent (e.g. app clean while HA was
-        # disconnected). region_id is already set from selected_region_id above
-        # if the entity was found, so only pmap_id may still be missing.
-        if region_id and not pmap_id:
-            zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
-            pmap_id = zone_data.get(region_id, {}).get("pmap_id") or None
+            if not pmap_id:
+                pmap_id = last.get("pmap_id")
+            if not region_id:
+                regions = last.get("regions", [])
+                if regions:
+                    region_id = str(regions[0].get("region_id", "")) or None
 
         if not region_id or not pmap_id:
             _LOGGER.warning(
                 "SmartZoneButton: no region/pmap available — run a zone mission first"
+            )
+            return
+
+        # Guard: reject if the robot is currently updating its Smart Map.
+        # notReady bit 6 (64) = map save/upload in progress — same guard as
+        # the clean_room service action.
+        not_ready: int = self.vacuum_state.get(
+            "cleanMissionStatus", {}
+        ).get("notReady", 0)
+        if not_ready & 64:
+            _LOGGER.warning(
+                "SmartZoneButton: robot is updating Smart Map (notReady=%d) — "
+                "wait for map update to complete before starting a zone clean",
+                not_ready,
             )
             return
 
@@ -428,15 +443,18 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             )
             return
 
+        # Send region_id as integer when numeric — older firmware requires it.
+        rid_wire = int(region_id) if str(region_id).isdigit() else region_id
+
         params = {
             "pmap_id": pmap_id,
-            "regions": [{"region_id": region_id, "type": "rid"}],
+            "regions": [{"region_id": rid_wire, "type": "rid"}],
             "user_pmapv_id": user_pmapv_id,
             "ordered": 1,
         }
         _LOGGER.info(
-            "SmartZoneButton: cleaning region %s on map %s",
-            region_id, pmap_id[:12],
+            "SmartZoneButton: cleaning region %s (wire=%r) on map %s",
+            region_id, rid_wire, pmap_id[:12],
         )
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start", params

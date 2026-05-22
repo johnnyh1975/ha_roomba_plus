@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.4.4.5-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.4.4.6-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -403,6 +403,14 @@ If you have never started a room-specific clean while HA was connected, no regio
 Use the **manual entry flow** to break the dependency: Settings → Devices & Services → Roomba+ → Configure → **Manually enter Smart Map zones**. Enter your region IDs as a comma-separated list. Find them in the HA diagnostics download under `options → discovered_zone_ids` (after even one partial MQTT connection) or use the iRobot app to find your room layout. Once entered and named, the select entity populates and `roomba_plus.clean_room` works immediately — the `pmap_id` is resolved live from the robot's state at call time, so zones entered manually work even before any room-specific MQTT clean has been received.
 
 **Note on capability detection timing:** on a fresh install, `map_capability` is detected during HA startup. If the robot's `pmaps` state delta arrives after the initial 2-second wait, the robot may be misclassified as non-Smart-Map and `clean_room` will raise "does not support Smart Map room cleaning". Fixed in v1.4.4 — the integration now waits up to 6 additional seconds for `pmaps` on robots that report Smart Map capability flags (`pmapUpload` / `tflmsl`). If you see this error on an i/s/j-series robot, reload the integration once (Settings → Devices & Services → Roomba+ → ⋮ → Reload) to re-run capability detection.
+
+**Error 224 / Smart Map localization failed**
+
+This error has two independent causes, both fixed in v1.4.4.6:
+
+1. **Robot is updating its Smart Map** — after any clean the robot saves its map while charging.  bit 6 (64) is set during this period. Sending a region clean while this bit is set causes the robot to reject the command immediately with error 224. The integration now checks  before sending and raises a clear error instead. Wait for the readiness sensor to show  before starting a zone clean from HA.
+
+2. **region_id type mismatch** — older i7 firmware (lewis pre-2024) requires  as an integer on the MQTT wire. The integration was sending a string. Fixed: numeric region IDs are now sent as integers.
 
 **Note:** if `clean_room` raises "Could not resolve map ID", the robot has not yet reported its map state via MQTT. Ensure the robot is docked and connected, wait a few seconds for the state to arrive, then try again.
 

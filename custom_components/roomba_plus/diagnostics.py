@@ -83,6 +83,29 @@ async def async_get_config_entry_diagnostics(
         # Current mission status
         "mission": state.get("cleanMissionStatus", {}),
 
+        # Smart Map state — critical for diagnosing region-clean failures.
+        # pmap_ids shows which maps the robot has stored (pmapv values redacted
+        # as they are session tokens). lastCommand shows the most recent command
+        # type and region_id so pmap resolution can be verified without needing
+        # the full HA log.
+        "smart_map": {
+            "map_upload_allowed": state.get("mapUploadAllowed"),
+            "pmap_learning_allowed": state.get("pmapLearningAllowed"),
+            "not_ready_raw": state.get("cleanMissionStatus", {}).get("notReady"),
+            "pmap_ids": [
+                next(iter(p)) for p in state.get("pmaps", []) if p
+            ],
+            "last_command_summary": {
+                "command": state.get("lastCommand", {}).get("command"),
+                "pmap_id": state.get("lastCommand", {}).get("pmap_id"),
+                "initiator": state.get("lastCommand", {}).get("initiator"),
+                "region_ids": [
+                    r.get("region_id")
+                    for r in (state.get("lastCommand", {}).get("regions") or [])
+                ],
+            },
+        },
+
         # Lifetime statistics (useful for maintenance sensor debugging)
         "lifetime_stats": {
             "bbrun": state.get("bbrun", {}),

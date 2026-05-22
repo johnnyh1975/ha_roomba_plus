@@ -107,6 +107,56 @@ def _clean_mode(entity: IRobotEntity) -> str:
 _ACTIVE_PHASES = {"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "new", "resume"}
 
 
+# notReady bitmask — individual bit meanings for i7/s9/j-series
+_NOT_READY_BITS: dict[int, str] = {
+    1:   "Low battery",
+    2:   "Bin full",
+    4:   "Map not ready",
+    8:   "Not on dock",
+    16:  "Lid open",
+    32:  "Tank empty",
+    64:  "Updating map",
+    128: "Pending task",
+}
+
+
+def _not_ready_value(entity: "IRobotEntity") -> str:
+    """Decode notReady bitmask into a human-readable label.
+
+    NOT_READY_LABELS covers exact combined values seen in the wild.
+    For unlisted combinations, decode bit by bit so any value is readable
+    rather than falling back to a raw integer.
+    """
+    nr: int = entity.clean_mission_status.get("notReady", 0)
+    if nr in NOT_READY_LABELS:
+        return NOT_READY_LABELS[nr]
+    if nr == 0:
+        return "Ready"
+    # Decode individual bits for unknown combinations.
+    parts = [label for bit, label in sorted(_NOT_READY_BITS.items()) if nr & bit]
+    return ", ".join(parts) if parts else f"Not ready ({nr})"
+
+
+def _error_value(entity: "IRobotEntity") -> str:
+    """Error label — suppressed when the robot is docked/idle after a mission.
+
+    cleanMissionStatus.error persists across missions: the firmware does not
+    reset it to 0 when the robot docks after a failure. Showing the stale error
+    while the robot charges would be misleading, so we return "None" whenever
+    cycle is "none" (no active or queued mission) and phase indicates rest.
+    """
+    status = entity.clean_mission_status
+    cycle = status.get("cycle", "")
+    phase = status.get("phase", "")
+    error = status.get("error", 0)
+
+    # No active mission and robot is resting — suppress stale error.
+    if cycle == "none" and phase in ("charge", "stop", "idle", ""):
+        return "None"
+
+    return ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or "None")
+
+
 def _phase_value(entity: "IRobotEntity") -> str:
     """Phase label with Idle and Stopped detection."""
     status = entity.clean_mission_status
@@ -166,10 +216,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="error",
         icon="mdi:alert-circle-outline",
         entity_category=None,
-        value_fn=lambda e: ERROR_CODE_LABELS.get(
-            e.clean_mission_status.get("error", 0),
-            e.vacuum.error_message or "None",
-        ),
+        value_fn=_error_value,
     ),
 
     # GROUP 2 — Operational (DIAGNOSTIC, enabled)
@@ -179,10 +226,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="readiness",
         icon="mdi:check-circle-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda e: NOT_READY_LABELS.get(
-            e.clean_mission_status.get("notReady", 0),
-            str(e.clean_mission_status.get("notReady", 0)),
-        ),
+        value_fn=_not_ready_value,
     ),
     RoombaSensorDescription(
         key="job_initiator",
