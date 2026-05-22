@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.4.4.3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.4.4.4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -405,6 +405,14 @@ Use the **manual entry flow** to break the dependency: Settings → Devices & Se
 **Note on capability detection timing:** on a fresh install, `map_capability` is detected during HA startup. If the robot's `pmaps` state delta arrives after the initial 2-second wait, the robot may be misclassified as non-Smart-Map and `clean_room` will raise "does not support Smart Map room cleaning". Fixed in v1.4.4 — the integration now waits up to 6 additional seconds for `pmaps` on robots that report Smart Map capability flags (`pmapUpload` / `tflmsl`). If you see this error on an i/s/j-series robot, reload the integration once (Settings → Devices & Services → Roomba+ → ⋮ → Reload) to re-run capability detection.
 
 **Note:** if `clean_room` raises "Could not resolve map ID", the robot has not yet reported its map state via MQTT. Ensure the robot is docked and connected, wait a few seconds for the state to arrive, then try again.
+
+**Smart Map Zone selector goes unavailable after mission ends**
+
+The selector relies on `discovered_zone_ids` in the integration options as its persistent source of truth. If this list was emptied by the v1.4.4.1 repair flow (a now-fixed bug), the selector loses its options as soon as `lastCommand` is cleared at mission end. Fixed in v1.4.4.4 — `async_setup_entry` now backfills `discovered_zone_ids` from `smart_zone_data` keys on startup, self-healing any affected installation without user intervention.
+
+**Map entity shows a blank white image (i7 / s9 / j-series)**
+
+Smart Map robots (i7, s9, j-series) use cloud-based vSLAM for navigation and do not broadcast local pose updates via MQTT. The live map renderer relies on pose data and therefore has nothing to render on these robots. The map image entity is suppressed for Smart Map robots from v1.4.4.4 onwards. Use the iRobot app to view the Smart Map.
 
 **`clean_room` raises "Failed to process action response" in Developer Tools**
 

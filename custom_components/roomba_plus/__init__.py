@@ -291,6 +291,26 @@ async def async_setup_entry(
             },
         )
 
+    # ── Data migration: backfill discovered_zone_ids ───────────────────────
+    # v1.4.4.1 repair flow incorrectly drained discovered_zone_ids after
+    # labelling zones, leaving it empty. The selector relies on this list as
+    # its persistent source of truth and goes unavailable whenever lastCommand
+    # is cleared (mission end, dock). Backfill from smart_zone_data keys so
+    # existing installations self-heal without user intervention.
+    _opts = config_entry.options
+    _zone_data_keys = set(_opts.get(CONF_SMART_ZONE_DATA, {}).keys())
+    _discovered = set(_opts.get("discovered_zone_ids", []))
+    if _zone_data_keys and not _zone_data_keys.issubset(_discovered):
+        _new_discovered = sorted(_discovered | _zone_data_keys)
+        hass.config_entries.async_update_entry(
+            config_entry,
+            options={**_opts, "discovered_zone_ids": _new_discovered},
+        )
+        _LOGGER.info(
+            "Roomba+: backfilled discovered_zone_ids with %s from smart_zone_data",
+            sorted(_zone_data_keys - _discovered),
+        )
+
     roomba = await hass.async_add_executor_job(
         partial(
             RoombaFactory.create_roomba,
@@ -371,7 +391,12 @@ async def async_setup_entry(
 
     # ── Platform setup ──────────────────────────────────────────────────────
     platforms = list(LOCAL_PLATFORMS)
-    if map_capability != MapCapability.NONE:
+    # Image entity is only meaningful for EPHEMERAL (900-series) robots, which
+    # broadcast live pose updates via local MQTT. SMART map robots (i7/s9/j)
+    # use cloud-based vSLAM and do not send pose deltas over local MQTT at all,
+    # so the renderer never receives points and the map stays blank. Suppress
+    # the image entity for SMART robots to avoid a misleading blank white map.
+    if map_capability == MapCapability.EPHEMERAL:
         platforms.append(Platform.IMAGE)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
@@ -417,7 +442,7 @@ async def async_unload_entry(
     """Unload a config entry and disconnect from the Roomba."""
     data = config_entry.runtime_data
     platforms = list(LOCAL_PLATFORMS)
-    if data.map_capability != MapCapability.NONE:
+    if data.map_capability == MapCapability.EPHEMERAL:
         platforms.append(Platform.IMAGE)
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, platforms
