@@ -125,13 +125,33 @@ def _resolve_rooms(
             translation_placeholders={"names": ", ".join(unknown)},
         )
 
-    # Resolve empty pmap_ids from live state.pmaps.
-    # This covers zones entered via manual entry (Alt 1) where pmap_id was not
-    # available at save time, as well as zones with stale pmap_ids after a map
-    # retrain. Smart Map robots always have exactly one pmap per floor.
-    live_pmap_id = next(
-        (next(iter(p)) for p in state.get("pmaps", []) if p),
-        "",
+    # Resolve empty pmap_ids from live state for zones entered via manual entry
+    # (where pmap_id was not available at save time) or after a map retrain.
+    #
+    # Priority order — mirrors the rest980 recommendation and repairs.py:
+    #   1. lastCommand.pmap_id — the map the robot last used for a region clean.
+    #      Most reliable on multi-map robots: it is the map actually associated
+    #      with the region IDs in flight, not an arbitrary list position.
+    #   2. First pmap_id found across cleanSchedule2[].cmd.pmap_id — stable
+    #      between sessions even when lastCommand has been overwritten by a
+    #      full-home clean.
+    #   3. pmaps[0] key — last resort only; on robots with a single map this is
+    #      always correct, but on multi-map robots the list order is undefined
+    #      and picking index 0 is the root cause of "Problem with the smart map".
+    last = state.get("lastCommand", {})
+    pmaps: list[dict] = state.get("pmaps", [])
+    live_pmap_id: str = (
+        last.get("pmap_id")
+        or next(
+            (
+                cmd.get("cmd", {}).get("pmap_id")
+                for cmd in state.get("cleanSchedule2", [])
+                if cmd.get("cmd", {}).get("pmap_id")
+            ),
+            None,
+        )
+        or (next(iter(pmaps[0]), None) if pmaps else None)
+        or ""
     )
     resolved = [
         (rid, pmap_id if pmap_id else live_pmap_id)

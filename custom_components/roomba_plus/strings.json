@@ -298,8 +298,18 @@
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Name Smart Map zones"
+            "title": "Name Smart Map zones",
+            "description": "Enter one zone per line in the format `id=Name`. Zone IDs to name: {zone_ids}",
+            "data": {
+              "zones": "Zone assignments"
+            },
+            "data_description": {
+              "zones": "One entry per line: `21=Corridor`, `22=Kitchen`, etc."
+            }
           }
+        },
+        "error": {
+          "no_valid_entries": "No valid entries found. Use the format `id=Name`, one per line."
         }
       }
     },

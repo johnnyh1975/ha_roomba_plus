@@ -298,8 +298,18 @@
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Smart-Map-Zonen benennen"
+            "title": "Smart-Map-Zonen benennen",
+            "description": "Eine Zone pro Zeile im Format `ID=Name` eingeben. Zu benennende Zonen-IDs: {zone_ids}",
+            "data": {
+              "zones": "Zonenzuweisungen"
+            },
+            "data_description": {
+              "zones": "Eine Zeile pro Zone: `21=Korridor`, `22=Küche`, usw."
+            }
           }
+        },
+        "error": {
+          "no_valid_entries": "Keine gültigen Einträge gefunden. Bitte das Format `ID=Name` verwenden, eine Zeile pro Zone."
         }
       }
     }
