@@ -443,6 +443,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             )
             return
 
+        # user_pmapv_id intentionally omitted — see clean_room handler comment.
         params = {
             "pmap_id": pmap_id,
             "regions": [
@@ -452,7 +453,6 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
                     "params": {"noAutoPasses": False, "twoPass": False},
                 }
             ],
-            "user_pmapv_id": user_pmapv_id,
             "ordered": 1,
         }
         _LOGGER.info(

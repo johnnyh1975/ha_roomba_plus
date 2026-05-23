@@ -268,15 +268,20 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
                 translation_key="pmap_not_found",
             )
 
+        # user_pmapv_id is intentionally omitted from the payload.
+        # Sending it requires the value to exactly match the robot's current
+        # internal map version. If MQTT state is even slightly stale the robot
+        # rejects the command with error 224. Omitting it tells the robot to
+        # use whichever pmapv it currently has — the same approach used by
+        # ia74/roomba_rest980, which works on older lewis firmware.
+        # The resolved value is logged for diagnostic comparison only.
         params = {
             "ordered": 1 if ordered else 0,
             "pmap_id": pmap_id,
-            "user_pmapv_id": user_pmapv_id,
             "regions": [
-                # region_id is sent as string — confirmed working on lewis firmware.
-                # Each region requires a "params" sub-object with cleaning pass
-                # settings. Omitting it causes error 224 on older i7 firmware
-                # (lewis+22.52.10) because the robot cannot determine pass config.
+                # region_id as string — confirmed correct on lewis firmware.
+                # params sub-object required on older firmware; omitting it
+                # causes error 224 because the robot cannot determine pass config.
                 {
                     "region_id": rid,
                     "type": "rid",
@@ -287,7 +292,7 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
         }
 
         _LOGGER.info(
-            "clean_room: %s → regions=%s pmap=%s pmapv=%s",
+            "clean_room: %s → regions=%s pmap=%s pmapv=%s (not sent)",
             entity_id,
             [rid for rid, _ in resolved],
             pmap_id[:12],
