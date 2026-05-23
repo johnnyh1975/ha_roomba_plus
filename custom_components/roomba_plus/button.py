@@ -104,6 +104,13 @@ async def async_setup_entry(
     if has_smart_map(state):
         entities.append(SmartZoneButton(roomba, blid, config_entry))
 
+    # Favorite buttons: one per saved iRobot routine, cloud robots only
+    data = config_entry.runtime_data
+    if data.has_cloud:
+        favorites = data.cloud_coordinator.data.get("favorites", [])  # type: ignore[union-attr]
+        for fav in favorites:
+            entities.append(FavoriteButton(config_entry, fav))
+
     async_add_entities(entities)
 
 
@@ -461,4 +468,63 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         )
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start", params
+        )
+
+
+class FavoriteButton(ButtonEntity):
+    """Button that triggers a saved iRobot cleaning favorite.
+
+    Favorites are multi-step cleaning routines defined in the iRobot app
+    (e.g. "Monday morning: kitchen + hallway"). They are fetched from the
+    cloud coordinator via /user/favorites and each contains a pre-built
+    command payload that can be sent verbatim via send_command("start", ...).
+
+    One entity per favorite. Hidden favorites (data["hidden"] == True) are
+    disabled in the entity registry by default but can be enabled manually.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:star-outline"
+
+    def __init__(
+        self,
+        config_entry: RoombaConfigEntry,
+        favorite: dict[str, Any],
+    ) -> None:
+        from homeassistant.helpers.device_registry import DeviceInfo
+        fav_id: str = favorite.get("favorite_id", "")
+        fav_name: str = favorite.get("name", fav_id)
+
+        self._config_entry = config_entry
+        self._favorite = favorite
+        self._attr_name = fav_name
+        self._attr_unique_id = f"{config_entry.unique_id}_fav_{fav_id}"
+        self._attr_entity_registry_enabled_default = not favorite.get("hidden", False)
+        self._attr_device_info = DeviceInfo(
+            identifiers={("roomba_plus", config_entry.unique_id)},
+        )
+
+    async def async_press(self) -> None:
+        """Send the favorite's command payload to the robot."""
+        command_defs = self._favorite.get("commanddefs") or []
+        if not command_defs:
+            _LOGGER.warning(
+                "FavoriteButton '%s': no commanddefs in favorite payload",
+                self._attr_name,
+            )
+            return
+
+        # commanddefs[0] is the primary command — mirrors roomba_rest980 behaviour.
+        cmd = command_defs[0]
+        command = cmd.get("command", "start")
+        params = {k: v for k, v in cmd.items() if k != "command"}
+
+        _LOGGER.info(
+            "FavoriteButton: firing favorite '%s' → %s params=%s",
+            self._attr_name, command, params or "(none)",
+        )
+        await self.hass.async_add_executor_job(
+            self._config_entry.runtime_data.roomba.send_command,
+            command,
+            params,
         )

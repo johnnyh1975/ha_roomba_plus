@@ -84,22 +84,49 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Parse "id=Name" lines from the textarea, one per line.
-            # Lines that are blank or malformed are skipped with a warning.
+            # Parse "id=Name" entries from the textarea.
+            #
+            # Two delimiter styles are accepted so the form is forgiving
+            # regardless of how the browser renders the pre-filled value:
+            #
+            #   Newline-separated (canonical, one entry per line):
+            #     1=Cucina
+            #     17=CabinaArmadio
+            #
+            #   Comma-separated (fallback, what users type when the textarea
+            #   visually shows all IDs on one line):
+            #     1=Cucina,17=CabinaArmadio,19=Bagno
+            #
+            # Strategy: if the raw input contains at least one "," that sits
+            # between two "id=..." tokens (i.e. the pattern ",digits="), split
+            # on commas first.  Otherwise split on newlines.  This lets names
+            # contain commas (e.g. "Living room, open plan") without breaking.
             raw: str = user_input.get("zones", "").strip()
             parsed: dict[str, str] = {}
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
+
+            import re as _re
+            # Detect comma-as-delimiter: a comma followed by digits then "="
+            _comma_delim = _re.compile(r",\s*\d")
+            if _comma_delim.search(raw):
+                # Split on commas that precede a digit= token.
+                # Use a lookahead so the delimiter comma is consumed but the
+                # digit that follows is kept as part of the next token.
+                tokens = _re.split(r",(?=\s*\d)", raw)
+            else:
+                tokens = raw.splitlines()
+
+            for token in tokens:
+                token = token.strip()
+                if not token:
                     continue
-                if "=" not in line:
+                if "=" not in token:
                     _LOGGER.warning(
-                        "SmartZoneNamingRepairFlow: skipping malformed line %r "
+                        "SmartZoneNamingRepairFlow: skipping malformed token %r "
                         "(expected 'id=Name' format)",
-                        line,
+                        token,
                     )
                     continue
-                rid_part, _, name_part = line.partition("=")
+                rid_part, _, name_part = token.partition("=")
                 rid = rid_part.strip()
                 name = name_part.strip()
                 if rid in unlabelled and name:
@@ -168,7 +195,18 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 self._dismiss()
                 return self.async_create_entry(data={})
 
-        # Build the default textarea value as "id=Name" lines, one per zone.
+        # Build the default textarea value: one "id=" stub per unlabelled zone,
+        # separated by newlines so each zone starts on its own line.
+        #
+        # The HA repair frontend renders a <textarea> for `str` schema fields.
+        # Python's "\n".join() produces a string with real newline characters
+        # which the browser preserves correctly in a textarea — each zone ID
+        # appears on its own line and the user fills in the name after "=".
+        #
+        # Historical note: an earlier version used ", ".join() which caused all
+        # IDs to appear on a single line (e.g. "1=17=19=") and prompted users
+        # to enter comma-separated input. The parser now accepts both formats
+        # for backwards compatibility, but the canonical pre-fill is newlines.
         default_text = "\n".join(f"{rid}=" for rid in unlabelled)
 
         schema = vol.Schema(

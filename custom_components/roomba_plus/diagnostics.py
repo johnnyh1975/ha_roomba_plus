@@ -14,6 +14,27 @@ from . import roomba_reported_state
 from .const import DIAG_REDACT_KEYS, DOMAIN
 from .models import MapCapability, RoombaConfigEntry
 
+_CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
+
+
+def _cloud_diag(data: Any) -> dict[str, Any]:
+    """Return cloud coordinator diagnostics (no credentials)."""
+    cc = data.cloud_coordinator
+    if cc is None:
+        return {"enabled": False}
+    result: dict[str, Any] = {
+        "enabled": True,
+        "last_update_success": cc.last_update_success,
+        "last_exception": str(cc.last_exception) if cc.last_exception else None,
+    }
+    if cc.data:
+        result["pmap_count"] = len(cc.data.get("pmaps", []))
+        result["favorite_count"] = len(cc.data.get("favorites", []))
+        result["active_pmap_id"] = cc.active_pmap_id
+        result["region_count"] = len(cc.regions)
+        result["zone_count"] = len(cc.zones)
+    return result
+
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
@@ -53,8 +74,8 @@ async def async_get_config_entry_diagnostics(
         "title": config_entry.title,
 
         # Config and options with sensitive values redacted
-        "config": async_redact_data(dict(config_entry.data), DIAG_REDACT_KEYS),
-        "options": async_redact_data(dict(config_entry.options), DIAG_REDACT_KEYS),
+        "config": async_redact_data(dict(config_entry.data), _CLOUD_REDACT),
+        "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
 
         # Connection state
         "connection": {
@@ -139,6 +160,9 @@ async def async_get_config_entry_diagnostics(
         # Map and zone subsystem
         "map": map_diag,
         "zones": zone_diag,
+
+        # Cloud coordinator status
+        "cloud": _cloud_diag(data),
 
         # All top-level keys in master_state (for debugging unknown models)
         "master_state_keys": sorted(state.keys()),

@@ -61,9 +61,32 @@ async def async_setup_entry(
     if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
         entities.append(ZoneSelect(roomba, blid, config_entry))
 
-    # Smart Zone select: for Smart Map robots (i/s/j/m) with pmaps
+    # Smart Zone select: for Smart Map robots (i/s/j/m) with pmaps.
+    # When cloud is active, cloud-sourced selects replace the repair-flow
+    # based SmartZoneSelect — the repair issue is suppressed in that case.
     if has_smart_map(state):
-        entities.append(SmartZoneSelect(roomba, blid, config_entry))
+        if data.has_cloud:
+            # Cloud-sourced: one select per pmap, entities know their region/zone list.
+            cc = data.cloud_coordinator
+            for pmap in cc.data.get("pmaps", []):  # type: ignore[union-attr]
+                details = pmap.get("active_pmapv_details", {})
+                pmap_id = details.get("active_pmapv", {}).get("pmap_id", "")
+                map_name = details.get("map_header", {}).get("name", "Map")
+                regions = details.get("regions", [])
+                zones = details.get("zones", [])
+                if regions or zones:
+                    entities.append(
+                        CloudSmartZoneSelect(
+                            roomba, blid, config_entry,
+                            pmap_id=pmap_id,
+                            map_name=map_name,
+                            regions=regions,
+                            zones=zones,
+                        )
+                    )
+        else:
+            # MQTT-only fallback: names come from the repair flow / options.
+            entities.append(SmartZoneSelect(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -402,14 +425,19 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     async def _async_raise_naming_issue(self, region_ids: list[str]) -> None:
         """Create (or update) the smart_zones_need_naming Repair Issue.
 
-        region_ids must be passed in by the caller (on_message or
-        async_added_to_hass) while vacuum_state is guaranteed fresh.
-        Re-computing from vacuum_state here is unsafe because the MQTT
-        connection may have dropped by the time this coroutine runs.
+        Suppressed when the cloud coordinator is active — the cloud provides
+        authoritative region names so the manual naming flow is not needed.
         """
         from homeassistant.helpers import issue_registry as ir
 
         if not region_ids:
+            return
+
+        # If cloud is active, names come from cloud pmaps — no repair needed.
+        if self._config_entry.runtime_data.has_cloud:
+            _LOGGER.debug(
+                "SmartZoneSelect: cloud active — suppressing naming repair issue"
+            )
             return
 
         # Persist discovered IDs to options so the repair fix flow can
@@ -445,3 +473,125 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
         ir.async_delete_issue(self.hass, DOMAIN, "smart_zones_need_naming")
         _LOGGER.debug("SmartZoneSelect: repair issue dismissed — all zones labelled")
+
+
+class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
+    """Zone selector for Smart Map robots populated from the iRobot cloud.
+
+    Replaces SmartZoneSelect when cloud credentials are configured.
+    Regions and zones come from the /pmaps UMF endpoint — names, types, and
+    pmap_id are authoritative and require no manual naming by the user.
+
+    One entity is created per pmap (floor). On robots with a single map this
+    means one entity named "Select zone — <MapName>". Multi-floor robots get
+    one per floor with the map name disambiguating them.
+
+    Because this entity's data comes from the cloud coordinator (not MQTT
+    push), it updates when the coordinator refreshes (map retrain detection
+    or the daily background poll), not on every MQTT message.
+
+    The companion SmartZoneButton reads selected_region_id / selected_pmap_id
+    from this entity — the interface is identical to SmartZoneSelect so the
+    button requires no changes.
+    """
+
+    _attr_icon = "mdi:map-marker-outline"
+    _attr_entity_category = None   # primary control — visible by default
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        *,
+        pmap_id: str,
+        map_name: str,
+        regions: list[dict[str, Any]],
+        zones: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._pmap_id = pmap_id
+        self._map_name = map_name
+        self._regions = regions   # list of {id, name, region_type}
+        self._zones = zones       # list of {id, name, zone_type}
+        self._selected: str | None = None
+
+        # unique_id includes pmap_id so multi-floor robots get separate entities
+        self._attr_unique_id = f"{self.robot_unique_id}_cloud_zone_{pmap_id}"
+        self._attr_translation_key = "cloud_smart_zone_select"
+
+    # ── Option list ───────────────────────────────────────────────────────────
+
+    def _all_items(self) -> list[dict[str, Any]]:
+        """Return combined regions + zones, each with id/name/pmap_id."""
+        items = []
+        for r in self._regions:
+            name = r.get("name") or f"Zone {r.get('id', '?')}"
+            items.append({"id": str(r.get("id", "")), "name": name, "pmap_id": self._pmap_id})
+        for z in self._zones:
+            name = z.get("name") or f"Zone {z.get('id', '?')}"
+            items.append({"id": str(z.get("id", "")), "name": name, "pmap_id": self._pmap_id})
+        return items
+
+    @property
+    def options(self) -> list[str]:
+        return [item["name"] for item in self._all_items()]
+
+    @property
+    def current_option(self) -> str | None:
+        opts = self.options
+        if not opts:
+            return None
+        if self._selected not in opts:
+            self._selected = opts[0]
+        return self._selected
+
+    async def async_select_option(self, option: str) -> None:
+        self._selected = option
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        return bool(self.options)
+
+    # ── Data used by SmartZoneButton ──────────────────────────────────────────
+
+    @property
+    def selected_region_id(self) -> str | None:
+        """Return the region/zone id for the currently selected option."""
+        for item in self._all_items():
+            if item["name"] == self._selected:
+                return item["id"]
+        items = self._all_items()
+        return items[0]["id"] if items else None
+
+    @property
+    def selected_pmap_info(self) -> dict[str, str]:
+        """Return {pmap_id, user_pmapv_id} — compatible with SmartZoneSelect."""
+        # user_pmapv_id is intentionally left empty here: SmartZoneButton
+        # always re-reads it from live MQTT state via _resolve_pmapv_id.
+        return {"pmap_id": self._pmap_id, "user_pmapv_id": ""}
+
+    # ── Extra attributes ──────────────────────────────────────────────────────
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        items = self._all_items()
+        selected = next(
+            (i for i in items if i["name"] == self._selected), items[0] if items else {}
+        )
+        return {
+            "map_name": self._map_name,
+            "pmap_id": self._pmap_id,
+            "region_id": selected.get("id"),
+            "region_count": len(self._regions),
+            "zone_count": len(self._zones),
+            "source": "cloud",
+        }
+
+    # ── Push update wiring ────────────────────────────────────────────────────
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        # Cloud entity doesn't update from MQTT — coordinator handles refresh.
+        return False

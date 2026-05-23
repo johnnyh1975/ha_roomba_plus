@@ -28,12 +28,22 @@
         "data": {
           "password": "Passwort"
         }
+      },
+      "cloud_credentials": {
+        "title": "iRobot Cloud-Zugangsdaten (optional)",
+        "description": "Geben Sie Ihre iRobot-App E-Mail und Ihr Passwort ein, um Cloud-Funktionen zu aktivieren (verbindliche Raumnamen, Favoriten). Lassen Sie beide Felder leer, um die Cloud zu überspringen und nur lokales MQTT zu verwenden.",
+        "data": {
+          "irobot_username": "iRobot E-Mail",
+          "irobot_password": "iRobot Passwort"
+        }
       }
     },
     "error": {
       "cannot_connect": "Verbindung zum Roboter fehlgeschlagen. Bitte prüfen, ob er eingeschaltet und erreichbar ist.",
       "invalid_auth": "Ungültige Zugangsdaten. BLID und Passwort überprüfen.",
-      "unknown": "Unerwarteter Fehler. Die Home Assistant-Protokolle für Details prüfen."
+      "unknown": "Unerwarteter Fehler. Die Home Assistant-Protokolle für Details prüfen.",
+      "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
+      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
     },
     "abort": {
       "already_configured": "Dieser Roboter ist bereits eingerichtet.",
@@ -48,7 +58,8 @@
         "title": "Roomba+ konfigurieren",
         "menu_options": {
           "settings": "Verbindungseinstellungen",
-          "smart_zones_manual": "Smart Map Zonen manuell eingeben"
+          "smart_zones_manual": "Smart Map Zonen manuell eingeben",
+          "cloud_credentials": "iRobot Cloud-Zugangsdaten"
         }
       },
       "zones": {
@@ -98,10 +109,22 @@
           "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone.",
           "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist."
         }
+      },
+      "cloud_credentials": {
+        "title": "iRobot Cloud-Zugangsdaten",
+        "description": "Aktuell angemeldet als: {current_user}\n\nAktualisieren Sie Ihre iRobot-Zugangsdaten oder leeren Sie beide Felder, um Cloud-Funktionen zu deaktivieren.",
+        "data": {
+          "irobot_username": "iRobot E-Mail",
+          "irobot_password": "iRobot Passwort"
+        }
       }
     },
     "errors": {
       "no_valid_ids": "Keine gültigen IDs gefunden. Bitte kommagetrennte Zahlen eingeben."
+    },
+    "error": {
+      "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
+      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung."
     }
   },
   "entity": {
@@ -256,6 +279,9 @@
       },
       "clean_smart_zone": {
         "name": "Zone reinigen (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
       }
     },
     "switch": {
@@ -278,6 +304,9 @@
       },
       "smart_zone_select": {
         "name": "Smart Map Zone auswählen"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Zone auswählen (Cloud)"
       }
     },
     "image": {
@@ -305,17 +334,17 @@
         "step": {
           "init": {
             "title": "Smart-Map-Zonen benennen",
-            "description": "Eine Zone pro Zeile im Format `ID=Name` eingeben. Zu benennende Zonen-IDs: {zone_ids}",
+            "description": "Tragen Sie für jede Zone einen Namen ein — jede vorausgefüllte Zeile zeigt eine Zonen-ID, geben Sie den Namen nach dem Gleichheitszeichen ein. Zu benennende Zonen-IDs: {zone_ids}",
             "data": {
               "zones": "Zonenzuweisungen"
             },
             "data_description": {
-              "zones": "Eine Zeile pro Zone: `21=Korridor`, `22=Küche`, usw."
+              "zones": "Ein Eintrag pro Zeile: 21=Korridor, 22=Küche usw. Kommagetrennte Eingabe ist ebenfalls möglich: 21=Korridor,22=Küche."
             }
           }
         },
         "error": {
-          "no_valid_entries": "Keine gültigen Einträge gefunden. Bitte das Format `ID=Name` verwenden, eine Zeile pro Zone.",
+          "no_valid_entries": "Keine gültigen Einträge gefunden. Jeder Eintrag muss das Format id=Name haben — einen pro Zeile oder kommagetrennt.",
           "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist, und versuche es erneut."
         }
       }

@@ -1,12 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.4.4.8-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.5.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration für iRobot Roomba und Braava. Vollständig lokal, kein Cloud-Zwang, kein Abo — deutlich mehr Sensoren, Karte und Zonen als die eingebaute HA-Integration.
+Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.5 adds optional iRobot cloud integration** for Smart Map robots, bringing authoritative room names, favorites, and stable pmap resolution without any manual naming flow.
 
 ---
 
@@ -14,18 +14,18 @@ Home Assistant Custom Integration für iRobot Roomba und Braava. Vollständig lo
 
 ## Supported devices
 
-| Series | Examples | Map | Zones | Always finish | Schedule hold | Bin present | Tested |
+| Series | Examples | Map | Zones | Cloud features | Schedule hold | Bin present | Tested |
 |---|---|---|---|---|---|---|---|
 | **600** (Bump & Run) | Roomba 694, 692 | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ untested |
 | **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ❌ | ❌ | ❌ | ✅ **Roomba 980** |
-| **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ i7+ only | ✅ | ✅ | ✅ **i7+** |
-| **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ | ✅ | ✅ | ⚠️ untested |
-| **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ j7+ only | ✅ | ✅ | ⚠️ untested |
-| **Braava** | m6 | ✅ | ✅ Smart Map | ❌ | ✅ | ❌ (mop ready ✅) | ⚠️ untested |
+| **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **i7+** |
+| **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
+| **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
+| **Braava** | m6 | ✅ | ✅ Smart Map | ✅ optional | ✅ | ❌ (mop ready ✅) | ⚠️ untested |
 
-> **Tested hardware:** Roomba 980 and Roomba i7+. Support for other series is implemented based on protocol documentation, capability flags and the roombapy library — but has not been verified on real hardware. If you own a different model and run into issues, please [open an issue](https://github.com/johnnyh1975/ha_roomba_plus/issues).
+> **Tested hardware:** Roomba 980 and Roomba i7+. Support for other series is implemented based on protocol documentation, capability flags and the roombapy library.
 
-> "Always finish" requires a Clean Base dock. "Bin present" requires a removable bin (i/s/j-series). Availability is detected automatically from the robot's reported state — no manual configuration needed.
+> Cloud features (v1.5+) require your iRobot app email and password. They are entirely optional — all local MQTT functionality works identically without them.
 
 ---
 
@@ -33,14 +33,12 @@ Home Assistant Custom Integration für iRobot Roomba und Braava. Vollständig lo
 
 ### Sensors (35)
 
-Grouped for easy navigation in the diagnostics section:
-
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
 - **Maintenance** — filter remaining, brushes remaining, charge cycles
-- **Missions** — total, successful, cancelled, failed, total time, avg. duration, cleaned area, last mission, mission start (active only), mission elapsed time, recharge time, expire time
-- **Connectivity** — connected, bin full, battery, RSSI, SNR, signal noise (all opt-in), IP address
-- **Clean Base** — dock status, dock tank level (when Clean Base present)
+- **Missions** — total, successful, cancelled, failed, total time, avg. duration, cleaned area, last mission, mission start, mission elapsed, recharge time, expire time
+- **Connectivity** — connected, bin full, battery, RSSI, SNR, signal noise, IP address
+- **Clean Base** — dock status, dock tank level
 - **Braava** — tank level, mop pad type, mop behaviour, mop tank level
 - **Navigation** — navigation quality / l_squal (VSLAM robots, opt-in)
 
@@ -48,16 +46,23 @@ Grouped for easy navigation in the diagnostics section:
 
 - **Cleaning passes** — Auto / One pass / Two passes (select)
 - **Edge cleaning** — On/Off (switch)
-- **Always finish** — keep cleaning even when the bin is full; the Clean Base empties it automatically mid-mission (switch, i7+/s9+/j7+ with Clean Base only — detected automatically)
-- **Schedule hold** — freeze the cleaning schedule without deleting it, ideal for holidays or when guests are present (switch, i/s/j/Braava — detected automatically)
+- **Always finish** — keep cleaning even when the bin is full (switch, i7+/s9+/j7+ with Clean Base only)
+- **Schedule hold** — freeze the cleaning schedule without deleting it (switch, i/s/j/Braava)
 - **Maintenance reset** — confirm filter, brush, and battery replacement (buttons)
 - **Locate robot** — play find-me tone (button)
 - **Evacuate bin** — Clean Base models (button)
 
-### Additional binary sensors
+### Cloud features — Smart Map robots with iRobot credentials (v1.5, optional)
 
-- **Bin present** — whether the dust bin is physically inserted. Relevant for i-series robots where the bin is removed during Clean Base evacuation and can accidentally be left out (i/s/j-series).
-- **Mop problem** — combines `mopReady.tankPresent` and `mopReady.lidClosed` into a single problem sensor. ON when the Braava is not ready to mop — useful for automations that warn before a scheduled mopping mission (Braava m6).
+When you enter your iRobot app email and password during setup (or later via **Configure → iRobot cloud credentials**), Roomba+ connects to the iRobot cloud to fetch authoritative Smart Map data:
+
+- **Zone select from cloud** — room and zone names come directly from your Smart Map; no manual repair-flow naming required. One select entity per floor.
+- **Favorites as buttons** — each saved cleaning routine from the iRobot app appears as a button entity that fires that routine from HA.
+- **Stable pmap_id** — `clean_room` and the zone buttons use the authoritative pmap_id from the cloud, eliminating stale-MQTT failures after a full-home clean overwrites `lastCommand`.
+- **Auto-refresh on map retrain** — Roomba+ detects map version changes in the MQTT stream and immediately refreshes cloud data, so new room names appear in HA without waiting for the 24-hour background poll.
+- **Repair flow suppressed** — when cloud is active the `smart_zones_need_naming` repair issue is not raised; names are always current from the cloud.
+
+> Cloud credentials are stored in the HA config entry (encrypted at rest by HA). All robot control commands continue to go through local MQTT — only map metadata is fetched from the cloud.
 
 ### Cleaning map (Roomba 900 / i / s / j / Braava m6)
 
@@ -65,45 +70,35 @@ Live map of the current cleaning mission as a HA image entity:
 
 - White background, blue travel path, light-blue cleaned area
 - Dock marker, robot position with direction arrow
-- Stuck events are marked on the map
-- Map is retained after the mission ends
-- **Map state survives HA restarts** — pose points and stuck markers are persisted to `hass.storage` after each mission and restored on startup
-- **Room outline suggestions** — dashed grey rectangles showing approximate room boundaries derived from zone bounding boxes (900-series, v1.4.0+)
-- **Door crossing markers** — small blue circles showing where the Roomba crossed between rooms, accumulated across missions (900-series, v1.4.0+)
+- Stuck events marked on the map
+- **Map state survives HA restarts** — persisted to `hass.storage` after each mission
+- **Room outline suggestions** — dashed rectangles from zone bounding boxes (900-series)
+- **Door crossing markers** — small circles showing door crossings accumulated across missions
 
 ### Zone detection (Roomba 900)
 
 Automatic room segmentation from travel data:
 
-- Doorway crossings are detected as room boundaries and shown as markers on the map
-- Door crossing positions are clustered across missions — a marker seen in ≥2 missions is displayed on the map
-- Detected zones are persistently stored across restarts
+- Doorway crossings detected and shown as markers on the map
+- Markers clustered across missions — shown after ≥2 sightings
+- Detected zones persist across restarts
 - User naming via Options Flow after each mission
-- Calibration via door-width wizard (DIN 875 mm standard)
+- Calibration via door-width wizard
 
-### Smart Map zone naming (i / s / j / Braava m6)
+### Smart Map zone naming (i / s / j / Braava — without cloud credentials)
 
-When the robot reports previously unseen room IDs from its Smart Map, a **HA Repair Issue** is automatically raised. The check runs both at HA startup and on live MQTT updates — no room-specific clean required to trigger it.
+When new room IDs are discovered via MQTT, a **HA Repair Issue** is raised automatically. The fix flow opens directly in the Repairs dialog.
 
-The fix flow opens directly in the Repairs dialog where you can assign names to each discovered zone. Zone IDs are persisted to integration storage so they survive robot state changes between discovery and naming. The issue dismisses itself once all zones have a name.
+**v1.5 parser improvement:** the zone naming form now accepts both newline-separated entries (`1=Kitchen` per line) and comma-separated entries on one line (`1=Kitchen,17=Hallway`). Both formats produce identical results — the parser detects the delimiter automatically.
 
-**Robots with multiple Smart Maps** are fully supported — the capability detection now correctly identifies all Smart Map robots regardless of how many maps are configured.
-
-**Manual zone entry for fresh installs**
-
-On a fresh install, HA may not have seen any room-specific cleans yet and therefore has no region IDs to display. To break this circular dependency, open **Settings → Devices & Services → Roomba+ → Configure** and select **Manually enter Smart Map zones**.
-
-Enter your region IDs as a comma-separated list (e.g. `5, 12, 7`). You can find them in the HA diagnostics download under `options → discovered_zone_ids`, or by starting a room-specific clean from the iRobot app while HA is connected and checking the diagnostics afterwards. On the next screen, assign a name to each ID. The `pmap_id` is resolved automatically from the robot's live state — you do not need to find it manually.
-
-Once saved, `roomba_plus.clean_room` works immediately — the integration resolves the map ID from the robot's live state at command time, so no prior MQTT clean history is required.
+**With cloud credentials:** the repair flow is suppressed entirely — room names come from the cloud and are always current.
 
 ### Diagnostics
 
-The diagnostics download (Settings → Devices & Services → Roomba+ → Download diagnostics) now includes:
-
-- Map subsystem: renderer configuration, number of recorded pose points, stuck event count, whether a cached image is present
-- Zone subsystem: gap threshold, calibration scale factor, full zone list with bounding boxes and confidence scores
-- Geometry subsystem: door marker count, wall/door/obstacle counts, cumulative drift, wall offset setting
+- Map subsystem: renderer config, pose point count, stuck events, cached image status
+- Zone subsystem: gap threshold, calibration scale, full zone list with bounding boxes
+- Geometry subsystem: door marker count, wall/door/obstacle counts, drift, wall offset
+- **Cloud subsystem (v1.5):** coordinator status, pmap count, region count, favorite count, last exception
 
 ---
 
@@ -122,7 +117,7 @@ The diagnostics download (Settings → Devices & Services → Roomba+ → Downlo
 
 ### Manual
 
-1. Copy `custom_components/roomba_plus/` from this repository into your HA configuration directory
+1. Copy `custom_components/roomba_plus/` into your HA configuration directory
 2. Restart HA
 
 ### Setup
@@ -130,23 +125,22 @@ The diagnostics download (Settings → Devices & Services → Roomba+ → Downlo
 1. Settings → Devices & Services → Add integration → **Roomba+**
 2. Roomba is discovered automatically via DHCP/Zeroconf
 3. Hold the HOME button on the Roomba for ~2 seconds until it plays tones
-4. Integration is connected
+4. Integration connects
+5. **(Smart Map robots, optional)** Enter your iRobot app email and password to enable cloud features — or leave blank to skip
 
-> **Note:** Roomba+ and the built-in Core Roomba integration must not be active at the same time — they compete for the same local MQTT connection. Disable the Core integration under Settings → Devices & Services before adding Roomba+.
+> **Note:** Roomba+ and the built-in Core Roomba integration must not be active at the same time — they compete for the same local MQTT connection.
 
-> **Continuous mode:** The Roomba's local MQTT server only allows a single connection at a time. With continuous mode enabled (the default), the iRobot app is forced to connect via the cloud when Roomba+ is active. You can disable continuous mode in the integration options after setup to allow the app to connect locally — at the cost of a slightly longer reconnect delay after HA restarts. See the [Roomba 980 repository](https://github.com/NickWaterton/Roomba980-Python#firmware-2xx-notes) for details.
+### Adding or updating cloud credentials after setup
+
+Settings → Devices & Services → Roomba+ → Configure → **iRobot cloud credentials**
+
+Enter your iRobot email and password, or clear both fields to disable cloud features. A credential test is run before saving — if it fails you will see a clear error message.
 
 ---
 
 ## Multiple Roomba robots
 
-Roomba+ fully supports households with more than one robot. Each robot is set up as a separate integration entry with its own device, entities and storage.
-
-1. Settings → Devices & Services → Add integration → **Roomba+**
-2. Repeat for each robot — each gets its own BLID-based unique ID
-3. All entities are named after the robot's name from the iRobot app, so `vacuum.roomba_downstairs` and `vacuum.roomba_upstairs` stay distinct
-
-Each robot has completely separate state: its own ZoneStore, MaintenanceStore, map renderer state and hass.storage keys. There is no cross-contamination between robots even if they are the same model.
+Each robot is set up as a separate integration entry with its own device, entities and storage. Repeat the Add Integration flow for each robot. Cloud credentials are stored per-robot.
 
 ---
 
@@ -159,8 +153,6 @@ If the automatic HOME button pairing fails:
 
 ## Dashboard card for the cleaning map
 
-The simplest option using the built-in picture-entity card:
-
 ```yaml
 type: picture-entity
 entity: image.roomba_cleaning_map
@@ -170,24 +162,12 @@ show_state: false
 
 **Recommended: xiaomi-vacuum-map-card (HACS)**
 
-The [lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) gives you a fully interactive map with room selection, robot position, and real-time path overlay. It works with Roomba+ out of the box:
-
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
 map_camera: image.roomba_cleaning_map
 calibration_source:
   camera: true
-```
-
-**Roomba Vacuum Card (HACS)**
-
-The [lovelace-roomba-vacuum-card](https://github.com/jeremywillans/lovelace-roomba-vacuum-card) by jeremywillans shows status, battery, bin level and map in a single card:
-
-```yaml
-type: custom:vacuum-map-card
-entity: vacuum.roomba
-map_camera: image.roomba_cleaning_map
 ```
 
 ---
@@ -204,8 +184,6 @@ After replacing the filter, brushes, or battery:
 
 ## Device triggers
 
-Roomba+ registers native HA device triggers visible directly in the Automation editor under the device card. No entity monitoring needed — just pick the device and choose a trigger.
-
 | Trigger | Description |
 |---|---|
 | Cleaning started | Robot transitions into an active cleaning phase |
@@ -215,30 +193,11 @@ Roomba+ registers native HA device triggers visible directly in the Automation e
 | Docked | Robot is docked and charging |
 | Error reported | Robot reports any error |
 
-Example — notify when the robot gets stuck:
-
-```yaml
-automation:
-  trigger:
-    platform: device
-    domain: roomba_plus
-    device_id: <your_device_id>
-    type: stuck
-  action:
-    service: notify.mobile_app
-    data:
-      message: "Roomba is stuck and needs help!"
-```
-
 ---
 
 ## Automation ideas
 
-Roomba+ exposes enough sensors and controls to build meaningful automations. Here are some ideas to get you started.
-
-### Start/stop cleaning automatically
-
-**Absence-triggered cleaning** — start the Roomba when everyone leaves home during the day, stop and return to base when someone arrives. Add an `input_boolean.roomba_cleaned_today` helper as a guard so it only runs once per day:
+### Absence-triggered cleaning
 
 ```yaml
 automation:
@@ -261,75 +220,24 @@ automation:
       - service: input_boolean.turn_on
         target:
           entity_id: input_boolean.roomba_cleaned_today
-
-  - alias: "Roomba — return to base when someone arrives"
-    trigger:
-      - platform: state
-        entity_id: group.all_people
-        to: "home"
-    condition:
-      - condition: state
-        entity_id: vacuum.roomba
-        state: "cleaning"
-    action:
-      - service: vacuum.return_to_base
-        target:
-          entity_id: vacuum.roomba
-
-  - alias: "Roomba — reset daily guard at midnight"
-    trigger:
-      - platform: time
-        at: "00:00:00"
-    action:
-      - service: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.roomba_cleaned_today
 ```
 
-**Time window as extra condition** — add a time condition to the absence trigger so a late-night departure does not start the Roomba unexpectedly (already included in the example above).
+### Room-specific clean via service action
 
-**Guest mode** — create an `input_boolean.guest_mode` toggle. Add it as a condition to the absence automation so cleaning is suppressed while guests are present.
-
-**Trigger after kitchen appliances** — if you have a dishwasher or oven integration, start the Roomba 10 minutes after they finish.
-
-### Notifications and alerts
-
-**Mission complete** — send a notification with the total cleaning time and cleaned area from the `sensor.roomba_total_cleaned_area` and `sensor.roomba_total_cleaning_time` sensors when the phase changes to `charge`.
-
-**Roomba stuck** — use the native "Robot stuck" device trigger (see Device triggers section above) for a single-click setup in the Automation editor. Alternatively trigger on `sensor.roomba_phase` changing to `Stuck`.
-
-**Bin full** — use the native "Bin full" device trigger, or watch `binary_sensor.roomba_bin_full` turning `on`.
-
-**Maintenance due** — when `sensor.roomba_filter_remaining_hours` or `sensor.roomba_brush_remaining_hours` drops below a threshold (e.g. 5 h), send a weekly reminder.
-
-**Connection lost** — alert when `binary_sensor.roomba_connected` stays `off` for more than 5 minutes.
-
-### Integration with other devices
-
-**Door sensor** — pause the Roomba when the front door opens during a cleaning mission, then resume after it closes again.
-
-**Motion detector fallback** — if motion is detected at home while the Roomba is running (someone unexpectedly stayed home), send it back to base.
-
-**Status light** — set a smart bulb to orange while the Roomba is cleaning and green when it is docked and idle.
-
-**Voice assistant routine** — include a `vacuum.start` call in an Alexa or Google "leaving home" routine.
-
-### Maintenance and monitoring
-
-**Weekly maintenance report** — every Sunday, send a summary with the number of missions completed, total cleaned area, and remaining hours on filter and brushes.
-
-**Charge cycle tracking** — log `sensor.roomba_battery_cycles` over time using the History Stats integration or InfluxDB to track battery wear.
-
-**Stuck event monitoring** — watch `bbrun.nStuck` via the diagnostics data. A steep increase over time indicates a recurring obstacle that should be removed.
-
-**Automatic reset reminder** — display a persistent notification or dashboard card after a set number of operating hours prompting the user to replace the filter.
+```yaml
+service: roomba_plus.clean_room
+target:
+  entity_id: vacuum.roomba
+data:
+  room_name:
+    - Kitchen
+    - Hallway
+  ordered: true
+```
 
 ---
 
 ## Comparison with the Core integration
-
-For a detailed comparison of all three Roomba integrations (HA Core, Roomba+, roomba_rest980) including maps, zones, sensors and controls, see **[COMPARISON.md](COMPARISON.md)**.
-
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
@@ -337,7 +245,9 @@ For a detailed comparison of all three Roomba integrations (HA Core, Roomba+, ro
 | Cleaning map | ❌ | ✅ |
 | Map persists across restarts | ❌ | ✅ |
 | Zone detection (900-series) | ❌ | ✅ |
-| Smart Map zone naming prompt | ❌ | ✅ |
+| Smart Map zone naming (repair flow) | ❌ | ✅ |
+| Smart Map zones from cloud | ❌ | ✅ (v1.5) |
+| Favorites from cloud | ❌ | ✅ (v1.5) |
 | Maintenance reset | ❌ | ✅ |
 | Edge cleaning toggle | ❌ | ✅ |
 | Always finish (binPause) | ❌ | ✅ |
@@ -350,11 +260,9 @@ For a detailed comparison of all three Roomba integrations (HA Core, Roomba+, ro
 | Idle / Stopped phase detection | ❌ | ✅ |
 | Error codes (80+) | ❌ | ✅ |
 | Device triggers | ❌ | ✅ |
-| Cleaning passes | ❌ | ✅ |
 | Carpet Boost (980) | ❌ | ✅ |
-| Extended diagnostics (map + zones) | ❌ | ✅ |
+| Extended diagnostics | ❌ | ✅ |
 | German translation | ✅ | ✅ |
-| Alphabetically grouped entities | ❌ | ✅ |
 
 ---
 
@@ -362,101 +270,67 @@ For a detailed comparison of all three Roomba integrations (HA Core, Roomba+, ro
 
 **"Failed to connect" during setup**
 
-Before attempting a factory reset, try the following: press the physical **Clean** button on the robot to start a manual cleaning job (do not use the app), then immediately attempt the credential retrieval in HA. Some models only respond to credential requests while actively running. If this still fails, factory reset the robot and try again.
-
-**Credentials cannot be retrieved automatically**
-
-Some newer models (j7 and later) require retrieving the password via the cloud. Use [dorita980's credential tool](https://github.com/koalazak/dorita980#how-to-get-your-usernameblid-and-password) which authenticates against the iRobot cloud and returns the local password.
+Press the physical **Clean** button on the robot to start a manual cleaning job, then immediately attempt credential retrieval in HA. Some models only respond while actively running.
 
 **App loses connection when Roomba+ is running**
 
-This is expected with continuous mode enabled — the robot only allows one local MQTT connection. Either disable continuous mode in the integration options (Settings → Devices & Services → Roomba+ → Configure), or accept that the app will use the cloud while Roomba+ is connected.
+Expected with continuous mode enabled — the robot only allows one local MQTT connection. Disable continuous mode in Settings → Devices & Services → Roomba+ → Configure, or accept that the app will use the cloud while Roomba+ is connected.
 
-**Robot name shows MAC address instead of robot name**
+**Cloud authentication fails**
 
-Roomba+ fixes this automatically on the first state update after setup. If it persists, reload the integration once (Settings → Devices & Services → Roomba+ → ⋮ → Reload). The device name is updated in the HA Device Registry from the robot's reported `name` field.
-
-**Map is empty after HA restart**
-
-The map state is persisted to `hass.storage` after each completed mission and restored on startup. If the map appears empty after a restart, check that at least one mission has completed with v1.4.0 installed — the first mission writes the initial storage state. Door markers and zone outlines accumulate across missions and are also persisted separately. If the storage file is corrupted, removing and re-adding the integration clears it.
-
-**Zone detection not working (900-series)**
-
-Zone detection requires at least 20 pose points per segment. Short missions or missions in very open spaces may not produce enough data for reliable segmentation. Run a full cleaning mission covering the entire floor for best results. Use the door-width calibration wizard (Settings → Devices & Services → Roomba+ → Configure) to improve accuracy.
-
-**Configure menu shows buttons without labels (Smart Map robots)**
-
-Fixed in v1.4.4. The OptionsFlow menu renderer requires `description_placeholders` to be passed explicitly — without it, HA's frontend skips label resolution and renders empty button text. The `translations/en.json` German-string regression from v1.4.3 is also corrected. Ensure you have deployed the complete v1.4.4 package and cleared your browser's frontend cache (Shift+F5).
+Check your iRobot app email and password. If authentication is rate-limited ("mqtt slot" error), close the iRobot app on all devices and wait a few minutes before trying again.
 
 **Smart Map zones not appearing / Repair Issue never fires (i / s / j-series)**
 
-The zone check runs at HA startup — the Repair Issue should appear within seconds of restarting HA if any zones are unnamed. If it does not:
+- Check `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1
+- If the Repair Issue appears but Fix shows "Problem resolved" without a form, ensure you have the full v1.4.4.9+ package including `repairs.py`
+- **v1.5:** consider adding cloud credentials — the repair flow is replaced entirely by cloud-sourced zone names
 
-- Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. Robots with multiple Smart Maps previously required exactly `pose == 1` — fixed in v1.4.2.
-- Ensure `regions` in `lastCommand` is not `null` in your firmware — handled in v1.4.2.
-- If the Repair Issue appears but clicking Fix shows "Problem resolved" without a form, ensure you have the full v1.4.2+ package including `repairs.py`.
+**Zone naming form — all IDs on one line (pre-v1.5)**
 
-**Fresh install with no zone IDs — circular dependency**
-
-If you have never started a room-specific clean while HA was connected, no region IDs have been captured and the Repair Issue either does not appear or shows an empty form. This happens because the robot only broadcasts region IDs as a one-time MQTT delta when a room-specific clean is commanded — and if the iRobot app initiated the clean, it takes over the MQTT connection first.
-
-Use the **manual entry flow** to break the dependency: Settings → Devices & Services → Roomba+ → Configure → **Manually enter Smart Map zones**. Enter your region IDs as a comma-separated list. Find them in the HA diagnostics download under `options → discovered_zone_ids` (after even one partial MQTT connection) or use the iRobot app to find your room layout. Once entered and named, the select entity populates and `roomba_plus.clean_room` works immediately — the `pmap_id` is resolved live from the robot's state at call time, so zones entered manually work even before any room-specific MQTT clean has been received.
-
-**Note on capability detection timing:** on a fresh install, `map_capability` is detected during HA startup. If the robot's `pmaps` state delta arrives after the initial 2-second wait, the robot may be misclassified as non-Smart-Map and `clean_room` will raise "does not support Smart Map room cleaning". Fixed in v1.4.4 — the integration now waits up to 6 additional seconds for `pmaps` on robots that report Smart Map capability flags (`pmapUpload` / `tflmsl`). If you see this error on an i/s/j-series robot, reload the integration once (Settings → Devices & Services → Roomba+ → ⋮ → Reload) to re-run capability detection.
+Upgrading to v1.5 fixes this. The parser now accepts comma-separated input (`1=Kitchen,17=Hallway`) as well as the canonical newline-separated format. The pre-filled textarea also shows each zone on its own line.
 
 **Error 224 / Smart Map localization failed**
 
-This error has two independent causes, both fixed in v1.4.4.6:
-
-1. **Robot is updating its Smart Map** — after any clean the robot saves its map while charging.  bit 6 (64) is set during this period. Sending a region clean while this bit is set causes the robot to reject the command immediately with error 224. The integration now checks  before sending and raises a clear error instead. Wait for the readiness sensor to show  before starting a zone clean from HA.
-
-2. **region_id type mismatch** — older i7 firmware (lewis pre-2024) requires  as an integer on the MQTT wire. The integration was sending a string. Fixed: numeric region IDs are now sent as integers.
-
-**Note:** if `clean_room` raises "Could not resolve map ID", the robot has not yet reported its map state via MQTT. Ensure the robot is docked and connected, wait a few seconds for the state to arrive, then try again.
+Two causes, both fixed in v1.4.4.6:
+1. Robot is updating its Smart Map — the integration now checks `notReady` bit 6 before sending and raises a clear error instead of silently sending.
+2. region_id type mismatch on older firmware — numeric IDs are now sent as integers.
 
 **Smart Map Zone selector goes unavailable after mission ends**
 
-The selector relies on `discovered_zone_ids` in the integration options as its persistent source of truth. If this list was emptied by the v1.4.4.1 repair flow (a now-fixed bug), the selector loses its options as soon as `lastCommand` is cleared at mission end. Fixed in v1.4.4.4 — `async_setup_entry` now backfills `discovered_zone_ids` from `smart_zone_data` keys on startup, self-healing any affected installation without user intervention.
+Fixed in v1.4.4.4 — `discovered_zone_ids` is backfilled from `smart_zone_data` on startup. Self-heals on next HA restart.
 
-**Map entity shows a blank white image (i7 / s9 / j-series)**
+**Map entity shows blank white image (i7 / s9 / j-series)**
 
-Smart Map robots (i7, s9, j-series) use cloud-based vSLAM for navigation and do not broadcast local pose updates via MQTT. The live map renderer relies on pose data and therefore has nothing to render on these robots. The map image entity is suppressed for Smart Map robots from v1.4.4.4 onwards. Use the iRobot app to view the Smart Map.
-
-**`clean_room` raises "Failed to process action response" in Developer Tools**
-
-Fixed in v1.4.4. The handler now declares `SupportsResponse.OPTIONAL` and returns `{}` on success, so HA's action framework always receives a valid response object. In earlier builds the handler returned `None` implicitly, causing HA 2026.x to raise "expected a dictionary, but got NoneType". The underlying clean command was sent correctly in all cases — only the Developer Tools response handling failed.
+Smart Map robots do not broadcast local pose data via MQTT. The map image entity is suppressed for these robots from v1.4.4.4. Use the iRobot app to view the Smart Map.
 
 **Migration from Core Roomba integration**
 
 1. Settings → Devices & Services → iRobot Roomba and Braava → Delete
 2. Restart Home Assistant
-3. Add Roomba+ via HACS and set it up as described above
-
-Your automations targeting `vacuum.roomba` will continue to work — the entity ID is preserved if the robot name matches. Dashboard cards referencing `binary_sensor.roomba_bin_full` or similar may need updating to the new entity IDs.
+3. Add Roomba+ via HACS
 
 **Migration from roomba_rest980**
 
 1. Remove roomba_rest980 and stop the rest980 Docker container
-2. Add Roomba+ — it connects directly to the robot without any middleware
-3. Zone/room selections from cloud pmaps are not automatically carried over — use the SmartZone naming flow in Roomba+ to assign names to the locally discovered region IDs
+2. Add Roomba+ — it connects directly to the robot without middleware
+3. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
 
 ---
 
 ## Credits
 
-Roomba+ stands on the shoulders of an active open-source community:
+**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots.
 
-**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots. The foundation of the entire local connection layer in Roomba+. Originally developed for the Home Assistant Core Roomba integration.
+**[dorita980](https://github.com/koalazak/dorita980)** by Facu Decena — Pioneering work documenting the local MQTT protocol, cloud auth flows, and Smart Map commands.
 
-**[dorita980](https://github.com/koalazak/dorita980)** by Facu Decena (koalazak) — Unofficial Node.js SDK for iRobot robots. Pioneering work documenting the local MQTT protocol, cloud auth flows, and Smart Map commands (`pmap_id`, `regions`).
+**[rest980](https://github.com/koalazak/rest980)** by Facu Decena — REST interface and cloud API analysis, including the Gigya → AWS Cognito auth flow documented in cloudReverse.md.
 
-**[rest980](https://github.com/koalazak/rest980)** by Facu Decena (koalazak) — REST interface built on dorita980. Source for analysing available API endpoints, command structures, and device capabilities.
+**[roomba_rest980](https://github.com/ia74/roomba_rest980)** — Reverse-engineered iRobot cloud API client (Gigya → Cognito → AWS SigV4) whose auth implementation the v1.5 cloud layer is based on.
 
-**[Roomba980-Python](https://github.com/NickWaterton/Roomba980-Python)** by Nick Waterton — Comprehensive Python implementation with detailed documentation of the Roomba protocol, state dictionaries for all model series, and AWS Sig V4-based cloud authentication. Essential for analysing capability differences across the 600/900/i/s/j series.
+**[Roomba980-Python](https://github.com/NickWaterton/Roomba980-Python)** by Nick Waterton — Comprehensive Python implementation with detailed Roomba protocol documentation.
 
-**[Home Assistant Core Roomba Integration](https://github.com/home-assistant/core/tree/dev/homeassistant/components/roomba)** — The official integration whose architecture served as the starting point for Roomba+. Roomba+ extends and improves on this foundation while remaining compatible with the same local protocol.
-
-**[PyRoomba](https://doi.org/10.1016/j.fsidi.2023.301686)** by Onik et al. (2024) — Forensic analysis of the Roomba cloud infrastructure documenting undisclosed API endpoints.
+**[Home Assistant Core Roomba Integration](https://github.com/home-assistant/core/tree/dev/homeassistant/components/roomba)** — Architecture foundation for Roomba+.
 
 > Roomba+ is an independent community project with no affiliation to iRobot or Picea Robotics.
 

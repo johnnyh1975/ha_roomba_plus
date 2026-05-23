@@ -99,6 +99,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         self.blid: str = ""
         self.host: str | None = None
         self.discovered_robots: dict[str, RoombaInfo] = {}
+        self._pending_config: dict[str, Any] = {}
 
     @staticmethod
     @callback
@@ -279,7 +280,8 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             self.name = info[CONF_NAME]
 
         assert self.name
-        return self.async_create_entry(title=self.name, data=config)
+        self._pending_config = config
+        return await self.async_step_cloud_credentials()
 
     async def async_step_link_manual(
         self, user_input: dict[str, Any] | None = None
@@ -299,13 +301,58 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             else:
-                return self.async_create_entry(title=info[CONF_NAME], data=config)
+                self.name = info[CONF_NAME]
+                self._pending_config = config
+                return await self.async_step_cloud_credentials()
 
         return self.async_show_form(
             step_id="link_manual",
             description_placeholders={AUTH_HELP_URL_KEY: AUTH_HELP_URL_VALUE},
             data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
             errors=errors,
+        )
+
+    async def async_step_cloud_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Optional iRobot account credentials for cloud features.
+
+        Skipping leaves cloud_coordinator disabled — all local MQTT
+        functionality continues to work normally.
+        """
+        from .const import CONF_IROBOT_USERNAME, CONF_IROBOT_PASSWORD
+
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            config = dict(self._pending_config)
+            username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
+            password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
+            if username and password:
+                # Validate credentials before storing
+                from homeassistant.helpers.aiohttp_client import async_get_clientsession
+                from .cloud_api import IrobotCloudApi, AuthenticationError, CloudApiError
+                api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+                try:
+                    await api.authenticate()
+                except AuthenticationError:
+                    errors["base"] = "cloud_auth_failed"
+                except CloudApiError:
+                    errors["base"] = "cloud_unavailable"
+                else:
+                    config[CONF_IROBOT_USERNAME] = username
+                    config[CONF_IROBOT_PASSWORD] = password
+            if not errors:
+                return self.async_create_entry(title=self.name, data=config)
+
+        return self.async_show_form(
+            step_id="cloud_credentials",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_IROBOT_USERNAME, default=""): str,
+                vol.Optional(CONF_IROBOT_PASSWORD, default=""): str,
+            }),
+            errors=errors,
+            description_placeholders={},
         )
 
 
@@ -324,10 +371,11 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
 
         if has_smart_map(state):
-            # Smart Map robots get a menu: connection settings or manual zone entry.
+            # Smart Map robots get a menu: connection settings, manual zone entry,
+            # and (re-)configure cloud credentials.
             return self.async_show_menu(
                 step_id="init",
-                menu_options=["settings", "smart_zones_manual"],
+                menu_options=["settings", "smart_zones_manual", "cloud_credentials"],
                 description_placeholders={},
             )
 
@@ -692,6 +740,64 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ),
             }),
             description_placeholders=placeholders,
+        )
+
+    async def async_step_cloud_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add or update iRobot cloud credentials.
+
+        Saves credentials to config_entry.data (not options), then triggers a
+        reload so the cloud coordinator is re-initialised with the new values.
+        Clearing both fields removes the credentials and disables cloud features.
+        """
+        from .const import CONF_IROBOT_USERNAME, CONF_IROBOT_PASSWORD
+
+        errors: dict[str, str] = {}
+        current_user = self.config_entry.data.get(CONF_IROBOT_USERNAME, "")
+
+        if user_input is not None:
+            username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
+            password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
+
+            new_data = dict(self.config_entry.data)
+
+            if username and password:
+                # Validate before storing
+                from homeassistant.helpers.aiohttp_client import async_get_clientsession
+                from .cloud_api import IrobotCloudApi, AuthenticationError, CloudApiError
+                api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+                try:
+                    await api.authenticate()
+                except AuthenticationError:
+                    errors["base"] = "cloud_auth_failed"
+                except CloudApiError:
+                    errors["base"] = "cloud_unavailable"
+                else:
+                    new_data[CONF_IROBOT_USERNAME] = username
+                    new_data[CONF_IROBOT_PASSWORD] = password
+            else:
+                # Clear credentials — disables cloud
+                new_data.pop(CONF_IROBOT_USERNAME, None)
+                new_data.pop(CONF_IROBOT_PASSWORD, None)
+
+            if not errors:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, data=new_data
+                )
+                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+                return self.async_create_entry(title="", data=self.config_entry.options)
+
+        return self.async_show_form(
+            step_id="cloud_credentials",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_IROBOT_USERNAME, default=current_user): str,
+                vol.Optional(CONF_IROBOT_PASSWORD, default=""): str,
+            }),
+            errors=errors,
+            description_placeholders={
+                "current_user": current_user or "not configured",
+            },
         )
 
 

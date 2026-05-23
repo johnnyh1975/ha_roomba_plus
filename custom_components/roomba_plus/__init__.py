@@ -35,6 +35,8 @@ from .const import (
     ATTR_ROOM_NAME,
     CONF_BLID,
     CONF_CONTINUOUS,
+    CONF_IROBOT_PASSWORD,
+    CONF_IROBOT_USERNAME,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -51,6 +53,7 @@ from .const import (
     has_pose,
     has_smart_map,
 )
+from .cloud_coordinator import IrobotCloudCoordinator
 from .maintenance_store import MaintenanceStore
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
@@ -79,16 +82,19 @@ def _resolve_rooms(
     zone_data: dict[str, dict],
     room_names: list[str],
     state: dict,
+    cloud_pmap_id: str | None = None,
 ) -> list[tuple[str, str]]:
     """Resolve room names to (region_id, pmap_id) tuples.
 
     Args:
-        zone_data: smart_zone_data from config_entry.options —
-                   {region_id: {"name": str, "pmap_id": str}}
-        room_names: user-supplied room names from the service call.
-        state:      live robot state — used to resolve pmap_id when the stored
-                    value is empty (e.g. zone was entered via manual entry before
-                    any MQTT mission data arrived).
+        zone_data:      smart_zone_data from config_entry.options —
+                        {region_id: {"name": str, "pmap_id": str}}
+        room_names:     user-supplied room names from the service call.
+        state:          live robot state — used to resolve pmap_id when the stored
+                        value is empty (MQTT fallback).
+        cloud_pmap_id:  authoritative pmap_id from the cloud coordinator.
+                        When present this is preferred over the MQTT cascade for
+                        zones whose stored pmap_id is empty.
 
     Returns:
         Ordered list of (region_id, pmap_id) matching each room name.
@@ -125,23 +131,24 @@ def _resolve_rooms(
             translation_placeholders={"names": ", ".join(unknown)},
         )
 
-    # Resolve empty pmap_ids from live state for zones entered via manual entry
-    # (where pmap_id was not available at save time) or after a map retrain.
+    # Resolve empty pmap_ids for zones whose stored value is empty
+    # (manual entry before MQTT data arrived, or after a map retrain).
     #
-    # Priority order — mirrors the rest980 recommendation and repairs.py:
-    #   1. lastCommand.pmap_id — the map the robot last used for a region clean.
-    #      Most reliable on multi-map robots: it is the map actually associated
-    #      with the region IDs in flight, not an arbitrary list position.
-    #   2. First pmap_id found across cleanSchedule2[].cmd.pmap_id — stable
-    #      between sessions even when lastCommand has been overwritten by a
-    #      full-home clean.
-    #   3. pmaps[0] key — last resort only; on robots with a single map this is
-    #      always correct, but on multi-map robots the list order is undefined
-    #      and picking index 0 is the root cause of "Problem with the smart map".
+    # Priority order:
+    #   0. cloud_pmap_id — authoritative value from /pmaps endpoint. Always
+    #      current; immune to stale MQTT state. Used when the cloud coordinator
+    #      is active.
+    #   1. lastCommand.pmap_id — most recent MQTT value; reliable on single-map
+    #      robots and correct immediately after a region clean.
+    #   2. cleanSchedule2[].cmd.pmap_id — stable between sessions even when
+    #      lastCommand has been overwritten by a full-home clean.
+    #   3. pmaps[0] key — last resort; correct on single-map robots but
+    #      undefined order on multi-map robots.
     last = state.get("lastCommand", {})
     pmaps: list[dict] = state.get("pmaps", [])
-    live_pmap_id: str = (
-        last.get("pmap_id")
+    fallback_pmap_id: str = (
+        cloud_pmap_id
+        or last.get("pmap_id")
         or next(
             (
                 cmd.get("cmd", {}).get("pmap_id")
@@ -154,7 +161,7 @@ def _resolve_rooms(
         or ""
     )
     resolved = [
-        (rid, pmap_id if pmap_id else live_pmap_id)
+        (rid, pmap_id if pmap_id else fallback_pmap_id)
         for rid, pmap_id in resolved
     ]
 
@@ -233,6 +240,16 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
         # Read live state before resolving rooms — needed for pmap_id fallback.
         state = roomba_reported_state(data.roomba)
 
+        # Cloud pmap_id takes priority over the MQTT cascade when available.
+        cloud_pmap_id: str | None = None
+        if data.has_cloud:
+            cloud_pmap_id = data.cloud_coordinator.active_pmap_id  # type: ignore[union-attr]
+            if cloud_pmap_id:
+                _LOGGER.debug(
+                    "clean_room: using cloud pmap_id %s for %s",
+                    cloud_pmap_id[:12], entity_id,
+                )
+
         # Guard: reject if the robot is currently updating its Smart Map.
         # notReady bit 6 (64) = map save/upload in progress. Sending a region
         # clean while this bit is set causes the robot to immediately report
@@ -249,7 +266,7 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
             )
 
         # Resolve names → (region_id, pmap_id) — raises on unknown or cross-floor.
-        resolved = _resolve_rooms(zone_data, room_names, state)
+        resolved = _resolve_rooms(zone_data, room_names, state, cloud_pmap_id)
 
         pmap_id = resolved[0][1]  # all share one pmap_id (enforced by _resolve_rooms)
 
@@ -408,6 +425,35 @@ async def async_setup_entry(
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
+    # ── Cloud coordinator (SMART robots + credentials only) ────────────────
+    cloud_coordinator: IrobotCloudCoordinator | None = None
+    irobot_username = config_entry.data.get(CONF_IROBOT_USERNAME)
+    irobot_password = config_entry.data.get(CONF_IROBOT_PASSWORD)
+
+    if map_capability == MapCapability.SMART and irobot_username and irobot_password:
+        cloud_coordinator = IrobotCloudCoordinator(
+            hass=hass,
+            config_entry=config_entry,
+            blid=config_entry.data[CONF_BLID],
+            username=irobot_username,
+            password=irobot_password,
+        )
+        try:
+            await cloud_coordinator.async_config_entry_first_refresh()
+            _LOGGER.info(
+                "Roomba+ cloud: coordinator active for %s (%d pmap(s))",
+                config_entry.data[CONF_BLID],
+                len(cloud_coordinator.data.get("pmaps", [])),
+            )
+        except Exception:  # noqa: BLE001
+            # Cloud failure must never prevent local MQTT from working.
+            # Log and continue — the coordinator will retry on its interval.
+            _LOGGER.warning(
+                "Roomba+ cloud: initial fetch failed for %s — "
+                "local operation unaffected, cloud features unavailable until retry",
+                config_entry.data[CONF_BLID],
+            )
+
     config_entry.runtime_data = RoombaData(
         roomba=roomba,
         blid=config_entry.data[CONF_BLID],
@@ -416,6 +462,7 @@ async def async_setup_entry(
         zone_store=zone_store,
         geometry_store=geometry_store,
         maintenance_store=maintenance_store,
+        cloud_coordinator=cloud_coordinator,
     )
 
     # ── Platform setup ──────────────────────────────────────────────────────
@@ -427,6 +474,15 @@ async def async_setup_entry(
     # the image entity for SMART robots to avoid a misleading blank white map.
     if map_capability == MapCapability.EPHEMERAL:
         platforms.append(Platform.IMAGE)
+
+    # Cloud platforms are only meaningful for SMART robots with credentials.
+    # select.py and button.py gate their cloud entities on data.has_cloud
+    # internally, so forwarding is safe even when the coordinator is None —
+    # but we skip the forward entirely for non-SMART robots to avoid creating
+    # empty platform registrations.
+    if map_capability == MapCapability.SMART:
+        from .const import CLOUD_PLATFORMS
+        platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
@@ -457,6 +513,38 @@ async def async_setup_entry(
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
 
+    # ── Map retrain detector ────────────────────────────────────────────────
+    # iRobot increments user_pmapv_id in the MQTT state whenever the user
+    # retrains or edits a Smart Map. This is the earliest signal that pmap
+    # data has changed — earlier than any cloud /pmaps poll would notice.
+    # When we see a new value, schedule an immediate cloud coordinator refresh
+    # so region names and pmap_id stay in sync without waiting 24 hours.
+    if cloud_coordinator is not None:
+        _last_pmapv: dict[str, str] = {}   # pmap_id → last seen pmapv_id
+
+        def _on_roomba_message(json_data: dict[str, Any]) -> None:
+            reported = json_data.get("state", {}).get("reported", {})
+            pmaps: list[dict] = reported.get("pmaps", [])
+            changed = False
+            for pmap_entry in pmaps:
+                for pid, pmapv in pmap_entry.items():
+                    if _last_pmapv.get(pid) not in (None, pmapv):
+                        _LOGGER.info(
+                            "Roomba+ cloud: user_pmapv_id changed for pmap %s "
+                            "(%s → %s) — triggering cloud refresh",
+                            pid[:12], _last_pmapv[pid][:12], pmapv[:12],
+                        )
+                        changed = True
+                    _last_pmapv[pid] = pmapv
+            if changed:
+                hass.async_create_task(
+                    cloud_coordinator.async_request_refresh()
+                )
+
+        config_entry.runtime_data.roomba.register_on_message_callback(
+            _on_roomba_message
+        )
+
     _LOGGER.info(
         "Roomba+ connected to %s (blid=%s)",
         config_entry.data[CONF_HOST],
@@ -473,6 +561,9 @@ async def async_unload_entry(
     platforms = list(LOCAL_PLATFORMS)
     if data.map_capability == MapCapability.EPHEMERAL:
         platforms.append(Platform.IMAGE)
+    if data.has_cloud:
+        from .const import CLOUD_PLATFORMS
+        platforms.extend(CLOUD_PLATFORMS)
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, platforms
     )

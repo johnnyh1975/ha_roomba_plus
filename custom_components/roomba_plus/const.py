@@ -19,8 +19,16 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.SELECT,
 ]
 
-# Cloud and map platforms are added dynamically in __init__.py
-CLOUD_PLATFORMS: Final[list[Platform]] = []  # Phase 3
+# Cloud credential keys — stored in config_entry.data (encrypted by HA)
+CONF_IROBOT_USERNAME: Final = "irobot_username"
+CONF_IROBOT_PASSWORD: Final = "irobot_password"
+
+# Cloud-only platforms — added dynamically in __init__.py for SMART robots
+# when cloud credentials are present.
+CLOUD_PLATFORMS: Final[list[Platform]] = [
+    Platform.SELECT,   # CloudRegionSelect, CloudZoneSelect (replace repair flow)
+    Platform.BUTTON,   # FavoriteButton
+]
 
 # ── Config / Options keys ─────────────────────────────────────────────────────
 CONF_BLID: Final = "blid"

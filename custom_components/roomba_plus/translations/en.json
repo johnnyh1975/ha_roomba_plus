@@ -28,12 +28,26 @@
         "data": {
           "password": "Password"
         }
+      },
+      "cloud_credentials": {
+        "title": "iRobot cloud credentials (optional)",
+        "description": "Enter your iRobot app email and password to enable cloud features (authoritative room names, favorites). Leave both fields empty to skip and use local MQTT only.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        },
+        "data_description": {
+          "irobot_username": "The email address used to log into the iRobot app.",
+          "irobot_password": "Your iRobot app password."
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the robot. Verify it is powered on and reachable.",
       "invalid_auth": "Invalid credentials. Check your BLID and password.",
-      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+      "unknown": "Unexpected error. Check the Home Assistant logs for details.",
+      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
+      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again."
     },
     "abort": {
       "already_configured": "This robot is already configured.",
@@ -48,7 +62,8 @@
         "title": "Configure Roomba+",
         "menu_options": {
           "settings": "Connection settings",
-          "smart_zones_manual": "Manually enter Smart Map zones"
+          "smart_zones_manual": "Manually enter Smart Map zones",
+          "cloud_credentials": "iRobot cloud credentials"
         }
       },
       "zones": {
@@ -98,10 +113,22 @@
           "no_valid_ids": "No valid entries found. Use the format id=Name, one per line.",
           "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
         }
+      },
+      "cloud_credentials": {
+        "title": "iRobot cloud credentials",
+        "description": "Currently signed in as: {current_user}\n\nUpdate your iRobot credentials or clear both fields to disable cloud features.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        }
       }
     },
     "errors": {
       "no_valid_ids": "No valid IDs found. Please enter comma-separated numbers."
+    },
+    "error": {
+      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
+      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again."
     }
   },
   "entity": {
@@ -256,6 +283,9 @@
       },
       "clean_smart_zone": {
         "name": "Clean zone (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
       }
     },
     "switch": {
@@ -278,6 +308,9 @@
       },
       "smart_zone_select": {
         "name": "Select Smart Map zone"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Select zone (cloud)"
       }
     },
     "image": {

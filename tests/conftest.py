@@ -15,6 +15,13 @@ import types
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
+# ── aiohttp stub ─────────────────────────────────────────────────────────────
+# cloud_api.py imports aiohttp at module level for type annotations.
+_aiohttp = types.ModuleType("aiohttp")
+_aiohttp.ClientSession = object
+_aiohttp.ClientError = Exception
+sys.modules["aiohttp"] = _aiohttp
+
 # ── voluptuous stub ───────────────────────────────────────────────────────────
 # __init__.py now imports voluptuous for service schema validation.
 # Stub it minimally so that module-level imports succeed in test env.
@@ -87,6 +94,7 @@ ha_const = _make_module("homeassistant.const",
 _make_module("homeassistant.exceptions",
     HomeAssistantError=Exception,
     ConfigEntryNotReady=Exception,
+    ConfigEntryAuthFailed=Exception,
     ServiceValidationError=type("ServiceValidationError", (Exception,), {"__init__": lambda self, msg="", **kw: Exception.__init__(self, msg)}),
 )
 
@@ -97,6 +105,40 @@ class _Store:
     async def async_save(self, data): pass
 
 ha_storage = _make_module("homeassistant.helpers.storage", Store=_Store)
+
+# homeassistant.helpers.issue_registry
+_make_module("homeassistant.helpers.issue_registry",
+    async_create_issue=lambda *a, **kw: None,
+    async_delete_issue=lambda *a, **kw: None,
+    IssueSeverity=types.SimpleNamespace(ERROR="error", WARNING="warning", INFO="info"),
+)
+
+# homeassistant.helpers.aiohttp_client
+_make_module("homeassistant.helpers.aiohttp_client",
+    async_get_clientsession=lambda hass: None,
+)
+
+# homeassistant.helpers.update_coordinator
+class _DataUpdateCoordinator:
+    def __init__(self, hass=None, logger=None, *, name="", config_entry=None, update_interval=None, **kw):
+        self.data = None
+        self.last_update_success = True
+        self.last_exception = None
+        self.hass = hass
+        self.name = name
+    async def async_config_entry_first_refresh(self): pass
+    async def _async_setup(self): pass
+    async def _async_update_data(self): return {}
+    def __class_getitem__(cls, item): return cls
+
+class _ConfigEntryAuthFailed(Exception): pass
+class _UpdateFailed(Exception): pass
+
+_make_module("homeassistant.helpers.update_coordinator",
+    DataUpdateCoordinator=_DataUpdateCoordinator,
+    ConfigEntryAuthFailed=_ConfigEntryAuthFailed,
+    UpdateFailed=_UpdateFailed,
+)
 
 # homeassistant.helpers.entity_registry
 ha_er = _make_module("homeassistant.helpers.entity_registry",
@@ -188,8 +230,18 @@ _make_module("homeassistant.components.switch", SwitchEntity=object)
 _make_module("homeassistant.components.select", SelectEntity=object)
 
 # homeassistant.components.button
+import dataclasses as _dc
+
+@_dc.dataclass(frozen=True, kw_only=True)
+class _ButtonEntityDescription:
+    key: str = ""
+    translation_key: str | None = None
+    icon: str | None = None
+    entity_category: object = None
+
 _make_module("homeassistant.components.button",
     ButtonEntity=object,
+    ButtonEntityDescription=_ButtonEntityDescription,
     ButtonDeviceClass=types.SimpleNamespace(RESTART="restart"),
 )
 
