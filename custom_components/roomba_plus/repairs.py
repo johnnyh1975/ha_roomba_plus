@@ -105,6 +105,38 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 if rid in unlabelled and name:
                     parsed[rid] = name
 
+            # Resolve pmap_id from live state using the same priority order
+            # as _resolve_rooms in __init__.py:
+            #   1. lastCommand.pmap_id (canonical for multi-map robots)
+            #   2. cleanSchedule2[].cmd.pmap_id
+            #   3. pmaps[0] key as last resort
+            # Must be resolved before the parsed/pmap_id checks below so
+            # that pmap_id is always bound (fixes UnboundLocalError).
+            from . import roomba_reported_state  # noqa: PLC0415
+            _state: dict = {}
+            try:
+                runtime = self._config_entry.runtime_data
+                if runtime and runtime.roomba:
+                    _state = roomba_reported_state(runtime.roomba)
+            except Exception:  # noqa: BLE001
+                pass
+
+            _last = _state.get("lastCommand", {})
+            _pmaps: list[dict] = _state.get("pmaps", [])
+            pmap_id: str = (
+                _last.get("pmap_id")
+                or next(
+                    (
+                        cmd.get("cmd", {}).get("pmap_id")
+                        for cmd in _state.get("cleanSchedule2", [])
+                        if cmd.get("cmd", {}).get("pmap_id")
+                    ),
+                    None,
+                )
+                or (next(iter(_pmaps[0]), None) if _pmaps else "")
+                or ""
+            )
+
             if not parsed:
                 errors["zones"] = "no_valid_entries"
             elif not pmap_id:
@@ -112,36 +144,6 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             else:
                 new_labels = dict(opts.get("smart_zone_labels", {}))
                 new_zone_data = dict(opts.get("smart_zone_data", {}))
-
-                # Resolve pmap_id from live state using the same priority order
-                # as _resolve_rooms in __init__.py:
-                #   1. lastCommand.pmap_id (canonical for multi-map robots)
-                #   2. cleanSchedule2[].cmd.pmap_id
-                #   3. pmaps[0] key as last resort
-                from . import roomba_reported_state
-                state: dict = {}
-                try:
-                    runtime = self._config_entry.runtime_data
-                    if runtime and runtime.roomba:
-                        state = roomba_reported_state(runtime.roomba)
-                except Exception:  # noqa: BLE001
-                    pass
-
-                last = state.get("lastCommand", {})
-                pmaps: list[dict] = state.get("pmaps", [])
-                pmap_id: str = (
-                    last.get("pmap_id")
-                    or next(
-                        (
-                            cmd.get("cmd", {}).get("pmap_id")
-                            for cmd in state.get("cleanSchedule2", [])
-                            if cmd.get("cmd", {}).get("pmap_id")
-                        ),
-                        None,
-                    )
-                    or (next(iter(pmaps[0]), None) if pmaps else "")
-                    or ""
-                )
 
                 for rid, name in parsed.items():
                     new_labels[rid] = name
