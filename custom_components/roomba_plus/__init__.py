@@ -273,11 +273,15 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
             "pmap_id": pmap_id,
             "user_pmapv_id": user_pmapv_id,
             "regions": [
-                # Send region_id as integer when it is numeric.
-                # Older i7 firmware (lewis pre-2024) requires integer region_ids
-                # on the MQTT wire; sending a string causes error 224.
-                # Newer firmware accepts both. int() is always safe here.
-                {"region_id": int(rid) if rid.isdigit() else rid, "type": "rid"}
+                # region_id is sent as string — confirmed working on lewis firmware.
+                # Each region requires a "params" sub-object with cleaning pass
+                # settings. Omitting it causes error 224 on older i7 firmware
+                # (lewis+22.52.10) because the robot cannot determine pass config.
+                {
+                    "region_id": rid,
+                    "type": "rid",
+                    "params": {"noAutoPasses": False, "twoPass": False},
+                }
                 for rid, _ in resolved
             ],
         }

@@ -98,12 +98,28 @@ async def async_get_config_entry_diagnostics(
             "last_command_summary": {
                 "command": state.get("lastCommand", {}).get("command"),
                 "pmap_id": state.get("lastCommand", {}).get("pmap_id"),
+                "user_pmapv_id": state.get("lastCommand", {}).get("user_pmapv_id"),
                 "initiator": state.get("lastCommand", {}).get("initiator"),
                 "region_ids": [
                     r.get("region_id")
                     for r in (state.get("lastCommand", {}).get("regions") or [])
                 ],
             },
+            # cleanSchedule2 stores scheduled/recent app-initiated region cleans.
+            # Shows the exact pmap_id and user_pmapv_id the app used — useful for
+            # verifying that our resolved values match what works.
+            "clean_schedule2_pmaps": [
+                {
+                    "pmap_id": entry.get("cmd", {}).get("pmap_id"),
+                    "user_pmapv_id": entry.get("cmd", {}).get("user_pmapv_id"),
+                    "region_ids": [
+                        r.get("region_id")
+                        for r in (entry.get("cmd", {}).get("regions") or [])
+                    ],
+                }
+                for entry in state.get("cleanSchedule2", [])
+                if entry.get("cmd", {}).get("pmap_id")
+            ],
         },
 
         # Lifetime statistics (useful for maintenance sensor debugging)

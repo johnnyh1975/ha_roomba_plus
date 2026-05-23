@@ -443,18 +443,21 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             )
             return
 
-        # Send region_id as integer when numeric — older firmware requires it.
-        rid_wire = int(region_id) if str(region_id).isdigit() else region_id
-
         params = {
             "pmap_id": pmap_id,
-            "regions": [{"region_id": rid_wire, "type": "rid"}],
+            "regions": [
+                {
+                    "region_id": str(region_id),
+                    "type": "rid",
+                    "params": {"noAutoPasses": False, "twoPass": False},
+                }
+            ],
             "user_pmapv_id": user_pmapv_id,
             "ordered": 1,
         }
         _LOGGER.info(
-            "SmartZoneButton: cleaning region %s (wire=%r) on map %s",
-            region_id, rid_wire, pmap_id[:12],
+            "SmartZoneButton: cleaning region %s on map %s",
+            region_id, pmap_id[:12],
         )
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start", params
