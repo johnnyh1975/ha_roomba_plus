@@ -1,11 +1,14 @@
 """Binary sensor platform for Roomba+.
 
 Entities:
-  RoombaBinStatus       — True when the bin is full
-  RoombaBinPresentStatus — True when the bin is present/inserted
-  RoombaConnectionStatus — True when the robot is reachable via MQTT
-  RoombaMopReadyStatus  — True when the Braava mop is ready to start
-                          (tank present AND lid closed)
+  RoombaBinStatus         — True when the bin is full
+  RoombaBinPresentStatus  — True when the bin is present/inserted
+  RoombaConnectionStatus  — True when the robot is reachable via MQTT
+  RoombaMopReadyStatus    — True when the Braava mop is ready to start
+                            (tank present AND lid closed)
+  RoombaMapSavingStatus   — True when the robot is saving/updating its
+                            Smart Map (notReady bit 6 set). Only created
+                            for Smart Map robots (i/s/j/Braava m6).
 """
 from __future__ import annotations
 
@@ -20,8 +23,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from .const import has_smart_map
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
+
+_NOT_READY_MAP_SAVING: int = 64  # notReady bitmask bit 6
 
 
 async def async_setup_entry(
@@ -52,6 +58,12 @@ async def async_setup_entry(
         entities.append(RoombaMopReadyStatus(roomba, blid))
         entities.append(RoombaMopTankPresentStatus(roomba, blid))
         entities.append(RoombaMopLidClosedStatus(roomba, blid))
+
+    # Map saving: only for Smart Map robots (i/s/j/Braava m6).
+    # Reads notReady bit 6 — set while the robot is saving or uploading
+    # its Smart Map after a training run or boundary edit.
+    if has_smart_map(state):
+        entities.append(RoombaMapSavingStatus(roomba, blid))
 
     async_add_entities(entities)
 
@@ -245,3 +257,58 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "mopReady" in new_state
+
+
+class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
+    """Binary sensor that is ON while the robot is saving its Smart Map.
+
+    The iRobot firmware sets notReady bit 6 (value 64) during Smart Map
+    save/upload operations that follow a training run or boundary edit in
+    the iRobot app. While this bit is set:
+      - The robot does not respond to region-targeted clean commands
+      - Any clean_room or Smart Zone button press will be silently refused
+        (the integration already guards against this with error 224)
+
+    This sensor makes that state visible in HA so users can:
+      - Build automations that wait for the map save to complete
+        before issuing a zone clean
+      - Show a warning in the dashboard when commands are blocked
+      - Trigger notifications ("Smart Map is updating, please wait")
+
+    Only created for Smart Map robots (i/s/j/Braava m6). The notReady
+    field is not present on 900-series or 600-series robots.
+
+    Device class UPDATE: ON = update in progress (map save running),
+    OFF = idle (map save complete, commands accepted normally).
+    """
+
+    _attr_translation_key = "map_saving"
+    _attr_device_class = BinarySensorDeviceClass.UPDATE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_map_saving"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True while the robot is saving its Smart Map."""
+        not_ready: int = (
+            roomba_reported_state(self.vacuum)
+            .get("cleanMissionStatus", {})
+            .get("notReady") or 0
+        )
+        return bool(not_ready & _NOT_READY_MAP_SAVING)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return full notReady bitmask value for diagnostics."""
+        not_ready: int = (
+            roomba_reported_state(self.vacuum)
+            .get("cleanMissionStatus", {})
+            .get("notReady") or 0
+        )
+        return {"not_ready_bitmask": not_ready}
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state

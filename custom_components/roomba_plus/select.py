@@ -66,14 +66,15 @@ async def async_setup_entry(
     # based SmartZoneSelect — the repair issue is suppressed in that case.
     if has_smart_map(state):
         if data.has_cloud:
-            # Cloud-sourced: one select per pmap, entities know their region/zone list.
             cc = data.cloud_coordinator
+            active_pmap_id = cc.active_pmap_id  # type: ignore[union-attr]
             for pmap in cc.data.get("pmaps", []):  # type: ignore[union-attr]
                 details = pmap.get("active_pmapv_details", {})
                 pmap_id = details.get("active_pmapv", {}).get("pmap_id", "")
                 map_name = details.get("map_header", {}).get("name", "Map")
                 regions = details.get("regions", [])
                 zones = details.get("zones", [])
+                is_active = (pmap_id == active_pmap_id)
                 if regions or zones:
                     entities.append(
                         CloudSmartZoneSelect(
@@ -82,10 +83,10 @@ async def async_setup_entry(
                             map_name=map_name,
                             regions=regions,
                             zones=zones,
+                            is_active_map=is_active,
                         )
                     )
         else:
-            # MQTT-only fallback: names come from the repair flow / options.
             entities.append(SmartZoneSelect(roomba, blid, config_entry))
 
     async_add_entities(entities)
@@ -508,18 +509,23 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         map_name: str,
         regions: list[dict[str, Any]],
         zones: list[dict[str, Any]],
+        is_active_map: bool = True,
     ) -> None:
         super().__init__(roomba, blid)
         self._config_entry = config_entry
         self._pmap_id = pmap_id
-        self._map_name = map_name
         self._regions = regions   # list of {id, name, region_type}
         self._zones = zones       # list of {id, name, zone_type}
+        self._is_active_map = is_active_map
         self._selected: str | None = None
 
-        # unique_id includes pmap_id so multi-floor robots get separate entities
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_zone_{pmap_id}"
         self._attr_translation_key = "cloud_smart_zone_select"
+
+        # Inactive maps: disabled by default, name suffixed so users know why.
+        # Active map: enabled by default, name unchanged.
+        self._map_name = map_name if is_active_map else f"{map_name} (inactive)"
+        self._attr_entity_registry_enabled_default = is_active_map
 
     # ── Option list ───────────────────────────────────────────────────────────
 
@@ -588,6 +594,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
             "region_count": len(self._regions),
             "zone_count": len(self._zones),
             "source": "cloud",
+            "is_active_map": self._is_active_map,
         }
 
     # ── Push update wiring ────────────────────────────────────────────────────

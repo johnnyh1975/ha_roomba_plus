@@ -229,6 +229,33 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
             )
 
         zone_data: dict = config_entry.options.get(CONF_SMART_ZONE_DATA, {})
+
+        # When cloud is active, supplement (or replace) zone_data with cloud
+        # regions. Cloud is authoritative — if the same region_id exists in
+        # both, the cloud name wins. This means clean_room works by room name
+        # even when the user has never gone through the repair naming flow.
+        if data.has_cloud:
+            cc = data.cloud_coordinator  # type: ignore[union-attr]
+            cloud_zone_data: dict = {
+                str(r["id"]): {
+                    "name": r["name"],
+                    "pmap_id": r["pmap_id"],
+                }
+                for r in cc.regions
+                if r.get("id") and r.get("name")
+            }
+            # Cloud zones (custom zones, not rooms) also addressable by name
+            cloud_zone_data.update({
+                str(z["id"]): {
+                    "name": z["name"],
+                    "pmap_id": z["pmap_id"],
+                }
+                for z in cc.zones
+                if z.get("id") and z.get("name")
+            })
+            # Merge: cloud wins on conflict, local-only entries preserved
+            zone_data = {**zone_data, **cloud_zone_data}
+
         if not zone_data:
             raise ServiceValidationError(
                 "No rooms configured yet. Run a room-targeted clean via the "

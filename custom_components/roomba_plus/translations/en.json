@@ -237,6 +237,15 @@
       },
       "raw_state": {
         "name": "Raw state (debug)"
+      },
+      "lifetime_area": {
+        "name": "Lifetime cleaned area"
+      },
+      "lifetime_time": {
+        "name": "Lifetime cleaning time"
+      },
+      "lifetime_missions": {
+        "name": "Lifetime missions"
       }
     },
     "binary_sensor": {
@@ -257,6 +266,9 @@
       },
       "mop_lid_closed": {
         "name": "Mop lid open"
+      },
+      "map_saving": {
+        "name": "Smart Map saving"
       }
     },
     "button": {
@@ -286,6 +298,18 @@
       },
       "favorite": {
         "name": "{name}"
+      },
+      "spot": {
+        "name": "Spot clean (experimental)"
+      },
+      "quick": {
+        "name": "Quick clean (experimental)"
+      },
+      "sleep": {
+        "name": "Sleep (experimental)"
+      },
+      "power_off": {
+        "name": "Power off (experimental)"
       }
     },
     "switch": {

@@ -219,7 +219,8 @@ _make_module("homeassistant.components.sensor",
 _make_module("homeassistant.components.binary_sensor",
     BinarySensorEntity=object,
     BinarySensorDeviceClass=types.SimpleNamespace(
-        PROBLEM="problem", PRESENCE="presence", CONNECTIVITY="connectivity"
+        PROBLEM="problem", PRESENCE="presence", CONNECTIVITY="connectivity",
+        OPENING="opening", UPDATE="update",
     ),
 )
 

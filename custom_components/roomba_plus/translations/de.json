@@ -233,6 +233,15 @@
       },
       "raw_state": {
         "name": "Rohzustand (Debug)"
+      },
+      "lifetime_area": {
+        "name": "Gesamte gereinigte Fläche"
+      },
+      "lifetime_time": {
+        "name": "Gesamte Reinigungszeit"
+      },
+      "lifetime_missions": {
+        "name": "Gesamte Reinigungen"
       }
     },
     "binary_sensor": {
@@ -253,6 +262,9 @@
       },
       "mop_lid_closed": {
         "name": "Mop-Deckel offen"
+      },
+      "map_saving": {
+        "name": "Smart Map wird gespeichert"
       }
     },
     "button": {
@@ -282,6 +294,18 @@
       },
       "favorite": {
         "name": "{name}"
+      },
+      "spot": {
+        "name": "Spot-Reinigung (experimentell)"
+      },
+      "quick": {
+        "name": "Schnellreinigung (experimentell)"
+      },
+      "sleep": {
+        "name": "Ruhemodus (experimentell)"
+      },
+      "power_off": {
+        "name": "Ausschalten (experimentell)"
       }
     },
     "switch": {

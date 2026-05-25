@@ -70,6 +70,7 @@ from .const import (
 )
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
+from .cloud_coordinator import IrobotCloudCoordinator
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -556,12 +557,24 @@ async def async_setup_entry(
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
+    data = config_entry.runtime_data
 
-    entities = [
+    entities: list = [
         RoombaSensor(roomba, blid, description, config_entry)
         for description in SENSORS
         if description.filter_fn(state)
     ]
+
+    # Cloud history sensors: lifetime stats from /missionhistory.
+    # Available for all robots when cloud credentials are configured.
+    # Data comes from the cloud coordinator (daily poll) — not from MQTT.
+    if data.has_cloud:
+        cc = data.cloud_coordinator  # type: ignore[union-attr]
+        entities.extend([
+            CloudHistorySensor(roomba, blid, cc, desc)
+            for desc in CLOUD_HISTORY_SENSORS
+        ])
+
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
     async_add_entities(entities)
@@ -715,6 +728,140 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             candidates.append(candidate)
 
         return min(candidates) if candidates else None
+
+
+
+# ── Cloud history sensors ─────────────────────────────────────────────────────
+# Lifetime stats from the iRobot /missionhistory cloud endpoint.
+# Available for all robots when cloud credentials are configured.
+# Updated by the cloud coordinator (daily poll + map-retrain trigger).
+#
+# Response structure from the API:
+#   {
+#     "runtimeStats": {"sqft": 12345, "hr": 42, "min": 30},
+#     "bbmssn":       {"nMssn": 987},
+#     ...
+#   }
+#
+# sqft is in US square feet — converted to m² for non-US robots.
+# hr + min together give total lifetime cleaning duration.
+# nMssn is the total number of completed missions.
+
+@dataclass(frozen=True, kw_only=True)
+class CloudHistorySensorDescription(SensorEntityDescription):
+    """Description for a cloud-sourced history sensor."""
+    value_fn: Callable[[dict[str, Any]], StateType]
+
+
+def _mh_sqft_to_m2(history: dict[str, Any]) -> StateType:
+    """Return lifetime cleaned area in m² (converted from sqft)."""
+    sqft = (history.get("runtimeStats") or {}).get("sqft")
+    if sqft is None:
+        return None
+    return round(sqft / 10.764, 1)
+
+
+def _mh_total_minutes(history: dict[str, Any]) -> StateType:
+    """Return lifetime cleaning time in minutes."""
+    stats = history.get("runtimeStats") or {}
+    hr = stats.get("hr")
+    mn = stats.get("min")
+    if hr is None or mn is None:
+        return None
+    return hr * 60 + mn
+
+
+def _mh_total_missions(history: dict[str, Any]) -> StateType:
+    """Return lifetime mission count."""
+    return (history.get("bbmssn") or {}).get("nMssn")
+
+
+CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
+    CloudHistorySensorDescription(
+        key="lifetime_area",
+        translation_key="lifetime_area",
+        icon="mdi:texture-box",
+        native_unit_of_measurement="m²",
+        device_class=SensorDeviceClass.AREA,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_mh_sqft_to_m2,
+    ),
+    CloudHistorySensorDescription(
+        key="lifetime_time",
+        translation_key="lifetime_time",
+        icon="mdi:clock-time-five-outline",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_mh_total_minutes,
+    ),
+    CloudHistorySensorDescription(
+        key="lifetime_missions",
+        translation_key="lifetime_missions",
+        icon="mdi:counter",
+        native_unit_of_measurement="missions",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_mh_total_missions,
+    ),
+)
+
+
+class CloudHistorySensor(IRobotEntity, SensorEntity):
+    """Sensor reading lifetime stats from the iRobot cloud mission history.
+
+    Unlike RoombaSensor (which is driven by MQTT push), this sensor reads
+    from the cloud coordinator cache. It updates whenever the coordinator
+    refreshes (daily poll or map-retrain trigger) — not on every MQTT message.
+
+    Available for all robots when cloud credentials are configured,
+    including the 980 which does not expose lifetime stats over local MQTT.
+    """
+
+    entity_description: CloudHistorySensorDescription
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        coordinator: IrobotCloudCoordinator,
+        description: CloudHistorySensorDescription,
+    ) -> None:
+        super().__init__(roomba, blid)
+        self.entity_description = description
+        self._coordinator = coordinator
+        self._attr_unique_id = f"{self.robot_unique_id}_cloud_{description.key}"
+
+    @property
+    def native_value(self) -> StateType:
+        if not self._coordinator.data:
+            return None
+        history = self._coordinator.data.get("mission_history", {})
+        return self.entity_description.value_fn(history)
+
+    @property
+    def available(self) -> bool:
+        return (
+            self._coordinator.last_update_success
+            and self._coordinator.data is not None
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        # Cloud sensor does not update from MQTT — coordinator handles refresh.
+        return False
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates."""
+        await super().async_added_to_hass()
+
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            self._coordinator.async_add_listener(_on_coordinator_update)
+        )
 
 
 class RawStateSensor(IRobotEntity, SensorEntity):

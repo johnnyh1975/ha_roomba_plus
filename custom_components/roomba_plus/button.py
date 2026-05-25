@@ -6,6 +6,20 @@ COMMAND BUTTONS — send a direct command to the robot:
   EvacButton      — trigger bin evacuation (Clean Base models only)
   LocateButton    — play find-me tone
 
+EXPERIMENTAL COMMAND BUTTONS — disabled by default, enabled manually:
+  SpotButton      — spot clean (small area around current position)
+  QuickButton     — quick/shorter full-floor clean
+  SleepButton     — send robot to low-power sleep
+  OffButton       — power robot off completely
+
+  These commands are confirmed present in the iRobot firmware protocol
+  (documented in dorita980 issue #39 via Android app reverse engineering)
+  but their exact behaviour across all firmware versions and models has
+  not been fully verified. They are gated on MapCapability.EPHEMERAL
+  (900-series) where they are known to work. Disabled by default so
+  users must explicitly enable them — the standard HA pattern for
+  features that are real but not yet fully validated.
+
 MAINTENANCE RESET BUTTONS — record the current bbrun.hr as the new
   start point for remaining-life calculations:
   FilterResetButton  — mark filter as replaced
@@ -40,6 +54,7 @@ class RoombaButtonDescription(ButtonEntityDescription):
     """Command button: sends a direct command to the robot."""
     command: str
     filter_fn: Any = None  # callable(state) -> bool | None = always create
+    entity_registry_enabled_default: bool = True  # False = experimental
 
 
 COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
@@ -58,6 +73,46 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
         entity_category=EntityCategory.CONFIG,
         command="find",
         filter_fn=None,
+    ),
+    # ── Experimental — disabled by default ────────────────────────────────────
+    # Confirmed in iRobot firmware protocol (dorita980 issue #39).
+    # Gated on EPHEMERAL (900-series) where behaviour is known.
+    # Enable manually via Settings → Devices & Services → Roomba+ → entity.
+    RoombaButtonDescription(
+        key="spot",
+        translation_key="spot",
+        icon="mdi:map-marker-circle",
+        entity_category=EntityCategory.CONFIG,
+        command="spot",
+        filter_fn=lambda s: not s.get("pmaps"),  # EPHEMERAL: no persistent pmaps
+        entity_registry_enabled_default=False,
+    ),
+    RoombaButtonDescription(
+        key="quick",
+        translation_key="quick",
+        icon="mdi:fast-forward-outline",
+        entity_category=EntityCategory.CONFIG,
+        command="quick",
+        filter_fn=lambda s: not s.get("pmaps"),
+        entity_registry_enabled_default=False,
+    ),
+    RoombaButtonDescription(
+        key="sleep",
+        translation_key="sleep",
+        icon="mdi:sleep",
+        entity_category=EntityCategory.CONFIG,
+        command="sleep",
+        filter_fn=lambda s: not s.get("pmaps"),
+        entity_registry_enabled_default=False,
+    ),
+    RoombaButtonDescription(
+        key="power_off",
+        translation_key="power_off",
+        icon="mdi:power",
+        entity_category=EntityCategory.CONFIG,
+        command="off",
+        filter_fn=lambda s: not s.get("pmaps"),
+        entity_registry_enabled_default=False,
     ),
 )
 
@@ -109,7 +164,7 @@ async def async_setup_entry(
     if data.has_cloud:
         favorites = data.cloud_coordinator.data.get("favorites", [])  # type: ignore[union-attr]
         for fav in favorites:
-            entities.append(FavoriteButton(config_entry, fav))
+            entities.append(FavoriteButton(data.roomba, data.blid, config_entry, fav))
 
     async_add_entities(entities)
 
@@ -130,6 +185,7 @@ class RoombaCommandButton(IRobotEntity, ButtonEntity):
         super().__init__(roomba, blid)
         self.entity_description = description
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
+        self._attr_entity_registry_enabled_default = description.entity_registry_enabled_default
 
     async def async_press(self) -> None:
         _LOGGER.debug("CommandButton: %s → %s",
@@ -391,22 +447,37 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         pmap_id: str | None = None
 
         # Walk all entity platforms registered under this domain to find
-        # the SmartZoneSelect entity for this specific robot (by unique_id).
-        target_uid = f"{self.robot_unique_id}_smart_zone_select"
+        # the zone select entity for this specific robot. We check for both:
+        #   - SmartZoneSelect  uid = "{robot_unique_id}_smart_zone_select"
+        #   - CloudSmartZoneSelect uid = "{robot_unique_id}_cloud_zone_{pmap_id}"
+        # Rather than hardcoding uids, we match on robot_unique_id prefix and
+        # presence of selected_region_id — works for both entity types.
+        prefix = self.robot_unique_id
         for platform in ep.async_get_platforms(self.hass, "roomba_plus"):
             for entity in platform.entities.values():
-                if getattr(entity, "unique_id", None) == target_uid:
+                uid = getattr(entity, "unique_id", "") or ""
+                if not uid.startswith(prefix):
+                    continue
+                if not hasattr(entity, "selected_region_id"):
+                    continue
+                # For CloudSmartZoneSelect, prefer the active map's entity.
+                # active_map attr is set in v1.5.1+ — fall back gracefully.
+                is_active = getattr(entity, "_is_active_map", True)
+                if is_active and entity.selected_region_id:
                     region_id = entity.selected_region_id
+                    # Also read pmap_id directly from cloud entity if available
+                    pmap_info = getattr(entity, "selected_pmap_info", {})
+                    if pmap_info.get("pmap_id"):
+                        pmap_id = pmap_info["pmap_id"]
                     break
             if region_id:
                 break
 
-        # Resolve pmap_id from smart_zone_data first — this is the value
-        # persisted at zone-naming time and is correct for the specific region.
-        # lastCommand.pmap_id may reflect a full-home clean and be wrong for
-        # a targeted region clean. Only fall back to lastCommand when
-        # smart_zone_data has no entry for this region_id.
-        if region_id:
+        # pmap_id resolution priority:
+        #   1. Read directly from CloudSmartZoneSelect.selected_pmap_info (above)
+        #   2. Stored in smart_zone_data options (MQTT-only path)
+        #   3. lastCommand fallback (least reliable)
+        if region_id and not pmap_id:
             zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
             pmap_id = zone_data.get(str(region_id), {}).get("pmap_id") or None
 
@@ -471,13 +542,17 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         )
 
 
-class FavoriteButton(ButtonEntity):
+class FavoriteButton(IRobotEntity, ButtonEntity):
     """Button that triggers a saved iRobot cleaning favorite.
 
     Favorites are multi-step cleaning routines defined in the iRobot app
     (e.g. "Monday morning: kitchen + hallway"). They are fetched from the
     cloud coordinator via /user/favorites and each contains a pre-built
     command payload that can be sent verbatim via send_command("start", ...).
+
+    Inherits IRobotEntity so device_info is provided automatically and the
+    button appears under the correct robot device — not as a phantom unnamed
+    device entry.
 
     One entity per favorite. Hidden favorites (data["hidden"] == True) are
     disabled in the entity registry by default but can be enabled manually.
@@ -488,24 +563,23 @@ class FavoriteButton(ButtonEntity):
 
     def __init__(
         self,
+        roomba: Any,
+        blid: str,
         config_entry: RoombaConfigEntry,
         favorite: dict[str, Any],
     ) -> None:
-        from homeassistant.helpers.device_registry import DeviceInfo
+        super().__init__(roomba, blid)
         fav_id: str = favorite.get("favorite_id", "")
         fav_name: str = favorite.get("name", fav_id)
 
         self._config_entry = config_entry
         self._favorite = favorite
         self._attr_name = fav_name
-        self._attr_unique_id = f"{config_entry.unique_id}_fav_{fav_id}"
+        self._attr_unique_id = f"{self.robot_unique_id}_fav_{fav_id}"
         self._attr_entity_registry_enabled_default = not favorite.get("hidden", False)
-        self._attr_device_info = DeviceInfo(
-            identifiers={("roomba_plus", config_entry.unique_id)},
-        )
 
     async def async_press(self) -> None:
-        """Send the favorite's command payload to the robot."""
+        """Send the favorite's command payload to the robot via local MQTT."""
         command_defs = self._favorite.get("commanddefs") or []
         if not command_defs:
             _LOGGER.warning(
@@ -524,7 +598,7 @@ class FavoriteButton(ButtonEntity):
             self._attr_name, command, params or "(none)",
         )
         await self.hass.async_add_executor_job(
-            self._config_entry.runtime_data.roomba.send_command,
+            self.vacuum.send_command,
             command,
             params,
         )

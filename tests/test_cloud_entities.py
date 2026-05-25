@@ -41,6 +41,7 @@ def _make_config_entry(has_cloud: bool = False, favorites=None, pmaps=None):
         "favorites": favorites or [],
         "mission_history": {},
     }
+    cc.active_pmap_id = (pmaps[0].get("active_pmapv_details", {}).get("active_pmapv", {}).get("pmap_id") if pmaps else None)
     runtime = MagicMock()
     runtime.has_cloud = has_cloud
     runtime.cloud_coordinator = cc if has_cloud else None
@@ -202,6 +203,80 @@ class TestCloudSmartZoneSelectAttributes:
         assert "xyz789" in sel._attr_unique_id
 
 
+class TestCloudSmartZoneSelectActiveInactive:
+    """Tests for active vs inactive map distinction."""
+
+    def test_active_map_enabled_by_default(self):
+        sel = _zone_select(regions=[{"id": "1", "name": "R"}])
+        # is_active_map defaults to True
+        assert sel._attr_entity_registry_enabled_default is True
+
+    def test_inactive_map_disabled_by_default(self):
+        entry = _make_config_entry()
+        roomba = _make_roomba()
+        sel = CloudSmartZoneSelect(
+            roomba, "test_blid", entry,
+            pmap_id="old_map", map_name="Ground floor",
+            regions=[{"id": "1", "name": "Kitchen"}],
+            zones=[],
+            is_active_map=False,
+        )
+        assert sel._attr_entity_registry_enabled_default is False
+
+    def test_inactive_map_name_gets_suffix(self):
+        entry = _make_config_entry()
+        roomba = _make_roomba()
+        sel = CloudSmartZoneSelect(
+            roomba, "test_blid", entry,
+            pmap_id="old_map", map_name="Ground floor",
+            regions=[{"id": "1", "name": "Kitchen"}],
+            zones=[],
+            is_active_map=False,
+        )
+        assert "(inactive)" in sel._map_name
+
+    def test_active_map_name_unchanged(self):
+        entry = _make_config_entry()
+        roomba = _make_roomba()
+        sel = CloudSmartZoneSelect(
+            roomba, "test_blid", entry,
+            pmap_id="active_map", map_name="Ground floor",
+            regions=[{"id": "1", "name": "Kitchen"}],
+            zones=[],
+            is_active_map=True,
+        )
+        assert sel._map_name == "Ground floor"
+
+    def test_is_active_map_in_attributes(self):
+        sel = _zone_select(regions=[{"id": "1", "name": "Kitchen"}])
+        assert "is_active_map" in sel.extra_state_attributes
+        assert sel.extra_state_attributes["is_active_map"] is True
+
+    def test_inactive_in_attributes(self):
+        entry = _make_config_entry()
+        roomba = _make_roomba()
+        sel = CloudSmartZoneSelect(
+            roomba, "test_blid", entry,
+            pmap_id="old_map", map_name="Ground floor",
+            regions=[{"id": "1", "name": "Kitchen"}],
+            zones=[],
+            is_active_map=False,
+        )
+        assert sel.extra_state_attributes["is_active_map"] is False
+
+    def test_is_active_map_flag_stored(self):
+        entry = _make_config_entry()
+        roomba = _make_roomba()
+        sel = CloudSmartZoneSelect(
+            roomba, "test_blid", entry,
+            pmap_id="p1", map_name="Home",
+            regions=[{"id": "1", "name": "R"}],
+            zones=[],
+            is_active_map=False,
+        )
+        assert sel._is_active_map is False
+
+
 # ── CloudSmartZoneSelect — no_state_filter ────────────────────────────────────
 
 class TestCloudSmartZoneSelectNoMqttUpdate:
@@ -217,7 +292,8 @@ class TestCloudSmartZoneSelectNoMqttUpdate:
 
 def _fav_button(favorite):
     entry = _make_config_entry(has_cloud=True)
-    return FavoriteButton(entry, favorite)
+    roomba = _make_roomba()
+    return FavoriteButton(roomba, "test_blid", entry, favorite)
 
 
 class TestFavoriteButton:
@@ -241,6 +317,17 @@ class TestFavoriteButton:
         btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
         assert btn._attr_entity_registry_enabled_default is True
 
+    def test_inherits_irobot_entity(self):
+        """FavoriteButton must inherit IRobotEntity for correct device linkage."""
+        from custom_components.roomba_plus.entity import IRobotEntity
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
+        assert isinstance(btn, IRobotEntity)
+
+    def test_has_vacuum_attribute(self):
+        """IRobotEntity provides .vacuum — used in async_press instead of config_entry."""
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
+        assert hasattr(btn, "vacuum")
+
     @pytest.mark.asyncio
     async def test_press_sends_command(self):
         entry = _make_config_entry(has_cloud=True)
@@ -249,7 +336,7 @@ class TestFavoriteButton:
             "name": "Morning",
             "commanddefs": [{"command": "start", "pmap_id": "map1", "regions": [{"region_id": "3"}]}],
         }
-        btn = FavoriteButton(entry, fav)
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
         btn.hass = MagicMock()
         btn.hass.async_add_executor_job = AsyncMock()
 
@@ -265,7 +352,7 @@ class TestFavoriteButton:
     async def test_press_no_commanddefs_logs_warning(self):
         entry = _make_config_entry(has_cloud=True)
         fav = {"favorite_id": "f1", "name": "Empty", "commanddefs": []}
-        btn = FavoriteButton(entry, fav)
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
         btn.hass = MagicMock()
         btn.hass.async_add_executor_job = AsyncMock()
 
@@ -280,7 +367,7 @@ class TestFavoriteButton:
         """commanddefs key absent — should not raise, should warn."""
         entry = _make_config_entry(has_cloud=True)
         fav = {"favorite_id": "f1", "name": "NoCmd"}
-        btn = FavoriteButton(entry, fav)
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
         btn.hass = MagicMock()
         btn.hass.async_add_executor_job = AsyncMock()
 
@@ -297,7 +384,7 @@ class TestFavoriteButton:
             "name": "Kitchen",
             "commanddefs": [{"command": "start", "pmap_id": "p1", "ordered": 1}],
         }
-        btn = FavoriteButton(entry, fav)
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
         btn.hass = MagicMock()
         btn.hass.async_add_executor_job = AsyncMock()
 
@@ -333,6 +420,8 @@ class TestSelectSetupEntryRouting:
         state = {"pmaps": [{"map1": "v1"}]}
         entry = _make_config_entry(has_cloud=True, pmaps=[self._cloud_pmap()])
         entry.runtime_data.map_capability = MapCapability.SMART
+        # active_pmap_id matches the pmap in _cloud_pmap()
+        entry.runtime_data.cloud_coordinator.active_pmap_id = "map1"
 
         roomba = _make_roomba()
         roomba.master_state = {"state": {"reported": state}}
@@ -351,6 +440,52 @@ class TestSelectSetupEntryRouting:
         mqtt_selects = [e for e in created if isinstance(e, SmartZoneSelect)]
         assert len(cloud_selects) == 1, f"Expected 1 CloudSmartZoneSelect, got {created}"
         assert len(mqtt_selects) == 0
+        # Active map must be enabled
+        assert cloud_selects[0]._attr_entity_registry_enabled_default is True
+        assert cloud_selects[0]._is_active_map is True
+
+    @pytest.mark.asyncio
+    async def test_inactive_pmap_creates_disabled_select(self):
+        from custom_components.roomba_plus import select as sel_mod
+        from custom_components.roomba_plus.select import CloudSmartZoneSelect
+        from custom_components.roomba_plus.models import MapCapability
+
+        active = self._cloud_pmap()  # pmap_id = "map1"
+        inactive = {
+            "active_pmapv_details": {
+                "active_pmapv": {"pmap_id": "old_map"},
+                "map_header": {"name": "Old Home"},
+                "regions": [{"id": "9", "name": "Garage", "region_type": "garage"}],
+                "zones": [],
+            }
+        }
+        state = {"pmaps": [{"map1": "v1"}, {"old_map": "v2"}]}
+        entry = _make_config_entry(has_cloud=True, pmaps=[active, inactive])
+        entry.runtime_data.map_capability = MapCapability.SMART
+        entry.runtime_data.cloud_coordinator.active_pmap_id = "map1"
+
+        roomba = _make_roomba()
+        roomba.master_state = {"state": {"reported": state}}
+        entry.runtime_data.roomba = roomba
+        entry.runtime_data.blid = "test_blid"
+        entry.runtime_data.zone_store = None
+
+        created = []
+        def sync_add(entities, **kw): created.extend(entities)
+
+        with patch.object(sel_mod, "roomba_reported_state", return_value=state):
+            with patch.object(sel_mod, "has_smart_map", return_value=True):
+                await sel_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        cloud_selects = [e for e in created if isinstance(e, CloudSmartZoneSelect)]
+        assert len(cloud_selects) == 2
+
+        active_sel = next(e for e in cloud_selects if e._pmap_id == "map1")
+        inactive_sel = next(e for e in cloud_selects if e._pmap_id == "old_map")
+
+        assert active_sel._attr_entity_registry_enabled_default is True
+        assert inactive_sel._attr_entity_registry_enabled_default is False
+        assert "(inactive)" in inactive_sel._map_name
 
     @pytest.mark.asyncio
     async def test_no_cloud_creates_mqtt_select(self):

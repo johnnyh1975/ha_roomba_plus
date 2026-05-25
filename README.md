@@ -1,12 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.5.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.6.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.5 adds optional iRobot cloud integration** for Smart Map robots, bringing authoritative room names, favorites, and stable pmap resolution without any manual naming flow.
+Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.6 completes the optional iRobot cloud integration** with multi-map support, lifetime statistics, Smart Map saving indicator, and a fully production-ready hybrid local/cloud architecture.
 
 ---
 
@@ -31,7 +31,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 
 ## Features
 
-### Sensors (35)
+### Sensors (35 local + 3 cloud)
 
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
@@ -41,6 +41,15 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Clean Base** — dock status, dock tank level
 - **Braava** — tank level, mop pad type, mop behaviour, mop tank level
 - **Navigation** — navigation quality / l_squal (VSLAM robots, opt-in)
+- **Cloud history (v1.6)** — lifetime cleaned area (m²), lifetime cleaning time, lifetime mission count — available for all robots when cloud credentials are configured, including the 980
+
+### Binary sensors
+
+- **Bin full** — problem indicator when bin is full
+- **Bin present** — presence indicator when bin is inserted (i-series)
+- **Connected** — MQTT connectivity
+- **Mop ready / tank present / lid closed** — Braava m6
+- **Smart Map saving (v1.6)** — ON while the robot is saving or uploading its Smart Map after a training run or boundary edit. Only present on Smart Map robots (i/s/j/Braava). Useful for automations that need to wait before issuing zone clean commands.
 
 ### Controls
 
@@ -52,12 +61,27 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Locate robot** — play find-me tone (button)
 - **Evacuate bin** — Clean Base models (button)
 
+### Experimental buttons — 900-series / 980 (v1.5.1, disabled by default)
+
+Four additional buttons are available for 900-series robots (980/985), disabled by default. Enable them individually via **Settings → Devices & Services → Roomba+ → device → entity list**. These commands are confirmed present in the iRobot firmware protocol but their exact behaviour across all firmware versions has not been fully verified.
+
+| Button | Command | What it does |
+|---|---|---|
+| Spot clean | `spot` | Cleans a small area around the robot's current position |
+| Quick clean | `quick` | Shorter full-floor mission |
+| Sleep | `sleep` | Sends the robot to low-power sleep state |
+| Power off | `off` | Powers the robot off completely |
+
+> `sleep` and `power off` are most useful in power management automations. Note that after `power off` the robot will not respond to local MQTT commands until physically woken — press the Clean button or use the iRobot app.
+
 ### Cloud features — Smart Map robots with iRobot credentials (v1.5, optional)
 
 When you enter your iRobot app email and password during setup (or later via **Configure → iRobot cloud credentials**), Roomba+ connects to the iRobot cloud to fetch authoritative Smart Map data:
 
 - **Zone select from cloud** — room and zone names come directly from your Smart Map; no manual repair-flow naming required. One select entity per floor.
-- **Favorites as buttons** — each saved cleaning routine from the iRobot app appears as a button entity that fires that routine from HA.
+- **Multi-map support** — robots with more than one stored Smart Map get one zone select entity per map. The active map is enabled by default; legacy/inactive maps are disabled by default and labelled `(inactive)`. Zones from inactive maps cannot conflict with cleaning operations.
+- **Favorites as buttons** — each saved cleaning routine from the iRobot app appears as a button entity grouped under the robot device, firing that routine via local MQTT.
+- **`clean_room` service works without naming flow** — room names from the cloud are available directly to the `roomba_plus.clean_room` service action; no repair flow or manual naming required.
 - **Stable pmap_id** — `clean_room` and the zone buttons use the authoritative pmap_id from the cloud, eliminating stale-MQTT failures after a full-home clean overwrites `lastCommand`.
 - **Auto-refresh on map retrain** — Roomba+ detects map version changes in the MQTT stream and immediately refreshes cloud data, so new room names appear in HA without waiting for the 24-hour background poll.
 - **Repair flow suppressed** — when cloud is active the `smart_zones_need_naming` repair issue is not raised; names are always current from the cloud.
@@ -235,19 +259,46 @@ data:
   ordered: true
 ```
 
+### Wait for map save before zone clean
+
+```yaml
+automation:
+  - alias: "Roomba — clean kitchen after map save completes"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.roomba_smart_map_saving
+        to: "off"
+    condition:
+      - condition: state
+        entity_id: input_boolean.roomba_kitchen_pending
+        state: "on"
+    action:
+      - service: roomba_plus.clean_room
+        target:
+          entity_id: vacuum.roomba
+        data:
+          room_name: Kitchen
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.roomba_kitchen_pending
+```
+
 ---
 
 ## Comparison with the Core integration
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
-| Sensors | 13 | 35 |
+| Sensors | 13 | 35 (+ 3 cloud) |
+| Lifetime stats (area / time / missions) | ❌ | ✅ (v1.6, cloud) |
+| Smart Map saving indicator | ❌ | ✅ (v1.6) |
 | Cleaning map | ❌ | ✅ |
 | Map persists across restarts | ❌ | ✅ |
 | Zone detection (900-series) | ❌ | ✅ |
 | Smart Map zone naming (repair flow) | ❌ | ✅ |
-| Smart Map zones from cloud | ❌ | ✅ (v1.5) |
-| Favorites from cloud | ❌ | ✅ (v1.5) |
+| Smart Map zones from cloud | ❌ | ✅ (v1.5+) |
+| Multi-map support (active/inactive) | ❌ | ✅ (v1.6) |
+| Favorites from cloud | ❌ | ✅ (v1.5+) |
 | Maintenance reset | ❌ | ✅ |
 | Edge cleaning toggle | ❌ | ✅ |
 | Always finish (binPause) | ❌ | ✅ |
@@ -260,6 +311,8 @@ data:
 | Idle / Stopped phase detection | ❌ | ✅ |
 | Error codes (80+) | ❌ | ✅ |
 | Device triggers | ❌ | ✅ |
+| Spot / quick clean (980) | ❌ | ✅ (v1.6, experimental) |
+| Sleep / power off (980) | ❌ | ✅ (v1.6, experimental) |
 | Carpet Boost (980) | ❌ | ✅ |
 | Extended diagnostics | ❌ | ✅ |
 | German translation | ✅ | ✅ |
@@ -303,6 +356,26 @@ Fixed in v1.4.4.4 — `discovered_zone_ids` is backfilled from `smart_zone_data`
 **Map entity shows blank white image (i7 / s9 / j-series)**
 
 Smart Map robots do not broadcast local pose data via MQTT. The map image entity is suppressed for these robots from v1.4.4.4. Use the iRobot app to view the Smart Map.
+
+**Smart Map saving sensor not visible**
+
+The `binary_sensor.roomba_smart_map_saving` entity is only created for Smart Map robots (i/s/j/Braava m6). It will not appear on 900-series or 600-series robots. If it is missing on an i7/s9/j7, verify that `"cap": {"pose": ...}` is present in the diagnostics download.
+
+**Favorites appear under an unnamed/separate device**
+
+Upgrade to v1.6. Earlier versions constructed device info incorrectly, causing HA to create a phantom unnamed device. Favorites now appear under the correct robot device automatically.
+
+**Two Smart Maps — zones from the wrong map selected**
+
+This cannot happen from v1.6. Inactive map zone selects are disabled by default and labelled `(inactive)`. The Clean Zone button only considers the active map's select entity. Enable the inactive map select only if you want to inspect its zones.
+
+**`clean_room` service says "No rooms configured" even though cloud is active**
+
+Upgrade to v1.6. Earlier versions required the repair naming flow to populate zone data even when cloud credentials were present. From v1.6 the service reads room names directly from the cloud coordinator.
+
+**Experimental buttons not visible**
+
+They are disabled by default. Go to Settings → Devices & Services → Roomba+ → your device → the entity list (including disabled entities) → enable the ones you want. They only appear on 900-series robots (980/985) — Smart Map robots (i/s/j) do not get them.
 
 **Migration from Core Roomba integration**
 
