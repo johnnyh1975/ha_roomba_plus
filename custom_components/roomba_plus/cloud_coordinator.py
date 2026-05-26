@@ -90,7 +90,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with asyncio.timeout(30):
                 result["pmaps"] = await self.api.get_pmaps(self.blid)
-                result["mission_history"] = await self.api.get_mission_history(self.blid)
+                raw_history = await self.api.get_mission_history(self.blid)
                 result["favorites"] = await self.api.get_favorites()
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
@@ -98,6 +98,23 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ) from exc
         except CloudApiError as exc:
             raise UpdateFailed(f"iRobot cloud update failed: {exc}") from exc
+
+        # The /missionhistory endpoint returns a list of mission records.
+        # The first element contains the accumulated lifetime totals
+        # (runtimeStats.sqft, runtimeStats.hr/min, bbmssn.nMssn).
+        # Individual mission records follow. We store only the first element
+        # (the accumulator) since that is what the lifetime sensors read.
+        if isinstance(raw_history, list):
+            result["mission_history"] = raw_history[0] if raw_history else {}
+        elif isinstance(raw_history, dict):
+            # Some firmware versions may return a dict directly — handle gracefully.
+            result["mission_history"] = raw_history
+        else:
+            result["mission_history"] = {}
+            _LOGGER.warning(
+                "iRobot cloud: unexpected mission_history type %s for %s",
+                type(raw_history).__name__, self.blid,
+            )
 
         _LOGGER.debug(
             "iRobot cloud: fetched %d pmap(s), %d favorite(s) for %s",

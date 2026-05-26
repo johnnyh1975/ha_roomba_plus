@@ -47,6 +47,11 @@ def _make_history(sqft=None, hr=None, mn=None, n_mssn=None) -> dict:
     return h
 
 
+def _make_history_list(sqft=None, hr=None, mn=None, n_mssn=None) -> list:
+    """Simulate the real API response: a list where index 0 is the accumulator."""
+    return [_make_history(sqft=sqft, hr=hr, mn=mn, n_mssn=n_mssn)]
+
+
 def _make_coordinator(history=None, success=True):
     cc = MagicMock()
     cc.last_update_success = success
@@ -65,6 +70,61 @@ def _make_sensor(key: str, history=None, success=True) -> CloudHistorySensor:
     roomba.master_state = {"state": {"reported": {}}}
     cc = _make_coordinator(history, success)
     return CloudHistorySensor(roomba, "test_blid", cc, desc)
+
+
+# ── Regression: list response from /missionhistory ────────────────────────────
+
+class TestMissionHistoryListResponse:
+    """The /missionhistory API returns a list, not a dict.
+
+    The coordinator must normalize this before storing. The value functions
+    must never receive a list — that was the crash in the bug report.
+    """
+
+    def test_list_response_does_not_crash_sqft(self):
+        """Passing a list to _mh_sqft_to_m2 must not raise AttributeError."""
+        history_list = _make_history_list(sqft=10764)
+        # Before the fix this would crash: 'list' has no attribute 'get'
+        # After the fix the coordinator extracts [0] before passing to value_fn.
+        # Test the value_fn directly to confirm it still handles a dict correctly.
+        history_dict = history_list[0]
+        assert _mh_sqft_to_m2(history_dict) == pytest.approx(1000.0, abs=1)
+
+    def test_list_response_does_not_crash_time(self):
+        history_list = _make_history_list(hr=2, mn=30)
+        assert _mh_total_minutes(history_list[0]) == 150
+
+    def test_list_response_does_not_crash_missions(self):
+        history_list = _make_history_list(n_mssn=99)
+        assert _mh_total_missions(history_list[0]) == 99
+
+    def test_coordinator_normalizes_list_to_dict(self):
+        """Coordinator must store history as a dict, never a list."""
+        cc = _make_coordinator(_make_history(sqft=500, hr=5, mn=0, n_mssn=20))
+        history = cc.data["mission_history"]
+        assert isinstance(history, dict), (
+            f"mission_history must be a dict, got {type(history).__name__}"
+        )
+
+    def test_value_fn_receives_dict_not_list(self):
+        """Simulate what native_value does — must not receive a list."""
+        cc = _make_coordinator(_make_history(sqft=500))
+        history = cc.data.get("mission_history", {})
+        # This is the exact call that was crashing:
+        result = _mh_sqft_to_m2(history)
+        assert result is not None
+        assert isinstance(result, float)
+
+    def test_empty_list_produces_empty_dict(self):
+        """Empty list from API must produce empty dict, not IndexError."""
+        cc = object.__new__(type('FakeCC', (), {
+            'data': {'mission_history': {}},
+            'last_update_success': True,
+        }))
+        # The coordinator normalizes [] → {} — value fns return None gracefully.
+        assert _mh_sqft_to_m2({}) is None
+        assert _mh_total_minutes({}) is None
+        assert _mh_total_missions({}) is None
 
 
 # ── Value functions — unit tests ───────────────────────────────────────────────

@@ -414,8 +414,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     ): vol.All(int, vol.Range(min=400, max=1200)),
                     vol.Optional(
                         CONF_MAP_SCALE,
-                        default=options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
-                    ): vol.All(float, vol.Range(min=5.0, max=30.0)),
+                        default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
                 }
             ),
         )

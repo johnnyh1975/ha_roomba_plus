@@ -588,9 +588,12 @@ async def async_unload_entry(
     platforms = list(LOCAL_PLATFORMS)
     if data.map_capability == MapCapability.EPHEMERAL:
         platforms.append(Platform.IMAGE)
-    if data.has_cloud:
+    # Must exactly mirror async_setup_entry platform forwarding.
+    # CLOUD_PLATFORMS are forwarded for all SMART robots (credentials or not),
+    # so they must also be unloaded for all SMART robots.
+    if data.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
-        platforms.extend(CLOUD_PLATFORMS)
+        platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, platforms
     )

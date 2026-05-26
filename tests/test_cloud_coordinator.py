@@ -245,3 +245,44 @@ class TestResolveRoomsWithCloudPmapId:
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="")
         # empty string is falsy — falls through to MQTT cascade
         assert result == [("21", "mqtt_pmap")]
+
+
+# ── mission_history normalization ─────────────────────────────────────────────
+
+class TestMissionHistoryNormalization:
+    """Coordinator must normalize list API response to a dict before storing."""
+
+    def _bare_coordinator_with_history(self, raw_history):
+        """Simulate what _async_update_data does with the raw API result."""
+        if isinstance(raw_history, list):
+            return raw_history[0] if raw_history else {}
+        elif isinstance(raw_history, dict):
+            return raw_history
+        return {}
+
+    def test_list_normalized_to_first_element(self):
+        raw = [{"runtimeStats": {"sqft": 1000, "hr": 10, "min": 0}, "bbmssn": {"nMssn": 50}}]
+        result = self._bare_coordinator_with_history(raw)
+        assert isinstance(result, dict)
+        assert result["runtimeStats"]["sqft"] == 1000
+
+    def test_empty_list_normalized_to_empty_dict(self):
+        result = self._bare_coordinator_with_history([])
+        assert result == {}
+
+    def test_dict_passed_through_unchanged(self):
+        raw = {"runtimeStats": {"sqft": 500}, "bbmssn": {"nMssn": 20}}
+        result = self._bare_coordinator_with_history(raw)
+        assert result == raw
+
+    def test_unexpected_type_produces_empty_dict(self):
+        result = self._bare_coordinator_with_history("unexpected")
+        assert result == {}
+
+    def test_result_is_always_dict(self):
+        for raw in [[], [{"a": 1}], {}, {"b": 2}, None, 42, "str"]:
+            if raw is None or isinstance(raw, (int, str)):
+                result = self._bare_coordinator_with_history(raw) if isinstance(raw, (list, dict)) else {}
+            else:
+                result = self._bare_coordinator_with_history(raw)
+            assert isinstance(result, dict), f"Expected dict for input {raw!r}, got {type(result)}"

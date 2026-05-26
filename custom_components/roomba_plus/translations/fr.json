@@ -1,0 +1,441 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ajouter Roomba+",
+        "description": "Sélectionnez un Roomba découvert ou ajoutez-en un manuellement.",
+        "data": {
+          "host": "Sélectionner un robot"
+        }
+      },
+      "manual": {
+        "title": "Configuration manuelle",
+        "description": "Entrez l'adresse IP de votre Roomba. Vous pouvez trouver les identifiants sur [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "host": "Adresse IP"
+        },
+        "data_description": {
+          "host": "Adresse IP locale de votre Roomba"
+        }
+      },
+      "link": {
+        "title": "Associer le robot",
+        "description": "Appuyez et maintenez le bouton **ACCUEIL** de votre {name} jusqu'à ce qu'il émette une série de tonalités (environ 2 secondes), puis relâchez. Le voyant Wi-Fi clignote."
+      },
+      "link_manual": {
+        "title": "Entrer le mot de passe",
+        "description": "La récupération automatique du mot de passe a échoué. Entrez votre mot de passe Roomba manuellement. Instructions : [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "password": "Mot de passe"
+        }
+      },
+      "cloud_credentials": {
+        "title": "Identifiants cloud iRobot (optionnel)",
+        "description": "Entrez l'adresse e-mail et le mot de passe de votre application iRobot pour activer les fonctionnalités cloud (noms de pièces officiels, favoris). Laissez les deux champs vides pour ignorer et utiliser uniquement le MQTT local.",
+        "data": {
+          "irobot_username": "E-mail iRobot",
+          "irobot_password": "Mot de passe iRobot"
+        },
+        "data_description": {
+          "irobot_username": "L'adresse e-mail utilisée pour se connecter à l'application iRobot.",
+          "irobot_password": "Votre mot de passe de l'application iRobot."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter au robot. Vérifiez qu'il est allumé et accessible.",
+      "invalid_auth": "Identifiants invalides. Vérifiez votre BLID et votre mot de passe.",
+      "unknown": "Erreur inattendue. Consultez les journaux de Home Assistant pour plus de détails.",
+      "cloud_auth_failed": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot.",
+      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez."
+    },
+    "abort": {
+      "already_configured": "Ce robot est déjà configuré.",
+      "not_irobot_device": "L'appareil découvert n'est pas un appareil iRobot.",
+      "short_blid": "Une configuration pour ce robot est déjà en cours.",
+      "cannot_connect": "Impossible d'atteindre le robot à l'adresse spécifiée."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurer Roomba+",
+        "menu_options": {
+          "settings": "Paramètres de connexion",
+          "smart_zones_manual": "Saisir manuellement les zones Smart Map",
+          "cloud_credentials": "Identifiants cloud iRobot"
+        }
+      },
+      "zones": {
+        "title": "Nommer les pièces détectées",
+        "description": "{zone_count} nouvelle(s) zone(s) détectée(s). Attribuez des noms pour pouvoir les nettoyer individuellement :"
+      },
+      "calibration": {
+        "title": "Calibration de la carte",
+        "description": "Les passages de portes ont mesuré une largeur moyenne de {measured_cm} cm. Sélectionnez la largeur réelle de vos portes intérieures :",
+        "data": {
+          "door_width_mm": "Largeur de porte"
+        }
+      },
+      "smart_zones": {
+        "title": "Nommer les zones Smart Map",
+        "description": "{zone_count} zone(s) sans nom (IDs : {zone_ids}). Attribuez des noms pour pouvoir les nettoyer individuellement :"
+      },
+      "settings": {
+        "title": "Paramètres de connexion",
+        "data": {
+          "continuous": "Connexion continue",
+          "delay": "Délai de reconnexion (secondes)",
+          "map_enabled": "Activer la carte en direct",
+          "map_size_px": "Taille de la carte (pixels)",
+          "map_scale_mm_per_px": "Échelle (mm/pixel)"
+        },
+        "data_description": {
+          "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
+          "delay": "Secondes d'attente entre les tentatives de reconnexion.",
+          "map_enabled": "Activer la carte de nettoyage en direct pour les robots avec détection de position (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Taille du canevas de la carte en pixels (400–1200). Par défaut : 600.",
+          "map_scale_mm_per_px": "Millimètres par pixel (5–30). Par défaut 10 = 6 m × 6 m à 600 px."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Saisir manuellement les zones Smart Map",
+        "description": "Entrez les IDs de vos zones sous forme de liste séparée par des virgules (ex. : 5, 12, 7). Retrouvez-les dans le téléchargement de diagnostics HA sous options → discovered_zone_ids, ou démarrez un nettoyage ciblé par pièce depuis l'application iRobot pendant que HA est connecté, puis consultez les diagnostics.",
+        "data": {
+          "region_ids": "IDs de zones (séparés par des virgules)",
+          "zone_names": "Noms des zones"
+        },
+        "data_description": {
+          "region_ids": "Exemple : 5, 12, 7",
+          "zone_names": "Une entrée par ligne : 21=Couloir, 22=Cuisine, etc."
+        },
+        "error": {
+          "no_valid_ids": "Aucune entrée valide trouvée. Utilisez le format id=Nom, une par ligne.",
+          "pmap_not_resolved": "Impossible de résoudre l'ID de la carte. Assurez-vous que le robot est en station et connecté, puis réessayez."
+        }
+      },
+      "cloud_credentials": {
+        "title": "Identifiants cloud iRobot",
+        "description": "Actuellement connecté en tant que : {current_user}\n\nMettez à jour vos identifiants iRobot ou videz les deux champs pour désactiver les fonctionnalités cloud.",
+        "data": {
+          "irobot_username": "E-mail iRobot",
+          "irobot_password": "Mot de passe iRobot"
+        }
+      }
+    },
+    "errors": {
+      "no_valid_ids": "Aucun ID valide trouvé. Veuillez entrer des nombres séparés par des virgules."
+    },
+    "error": {
+      "cloud_auth_failed": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot.",
+      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_cycles": {
+        "name": "Maintenance – Cycles de batterie"
+      },
+      "total_cleaning_time": {
+        "name": "Missions – Temps total"
+      },
+      "average_mission_time": {
+        "name": "Missions – Durée moyenne"
+      },
+      "total_missions": {
+        "name": "Missions total"
+      },
+      "successful_missions": {
+        "name": "Missions réussies"
+      },
+      "canceled_missions": {
+        "name": "Missions annulées"
+      },
+      "failed_missions": {
+        "name": "Missions échouées"
+      },
+      "total_cleaned_area": {
+        "name": "Missions – Surface nettoyée"
+      },
+      "last_mission": {
+        "name": "Missions – Dernière"
+      },
+      "phase": {
+        "name": "Statut"
+      },
+      "error": {
+        "name": "Statut – Erreur"
+      },
+      "job_initiator": {
+        "name": "Statut – Démarré par"
+      },
+      "clean_mode": {
+        "name": "Paramètre – Passes de nettoyage"
+      },
+      "scrubs_count": {
+        "name": "Détections de saleté"
+      },
+      "rssi": {
+        "name": "Signal Wi-Fi"
+      },
+      "filter_remaining_hours": {
+        "name": "Maintenance – Filtre"
+      },
+      "brush_remaining_hours": {
+        "name": "Maintenance – Brosses"
+      },
+      "carpet_boost_mode": {
+        "name": "Paramètre – Turbo moquette"
+      },
+      "clean_base_status": {
+        "name": "Statut de la base Clean"
+      },
+      "dock_tank_level": {
+        "name": "Niveau du réservoir de la base"
+      },
+      "tank_level": {
+        "name": "Niveau du réservoir"
+      },
+      "mop_pad": {
+        "name": "Tampon de lavage"
+      },
+      "mop_behavior": {
+        "name": "Comportement de lavage"
+      },
+      "mop_tank_level": {
+        "name": "Niveau du réservoir de lavage"
+      },
+      "readiness": {
+        "name": "Statut – Disponibilité"
+      },
+      "next_clean": {
+        "name": "Statut – Prochain nettoyage"
+      },
+      "nav_quality": {
+        "name": "Qualité de navigation"
+      },
+      "snr": {
+        "name": "SNR"
+      },
+      "signal_noise": {
+        "name": "Bruit de signal"
+      },
+      "ip_address": {
+        "name": "Adresse IP"
+      },
+      "mission_start_time": {
+        "name": "Début de mission"
+      },
+      "mission_elapsed_time": {
+        "name": "Durée écoulée de mission"
+      },
+      "mission_recharge_time": {
+        "name": "Temps de recharge"
+      },
+      "mission_expire_time": {
+        "name": "Expiration de mission"
+      },
+      "raw_state": {
+        "name": "État brut (débogage)"
+      },
+      "lifetime_area": {
+        "name": "Surface nettoyée à vie"
+      },
+      "lifetime_time": {
+        "name": "Temps de nettoyage à vie"
+      },
+      "lifetime_missions": {
+        "name": "Missions à vie"
+      }
+    },
+    "binary_sensor": {
+      "bin_full": {
+        "name": "Bac plein"
+      },
+      "connected": {
+        "name": "Connecté"
+      },
+      "bin_present": {
+        "name": "Bac présent"
+      },
+      "mop_ready": {
+        "name": "Problème de lavage"
+      },
+      "mop_tank_present": {
+        "name": "Réservoir de lavage présent"
+      },
+      "mop_lid_closed": {
+        "name": "Couvercle de lavage ouvert"
+      },
+      "map_saving": {
+        "name": "Sauvegarde Smart Map"
+      }
+    },
+    "button": {
+      "evac": {
+        "name": "Action – Vider le bac"
+      },
+      "locate": {
+        "name": "Action – Localiser le robot"
+      },
+      "reset_filter": {
+        "name": "Maintenance – Confirmer le remplacement du filtre"
+      },
+      "reset_brush": {
+        "name": "Maintenance – Confirmer le remplacement des brosses"
+      },
+      "reset_battery": {
+        "name": "Maintenance – Confirmer le remplacement de la batterie"
+      },
+      "clean_zone": {
+        "name": "Nettoyer une zone"
+      },
+      "repeat_mission": {
+        "name": "Répéter la dernière mission"
+      },
+      "clean_smart_zone": {
+        "name": "Nettoyer une zone (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
+      },
+      "spot": {
+        "name": "Nettoyage ponctuel (expérimental)"
+      },
+      "quick": {
+        "name": "Nettoyage rapide (expérimental)"
+      },
+      "sleep": {
+        "name": "Veille (expérimental)"
+      },
+      "power_off": {
+        "name": "Éteindre (expérimental)"
+      }
+    },
+    "switch": {
+      "edge_clean": {
+        "name": "Paramètre – Nettoyage des bords"
+      },
+      "always_finish": {
+        "name": "Paramètre – Toujours terminer"
+      },
+      "schedule_hold": {
+        "name": "Paramètre – Suspension de la planification"
+      }
+    },
+    "select": {
+      "cleaning_passes": {
+        "name": "Paramètre – Passes de nettoyage"
+      },
+      "zone_select": {
+        "name": "Sélectionner une zone"
+      },
+      "smart_zone_select": {
+        "name": "Sélectionner une zone Smart Map"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Sélectionner une zone (cloud)"
+      }
+    },
+    "image": {
+      "map": {
+        "name": "Carte de nettoyage"
+      }
+    }
+  },
+  "issues": {
+    "zones_need_naming": {
+      "title": "Nouvelles pièces détectées",
+      "description": "Roomba+ a détecté de nouvelles zones. Ouvrez les paramètres pour les nommer.",
+      "fix_flow": {
+        "step": {
+          "zones": {
+            "title": "Nommer les pièces détectées"
+          }
+        }
+      }
+    },
+    "smart_zones_need_naming": {
+      "title": "Nouvelles zones Smart Map découvertes",
+      "description": "Roomba+ a découvert {zone_count} nouvelle(s) zone(s) ({zone_ids}) sans nom. Ouvrez les paramètres pour les nommer.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Nommer les zones Smart Map",
+            "description": "Entrez une zone par ligne au format `id=Nom`. IDs à nommer : {zone_ids}",
+            "data": {
+              "zones": "Assignation des zones"
+            },
+            "data_description": {
+              "zones": "Une entrée par ligne : `21=Couloir`, `22=Cuisine`, etc."
+            }
+          }
+        },
+        "error": {
+          "no_valid_entries": "Aucune entrée valide trouvée. Utilisez le format `id=Nom`, une par ligne.",
+          "pmap_not_resolved": "Impossible de résoudre l'ID de la carte. Assurez-vous que le robot est en station et connecté, puis réessayez."
+        }
+      }
+    },
+    "geometry_drifted": {
+      "title": "Dérive de carte détectée",
+      "description": "La carte de position du Roomba a dérivé significativement. Reconfirmez la disposition de vos pièces pour maintenir la précision de la carte.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Reconfirmer la disposition des pièces"
+          }
+        }
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "cleaning_started": "Nettoyage démarré",
+      "cleaning_finished": "Nettoyage terminé",
+      "stuck": "Robot bloqué",
+      "bin_full": "Bac plein",
+      "docked": "En station",
+      "error": "Erreur signalée"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Nettoyer une pièce",
+      "description": "Lance un nettoyage ciblé d'une ou plusieurs pièces nommées sur les robots avec Smart Map.",
+      "fields": {
+        "room_name": {
+          "name": "Nom de la pièce",
+          "description": "Nom de pièce ou liste de noms de pièces à nettoyer. Doit correspondre aux étiquettes assignées dans les options Roomba+. Lancez d'abord un nettoyage ciblé par pièce via l'application iRobot si aucune pièce n'apparaît encore."
+        },
+        "ordered": {
+          "name": "Séquence ordonnée",
+          "description": "Nettoyer les pièces dans l'ordre fourni plutôt que de laisser le robot choisir."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Pièce(s) inconnue(s) : {names}. Vérifiez que les noms correspondent à ceux assignés dans les options Roomba+."
+    },
+    "rooms_different_floors": {
+      "message": "Toutes les pièces doivent être au même étage. Des pièces provenant de cartes différentes ont été détectées : {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "Le nettoyage par pièce nécessite un robot Smart Map (i7, s9, série j). Ce robot ne prend pas en charge les Smart Maps."
+    },
+    "no_rooms_configured": {
+      "message": "Aucune pièce configurée pour l'instant. Pour utiliser cette action : (1) Ouvrez l'application iRobot, (2) Démarrez un nettoyage ciblé par pièce pour chaque pièce, (3) Revenez dans Home Assistant — les pièces apparaîtront automatiquement dans les options Roomba+ où vous pourrez leur attribuer des noms."
+    },
+    "pmap_not_found": {
+      "message": "Carte introuvable dans l'état du robot. La carte a peut-être été réentraînée — lancez une mission par pièce via l'application iRobot pour actualiser."
+    },
+    "pmap_not_resolved": {
+      "message": "Impossible de résoudre l'ID de carte pour une ou plusieurs pièces. Assurez-vous que le robot a transmis son état de carte via MQTT."
+    },
+    "map_updating": {
+      "message": "Le robot est en train de mettre à jour sa Smart Map. Attendez que le capteur de disponibilité indique « Prêt », puis réessayez."
+    }
+  }
+}

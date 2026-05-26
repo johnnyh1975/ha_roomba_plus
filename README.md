@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.6.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.6.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -357,6 +357,18 @@ Fixed in v1.4.4.4 — `discovered_zone_ids` is backfilled from `smart_zone_data`
 
 Smart Map robots do not broadcast local pose data via MQTT. The map image entity is suppressed for these robots from v1.4.4.4. Use the iRobot app to view the Smart Map.
 
+**"expected float" error on the Scale field in Connection settings**
+
+Fixed in v1.6.1. The scale field validator required a Python `float` type but the stored default `10` is an `int`, which HA's frontend rejected before the form could be submitted. Please update and the Connection settings dialog will open and save normally.
+
+**Configuration changes require a restart / "Config entry was never loaded!" in logs**
+
+Fixed in v1.6.1. The `select` and `button` platforms were registered as loaded during setup for all Smart Map robots, but the unload path only unloaded them when cloud credentials were present. This mismatch left platforms in a broken state after any options change, requiring a restart to recover.
+
+**Lifetime statistics sensors crash on startup (AttributeError: 'list' object has no attribute 'get')**
+
+Fixed in v1.6.1. The `/missionhistory` API returns a JSON array, not a dict. The coordinator was storing the raw list directly, causing all three lifetime sensors to crash immediately. Please update and restart HA.
+
 **Smart Map saving sensor not visible**
 
 The `binary_sensor.roomba_smart_map_saving` entity is only created for Smart Map robots (i/s/j/Braava m6). It will not appear on 900-series or 600-series robots. If it is missing on an i7/s9/j7, verify that `"cap": {"pose": ...}` is present in the diagnostics download.
@@ -389,9 +401,23 @@ They are disabled by default. Go to Settings → Devices & Services → Roomba+ 
 2. Add Roomba+ — it connects directly to the robot without middleware
 3. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
 
----
+## Translations
 
-## Credits
+Roomba+ is available in the following languages:
+
+| Language | Code | Status |
+|---|---|---|
+| English | `en` | ✅ Complete |
+| German | `de` | ✅ Complete |
+| French | `fr` | ✅ Complete (community contribution) |
+| Italian | `it` | ✅ Complete — native speaker review welcome |
+| Spanish | `es` | ✅ Complete — native speaker review welcome |
+| Portuguese | `pt` | ✅ Complete (European) — native speaker review welcome |
+| Dutch | `nl` | ✅ Complete — native speaker review welcome |
+
+To contribute a translation or report an incorrect phrase, please open an issue or pull request with the corrected `translations/<lang>.json` file.
+
+---
 
 **[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots.
 

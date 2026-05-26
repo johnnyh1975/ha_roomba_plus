@@ -1,0 +1,441 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Aggiungi Roomba+",
+        "description": "Seleziona un Roomba rilevato oppure aggiungine uno manualmente.",
+        "data": {
+          "host": "Seleziona robot"
+        }
+      },
+      "manual": {
+        "title": "Configurazione manuale",
+        "description": "Inserisci l'indirizzo IP del tuo Roomba. Le credenziali sono disponibili su [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "host": "Indirizzo IP"
+        },
+        "data_description": {
+          "host": "Indirizzo IP locale del tuo Roomba"
+        }
+      },
+      "link": {
+        "title": "Collega il robot",
+        "description": "Tieni premuto il tasto **HOME** del tuo {name} per circa 2 secondi finché non emette una serie di segnali acustici, poi rilascia. Il LED Wi-Fi lampeggerà."
+      },
+      "link_manual": {
+        "title": "Inserisci la password",
+        "description": "Il recupero automatico della password è fallito. Inserisci manualmente la password del Roomba. Istruzioni: [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "cloud_credentials": {
+        "title": "Credenziali cloud iRobot (opzionale)",
+        "description": "Inserisci l'email e la password dell'app iRobot per abilitare le funzioni cloud (nomi stanze ufficiali, preferiti). Lascia entrambi i campi vuoti per usare solo il MQTT locale.",
+        "data": {
+          "irobot_username": "Email iRobot",
+          "irobot_password": "Password iRobot"
+        },
+        "data_description": {
+          "irobot_username": "L'indirizzo email usato per accedere all'app iRobot.",
+          "irobot_password": "La password dell'app iRobot."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossibile connettersi al robot. Verifica che sia acceso e raggiungibile.",
+      "invalid_auth": "Credenziali non valide. Controlla il BLID e la password.",
+      "unknown": "Errore imprevisto. Controlla i log di Home Assistant per i dettagli.",
+      "cloud_auth_failed": "Autenticazione cloud non riuscita. Controlla email e password iRobot.",
+      "cloud_unavailable": "Impossibile raggiungere il cloud iRobot. Controlla la connessione Internet e riprova."
+    },
+    "abort": {
+      "already_configured": "Questo robot è già configurato.",
+      "not_irobot_device": "Il dispositivo rilevato non è un dispositivo iRobot.",
+      "short_blid": "È già in corso un flusso di configurazione per questo robot.",
+      "cannot_connect": "Impossibile raggiungere il robot all'indirizzo specificato."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configura Roomba+",
+        "menu_options": {
+          "settings": "Impostazioni di connessione",
+          "smart_zones_manual": "Inserisci manualmente le zone Smart Map",
+          "cloud_credentials": "Credenziali cloud iRobot"
+        }
+      },
+      "zones": {
+        "title": "Nomina le stanze rilevate",
+        "description": "{zone_count} nuova/e area/e rilevata/e. Assegna i nomi per pulirle singolarmente:"
+      },
+      "calibration": {
+        "title": "Calibrazione mappa",
+        "description": "I passaggi delle porte hanno misurato una larghezza media di {measured_cm} cm. Seleziona la larghezza reale delle tue porte interne:",
+        "data": {
+          "door_width_mm": "Larghezza porta"
+        }
+      },
+      "smart_zones": {
+        "title": "Nomina le zone Smart Map",
+        "description": "{zone_count} zona/e senza nome (ID: {zone_ids}). Assegna i nomi per pulirle singolarmente:"
+      },
+      "settings": {
+        "title": "Impostazioni di connessione",
+        "data": {
+          "continuous": "Connessione continua",
+          "delay": "Ritardo riconnessione (secondi)",
+          "map_enabled": "Abilita mappa in tempo reale",
+          "map_size_px": "Dimensione mappa (pixel)",
+          "map_scale_mm_per_px": "Scala (mm/pixel)"
+        },
+        "data_description": {
+          "continuous": "Mantieni una connessione MQTT persistente con il robot. Consigliato.",
+          "delay": "Secondi di attesa tra i tentativi di riconnessione.",
+          "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Dimensione del canvas della mappa in pixel (400–1200). Predefinito: 600.",
+          "map_scale_mm_per_px": "Millimetri per pixel (5–30). Predefinito 10 = 6 m × 6 m a 600 px."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Inserisci manualmente le zone Smart Map",
+        "description": "Inserisci gli ID delle zone come elenco separato da virgole (es. 5, 12, 7). Li trovi nel download diagnostica HA sotto opzioni → discovered_zone_ids, oppure avvia una pulizia per stanza dall'app iRobot mentre HA è connesso e controlla poi la diagnostica.",
+        "data": {
+          "region_ids": "ID regioni (separati da virgola)",
+          "zone_names": "Assegnazione nomi zone"
+        },
+        "data_description": {
+          "region_ids": "Esempio: 5, 12, 7",
+          "zone_names": "Una voce per riga: 21=Corridoio, 22=Cucina, ecc."
+        },
+        "error": {
+          "no_valid_ids": "Nessuna voce valida trovata. Usa il formato id=Nome, una per riga.",
+          "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova."
+        }
+      },
+      "cloud_credentials": {
+        "title": "Credenziali cloud iRobot",
+        "description": "Attualmente connesso come: {current_user}\n\nAggiorna le credenziali iRobot o svuota entrambi i campi per disabilitare le funzioni cloud.",
+        "data": {
+          "irobot_username": "Email iRobot",
+          "irobot_password": "Password iRobot"
+        }
+      }
+    },
+    "errors": {
+      "no_valid_ids": "Nessun ID valido trovato. Inserisci numeri separati da virgola."
+    },
+    "error": {
+      "cloud_auth_failed": "Autenticazione cloud non riuscita. Controlla email e password iRobot.",
+      "cloud_unavailable": "Impossibile raggiungere il cloud iRobot. Controlla la connessione Internet e riprova."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_cycles": {
+        "name": "Manutenzione – Cicli batteria"
+      },
+      "total_cleaning_time": {
+        "name": "Missioni – Tempo totale"
+      },
+      "average_mission_time": {
+        "name": "Missioni – Durata media"
+      },
+      "total_missions": {
+        "name": "Missioni totali"
+      },
+      "successful_missions": {
+        "name": "Missioni riuscite"
+      },
+      "canceled_missions": {
+        "name": "Missioni annullate"
+      },
+      "failed_missions": {
+        "name": "Missioni fallite"
+      },
+      "total_cleaned_area": {
+        "name": "Missioni – Area pulita"
+      },
+      "last_mission": {
+        "name": "Missioni – Ultima"
+      },
+      "phase": {
+        "name": "Stato"
+      },
+      "error": {
+        "name": "Stato – Errore"
+      },
+      "job_initiator": {
+        "name": "Stato – Avviato da"
+      },
+      "clean_mode": {
+        "name": "Impostazione – Passate di pulizia"
+      },
+      "scrubs_count": {
+        "name": "Rilevamenti sporco"
+      },
+      "rssi": {
+        "name": "Segnale Wi-Fi"
+      },
+      "filter_remaining_hours": {
+        "name": "Manutenzione – Filtro"
+      },
+      "brush_remaining_hours": {
+        "name": "Manutenzione – Spazzole"
+      },
+      "carpet_boost_mode": {
+        "name": "Impostazione – Boost moquette"
+      },
+      "clean_base_status": {
+        "name": "Stato Clean Base"
+      },
+      "dock_tank_level": {
+        "name": "Livello serbatoio base"
+      },
+      "tank_level": {
+        "name": "Livello serbatoio"
+      },
+      "mop_pad": {
+        "name": "Panno lavapavimenti"
+      },
+      "mop_behavior": {
+        "name": "Comportamento lavapavimenti"
+      },
+      "mop_tank_level": {
+        "name": "Livello serbatoio lavapavimenti"
+      },
+      "readiness": {
+        "name": "Stato – Disponibilità"
+      },
+      "next_clean": {
+        "name": "Stato – Prossima pulizia"
+      },
+      "nav_quality": {
+        "name": "Qualità navigazione"
+      },
+      "snr": {
+        "name": "SNR"
+      },
+      "signal_noise": {
+        "name": "Rumore segnale"
+      },
+      "ip_address": {
+        "name": "Indirizzo IP"
+      },
+      "mission_start_time": {
+        "name": "Inizio missione"
+      },
+      "mission_elapsed_time": {
+        "name": "Tempo trascorso missione"
+      },
+      "mission_recharge_time": {
+        "name": "Tempo ricarica"
+      },
+      "mission_expire_time": {
+        "name": "Scadenza missione"
+      },
+      "raw_state": {
+        "name": "Stato grezzo (debug)"
+      },
+      "lifetime_area": {
+        "name": "Area pulita totale"
+      },
+      "lifetime_time": {
+        "name": "Tempo pulizia totale"
+      },
+      "lifetime_missions": {
+        "name": "Missioni totali (vita)"
+      }
+    },
+    "binary_sensor": {
+      "bin_full": {
+        "name": "Contenitore pieno"
+      },
+      "connected": {
+        "name": "Connesso"
+      },
+      "bin_present": {
+        "name": "Contenitore presente"
+      },
+      "mop_ready": {
+        "name": "Problema lavapavimenti"
+      },
+      "mop_tank_present": {
+        "name": "Serbatoio lavapavimenti presente"
+      },
+      "mop_lid_closed": {
+        "name": "Coperchio lavapavimenti aperto"
+      },
+      "map_saving": {
+        "name": "Salvataggio Smart Map"
+      }
+    },
+    "button": {
+      "evac": {
+        "name": "Azione – Svuota contenitore"
+      },
+      "locate": {
+        "name": "Azione – Trova robot"
+      },
+      "reset_filter": {
+        "name": "Manutenzione – Conferma sostituzione filtro"
+      },
+      "reset_brush": {
+        "name": "Manutenzione – Conferma sostituzione spazzole"
+      },
+      "reset_battery": {
+        "name": "Manutenzione – Conferma sostituzione batteria"
+      },
+      "clean_zone": {
+        "name": "Pulisci zona"
+      },
+      "repeat_mission": {
+        "name": "Ripeti ultima missione"
+      },
+      "clean_smart_zone": {
+        "name": "Pulisci zona (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
+      },
+      "spot": {
+        "name": "Pulizia spot (sperimentale)"
+      },
+      "quick": {
+        "name": "Pulizia rapida (sperimentale)"
+      },
+      "sleep": {
+        "name": "Standby (sperimentale)"
+      },
+      "power_off": {
+        "name": "Spegni (sperimentale)"
+      }
+    },
+    "switch": {
+      "edge_clean": {
+        "name": "Impostazione – Pulizia bordi"
+      },
+      "always_finish": {
+        "name": "Impostazione – Completa sempre"
+      },
+      "schedule_hold": {
+        "name": "Impostazione – Sospendi pianificazione"
+      }
+    },
+    "select": {
+      "cleaning_passes": {
+        "name": "Impostazione – Passate di pulizia"
+      },
+      "zone_select": {
+        "name": "Seleziona zona"
+      },
+      "smart_zone_select": {
+        "name": "Seleziona zona Smart Map"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Seleziona zona (cloud)"
+      }
+    },
+    "image": {
+      "map": {
+        "name": "Mappa di pulizia"
+      }
+    }
+  },
+  "issues": {
+    "zones_need_naming": {
+      "title": "Nuove stanze rilevate",
+      "description": "Roomba+ ha rilevato nuove aree. Apri le impostazioni per nominarle.",
+      "fix_flow": {
+        "step": {
+          "zones": {
+            "title": "Nomina le stanze rilevate"
+          }
+        }
+      }
+    },
+    "smart_zones_need_naming": {
+      "title": "Nuove zone Smart Map scoperte",
+      "description": "Roomba+ ha scoperto {zone_count} nuova/e zona/e ({zone_ids}) senza nome. Apri le impostazioni per nominarle.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Nomina le zone Smart Map",
+            "description": "Inserisci una zona per riga nel formato `id=Nome`. ID da nominare: {zone_ids}",
+            "data": {
+              "zones": "Assegnazione zone"
+            },
+            "data_description": {
+              "zones": "Una voce per riga: `21=Corridoio`, `22=Cucina`, ecc."
+            }
+          }
+        },
+        "error": {
+          "no_valid_entries": "Nessuna voce valida trovata. Usa il formato `id=Nome`, una per riga.",
+          "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova."
+        }
+      }
+    },
+    "geometry_drifted": {
+      "title": "Deriva mappa rilevata",
+      "description": "La mappa di posizione del Roomba ha subito una deriva significativa. Riconferma il layout delle stanze per mantenere la precisione della mappa.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Riconferma il layout delle stanze"
+          }
+        }
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "cleaning_started": "Pulizia avviata",
+      "cleaning_finished": "Pulizia completata",
+      "stuck": "Robot bloccato",
+      "bin_full": "Contenitore pieno",
+      "docked": "In base",
+      "error": "Errore segnalato"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Pulisci stanza",
+      "description": "Avvia una pulizia mirata di una o più stanze nominate sui robot con Smart Map.",
+      "fields": {
+        "room_name": {
+          "name": "Nome stanza",
+          "description": "Nome stanza o elenco di nomi da pulire. Devono corrispondere alle etichette assegnate nelle opzioni Roomba+. Prima avvia una pulizia per stanza dall'app iRobot se non compare ancora nessuna stanza."
+        },
+        "ordered": {
+          "name": "Sequenza ordinata",
+          "description": "Pulisci le stanze nell'ordine fornito anziché lasciare scegliere al robot."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Stanza/e sconosciuta/e: {names}. Verifica che i nomi corrispondano a quelli assegnati nelle opzioni Roomba+."
+    },
+    "rooms_different_floors": {
+      "message": "Tutte le stanze devono essere allo stesso piano. Stanze da mappe diverse: {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "La pulizia per stanza richiede un robot Smart Map (i7, s9, serie j). Questo robot non supporta le Smart Map."
+    },
+    "no_rooms_configured": {
+      "message": "Nessuna stanza configurata. Per usare questa azione: (1) Apri l'app iRobot, (2) Avvia una pulizia per stanza per ogni stanza, (3) Torna in Home Assistant — le stanze appariranno automaticamente nelle opzioni Roomba+ dove potrai assegnare i nomi."
+    },
+    "pmap_not_found": {
+      "message": "Mappa non trovata nello stato del robot. La mappa potrebbe essere stata riaddestrata — avvia una missione per stanza dall'app iRobot per aggiornare."
+    },
+    "pmap_not_resolved": {
+      "message": "Impossibile risolvere l'ID mappa per una o più stanze. Assicurati che il robot abbia trasmesso lo stato della mappa via MQTT."
+    },
+    "map_updating": {
+      "message": "Il robot sta aggiornando la sua Smart Map. Attendi che il sensore di disponibilità mostri 'Pronto', poi riprova."
+    }
+  }
+}
