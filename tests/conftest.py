@@ -20,7 +20,15 @@ sys.path.insert(0, ROOT)
 _aiohttp = types.ModuleType("aiohttp")
 _aiohttp.ClientSession = object
 _aiohttp.ClientError = Exception
+# Stub aiohttp.web for api_views.py
+_aiohttp_web = types.ModuleType("aiohttp.web")
+class _FakeRequest:
+    def __init__(self): self.app = {}; self.query = {}
+_aiohttp_web.Request = _FakeRequest
+_aiohttp_web.Response = object
+_aiohttp.web = _aiohttp_web
 sys.modules["aiohttp"] = _aiohttp
+sys.modules["aiohttp.web"] = _aiohttp_web
 
 # ── voluptuous stub ───────────────────────────────────────────────────────────
 # __init__.py now imports voluptuous for service schema validation.
@@ -197,11 +205,18 @@ def _tz_aware_now(tz=None):
 def _tz_aware_utcnow():
     return datetime.datetime.now(tz=datetime.timezone.utc)
 
+def _as_local(dt_val):
+    """Return datetime in local time (stub: just return tz-aware UTC)."""
+    if dt_val.tzinfo is None:
+        dt_val = dt_val.replace(tzinfo=datetime.timezone.utc)
+    return dt_val
+
 ha_dt = _make_module("homeassistant.util.dt",
     now=_tz_aware_now,
     utcnow=_tz_aware_utcnow,
     utc_from_timestamp=lambda ts: datetime.datetime.fromtimestamp(ts, datetime.timezone.utc),
     as_timestamp=lambda dt: dt.timestamp(),
+    as_local=_as_local,
     parse_datetime=datetime.datetime.fromisoformat,
     dt=datetime,
 )
@@ -301,6 +316,19 @@ _make_module("homeassistant.helpers.entity_platform",
     async_get_platforms=lambda hass, domain: [],
 )
 
+
+# homeassistant.components.http
+class _HomeAssistantView:
+    """Stub for HomeAssistantView."""
+    url = ""
+    name = ""
+    requires_auth = True
+    def json(self, result, status_code=200): return result
+    def json_message(self, msg, status_code=200): return msg
+
+_make_module("homeassistant.components.http",
+    HomeAssistantView=_HomeAssistantView,
+)
 
 # homeassistant (top-level)
 ha = _make_module("homeassistant",

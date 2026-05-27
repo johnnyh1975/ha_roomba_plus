@@ -108,15 +108,41 @@ class TestRegions:
         assert regions[0]["pmap_id"] == "map1"
         assert regions[0]["region_type"] == "kitchen"
 
-    def test_regions_from_multiple_pmaps_flattened(self):
+    def test_regions_from_multiple_pmaps_returns_active_only(self):
+        """Active-map filter: when two pmaps exist, only active pmap regions returned.
+
+        This is the v1.8.0 behaviour change — previously both pmaps were flattened.
+        The first pmap is the active one (active_pmap_id returns the first pmap_id).
+        """
         cc = _bare_coordinator()
         cc.data = _make_data(pmaps=[
             _make_pmap("map1", [{"id": "1", "name": "Hall", "region_type": "hallway"}]),
             _make_pmap("map2", [{"id": "2", "name": "Bed", "region_type": "bedroom"}]),
         ])
         regions = cc.regions
+        # Only active pmap (map1) — map2 is the disabled old map
+        assert len(regions) == 1
+        assert regions[0]["pmap_id"] == "map1"
+        assert regions[0]["name"] == "Hall"
+
+    def test_regions_from_inactive_pmap_not_returned(self):
+        """Duplicate names across pmaps: only active pmap wins, no collision."""
+        cc = _bare_coordinator()
+        cc.data = _make_data(pmaps=[
+            _make_pmap("active_map", [
+                {"id": "r1", "name": "Kitchen", "region_type": "kitchen"},
+                {"id": "r2", "name": "Studio", "region_type": "room"},
+            ]),
+            _make_pmap("old_map", [
+                {"id": "r3", "name": "Kitchen", "region_type": "kitchen"},  # duplicate name
+                {"id": "r4", "name": "Studio", "region_type": "room"},      # duplicate name
+            ]),
+        ])
+        regions = cc.regions
         assert len(regions) == 2
-        assert {r["pmap_id"] for r in regions} == {"map1", "map2"}
+        assert all(r["pmap_id"] == "active_map" for r in regions)
+        ids = {r["id"] for r in regions}
+        assert ids == {"r1", "r2"}   # old_map entries must NOT appear
 
     def test_region_default_type_when_missing(self):
         cc = _bare_coordinator()
@@ -167,13 +193,17 @@ class TestZones:
         ])
         assert cc.zones[0]["zone_type"] == "default"
 
-    def test_zones_from_multiple_pmaps(self):
+    def test_zones_from_multiple_pmaps_returns_active_only(self):
+        """Active-map filter: two pmaps → only active pmap zones returned."""
         cc = _bare_coordinator()
         cc.data = _make_data(pmaps=[
             _make_pmap("m1", [], zones=[{"id": "z1", "name": "A", "zone_type": "furniture"}]),
             _make_pmap("m2", [], zones=[{"id": "z2", "name": "B", "zone_type": "furniture"}]),
         ])
-        assert len(cc.zones) == 2
+        zones = cc.zones
+        assert len(zones) == 1
+        assert zones[0]["pmap_id"] == "m1"
+        assert zones[0]["id"] == "z1"
 
 
 # ── RoombaData.has_cloud ───────────────────────────────────────────────────────

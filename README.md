@@ -1,12 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.7.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.8.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.7 adds three independent intelligence layers:** consumable reset services with replacement timestamps, blocking-sensor gates for smart starts, and a unified zone management UI with aliases and hidden zones.
+Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.8 adds mission intelligence:** a persistent mission log, error diagnosis with suggested actions, presence-aware schedule control, a REST history API for the Lovelace card, and a bugfix for silent wrong-map cleans when multiple Smart Maps exist in the same iRobot account.
 
 ---
 
@@ -31,7 +31,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 
 ## Features
 
-### Sensors (39 local + 3 cloud)
+### Sensors (53 local + 3 cloud)
 
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
@@ -42,6 +42,9 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Braava** — tank level, mop pad type, mop behaviour, mop tank level
 - **Navigation** — navigation quality / l_squal (VSLAM robots, opt-in)
 - **Cloud history (v1.6)** — lifetime cleaned area (m²), lifetime cleaning time, lifetime mission count — available for all robots when cloud credentials are configured, including the 980
+- **Mission log (v1.8)** — clean streak (days), missions last 30 days, completion rate 30 days, area cleaned today (VSLAM robots), last mission result, last mission duration
+- **Error intelligence (v1.8)** — last error code (with `description` and `action` attributes), last error time, last error zone, stuck events 30 days, problem zone (most frequent stuck zone, VSLAM robots)
+- **Presence analytics (v1.8)** — clean opportunities 7 days, clean utilisation 7 days, next likely clean window
 
 ### Binary sensors
 
@@ -52,6 +55,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Smart Map saving (v1.6)** — ON while the robot is saving or uploading its Smart Map after a training run or boundary edit. Only present on Smart Map robots (i/s/j/Braava). Useful for automations that need to wait before issuing zone clean commands.
 - **Maintenance due (v1.7)** — ON when any consumable has reached zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). One automation trigger instead of four separate threshold checks.
 - **Start blocked (v1.7)** — ON while a `smart_start` is queued waiting for blocking sensors to clear. Attributes: `blocking_entities`, `queued_since`, `timeout_at`.
+- **Schedule hold active (v1.8)** — ON when `schedHold` is true for any reason. Attribute `source` distinguishes `presence_manager` (automated by Roomba+) from `manual` (toggled by the switch). Only present on i/s/j/Braava robots.
 
 ### Controls
 
@@ -146,7 +150,106 @@ A unified config flow step replaces the disconnected rename + textarea + repair 
 - Changes saved atomically — one write, no partial state
 - Alias-clear-on-match: if you type the same name as the cloud name, the alias is deleted (future cloud renames flow through automatically)
 
-**Options menu order (v1.7):** Settings → Zone management → Cloud credentials → Blocking sensors
+**Options menu order (v1.8):** Settings → Zone management → Cloud credentials → Blocking sensors → Presence-aware scheduling *(i/s/j/Braava only)*
+
+
+### Mission Log — all robots (v1.8)
+
+Roomba+ now records every mission to a persistent log (up to 365 entries, FIFO). The log survives HA restarts and powers six new sensors:
+
+| Sensor | Notes |
+|---|---|
+| `clean_streak` | Consecutive days with at least one completed mission |
+| `missions_last_30d` | Count of completed missions in the last 30 days |
+| `completion_rate_30d` | Completed / total × 100 over 30 days |
+| `area_cleaned_today` | Sum of completed mission area today (VSLAM robots) |
+| `last_mission_result` | `completed` / `stuck` / `cancelled` / `error` |
+| `last_mission_duration` | Duration in minutes |
+
+The log also feeds the Error Intelligence sensors, Presence Analytics sensors, and the REST history API used by the Lovelace card heatmap.
+
+**Zone attribution per robot type:**
+- **600-series** — result and duration only; no area or zone data
+- **900-series (EPHEMERAL)** — zone names from `ZoneStore` at mission start
+- **i/s/j-series (SMART)** — zone names from `lastCommand.regions` at mission start, reverse-looked-up against the active Smart Map
+
+### Error Intelligence — all robots (v1.8)
+
+Five new diagnostic sensors surface error context that was previously only visible in the iRobot app:
+
+| Sensor | Notes |
+|---|---|
+| `last_error_code` | Populated from live MQTT (priority) or persisted MissionStore value |
+| `last_error_at` | Timestamp of the last error or stuck event |
+| `last_error_zone` | Zone where the error occurred (SMART: from `lastCommand`; EPHEMERAL: from ZoneStore) |
+| `stuck_count_30d` | Number of stuck events in the last 30 days |
+| `problem_zone` | Most frequently stuck zone over 30 days (VSLAM robots) |
+
+`last_error_code` exposes two extra attributes readable by automations and the Lovelace card:
+```yaml
+description: "The main brush roll is jammed."
+action: "Remove the brush roll and clear hair or debris, then reinsert."
+```
+
+The error state is cleared automatically when the next mission completes successfully. On HA restart, the last known error is restored from the mission log — if a completed mission followed the error, the state is correctly empty.
+
+### Presence-Aware Scheduling — i/s/j/Braava robots (v1.8)
+
+Automatically unfreeze the cleaning schedule when everyone leaves home, and re-freeze it when someone returns. Replaces the typical manual absence automation.
+
+Configure via **Settings → Devices & Services → Roomba+ → Configure → Presence-aware scheduling**.
+
+| Option | Description | Default |
+|---|---|---|
+| Enable presence-aware scheduling | Master toggle | Off |
+| Tracked persons | One or more `person.*` entities | — |
+| Mode | `Unfreeze when all away` or `Fire event (manual control)` | Unfreeze when all away |
+| Delay after leaving | Minutes to wait before unfreezing (0–60) | 5 min |
+
+**How it works:**
+- When all tracked persons leave home, a configurable delay starts (default 5 min)
+- After the delay, `schedHold` is set to `false` — the robot's existing cleaning schedule runs normally
+- When anyone returns, `schedHold` is set back to `true` — the schedule is re-frozen
+- If someone returns during the delay, the delay is cancelled and no write is made
+- The manager only re-freezes a hold it created — it never interferes with a hold you set manually via the Schedule Hold switch
+- `always_ask` mode fires the `roomba_plus_all_away` event instead of writing `schedHold`, giving you full control via automation
+
+**Events fired:**
+- `roomba_plus_all_away` — when delay expires in `always_ask` mode
+- `roomba_plus_person_detected_during_clean` — when someone returns home while a clean is running
+
+Three new analytics sensors (fed by the mission log) show how well your schedule is being used:
+- `presence_clean_opportunities_7d` — away windows long enough for a full clean
+- `presence_clean_utilisation_7d` — percentage of those windows that resulted in a clean
+- `next_likely_clean_window` — heuristic forecast of the next likely away window
+
+**Presence-aware scheduling example:**
+
+```yaml
+# "always_ask" mode — full control via automation
+automation:
+  - alias: "Roomba — start when all away"
+    trigger:
+      - platform: event
+        event_type: roomba_plus_all_away
+    action:
+      - service: vacuum.start
+        target:
+          entity_id: vacuum.roomba
+```
+
+### Multi-Map Bug Fix — SMART robots with multiple iRobot accounts (v1.8)
+
+If your iRobot account contains an old disabled Smart Map alongside the active one, and both maps share room names (e.g. `Kitchen`, `Studio`), v1.7 and earlier had two failure modes:
+
+- **Silent wrong-map clean** — all selected rooms exist in both maps → robot localises on the wrong map for ~6 minutes then docks. No error returned.
+- **`rooms_different_floors` error** — mixed unique and shared room names → rooms resolve to different maps → validation fires with a confusing error, even though the room selection was correct.
+
+v1.8 fixes this at the source: `cloud_coordinator.regions` and `.zones` now only return data from the **active pmap**. The old map is ignored entirely. The diagnostics download now shows `pmap_count_total` (all maps returned by the API) alongside `region_count_active` (active map only), making this class of issue immediately visible.
+
+**Who is affected:** Any SMART robot user with an old Smart Map still present in their iRobot account, even if that map is disabled in the iRobot app.
+
+**Action required:** None — the fix is automatic. To permanently prevent the issue, delete the old map in the iRobot app under **More → Maps**.
 
 ### Cleaning map (Roomba 900 / i / s / j / Braava m6)
 
@@ -182,7 +285,35 @@ When new room IDs are discovered via MQTT, a **HA Repair Issue** is raised autom
 - Map subsystem: renderer config, pose point count, stuck events, cached image status
 - Zone subsystem: gap threshold, calibration scale, full zone list with bounding boxes
 - Geometry subsystem: door marker count, wall/door/obstacle counts, drift, wall offset
-- **Cloud subsystem (v1.5):** coordinator status, pmap count, region count, favorite count, last exception
+- **Cloud subsystem (v1.5):** coordinator status, last exception
+- **Cloud subsystem (v1.8):** `pmap_count_total` (all maps from API), `active_pmap_id`, `region_count_active` (active pmap only, after filter) — visible difference when a disabled old map is present
+
+### REST History API (v1.8)
+
+The mission log is available to the Lovelace card via an authenticated REST endpoint:
+
+```
+GET /api/roomba_plus/{entry_id}/mission_history?days=28
+Authorization: Bearer <long-lived-token>
+```
+
+Returns a JSON array of daily summaries, sorted ascending by date:
+
+```json
+[
+  {
+    "date": "2025-05-01",
+    "total": 2,
+    "completed": 2,
+    "stuck": 0,
+    "area_sqft": 824,
+    "result": "completed"
+  }
+]
+```
+
+`days` parameter: 1–90, default 28. The endpoint is used by the Roomba+ Lovelace card to render the cleaning history heatmap. It requires a valid HA long-lived access token.
+
 
 ---
 
@@ -319,6 +450,46 @@ data:
   ordered: true
 ```
 
+### Presence-based clean with smart_start
+
+```yaml
+# "always_ask" mode — start a room-targeted clean only when everyone is away
+automation:
+  - alias: "Roomba — targeted clean when all away"
+    trigger:
+      - platform: event
+        event_type: roomba_plus_all_away
+    condition:
+      - condition: time
+        after: "09:00:00"
+        before: "20:00:00"
+    action:
+      - service: roomba_plus.smart_start
+        target:
+          entity_id: vacuum.roomba
+        data:
+          rooms:
+            - Kitchen
+            - Hallway
+```
+
+### Alert when person detected during clean
+
+```yaml
+automation:
+  - alias: "Roomba — pause when someone comes home mid-clean"
+    trigger:
+      - platform: event
+        event_type: roomba_plus_person_detected_during_clean
+    action:
+      - service: vacuum.pause
+        target:
+          entity_id: vacuum.roomba
+      - service: notify.mobile_app
+        data:
+          message: "Roomba paused — someone came home."
+```
+
 ### Wait for map save before zone clean
 
 ```yaml
@@ -349,7 +520,7 @@ automation:
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
-| Sensors | 13 | 35 (+ 3 cloud) |
+| Sensors | 13 | 53 (+ 3 cloud) |
 | Lifetime stats (area / time / missions) | ❌ | ✅ (v1.6, cloud) |
 | Smart Map saving indicator | ❌ | ✅ (v1.6) |
 | Cleaning map | ❌ | ✅ |
@@ -375,6 +546,11 @@ automation:
 | Blocking sensor gate (smart_start) | ❌ | ✅ (v1.7) |
 | Zone management UI (alias / hide) | ❌ | ✅ (v1.7) |
 | Mid-mission area + elapsed attrs | ❌ | ✅ (v1.7) |
+| Mission log (365 entries, persisted) | ❌ | ✅ (v1.8) |
+| Error intelligence (code + description + action) | ❌ | ✅ (v1.8) |
+| Presence-aware scheduling | ❌ | ✅ (v1.8, i/s/j/Braava) |
+| Multi-map collision fix | ❌ | ✅ (v1.8) |
+| REST mission history API | ❌ | ✅ (v1.8) |
 | Spot / quick clean (980) | ❌ | ✅ (v1.6, experimental) |
 | Sleep / power off (980) | ❌ | ✅ (v1.6, experimental) |
 | Carpet Boost (980) | ❌ | ✅ |
@@ -468,6 +644,26 @@ Upgrade to v1.6. Earlier versions required the repair naming flow to populate zo
 **Experimental buttons not visible**
 
 They are disabled by default. Go to Settings → Devices & Services → Roomba+ → your device → the entity list (including disabled entities) → enable the ones you want. They only appear on 900-series robots (980/985) — Smart Map robots (i/s/j) do not get them.
+
+**Mission log sensors show "Unknown" after upgrading to v1.8.0**
+
+The mission log is populated going forward — it has no history from before the upgrade. The streak, completion rate, and area sensors will be `Unknown` until the first mission completes. This is expected.
+
+**`last_error_code` shows a stale error after the robot has recovered**
+
+The error state is cleared automatically when the next mission completes successfully. If the sensor still shows an error after a successful clean, restart HA to force re-reading the mission log from storage.
+
+**Presence-aware scheduling step not visible in options menu**
+
+The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
+
+**Presence manager unfreezes schedule but robot doesn't clean**
+
+Check that `schedHold` was actually blocking the schedule — press the **Schedule hold** switch to verify. Also confirm the cleaning schedule is set in the iRobot app and is enabled for the correct days. Roomba+ controls the hold; it does not set the schedule itself.
+
+**`clean_room` says "rooms from different maps" after deleting the old map**
+
+The iRobot cloud cache may take up to 24 hours to clear after deleting a map. Trigger an immediate refresh by pulling-to-refresh in the iRobot app, then go to **Settings → Devices → Roomba+ → Configure** and re-enter (or just save) the cloud credentials step to force a coordinator refresh.
 
 **Migration from Core Roomba integration**
 

@@ -65,7 +65,8 @@
           "smart_zones_manual": "Smart Map-zones handmatig invoeren",
           "cloud_credentials": "iRobot cloud-inloggegevens",
           "blocking_sensors": "Blocking sensors",
-          "map_management": "Zone management"
+          "map_management": "Zone management",
+          "presence_scheduling": "Aanwezigheidsgestuurde planning"
         }
       },
       "zones": {
@@ -143,6 +144,16 @@
         "data": {
           "display_name": "Display name",
           "hidden": "Hide this zone"
+        }
+      },
+      "presence_scheduling": {
+        "title": "Aanwezigheidsgestuurde planning",
+        "description": "Schema automatisch vrijgeven als iedereen weg is.",
+        "data": {
+          "presence_scheduling_enabled": "Aanwezigheidsgestuurde planning inschakelen",
+          "presence_entities": "Gevolgde personen",
+          "presence_mode": "Modus",
+          "away_delay_min": "Vertraging na vertrek (minuten)"
         }
       }
     },
@@ -271,16 +282,58 @@
         "name": "Totale missies (levensduur)"
       },
       "filter_last_replaced": {
-        "name": "Filter last replaced"
+        "name": "Onderhoud – Filter vervangen"
       },
       "brush_last_replaced": {
-        "name": "Brushes last replaced"
+        "name": "Onderhoud – Borstels vervangen"
       },
       "pad_last_replaced": {
-        "name": "Cleaning pad last replaced"
+        "name": "Onderhoud – Pad vervangen"
       },
       "battery_last_replaced": {
-        "name": "Battery last replaced"
+        "name": "Onderhoud – Batterij vervangen"
+      },
+      "clean_streak": {
+        "name": "Missies – Schoonmaakserie"
+      },
+      "missions_last_30d": {
+        "name": "Missies – Afgelopen 30 dagen"
+      },
+      "completion_rate_30d": {
+        "name": "Missies – Voltooiingspercentage"
+      },
+      "area_cleaned_today": {
+        "name": "Missies – Vandaag schoongemaakt"
+      },
+      "last_mission_result": {
+        "name": "Missies – Laatste resultaat"
+      },
+      "last_mission_duration": {
+        "name": "Missies – Laatste duur"
+      },
+      "last_error_code": {
+        "name": "Fout – Laatste code"
+      },
+      "last_error_at": {
+        "name": "Fout – Laatste tijdstip"
+      },
+      "last_error_zone": {
+        "name": "Fout – Laatste zone"
+      },
+      "stuck_count_30d": {
+        "name": "Fout – Vastgelopen (30 dagen)"
+      },
+      "problem_zone": {
+        "name": "Fout – Probleemzone"
+      },
+      "presence_clean_opportunities_7d": {
+        "name": "Aanwezigheid – Schoonmaakmogelijkheden (7 dagen)"
+      },
+      "presence_clean_utilisation_7d": {
+        "name": "Aanwezigheid – Schoonmaakbenutting (7 dagen)"
+      },
+      "next_likely_clean_window": {
+        "name": "Aanwezigheid – Volgend schoonmaakvenster"
       }
     },
     "binary_sensor": {
@@ -317,6 +370,18 @@
         "state": {
           "off": "Clear",
           "on": "Blocked"
+        }
+      },
+      "schedule_hold_active": {
+        "name": "Planningsblokkering actief",
+        "state_attributes": {
+          "source": {
+            "name": "Source",
+            "state": {
+              "presence_manager": "Aanwezigheidsbeheer",
+              "manual": "Handmatig"
+            }
+          }
         }
       }
     },

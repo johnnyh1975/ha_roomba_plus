@@ -69,8 +69,34 @@ class BlockingManager:
         self._timeout_at: str | None = None
         self._timeout_task: asyncio.Task | None = None
         self._queued_rooms: list[str] | None = None
+        self._state_callbacks: list[Any] = []
 
     # ── Public state ──────────────────────────────────────────────────────────
+
+    def register_state_callback(self, callback_fn: Any):
+        """Register a callable invoked when queue state changes.
+
+        Used by RoombaStartBlocked to receive immediate updates without
+        waiting for the next MQTT message. Returns an unsubscribe callable
+        that removes the callback when the entity is cleaned up.
+        """
+        self._state_callbacks.append(callback_fn)
+
+        def _unsub() -> None:
+            try:
+                self._state_callbacks.remove(callback_fn)
+            except ValueError:
+                pass
+
+        return _unsub
+
+    def _notify_state_change(self) -> None:
+        """Call all registered state callbacks."""
+        for cb in self._state_callbacks:
+            try:
+                cb()
+            except Exception:  # noqa: BLE001
+                pass
 
     @property
     def is_queued(self) -> bool:
@@ -154,6 +180,7 @@ class BlockingManager:
         )
         self._queued_since = now.isoformat()
         self._timeout_at = (now + timedelta(minutes=timeout_min)).isoformat()
+        self._notify_state_change()
 
         sensor_ids: list[str] = self._entry.options.get(CONF_BLOCKING_SENSORS, [])
 
@@ -268,3 +295,4 @@ class BlockingManager:
             self._timeout_task.cancel()
         self._timeout_task = None
         _LOGGER.debug("BlockingManager: queue cancelled / cleaned up")
+        self._notify_state_change()

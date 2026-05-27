@@ -141,38 +141,59 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def regions(self) -> list[dict[str, Any]]:
-        """Return all regions across all pmaps (name, id, pmap_id, region_type)."""
+        """Return regions from the ACTIVE pmap only.
+
+        Deliberately ignores disabled/old maps to prevent room-name collisions
+        when multiple Smart Maps exist in the same iRobot account. A user with
+        an old disabled map and a current map that share room names would
+        otherwise get silent wrong-map cleans (Case 1) or rooms_different_floors
+        errors (Case 2) from _resolve_rooms.
+        """
         if not self.data:
             return []
-        out: list[dict[str, Any]] = []
+        active_id = self.active_pmap_id
+        if not active_id:
+            return []
         for pmap in self.data.get("pmaps", []):
             details = pmap.get("active_pmapv_details", {})
             pmapv = details.get("active_pmapv", {})
-            pmap_id = pmapv.get("pmap_id", "")
-            for region in details.get("regions", []):
-                out.append({
+            if pmapv.get("pmap_id") != active_id:
+                continue  # skip disabled / inactive maps
+            return [
+                {
                     "id": region.get("id", ""),
                     "name": region.get("name", ""),
                     "region_type": region.get("region_type", "default"),
-                    "pmap_id": pmap_id,
-                })
-        return out
+                    "pmap_id": active_id,
+                }
+                for region in details.get("regions", [])
+            ]
+        return []
 
     @property
     def zones(self) -> list[dict[str, Any]]:
-        """Return all custom zones across all pmaps."""
+        """Return custom zones from the ACTIVE pmap only.
+
+        Same active-map filter as regions — prevents stale zone data from
+        disabled maps contaminating zone_data lookups.
+        """
         if not self.data:
             return []
-        out: list[dict[str, Any]] = []
+        active_id = self.active_pmap_id
+        if not active_id:
+            return []
         for pmap in self.data.get("pmaps", []):
             details = pmap.get("active_pmapv_details", {})
             pmapv = details.get("active_pmapv", {})
-            pmap_id = pmapv.get("pmap_id", "")
-            for zone in details.get("zones", []):
-                out.append({
+            if pmapv.get("pmap_id") != active_id:
+                continue
+            return [
+                {
                     "id": zone.get("id", ""),
                     "name": zone.get("name", ""),
                     "zone_type": zone.get("zone_type", "default"),
-                    "pmap_id": pmap_id,
-                })
-        return out
+                    "pmap_id": active_id,
+                }
+                for zone in details.get("zones", [])
+            ]
+        return []

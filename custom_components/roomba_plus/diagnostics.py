@@ -28,11 +28,11 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         "last_exception": str(cc.last_exception) if cc.last_exception else None,
     }
     if cc.data:
-        result["pmap_count"] = len(cc.data.get("pmaps", []))
+        result["pmap_count_total"] = len(cc.data.get("pmaps", []))   # all pmaps from API
         result["favorite_count"] = len(cc.data.get("favorites", []))
         result["active_pmap_id"] = cc.active_pmap_id
-        result["region_count"] = len(cc.regions)
-        result["zone_count"] = len(cc.zones)
+        result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
+        result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
     return result
 
 

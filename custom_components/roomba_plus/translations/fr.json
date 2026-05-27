@@ -65,7 +65,8 @@
           "smart_zones_manual": "Saisir manuellement les zones Smart Map",
           "cloud_credentials": "Identifiants cloud iRobot",
           "blocking_sensors": "Blocking sensors",
-          "map_management": "Zone management"
+          "map_management": "Zone management",
+          "presence_scheduling": "Planification selon la présence"
         }
       },
       "zones": {
@@ -143,6 +144,16 @@
         "data": {
           "display_name": "Display name",
           "hidden": "Hide this zone"
+        }
+      },
+      "presence_scheduling": {
+        "title": "Planification selon la présence",
+        "description": "Libérer automatiquement le planning quand tout le monde est parti.",
+        "data": {
+          "presence_scheduling_enabled": "Activer la planification selon la présence",
+          "presence_entities": "Personnes suivies",
+          "presence_mode": "Mode",
+          "away_delay_min": "Délai après le départ (minutes)"
         }
       }
     },
@@ -271,16 +282,58 @@
         "name": "Missions à vie"
       },
       "filter_last_replaced": {
-        "name": "Filter last replaced"
+        "name": "Maintenance – Filtre remplacé"
       },
       "brush_last_replaced": {
-        "name": "Brushes last replaced"
+        "name": "Maintenance – Brosses remplacées"
       },
       "pad_last_replaced": {
-        "name": "Cleaning pad last replaced"
+        "name": "Maintenance – Pad remplacé"
       },
       "battery_last_replaced": {
-        "name": "Battery last replaced"
+        "name": "Maintenance – Batterie remplacée"
+      },
+      "clean_streak": {
+        "name": "Missions – Série de nettoyages"
+      },
+      "missions_last_30d": {
+        "name": "Missions – 30 derniers jours"
+      },
+      "completion_rate_30d": {
+        "name": "Missions – Taux de réussite"
+      },
+      "area_cleaned_today": {
+        "name": "Missions – Surface nettoyée aujourd'hui"
+      },
+      "last_mission_result": {
+        "name": "Missions – Dernier résultat"
+      },
+      "last_mission_duration": {
+        "name": "Missions – Dernière durée"
+      },
+      "last_error_code": {
+        "name": "Erreur – Dernier code"
+      },
+      "last_error_at": {
+        "name": "Erreur – Dernière heure"
+      },
+      "last_error_zone": {
+        "name": "Erreur – Dernière zone"
+      },
+      "stuck_count_30d": {
+        "name": "Erreur – Blocages (30 jours)"
+      },
+      "problem_zone": {
+        "name": "Erreur – Zone problématique"
+      },
+      "presence_clean_opportunities_7d": {
+        "name": "Présence – Opportunités de nettoyage (7 jours)"
+      },
+      "presence_clean_utilisation_7d": {
+        "name": "Présence – Utilisation du nettoyage (7 jours)"
+      },
+      "next_likely_clean_window": {
+        "name": "Présence – Prochaine fenêtre de nettoyage"
       }
     },
     "binary_sensor": {
@@ -317,6 +370,18 @@
         "state": {
           "off": "Clear",
           "on": "Blocked"
+        }
+      },
+      "schedule_hold_active": {
+        "name": "Blocage de planification actif",
+        "state_attributes": {
+          "source": {
+            "name": "Source",
+            "state": {
+              "presence_manager": "Gestionnaire de présence",
+              "manual": "Manuel"
+            }
+          }
         }
       }
     },

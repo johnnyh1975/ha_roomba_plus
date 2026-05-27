@@ -81,6 +81,10 @@ async def async_setup_entry(
     if config_entry.options.get(CONF_BLOCKING_SENSORS):
         entities.append(RoombaStartBlocked(roomba, blid, config_entry))
 
+    # v1.8.0 L6 — Schedule hold active sensor (only when robot supports schedHold)
+    if "schedHold" in state:
+        entities.append(RoombaScheduleHoldActive(roomba, blid, config_entry))
+
     async_add_entities(entities)
 
 
@@ -439,7 +443,50 @@ class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
             "timeout_at": bm.timeout_at,
         }
 
+    async def async_added_to_hass(self) -> None:
+        """Register callback with BlockingManager for immediate state updates."""
+        await super().async_added_to_hass()
+        bm = self._entry.runtime_data.blocking_manager
+        if bm is not None:
+            unsub = bm.register_state_callback(self.schedule_update_ha_state)
+            self.async_on_remove(unsub)
+
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         # This entity is updated externally when the BlockingManager changes
         # state — always accept updates (the filter is mostly cosmetic here).
         return True
+
+
+class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
+    """ON when schedHold is True for any reason.
+
+    The `source` attribute distinguishes presence-manager-managed holds
+    from manual toggles via ScheduleHoldSwitch, allowing the Lovelace
+    card to show the correct schedule zone state.
+
+    Only created when the robot reports schedHold in its state.
+    """
+
+    _attr_translation_key = "schedule_hold_active"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_schedule_hold_active"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when schedHold is active for any reason."""
+        return bool(self.vacuum_state.get("schedHold", False))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the source of the current hold (presence_manager or manual)."""
+        pm = self._entry.runtime_data.presence_manager
+        source = "presence_manager" if (pm and pm.is_managed_hold) else "manual"
+        return {"source": source}
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "schedHold" in new_state

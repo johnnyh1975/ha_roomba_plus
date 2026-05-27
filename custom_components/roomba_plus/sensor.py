@@ -57,6 +57,7 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
+    ERROR_CATALOGUE,
     ERROR_CODE_LABELS,
     JOB_INITIATOR_LABELS,
     MOP_RANK_LABELS,
@@ -199,9 +200,123 @@ def _ts_or_none(ts):
         return None
 
 
-SENSORS: tuple[RoombaSensorDescription, ...] = (
+# ── v1.8.0 — L1 / L3 / L6 helper functions ──────────────────────────────────
 
-    # GROUP 1 — Primary Status (EntityCategory=None → "Sensoren" section)
+def _mission_store_value(entity, fn):
+    """Safely access MissionStore — returns None if unavailable."""
+    store = entity._config_entry.runtime_data.mission_store
+    if store is None:
+        return None
+    try:
+        return fn(store)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _completion_rate_30d(store):
+    records = store.query(30)
+    if not records:
+        return None
+    completed = sum(1 for r in records if r["result"] == "completed")
+    return round(completed / len(records) * 100, 1)
+
+
+def _area_cleaned_today(store):
+    today = dt_util.now().date()
+    records = store.query(1, result="completed")
+    areas = []
+    for r in records:
+        if r.get("area_sqft") is None:
+            continue
+        dt = dt_util.parse_datetime(r["started_at"])
+        if dt is not None and dt_util.as_local(dt).date() == today:
+            areas.append(r["area_sqft"])
+    return float(sum(areas)) if areas else None
+
+
+def _last_error_code_value(entity):
+    """Live MQTT error code takes priority over persisted value."""
+    live = entity.vacuum_state.get("cleanMissionStatus", {}).get("error", 0)
+    if live:
+        return live
+    return entity._config_entry.runtime_data.last_error_code
+
+
+def _last_error_at_value(entity):
+    at_str = entity._config_entry.runtime_data.last_error_at
+    if not at_str:
+        return None
+    return dt_util.parse_datetime(at_str)
+
+
+def _problem_zone_value(entity):
+    store = entity._config_entry.runtime_data.mission_store
+    if not store:
+        return None
+    from collections import Counter
+    stuck_records = store.query(30, result="stuck")
+    if not stuck_records:
+        return None
+    zone_counts: Counter = Counter()
+    for r in stuck_records:
+        for z in (r.get("zones") or []):
+            zone_counts[z] += 1
+    if not zone_counts:
+        return None
+    return zone_counts.most_common(1)[0][0]
+
+
+def _presence_opportunities(entity, days):
+    store = entity._config_entry.runtime_data.mission_store
+    if store is None:
+        return None
+    windows = store.presence_windows(days)
+    if not windows:
+        return None
+    recent = store.query(30, result="completed")
+    avg_duration = (
+        sum(r["duration_min"] for r in recent) / len(recent)
+        if recent else 45
+    )
+    return sum(1 for w in windows if w.duration_min >= avg_duration)
+
+
+def _presence_utilisation(entity, days):
+    store = entity._config_entry.runtime_data.mission_store
+    if store is None:
+        return None
+    windows = store.presence_windows(days)
+    if not windows:
+        return None
+    opportunities = _presence_opportunities(entity, days) or 0
+    if opportunities == 0:
+        return 0.0
+    used = sum(1 for w in windows if w.resulted_in_clean)
+    return round(used / opportunities * 100, 1)
+
+
+def _next_likely_clean_window(entity):
+    from collections import Counter
+    store = entity._config_entry.runtime_data.mission_store
+    if store is None:
+        return None
+    windows = store.presence_windows(14)
+    if len(windows) < 3:
+        return None
+    hour_counts: Counter = Counter()
+    for w in windows:
+        hour_counts[w.started_at.hour] += 1
+    most_common_hour = hour_counts.most_common(1)[0][0]
+    candidate = dt_util.now().replace(
+        hour=most_common_hour, minute=0, second=0, microsecond=0
+    )
+    if candidate <= dt_util.now():
+        candidate = candidate + datetime.timedelta(days=1)
+    return candidate
+
+
+
+SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="battery",
@@ -624,6 +739,144 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             else None
         ),
     ),
+
+    # ── v1.8.0 L1 — Mission Log ───────────────────────────────────────────────
+
+    RoombaSensorDescription(
+        key="clean_streak",
+        translation_key="clean_streak",
+        icon="mdi:fire",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
+    ),
+    RoombaSensorDescription(
+        key="missions_last_30d",
+        translation_key="missions_last_30d",
+        icon="mdi:counter",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(
+            e, lambda s: len(s.query(30, result="completed"))
+        ),
+    ),
+    RoombaSensorDescription(
+        key="completion_rate_30d",
+        translation_key="completion_rate_30d",
+        icon="mdi:percent",
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(e, _completion_rate_30d),
+    ),
+    RoombaSensorDescription(
+        key="area_cleaned_today",
+        translation_key="area_cleaned_today",
+        icon="mdi:floor-plan",
+        native_unit_of_measurement=UnitOfArea.SQUARE_FEET,
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: has_pose(s),   # 600-series reports no sqft
+        value_fn=lambda e: _mission_store_value(e, _area_cleaned_today),
+    ),
+    RoombaSensorDescription(
+        key="last_mission_result",
+        translation_key="last_mission_result",
+        icon="mdi:check-circle-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(
+            e, lambda s: s.latest().get("result") if s.latest() else None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="last_mission_duration",
+        translation_key="last_mission_duration",
+        icon="mdi:clock-outline",
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(
+            e, lambda s: s.latest().get("duration_min") if s.latest() else None
+        ),
+    ),
+
+    # ── v1.8.0 L3 — Error Intelligence ───────────────────────────────────────
+
+    RoombaSensorDescription(
+        key="last_error_code",
+        translation_key="last_error_code",
+        icon="mdi:alert-circle-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_last_error_code_value,
+    ),
+    RoombaSensorDescription(
+        key="last_error_at",
+        translation_key="last_error_at",
+        icon="mdi:clock-alert-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_last_error_at_value,
+    ),
+    RoombaSensorDescription(
+        key="last_error_zone",
+        translation_key="last_error_zone",
+        icon="mdi:map-marker-alert",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # No filter_fn — created for all robots.
+        # Returns None for 600-series (no zone data) → correct HA "unknown" state.
+        # SMART: resolved from lastCommand.regions at mission start.
+        # EPHEMERAL: resolved from ZoneStore at mission start.
+        value_fn=lambda e: e._config_entry.runtime_data.last_error_zone,
+    ),
+    RoombaSensorDescription(
+        key="stuck_count_30d",
+        translation_key="stuck_count_30d",
+        icon="mdi:robot-confused-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _mission_store_value(
+            e, lambda s: len(s.query(30, result="stuck"))
+        ),
+    ),
+    RoombaSensorDescription(
+        key="problem_zone",
+        translation_key="problem_zone",
+        icon="mdi:map-marker-remove",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: has_pose(s),   # requires zone tracking — excludes 600-series
+        value_fn=_problem_zone_value,
+    ),
+
+    # ── v1.8.0 L6 — Presence Analytics ───────────────────────────────────────
+
+    RoombaSensorDescription(
+        key="presence_clean_opportunities_7d",
+        translation_key="presence_clean_opportunities_7d",
+        icon="mdi:calendar-check-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _presence_opportunities(e, 7),
+    ),
+    RoombaSensorDescription(
+        key="presence_clean_utilisation_7d",
+        translation_key="presence_clean_utilisation_7d",
+        icon="mdi:percent-outline",
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _presence_utilisation(e, 7),
+    ),
+    RoombaSensorDescription(
+        key="next_likely_clean_window",
+        translation_key="next_likely_clean_window",
+        icon="mdi:calendar-clock-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_next_likely_clean_window,
+    ),
 )
 
 # Raw state sensor is not in SENSORS tuple — it has a bespoke entity class
@@ -706,10 +959,21 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose threshold_hours for consumable sensors (used by Lovelace card)."""
+        """Expose sensor-specific attributes used by the Lovelace card."""
+        key = self.entity_description.key
+        # v1.7.0 L2: threshold_hours for consumable remaining sensors
         threshold = self.entity_description.threshold_fn(self)
         if threshold is not None:
             return {"threshold_hours": threshold}
+        # v1.8.0 L3: description + action for last_error_code
+        if key == "last_error_code":
+            code = self.native_value
+            if code is not None:
+                catalogue = ERROR_CATALOGUE.get(int(code), {})
+                return {
+                    "description": catalogue.get("description", ""),
+                    "action": catalogue.get("action", ""),
+                }
         return {}
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -747,6 +1011,19 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             return "mssnNavStats" in new_state
         if key == "next_clean":
             return "cleanSchedule2" in new_state or "cleanSchedule" in new_state
+        # v1.8.0 L1 — Mission log sensors
+        if key in ("clean_streak", "missions_last_30d", "completion_rate_30d",
+                   "area_cleaned_today", "last_mission_result", "last_mission_duration"):
+            return "cleanMissionStatus" in new_state
+        # v1.8.0 L3 — Error intelligence sensors
+        if key in ("last_error_code", "last_error_at", "last_error_zone"):
+            return "cleanMissionStatus" in new_state or "error" in new_state
+        if key in ("stuck_count_30d", "problem_zone"):
+            return "cleanMissionStatus" in new_state
+        # v1.8.0 L6 — Presence analytics sensors
+        if key in ("presence_clean_opportunities_7d", "presence_clean_utilisation_7d",
+                   "next_likely_clean_window"):
+            return "schedHold" in new_state or "cleanMissionStatus" in new_state
 
         return len(new_state) > 1 or "signal" not in new_state
 

@@ -377,12 +377,14 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         # All robots: settings, blocking_sensors (L5, model-agnostic).
         # EPHEMERAL + SMART: additionally map_management (L7).
         # SMART: additionally cloud_credentials.
-        # NOTE: "presence_scheduling" is intentionally omitted — added in v1.8.
+        # v1.8.0 L6 — presence_scheduling added when robot supports schedHold
         menu: list[str] = ["settings", "blocking_sensors"]
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.insert(1, "map_management")
         if has_smart_map(state):
             menu.append("cloud_credentials")
+        if "schedHold" in state:
+            menu.append("presence_scheduling")
 
         return self.async_show_menu(
             step_id="init",
@@ -482,6 +484,75 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=5, max=120, step=5,
+                        unit_of_measurement="min",
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+            }),
+        )
+
+    # ── v1.8.0 L6 — Presence-Aware Scheduling ────────────────────────────────
+
+    async def async_step_presence_scheduling(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure presence-aware scheduling."""
+        from homeassistant.helpers import selector
+        from .const import (
+            CONF_AWAY_DELAY_MIN,
+            CONF_PRESENCE_ENTITIES,
+            CONF_PRESENCE_MODE,
+            CONF_PRESENCE_SCHEDULING_ENABLED,
+            DEFAULT_AWAY_DELAY_MIN,
+            DEFAULT_PRESENCE_MODE,
+        )
+
+        if user_input is not None:
+            updated = dict(self.config_entry.options)
+            updated[CONF_PRESENCE_SCHEDULING_ENABLED] = user_input.get(
+                CONF_PRESENCE_SCHEDULING_ENABLED, False
+            )
+            updated[CONF_PRESENCE_ENTITIES] = user_input.get(CONF_PRESENCE_ENTITIES, [])
+            updated[CONF_PRESENCE_MODE] = user_input.get(
+                CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE
+            )
+            updated[CONF_AWAY_DELAY_MIN] = int(
+                user_input.get(CONF_AWAY_DELAY_MIN, DEFAULT_AWAY_DELAY_MIN)
+            )
+            return self.async_create_entry(title="", data=updated)
+
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="presence_scheduling",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_PRESENCE_SCHEDULING_ENABLED,
+                    default=current.get(CONF_PRESENCE_SCHEDULING_ENABLED, False),
+                ): bool,
+                vol.Optional(
+                    CONF_PRESENCE_ENTITIES,
+                    default=current.get(CONF_PRESENCE_ENTITIES, []),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="person", multiple=True)
+                ),
+                vol.Optional(
+                    CONF_PRESENCE_MODE,
+                    default=current.get(CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            {"value": "away_only",  "label": "Unfreeze when all away"},
+                            {"value": "always_ask", "label": "Fire event (manual control)"},
+                        ],
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Optional(
+                    CONF_AWAY_DELAY_MIN,
+                    default=int(current.get(CONF_AWAY_DELAY_MIN, DEFAULT_AWAY_DELAY_MIN)),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=60, step=1,
                         unit_of_measurement="min",
                         mode=selector.NumberSelectorMode.SLIDER,
                     )

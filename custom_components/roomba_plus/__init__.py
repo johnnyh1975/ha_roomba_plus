@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 from functools import partial
 import logging
 from typing import Any
@@ -26,6 +27,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.util import dt as dt_util
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -43,6 +45,7 @@ from .const import (
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
+    CONF_PRESENCE_SCHEDULING_ENABLED,
     CONF_SMART_ZONE_DATA,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
@@ -61,6 +64,9 @@ from .const import (
     has_pose,
     has_smart_map,
 )
+from .api_views import MissionHistoryView
+from .mission_store import MissionStore
+from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
 from .blocking_manager import BlockingManager
 from .maintenance_store import MaintenanceStore
@@ -112,14 +118,38 @@ def _resolve_rooms(
         ServiceValidationError: if any name is unknown, if pmap_id cannot be
             resolved, or if the resolved rooms span more than one pmap_id.
     """
-    # Build a case-insensitive name → (region_id, pmap_id) index.
-    # Include all zones that have a name — pmap_id may be empty for manually
-    # entered zones and will be resolved from live state below.
-    index: dict[str, tuple[str, str]] = {
-        meta["name"].casefold(): (rid, meta.get("pmap_id", ""))
-        for rid, meta in zone_data.items()
-        if meta.get("name")
-    }
+    # Build a collision-aware case-insensitive name → (region_id, pmap_id) index.
+    # Under normal operation (active-map filter in place) collisions cannot occur.
+    # This guard handles edge cases: cloud fetch failed, active_pmap_id is None,
+    # or manually-entered zone_data spans old and new maps.
+    index: dict[str, tuple[str, str]] = {}
+    for rid, meta in zone_data.items():
+        if not meta.get("name"):
+            continue
+        key = meta["name"].casefold()
+        pmap_id = meta.get("pmap_id", "")
+        if key in index:
+            existing_rid, existing_pmap = index[key]
+            # Prefer the entry that matches the authoritative active cloud map.
+            if cloud_pmap_id and pmap_id == cloud_pmap_id:
+                _LOGGER.warning(
+                    "clean_room: duplicate room name '%s' across maps "
+                    "(region %s from map %.8s overwrites region %s from map %.8s). "
+                    "Delete the old Smart Map in the iRobot app to prevent this.",
+                    meta["name"], rid, pmap_id, existing_rid, existing_pmap,
+                )
+                index[key] = (rid, pmap_id)
+            else:
+                _LOGGER.warning(
+                    "clean_room: duplicate room name '%s' — keeping region %s "
+                    "(region %s ignored, not from active map %.8s). "
+                    "Delete the old Smart Map in the iRobot app.",
+                    meta["name"], existing_rid, rid,
+                    cloud_pmap_id[:8] if cloud_pmap_id else "unknown",
+                )
+                # Keep existing — do not replace with non-active-map entry.
+        else:
+            index[key] = (rid, pmap_id)
 
     resolved: list[tuple[str, str]] = []
     unknown: list[str] = []
@@ -461,6 +491,28 @@ async def async_setup_entry(
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
+    # ── v1.8.0 L1 — Mission store ─────────────────────────────────────────────
+    mission_store = MissionStore()
+    await mission_store.async_load(hass, config_entry.entry_id)
+
+    # Restore L3 last-error state from the mission history.
+    # Walk records newest-first: if the most recent completed mission came
+    # AFTER the most recent error, the error is cleared (robot recovered).
+    # Must be determined BEFORE RoombaData is constructed.
+    last_error_code: int | None = None
+    last_error_at: str | None = None
+    last_error_zone: str | None = None
+    for _rec in reversed(mission_store._records):
+        _res = _rec.get("result")
+        if _res == "completed":
+            # A successful mission after any error — error is cleared
+            break
+        if _res in ("error", "stuck") and _rec.get("error_code"):
+            last_error_code = _rec["error_code"]
+            last_error_at   = _rec.get("ended_at")
+            last_error_zone = (_rec.get("zones") or [None])[0]
+            break
+
     # ── v1.7.0 L5 — Blocking manager ─────────────────────────────────────────
     blocking_manager: BlockingManager | None = None
     if config_entry.options.get(CONF_BLOCKING_SENSORS):
@@ -469,6 +521,12 @@ async def async_setup_entry(
             "Roomba+ blocking manager active — sensors: %s",
             config_entry.options[CONF_BLOCKING_SENSORS],
         )
+
+    # ── v1.8.0 L6 — Presence manager ─────────────────────────────────────────
+    presence_manager: PresenceManager | None = None
+    if config_entry.options.get(CONF_PRESENCE_SCHEDULING_ENABLED):
+        presence_manager = PresenceManager(hass, config_entry)
+        _LOGGER.debug("Roomba+ presence manager active")
 
     # ── Cloud coordinator (SMART robots + credentials only) ────────────────
     cloud_coordinator: IrobotCloudCoordinator | None = None
@@ -509,7 +567,17 @@ async def async_setup_entry(
         maintenance_store=maintenance_store,
         cloud_coordinator=cloud_coordinator,
         blocking_manager=blocking_manager,
+        mission_store=mission_store,
+        last_error_code=last_error_code,
+        last_error_at=last_error_at,
+        last_error_zone=last_error_zone,
+        # presence_manager set below, after runtime_data is available
     )
+
+    # Start PresenceManager after runtime_data is set (it reads data.roomba)
+    if presence_manager is not None:
+        config_entry.runtime_data.presence_manager = presence_manager
+        presence_manager.start()
 
     # ── Platform setup ──────────────────────────────────────────────────────
     platforms = list(LOCAL_PLATFORMS)
@@ -531,6 +599,11 @@ async def async_setup_entry(
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
+
+    # ── v1.8.0 — REST API view (registered once per HA instance) ─────────────
+    if not hass.data.get("_roomba_plus_view_registered"):
+        hass.http.register_view(MissionHistoryView())
+        hass.data["_roomba_plus_view_registered"] = True
 
     # ── clean_room service ──────────────────────────────────────────────────
     # Register once on first entry setup; subsequent entries reuse the same
@@ -686,6 +759,127 @@ async def async_setup_entry(
             _on_roomba_message
         )
 
+    # ── v1.8.0 L1 — Mission log MQTT callback ────────────────────────────────
+    # Detects mission end for ALL robot types (NONE, EPHEMERAL, SMART).
+    # image.py handles EPHEMERAL-specific map rendering — it does NOT record
+    # to mission_store to avoid double-counting.
+    _last_phase: str = ""
+    _current_mission_zones: list[str] = []
+
+    _CLEANING_PHASES:    frozenset = frozenset({"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "evac"})
+    _MISSION_END_PHASES: frozenset = frozenset({"completed", "cancelled", "charge", "stop"})
+
+    def _capture_zone_names(
+        entry: RoombaConfigEntry,
+        reported: dict[str, Any],
+    ) -> list[str]:
+        """Resolve zone names at mission start for all robot types."""
+        _data: RoombaData = entry.runtime_data
+        if _data.zone_store:                         # EPHEMERAL
+            return [z.name for z in _data.zone_store.zones if z.confirmed]
+        if _data.map_capability.value == "smart":    # SMART
+            last_cmd = reported.get("lastCommand", {})
+            region_ids = [
+                r.get("region_id")
+                for r in (last_cmd.get("regions") or [])
+                if r.get("region_id")
+            ]
+            if region_ids and _data.cloud_coordinator:
+                id_to_name = {
+                    r["id"]: r["name"]
+                    for r in _data.cloud_coordinator.regions
+                    if r.get("id")
+                }
+                return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
+        return []  # NONE (600-series) or SMART without cloud
+
+    async def _async_record_mission(
+        entry: RoombaConfigEntry,
+        mission: dict[str, Any],
+        reported: dict[str, Any],
+        zones: list[str],
+    ) -> None:
+        """Build and append a mission record to MissionStore."""
+        _data: RoombaData = entry.runtime_data
+        if _data.mission_store is None:
+            return
+
+        now = dt_util.utcnow()
+        started_ts = mission.get("mssnStrtTm") or 0
+        started_at = (
+            datetime.datetime.fromtimestamp(started_ts, datetime.timezone.utc)
+            if started_ts
+            else now
+        )
+
+        phase = mission.get("phase", "")
+        error_code: int = mission.get("error", 0) or 0
+        if error_code:
+            result = "error"
+        elif phase == "cancelled":
+            result = "cancelled"
+        elif mission.get("nStuck", 0) or reported.get("bbrun", {}).get("nStuck", 0):
+            result = "stuck"
+        else:
+            result = "completed"
+
+        record: dict[str, Any] = {
+            "id": f"m_{int(started_at.timestamp())}",
+            "started_at": started_at.isoformat(),
+            "ended_at": now.isoformat(),
+            "duration_min": mission.get("mssnM") or 0,
+            "area_sqft": mission.get("sqft"),   # None for 600-series — correct
+            "result": result,
+            "initiator": mission.get("initiator", "none"),
+            "zones": zones,
+            "error_code": error_code if error_code else None,
+            "bbrun_hr": reported.get("bbrun", {}).get("hr", 0),
+        }
+
+        await _data.mission_store.async_append(record)
+        await _data.mission_store.async_save(hass, entry.entry_id)
+
+        # Update L3 runtime error state
+        if result in ("error", "stuck"):
+            _data.last_error_code = error_code if error_code else None
+            _data.last_error_at   = now.isoformat()
+            _data.last_error_zone = zones[0] if zones else None
+        elif result == "completed":
+            _data.last_error_code = None
+            _data.last_error_at   = None
+            _data.last_error_zone = None
+
+        _LOGGER.debug(
+            "MissionStore: recorded %s result=%s zones=%s",
+            record["id"], result, zones,
+        )
+
+    def _on_mission_message(json_data: dict[str, Any]) -> None:
+        nonlocal _last_phase, _current_mission_zones
+        reported = json_data.get("state", {}).get("reported", {})
+        if "cleanMissionStatus" not in reported:
+            return
+        mission = reported["cleanMissionStatus"]
+        phase = mission.get("phase", "")
+
+        # Capture zone names at mission START — lastCommand.regions is fresh here.
+        # By mission end it may be overwritten by dock/schedule commands.
+        if phase in _CLEANING_PHASES and _last_phase not in _CLEANING_PHASES:
+            _current_mission_zones = _capture_zone_names(config_entry, reported)
+
+        if phase in _MISSION_END_PHASES and _last_phase in _CLEANING_PHASES:
+            hass.async_create_task(
+                _async_record_mission(
+                    config_entry, mission, reported, list(_current_mission_zones)
+                ),
+                name="roomba_plus_mission_record",
+            )
+            _current_mission_zones = []
+
+        _last_phase = phase
+
+    config_entry.runtime_data.roomba.register_on_message_callback(_on_mission_message)
+
     _LOGGER.info(
         "Roomba+ connected to %s (blid=%s)",
         config_entry.data[CONF_HOST],
@@ -716,6 +910,11 @@ async def async_unload_entry(
         bm = config_entry.runtime_data.blocking_manager
         if bm is not None:
             bm.cancel_queue()
+
+        # v1.8.0 L6 — Cancel presence manager
+        pm = config_entry.runtime_data.presence_manager
+        if pm is not None:
+            pm.cancel()
 
         await async_disconnect_or_timeout(
             hass, roomba=config_entry.runtime_data.roomba

@@ -17,7 +17,9 @@ if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .geometry_store import GeometryStore
     from .maintenance_store import MaintenanceStore
+    from .mission_store import MissionStore          # v1.8.0 L1
     from .map_renderer import MapRenderer
+    from .presence_manager import PresenceManager    # v1.8.0 L6
     from .zone_store import ZoneStore
 
 
@@ -51,6 +53,12 @@ class RoombaData:
     cloud_coordinator: IrobotCloudCoordinator | None = None
     # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
     blocking_manager: BlockingManager | None = None  # v1.7.0 L5
+    # v1.8.0 — Mission log, presence scheduling, and error state
+    mission_store: MissionStore | None = None
+    presence_manager: PresenceManager | None = None
+    last_error_code: int | None = None      # persisted via MissionStore on load
+    last_error_at: str | None = None        # ISO datetime string
+    last_error_zone: str | None = None      # zone name at last error time
 
     def roomba_reported_state(self) -> dict[str, Any]:
         """Return the reported state dict from master_state."""
