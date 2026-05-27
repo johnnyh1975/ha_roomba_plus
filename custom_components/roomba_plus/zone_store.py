@@ -121,6 +121,7 @@ class Zone:
     y_min: float = 0.0
     y_max: float = 0.0
     confidence: float = 0.0
+    hidden: bool = False  # v1.7.0 L7 — hidden from selectors and repair issues
     observations: list[MissionObservation] = field(default_factory=list)
 
     @property
@@ -261,7 +262,7 @@ class ZoneStore:
                     new_zone.x_max, new_zone.y_max,
                 )
 
-        return [z for z in self.zones if not z.confirmed]
+        return [z for z in self.zones if not z.confirmed and not z.hidden]
 
     def check_dock_drift(
         self, final_position_mm: tuple[float, float]
@@ -330,10 +331,34 @@ class ZoneStore:
                 return True
         return False
 
+    def hide_zone(self, zone_id: int) -> bool:
+        """Set zone.hidden = True. Removes from selectors and repair issues."""
+        for zone in self.zones:
+            if zone.id == zone_id:
+                zone.hidden = True
+                return True
+        return False
+
+    def unhide_zone(self, zone_id: int) -> bool:
+        """Set zone.hidden = False, restoring it to selectors."""
+        for zone in self.zones:
+            if zone.id == zone_id:
+                zone.hidden = False
+                return True
+        return False
+
+    @property
+    def hidden_zones(self) -> list[Zone]:
+        """All zones that have been hidden by the user."""
+        return [z for z in self.zones if z.hidden]
+
     @property
     def unconfirmed_zones(self) -> list[Zone]:
-        """Zones that have been detected but not yet named by the user."""
-        return [z for z in self.zones if not z.confirmed]
+        """Zones detected but not yet named by the user.
+
+        Hidden zones are excluded — no repair issue fires for hidden zones.
+        """
+        return [z for z in self.zones if not z.confirmed and not z.hidden]
 
     @property
     def has_unconfirmed_zones(self) -> bool:
@@ -450,6 +475,7 @@ class ZoneStore:
             "y_min": zone.y_min,
             "y_max": zone.y_max,
             "confidence": zone.confidence,
+            "hidden": zone.hidden,
             "observations": [
                 {
                     "x_min": o.x_min, "x_max": o.x_max,
@@ -479,5 +505,6 @@ class ZoneStore:
             x_min=d["x_min"], x_max=d["x_max"],
             y_min=d["y_min"], y_max=d["y_max"],
             confidence=d.get("confidence", 0.0),
+            hidden=d.get("hidden", False),  # backward-compat default
             observations=observations,
         )

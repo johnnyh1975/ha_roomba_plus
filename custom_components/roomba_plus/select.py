@@ -23,6 +23,32 @@ from .entity import IRobotEntity
 from .const import has_smart_map
 from .models import MapCapability, RoombaConfigEntry
 
+def resolve_zone_name(
+    region_id: str,
+    aliases: dict[str, str],
+    cloud_name: str | None,
+    local_name: str | None,
+    labels: dict[str, str],
+) -> str:
+    """5-level priority chain for SMART robot zone display names.
+
+    Priority:
+      1. aliases[region_id]   — user's local alias (overrides everything)
+      2. cloud_name           — authoritative name from cloud coordinator
+      3. local_name           — from smart_zone_data (manually entered)
+      4. labels[region_id]    — legacy smart_zone_labels fallback
+      5. f"Zone {region_id}"  — auto-generated placeholder
+    """
+    return (
+        aliases.get(region_id)
+        or cloud_name
+        or local_name
+        or labels.get(region_id)
+        or f"Zone {region_id}"
+    )
+
+
+
 _LOGGER = logging.getLogger(__name__)
 
 # Option labels — must match CLEAN_MODE_LABELS values
@@ -179,10 +205,14 @@ class ZoneSelect(IRobotEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        """Return confirmed zone names as options."""
+        """Return confirmed, non-hidden zone names as options.
+
+        Hidden zones are excluded so they don't appear in selectors or
+        trigger the clean_zone automation surface.
+        """
         if not self._zone_store:
             return []
-        return [z.name for z in self._zone_store.zones if z.confirmed]
+        return [z.name for z in self._zone_store.zones if z.confirmed and not z.hidden]
 
     @property
     def current_option(self) -> str | None:
@@ -295,33 +325,50 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     def _unlabelled_region_ids(self) -> list[str]:
         """Return region_ids that have no user-assigned label yet.
 
+        Excludes hidden zone IDs — no repair issue should fire for hidden zones.
         Checks smart_zone_data first (new storage), then falls back to
         smart_zone_labels (legacy) so existing installs aren't re-prompted.
         """
-        zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
-        labels: dict = self._config_entry.options.get("smart_zone_labels", {})
+        from .const import CONF_SMART_ZONE_HIDDEN
+        options = self._config_entry.options
+        zone_data: dict = options.get("smart_zone_data", {})
+        labels: dict = options.get("smart_zone_labels", {})
+        hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
         named = set(zone_data) | set(labels)
-        return [rid for rid in self._collect_region_ids() if rid not in named]
+        return [
+            rid for rid in self._collect_region_ids()
+            if rid not in named and rid not in hidden_ids
+        ]
 
     def _region_label(self, region_id: str) -> str:
-        """Return user-assigned name or auto-generated label.
+        """Return display name using 5-level priority chain (v1.7.0 L7).
 
-        Reads smart_zone_data first (written by the new config_flow step),
-        falls back to the older flat smart_zone_labels dict for entries
-        created before this version.
+        1. User alias (CONF_SMART_ZONE_ALIASES)
+        2. Cloud name (not available in SmartZoneSelect — cloud path uses CloudSmartZoneSelect)
+        3. smart_zone_data name (manual entry)
+        4. smart_zone_labels (legacy fallback)
+        5. Auto-generated "Zone {id}"
         """
-        zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
-        if region_id in zone_data:
-            return zone_data[region_id].get("name", f"Zone {region_id}")
-        labels: dict = self._config_entry.options.get("smart_zone_labels", {})
-        return labels.get(region_id, f"Zone {region_id}")
+        from .const import CONF_SMART_ZONE_ALIASES
+        options = self._config_entry.options
+        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
+        zone_data: dict = options.get("smart_zone_data", {})
+        labels: dict = options.get("smart_zone_labels", {})
+        local_name = zone_data.get(region_id, {}).get("name") if region_id in zone_data else None
+        return resolve_zone_name(region_id, aliases, None, local_name, labels)
 
     # ── SelectEntity interface ────────────────────────────────────────────────
 
     @property
     def options(self) -> list[str]:
-        """Return labelled options list."""
-        return [self._region_label(rid) for rid in self._collect_region_ids()]
+        """Return labelled options list, excluding hidden zones."""
+        from .const import CONF_SMART_ZONE_HIDDEN
+        hidden_ids: list = self._config_entry.options.get(CONF_SMART_ZONE_HIDDEN, [])
+        return [
+            self._region_label(rid)
+            for rid in self._collect_region_ids()
+            if rid not in hidden_ids
+        ]
 
     @property
     def current_option(self) -> str | None:
@@ -449,7 +496,16 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         self.hass.config_entries.async_update_entry(
             self._config_entry, options=new_options
         )
-        unlabelled = new_options["discovered_zone_ids"]
+        # Exclude hidden zone IDs from the repair issue — users have explicitly
+        # chosen to hide these zones and should not be prompted to name them.
+        from .const import CONF_SMART_ZONE_HIDDEN
+        hidden_ids: set = set(new_options.get(CONF_SMART_ZONE_HIDDEN, []))
+        unlabelled = [
+            rid for rid in new_options["discovered_zone_ids"]
+            if rid not in hidden_ids
+        ]
+        if not unlabelled:
+            return  # All remaining zones are hidden — no issue needed
 
         ir.async_create_issue(
             self.hass,
@@ -530,14 +586,35 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     # ── Option list ───────────────────────────────────────────────────────────
 
     def _all_items(self) -> list[dict[str, Any]]:
-        """Return combined regions + zones, each with id/name/pmap_id."""
+        """Return combined regions + zones with alias and hidden-filter applied (v1.7.0 L7).
+
+        Name resolution uses 5-level priority: alias > cloud > local > labels > auto.
+        Hidden region IDs are excluded entirely.
+        """
+        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
+        options = self._config_entry.options
+        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
+        hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
+        labels: dict = options.get("smart_zone_labels", {})
+        zone_data: dict = options.get("smart_zone_data", {})
+
         items = []
         for r in self._regions:
-            name = r.get("name") or f"Zone {r.get('id', '?')}"
-            items.append({"id": str(r.get("id", "")), "name": name, "pmap_id": self._pmap_id})
+            rid = str(r.get("id", ""))
+            if rid in hidden_ids:
+                continue
+            cloud_name = r.get("name")
+            local_name = zone_data.get(rid, {}).get("name") if rid in zone_data else None
+            name = resolve_zone_name(rid, aliases, cloud_name, local_name, labels)
+            items.append({"id": rid, "name": name, "pmap_id": self._pmap_id})
         for z in self._zones:
-            name = z.get("name") or f"Zone {z.get('id', '?')}"
-            items.append({"id": str(z.get("id", "")), "name": name, "pmap_id": self._pmap_id})
+            zid = str(z.get("id", ""))
+            if zid in hidden_ids:
+                continue
+            cloud_name = z.get("name")
+            local_name = zone_data.get(zid, {}).get("name") if zid in zone_data else None
+            name = resolve_zone_name(zid, aliases, cloud_name, local_name, labels)
+            items.append({"id": zid, "name": name, "pmap_id": self._pmap_id})
         return items
 
     @property

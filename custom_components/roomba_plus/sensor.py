@@ -67,6 +67,7 @@ from .const import (
     has_clean_base,
     has_pose,
     has_smart_map,
+    is_mop,
 )
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
@@ -78,6 +79,11 @@ class RoombaSensorDescription(SensorEntityDescription):
     value_fn: Callable[[IRobotEntity], StateType]
     filter_fn: Callable[[dict[str, Any]], bool] = field(
         default_factory=lambda: lambda _: True
+    )
+    # v1.7.0 L2 — when set, exposed as "threshold_hours" in extra_state_attributes
+    # Used by the Lovelace card to compute remaining % without hard-coded thresholds.
+    threshold_fn: Callable[[IRobotEntity], int | None] = field(
+        default_factory=lambda: lambda _: None
     )
 
 
@@ -262,7 +268,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         icon="mdi:air-filter",
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda e: None,
+        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
+        threshold_fn=lambda e: e._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
     ),
     RoombaSensorDescription(
         key="brush_remaining_hours",
@@ -270,7 +277,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         icon="mdi:brush",
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda e: None,
+        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
+        threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
     ),
     RoombaSensorDescription(
         key="battery_cycles",
@@ -542,6 +550,80 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         filter_fn=lambda s: "tankLvl" in s and "detectedPad" in s,
         value_fn=lambda e: e.vacuum_state.get("tankLvl"),
     ),
+
+    # v1.7.0 L2 — Consumable replacement timestamp sensors
+    # State is "unknown" on pre-v1.7 installs until the first reset is performed.
+
+    RoombaSensorDescription(
+        key="filter_last_replaced",
+        translation_key="filter_last_replaced",
+        icon="mdi:air-filter-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.filter_reset_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.filter_reset_at
+            )
+            else None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="brush_last_replaced",
+        translation_key="brush_last_replaced",
+        icon="mdi:brush-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: not is_mop(s),  # Braava uses pad_last_replaced
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.brush_reset_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.brush_reset_at
+            )
+            else None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="pad_last_replaced",
+        translation_key="pad_last_replaced",
+        icon="mdi:square-rounded-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: is_mop(s),  # Braava only — same store slot as brush
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.brush_reset_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.brush_reset_at
+            )
+            else None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="battery_last_replaced",
+        translation_key="battery_last_replaced",
+        icon="mdi:battery-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.battery_reset_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.battery_reset_at
+            )
+            else None
+        ),
+    ),
 )
 
 # Raw state sensor is not in SENSORS tuple — it has a bespoke entity class
@@ -622,6 +704,14 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
         return self.entity_description.value_fn(self)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose threshold_hours for consumable sensors (used by Lovelace card)."""
+        threshold = self.entity_description.threshold_fn(self)
+        if threshold is not None:
+            return {"threshold_hours": threshold}
+        return {}
+
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         key = self.entity_description.key
 
@@ -641,7 +731,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if key in ("mop_pad", "mop_behavior", "mop_tank_level", "tank_level"):
             return any(k in new_state for k in ("detectedPad", "rankOverlap", "tankLvl"))
         if key in ("filter_remaining_hours", "brush_remaining_hours",
-                   "scrubs_count", "total_cleaning_time"):
+                   "scrubs_count", "total_cleaning_time",
+                   "filter_last_replaced", "brush_last_replaced",
+                   "pad_last_replaced", "battery_last_replaced"):
             return "bbrun" in new_state
         if key in ("total_missions", "successful_missions", "canceled_missions",
                    "failed_missions", "average_mission_time", "last_mission"):

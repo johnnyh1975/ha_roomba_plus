@@ -64,7 +64,20 @@ class _SupportsResponse(_enum.Enum):
     NONE = "none"
     OPTIONAL = "optional"
     ONLY = "only"
-ha_core = _make_module("homeassistant.core", HomeAssistant=object, callback=lambda f: f, CALLBACK_TYPE=object, ServiceCall=object, SupportsResponse=_SupportsResponse)
+class _Event:
+    """Stub for homeassistant.core.Event."""
+    def __init__(self, event_type="", data=None):
+        self.event_type = event_type
+        self.data = data or {}
+
+ha_core = _make_module("homeassistant.core",
+    HomeAssistant=object,
+    callback=lambda f: f,
+    CALLBACK_TYPE=object,
+    ServiceCall=object,
+    SupportsResponse=_SupportsResponse,
+    Event=_Event,
+)
 
 # homeassistant.const
 ha_const = _make_module("homeassistant.const",
@@ -141,8 +154,13 @@ _make_module("homeassistant.helpers.update_coordinator",
 )
 
 # homeassistant.helpers.entity_registry
+class _FakeEntityRegistry:
+    def async_get(self, entity_id): return None
+    def async_get_entity_id(self, domain, platform, unique_id): return None
+    def async_entries_for_device(self, reg, dev_id): return []
+
 ha_er = _make_module("homeassistant.helpers.entity_registry",
-    async_get=lambda hass: None,
+    async_get=lambda hass: _FakeEntityRegistry(),
     async_entries_for_device=lambda reg, dev_id: [],
 )
 
@@ -172,11 +190,19 @@ ha_helpers = _make_module("homeassistant.helpers",
 
 # homeassistant.util.dt
 import datetime
+def _tz_aware_now(tz=None):
+    """Return timezone-aware datetime like dt_util.now() does in production."""
+    return datetime.datetime.now(tz=tz or datetime.timezone.utc)
+
+def _tz_aware_utcnow():
+    return datetime.datetime.now(tz=datetime.timezone.utc)
+
 ha_dt = _make_module("homeassistant.util.dt",
-    now=datetime.datetime.now,
-    utcnow=datetime.datetime.utcnow,
-    utc_from_timestamp=datetime.datetime.utcfromtimestamp,
+    now=_tz_aware_now,
+    utcnow=_tz_aware_utcnow,
+    utc_from_timestamp=lambda ts: datetime.datetime.fromtimestamp(ts, datetime.timezone.utc),
     as_timestamp=lambda dt: dt.timestamp(),
+    parse_datetime=datetime.datetime.fromisoformat,
     dt=datetime,
 )
 
@@ -220,7 +246,7 @@ _make_module("homeassistant.components.binary_sensor",
     BinarySensorEntity=object,
     BinarySensorDeviceClass=types.SimpleNamespace(
         PROBLEM="problem", PRESENCE="presence", CONNECTIVITY="connectivity",
-        OPENING="opening", UPDATE="update",
+        OPENING="opening", UPDATE="update", RUNNING="running",
     ),
 )
 

@@ -23,7 +23,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
-from .const import has_smart_map
+from .const import (
+    CONF_BLOCKING_SENSORS,
+    CONF_BRUSH_HOURS,
+    CONF_FILTER_HOURS,
+    DEFAULT_BRUSH_HOURS,
+    DEFAULT_FILTER_HOURS,
+    has_smart_map,
+    is_mop,
+)
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
@@ -64,6 +72,14 @@ async def async_setup_entry(
     # its Smart Map after a training run or boundary edit.
     if has_smart_map(state):
         entities.append(RoombaMapSavingStatus(roomba, blid))
+
+    # v1.7.0 L2 — Maintenance due sensor
+    if config_entry.runtime_data.maintenance_store is not None:
+        entities.append(RoombaMaintenanceDue(roomba, blid, config_entry))
+
+    # v1.7.0 L5 — Start blocked sensor (only when blocking sensors configured)
+    if config_entry.options.get(CONF_BLOCKING_SENSORS):
+        entities.append(RoombaStartBlocked(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -312,3 +328,118 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
+
+class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
+    """ON when any consumable has reached zero remaining hours.
+
+    Provides a single trigger point for maintenance automations instead of
+    requiring four separate threshold checks. Attributes expose which
+    consumables are due and by how many hours they are overdue.
+    """
+
+    _attr_translation_key = "maintenance_due"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_maintenance_due"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when at least one consumable is at zero remaining hours."""
+        return bool(self._due_items())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return which consumables are due and how many hours overdue each is.
+
+        overdue_by_hours values are 0 when exactly at threshold, positive when
+        past it. This is useful for automations that escalate alerts based on
+        how long maintenance has been deferred.
+        """
+        due = self._due_items()
+        overdue: dict[str, int] = {}
+        store = self._entry.runtime_data.maintenance_store
+        if store and due:
+            current_hr = self.vacuum_state.get("bbrun", {}).get("hr", 0)
+            options = self._entry.options
+            if "filter" in due:
+                threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
+                hours_since_reset = current_hr - store.filter_reset_hr
+                overdue["filter"] = max(0, hours_since_reset - threshold)
+            brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
+            if brush_key in due:
+                threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
+                hours_since_reset = current_hr - store.brush_reset_hr
+                overdue[brush_key] = max(0, hours_since_reset - threshold)
+        return {
+            "due": due,
+            "overdue_by_hours": overdue,
+        }
+
+    def _due_items(self) -> list[str]:
+        """Return list of consumable keys currently at zero remaining hours."""
+        store = self._entry.runtime_data.maintenance_store
+        if not store:
+            return []
+        current_hr = self.vacuum_state.get("bbrun", {}).get("hr", 0)
+        options = self._entry.options
+        items: list[str] = []
+        if store.filter_remaining(
+            current_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
+        ) == 0:
+            items.append("filter")
+        brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
+        if store.brush_remaining(
+            current_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
+        ) == 0:
+            items.append(brush_key)
+        return items
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "bbrun" in new_state
+
+
+class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
+    """ON while a smart_start is queued waiting for blocking sensors to clear.
+
+    ON = start is currently blocked/queued (a problem condition).
+    OFF = no pending start or all sensors clear.
+
+    Attributes expose which sensors are currently blocking, when queueing
+    started, and when the timeout will expire.
+    """
+
+    _attr_translation_key = "start_blocked"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_start_blocked"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True while a start is queued."""
+        bm = self._entry.runtime_data.blocking_manager
+        return bm is not None and bm.is_queued
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return blocking entity IDs and queue timing."""
+        bm = self._entry.runtime_data.blocking_manager
+        if bm is None:
+            return {}
+        return {
+            "blocking_entities": bm.blocking_entities,
+            "queued_since": bm.queued_since,
+            "timeout_at": bm.timeout_at,
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        # This entity is updated externally when the BlockingManager changes
+        # state — always accept updates (the filter is mostly cosmetic here).
+        return True

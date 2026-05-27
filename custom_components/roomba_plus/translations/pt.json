@@ -63,7 +63,9 @@
         "menu_options": {
           "settings": "Definições de ligação",
           "smart_zones_manual": "Introduzir zonas Smart Map manualmente",
-          "cloud_credentials": "Credenciais cloud iRobot"
+          "cloud_credentials": "Credenciais cloud iRobot",
+          "blocking_sensors": "Blocking sensors",
+          "map_management": "Zone management"
         }
       },
       "zones": {
@@ -120,6 +122,27 @@
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Palavra-passe iRobot"
+        }
+      },
+      "blocking_sensors": {
+        "title": "Blocking sensors",
+        "data": {
+          "blocking_sensors": "Blocking sensors",
+          "blocking_behavior": "Behavior when blocked",
+          "blocking_timeout_min": "Queue timeout (minutes)"
+        }
+      },
+      "map_management": {
+        "title": "Zone management",
+        "data": {
+          "selected_zone": "Zone to edit"
+        }
+      },
+      "map_management_edit": {
+        "title": "Edit zone",
+        "data": {
+          "display_name": "Display name",
+          "hidden": "Hide this zone"
         }
       }
     },
@@ -246,6 +269,18 @@
       },
       "lifetime_missions": {
         "name": "Missões totais (vida útil)"
+      },
+      "filter_last_replaced": {
+        "name": "Filter last replaced"
+      },
+      "brush_last_replaced": {
+        "name": "Brushes last replaced"
+      },
+      "pad_last_replaced": {
+        "name": "Cleaning pad last replaced"
+      },
+      "battery_last_replaced": {
+        "name": "Battery last replaced"
       }
     },
     "binary_sensor": {
@@ -269,6 +304,20 @@
       },
       "map_saving": {
         "name": "A guardar Smart Map"
+      },
+      "maintenance_due": {
+        "name": "Maintenance due",
+        "state": {
+          "off": "OK",
+          "on": "Due"
+        }
+      },
+      "start_blocked": {
+        "name": "Start blocked",
+        "state": {
+          "off": "Clear",
+          "on": "Blocked"
+        }
       }
     },
     "button": {

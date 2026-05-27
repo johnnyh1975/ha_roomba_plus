@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
     from roombapy import Roomba
+    from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
     from .geometry_store import GeometryStore
     from .maintenance_store import MaintenanceStore
@@ -48,6 +49,8 @@ class RoombaData:
     maintenance_store: MaintenanceStore | None = None
     # Optional cloud coordinator — None when no credentials or non-SMART robot
     cloud_coordinator: IrobotCloudCoordinator | None = None
+    # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
+    blocking_manager: BlockingManager | None = None  # v1.7.0 L5
 
     def roomba_reported_state(self) -> dict[str, Any]:
         """Return the reported state dict from master_state."""

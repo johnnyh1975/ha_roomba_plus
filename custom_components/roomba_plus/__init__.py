@@ -32,8 +32,11 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     ATTR_ORDERED,
+    ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
+    ATTR_ROOMS,
     CONF_BLID,
+    CONF_BLOCKING_SENSORS,
     CONF_CONTINUOUS,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
@@ -50,10 +53,16 @@ from .const import (
     LOCAL_PLATFORMS,
     ROOMBA_SESSION,
     SERVICE_CLEAN_ROOM,
+    SERVICE_RESET_BATTERY,
+    SERVICE_RESET_BRUSH,
+    SERVICE_RESET_FILTER,
+    SERVICE_RESET_PAD,
+    SERVICE_SMART_START,
     has_pose,
     has_smart_map,
 )
 from .cloud_coordinator import IrobotCloudCoordinator
+from .blocking_manager import BlockingManager
 from .maintenance_store import MaintenanceStore
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
@@ -452,6 +461,15 @@ async def async_setup_entry(
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
+    # ── v1.7.0 L5 — Blocking manager ─────────────────────────────────────────
+    blocking_manager: BlockingManager | None = None
+    if config_entry.options.get(CONF_BLOCKING_SENSORS):
+        blocking_manager = BlockingManager(hass, config_entry)
+        _LOGGER.debug(
+            "Roomba+ blocking manager active — sensors: %s",
+            config_entry.options[CONF_BLOCKING_SENSORS],
+        )
+
     # ── Cloud coordinator (SMART robots + credentials only) ────────────────
     cloud_coordinator: IrobotCloudCoordinator | None = None
     irobot_username = config_entry.data.get(CONF_IROBOT_USERNAME)
@@ -490,6 +508,7 @@ async def async_setup_entry(
         geometry_store=geometry_store,
         maintenance_store=maintenance_store,
         cloud_coordinator=cloud_coordinator,
+        blocking_manager=blocking_manager,
     )
 
     # ── Platform setup ──────────────────────────────────────────────────────
@@ -534,6 +553,101 @@ async def async_setup_entry(
             supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
+
+    # ── v1.7.0 L2 — Maintenance reset services ───────────────────────────────
+    # Named services callable from automations. Buttons call the same store
+    # methods via the UI — both paths are valid and non-redundant.
+
+    def _resolve_entry_from_entity(entity_id_call: str) -> RoombaConfigEntry | None:
+        """Return the config entry for a given vacuum entity_id."""
+        ent_reg = er.async_get(hass)
+        entry_reg = ent_reg.async_get(entity_id_call)
+        if entry_reg is None:
+            return None
+        return hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+
+    async def _handle_reset_service(call: ServiceCall, part: str) -> None:
+        entity_ids: list[str] = call.data.get("entity_id", [])
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        for eid in entity_ids:
+            cfg = _resolve_entry_from_entity(eid)
+            if cfg is None:
+                _LOGGER.warning("reset_%s: config entry not found for %s", part, eid)
+                continue
+            data: RoombaData = cfg.runtime_data
+            if data.maintenance_store is None:
+                raise ServiceValidationError(
+                    f"Maintenance store not available for {eid}",
+                    translation_domain=DOMAIN,
+                    translation_key="maintenance_store_unavailable",
+                )
+            state = data.roomba_reported_state()
+            current_hr: int = state.get("bbrun", {}).get("hr", 0)
+            getattr(data.maintenance_store, f"reset_{part}")(current_hr)
+            await data.maintenance_store.async_save(hass, cfg.entry_id)
+            _LOGGER.info("reset_%s: executed for %s at %dh", part, eid, current_hr)
+
+    _RESET_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_ids})
+    for _part in ("filter", "brush", "battery", "pad"):
+        _p = _part
+        if not hass.services.has_service(DOMAIN, f"reset_{_p}"):
+            hass.services.async_register(
+                DOMAIN,
+                f"reset_{_p}",
+                lambda call, p=_p: _handle_reset_service(call, p),
+                schema=_RESET_SCHEMA,
+            )
+
+    # ── v1.7.0 L5 — smart_start service ───────────────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_SMART_START):
+        async def _handle_smart_start(call: ServiceCall) -> None:
+            """Handle roomba_plus.smart_start with blocking-sensor gate."""
+            entity_ids: list[str] = call.data.get("entity_id", [])
+            if isinstance(entity_ids, str):
+                entity_ids = [entity_ids]
+            rooms: list[str] | None = call.data.get(ATTR_ROOMS)
+            override: bool = call.data.get(ATTR_OVERRIDE_BLOCKING, False)
+
+            for eid in entity_ids:
+                cfg = _resolve_entry_from_entity(eid)
+                if cfg is None:
+                    raise ServiceValidationError(
+                        f"Entity {eid} not found",
+                        translation_domain=DOMAIN,
+                        translation_key="entity_not_found",
+                    )
+                data: RoombaData = cfg.runtime_data
+                if rooms and data.map_capability != MapCapability.SMART:
+                    raise ServiceValidationError(
+                        f"{eid} does not support room targeting — "
+                        "only i7, s9, and j-series robots support this.",
+                        translation_domain=DOMAIN,
+                        translation_key="not_smart_map",
+                    )
+                if data.blocking_manager is not None:
+                    await data.blocking_manager.check_and_start(rooms, override)
+                elif rooms:
+                    # No blocking config — delegate directly to clean_room
+                    await hass.services.async_call(
+                        DOMAIN,
+                        SERVICE_CLEAN_ROOM,
+                        {"entity_id": eid, ATTR_ROOM_NAME: rooms},
+                        blocking=True,
+                    )
+                else:
+                    await hass.async_add_executor_job(data.roomba.start)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SMART_START,
+            _handle_smart_start,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Optional(ATTR_ROOMS): vol.All(cv.ensure_list, [cv.string]),
+                vol.Optional(ATTR_OVERRIDE_BLOCKING, default=False): cv.boolean,
+            }),
+        )
 
     # Reload on options change (continuous/delay require reconnect)
     config_entry.async_on_unload(
@@ -598,12 +712,21 @@ async def async_unload_entry(
         config_entry, platforms
     )
     if unload_ok:
+        # Cancel any pending blocking queue before disconnecting
+        bm = config_entry.runtime_data.blocking_manager
+        if bm is not None:
+            bm.cancel_queue()
+
         await async_disconnect_or_timeout(
             hass, roomba=config_entry.runtime_data.roomba
         )
-        # Remove the domain service when the last entry is unloaded.
+        # Remove domain services when the last entry is unloaded.
         if not hass.config_entries.async_entries(DOMAIN):
             hass.services.async_remove(DOMAIN, SERVICE_CLEAN_ROOM)
+            for _svc in (SERVICE_SMART_START, "reset_filter", "reset_brush",
+                         "reset_battery", "reset_pad"):
+                if hass.services.has_service(DOMAIN, _svc):
+                    hass.services.async_remove(DOMAIN, _svc)
     return unload_ok
 
 

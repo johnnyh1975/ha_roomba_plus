@@ -74,7 +74,12 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         if not discovered:
             discovered = self._collect_from_live_state()
 
-        unlabelled = [rid for rid in discovered if rid not in named]
+        from .const import CONF_SMART_ZONE_HIDDEN
+        hidden_ids: set = set(opts.get(CONF_SMART_ZONE_HIDDEN, []))
+        unlabelled = [
+            rid for rid in discovered
+            if rid not in named and rid not in hidden_ids
+        ]
 
         if not unlabelled:
             # Everything already labelled — dismiss and close.

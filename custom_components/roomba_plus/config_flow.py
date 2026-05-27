@@ -370,17 +370,25 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
 
-        if has_smart_map(state):
-            # Smart Map robots get a menu: connection settings, manual zone entry,
-            # and (re-)configure cloud credentials.
-            return self.async_show_menu(
-                step_id="init",
-                menu_options=["settings", "smart_zones_manual", "cloud_credentials"],
-                description_placeholders={},
-            )
+        from .models import MapCapability
+        data = self.config_entry.runtime_data
 
-        # Non-Smart-Map robots go directly to settings form.
-        return await self.async_step_settings(user_input)
+        # Build model-appropriate menu.
+        # All robots: settings, blocking_sensors (L5, model-agnostic).
+        # EPHEMERAL + SMART: additionally map_management (L7).
+        # SMART: additionally cloud_credentials.
+        # NOTE: "presence_scheduling" is intentionally omitted — added in v1.8.
+        menu: list[str] = ["settings", "blocking_sensors"]
+        if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
+            menu.insert(1, "map_management")
+        if has_smart_map(state):
+            menu.append("cloud_credentials")
+
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=menu,
+            description_placeholders={},
+        )
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
@@ -419,6 +427,317 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 }
             ),
         )
+
+    # ── v1.7.0 L5 — Blocking sensors configuration ───────────────────────────
+
+    async def async_step_blocking_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure blocking sensors for the smart_start service."""
+        from homeassistant.helpers import selector
+
+        from .const import (
+            CONF_BLOCKING_BEHAVIOR,
+            CONF_BLOCKING_SENSORS,
+            CONF_BLOCKING_TIMEOUT_MIN,
+            DEFAULT_BLOCKING_BEHAVIOR,
+            DEFAULT_BLOCKING_TIMEOUT_MIN,
+        )
+
+        if user_input is not None:
+            updated = dict(self.config_entry.options)
+            updated[CONF_BLOCKING_SENSORS] = user_input.get(CONF_BLOCKING_SENSORS, [])
+            updated[CONF_BLOCKING_BEHAVIOR] = user_input.get(CONF_BLOCKING_BEHAVIOR, DEFAULT_BLOCKING_BEHAVIOR)
+            updated[CONF_BLOCKING_TIMEOUT_MIN] = int(user_input.get(CONF_BLOCKING_TIMEOUT_MIN, DEFAULT_BLOCKING_TIMEOUT_MIN))
+            return self.async_create_entry(title="", data=updated)
+
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="blocking_sensors",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_BLOCKING_SENSORS,
+                    default=current.get(CONF_BLOCKING_SENSORS, []),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor",
+                        multiple=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_BLOCKING_BEHAVIOR,
+                    default=current.get(CONF_BLOCKING_BEHAVIOR, DEFAULT_BLOCKING_BEHAVIOR),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            {"value": "abort", "label": "Abort start"},
+                            {"value": "queue", "label": "Queue and wait"},
+                        ],
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Optional(
+                    CONF_BLOCKING_TIMEOUT_MIN,
+                    default=int(current.get(CONF_BLOCKING_TIMEOUT_MIN, DEFAULT_BLOCKING_TIMEOUT_MIN)),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=5, max=120, step=5,
+                        unit_of_measurement="min",
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+            }),
+        )
+
+    # ── v1.7.0 L7 — Zone Management UI ───────────────────────────────────────
+
+    async def async_step_map_management(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Zone management index step — shows all zones with current state.
+
+        Submitting with a zone selected → edit step.
+        Submitting blank selection → save all edits and close.
+        """
+        from homeassistant.helpers import selector
+
+        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
+        from .models import MapCapability
+
+        if not hasattr(self, "_pending_zone_edits"):
+            self._pending_zone_edits: dict[str, dict[str, Any]] = {}
+
+        data = self.config_entry.runtime_data
+        options = self.config_entry.options
+
+        if user_input is not None:
+            selected = user_input.get("selected_zone", "")
+            if not selected:
+                # Blank = save all pending edits atomically
+                return self._save_zone_edits_atomic()
+            self._editing_zone_id = selected
+            return await self.async_step_map_management_edit()
+
+        # Build options list for the selector
+        zone_options = self._build_zone_index_options(data, options)
+        if not zone_options:
+            return self.async_create_entry(title="", data=options)
+
+        # Build description placeholder summarising zone states
+        summary_lines = []
+        for opt in zone_options:
+            summary_lines.append(opt["label"])
+        description_placeholders = {
+            "zone_summary": "\n".join(summary_lines[:20]),
+        }
+
+        return self.async_show_form(
+            step_id="map_management",
+            data_schema=vol.Schema({
+                vol.Optional("selected_zone", default=""): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[{"value": "", "label": "─── Save and close ───"}] + zone_options,
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+            }),
+            description_placeholders=description_placeholders,
+            last_step=False,
+        )
+
+    async def async_step_map_management_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Zone management edit step — rename or hide a single zone.
+
+        Returns to the index step on submit.
+        """
+        zone_id = getattr(self, "_editing_zone_id", "")
+        data = self.config_entry.runtime_data
+        options = self.config_entry.options
+        current_edit = self._pending_zone_edits.get(zone_id, {})
+
+        if user_input is not None:
+            # Accumulate edit — NOT saved yet (atomic save in index step)
+            self._pending_zone_edits[zone_id] = {
+                "display_name": user_input.get("display_name", ""),
+                "hidden": bool(user_input.get("hidden", False)),
+            }
+            return await self.async_step_map_management()
+
+        # Resolve current display name and hidden state
+        current_name = self._resolve_current_zone_name(zone_id, data, options)
+        current_hidden = self._resolve_current_zone_hidden(zone_id, data, options)
+
+        return self.async_show_form(
+            step_id="map_management_edit",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    "display_name",
+                    default=current_edit.get("display_name", current_name),
+                ): str,
+                vol.Optional(
+                    "hidden",
+                    default=current_edit.get("hidden", current_hidden),
+                ): bool,
+            }),
+            description_placeholders={"zone_name": current_name},
+            last_step=False,
+        )
+
+    # ── L7 helpers ────────────────────────────────────────────────────────────
+
+    def _build_zone_index_options(self, data: Any, options: dict) -> list[dict]:
+        """Build selector option list for the map_management index step."""
+        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
+        from .models import MapCapability
+
+        opts: list[dict] = []
+
+        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+            for zone in data.zone_store.zones:
+                pending = self._pending_zone_edits.get(str(zone.id), {})
+                name = pending.get("display_name") or zone.name
+                hidden = pending.get("hidden", zone.hidden)
+                tags: list[str] = []
+                if hidden:
+                    tags.append("hidden")
+                if not zone.confirmed:
+                    tags.append("unconfirmed")
+                if str(zone.id) in self._pending_zone_edits:
+                    tags.append("*")
+                label = name + (f" [{', '.join(tags)}]" if tags else "")
+                opts.append({"value": str(zone.id), "label": label})
+
+        elif data.map_capability == MapCapability.SMART:
+            aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
+            hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
+            zone_data: dict = options.get("smart_zone_data", {})
+            region_ids: set[str] = set(zone_data.keys())
+            if data.has_cloud:
+                for r in data.cloud_coordinator.regions:
+                    if r.get("id"):
+                        region_ids.add(str(r["id"]))
+            for rid in sorted(region_ids):
+                pending = self._pending_zone_edits.get(rid, {})
+                cloud_name = next(
+                    (r["name"] for r in (data.cloud_coordinator.regions if data.has_cloud else [])
+                     if str(r.get("id")) == rid and r.get("name")), None
+                )
+                base_name = (
+                    pending.get("display_name")
+                    or aliases.get(rid)
+                    or cloud_name
+                    or zone_data.get(rid, {}).get("name")
+                    or f"Zone {rid}"
+                )
+                hidden = pending.get("hidden", rid in hidden_ids)
+                tags: list[str] = []
+                if hidden:
+                    tags.append("hidden")
+                if rid in aliases:
+                    tags.append("aliased")
+                if rid in self._pending_zone_edits:
+                    tags.append("*")
+                label = base_name + (f" [{', '.join(tags)}]" if tags else "")
+                opts.append({"value": rid, "label": label})
+
+        return opts
+
+    def _resolve_current_zone_name(self, zone_id: str, data: Any, options: dict) -> str:
+        """Resolve the best current display name for zone_id."""
+        from .const import CONF_SMART_ZONE_ALIASES
+        from .models import MapCapability
+
+        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+            for zone in data.zone_store.zones:
+                if str(zone.id) == zone_id:
+                    return zone.name
+            return f"Zone {zone_id}"
+
+        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
+        if zone_id in aliases:
+            return aliases[zone_id]
+        zone_data: dict = options.get("smart_zone_data", {})
+        if zone_id in zone_data:
+            return zone_data[zone_id].get("name") or f"Zone {zone_id}"
+        if data.has_cloud:
+            for r in data.cloud_coordinator.regions:
+                if str(r.get("id")) == zone_id:
+                    return r.get("name") or f"Zone {zone_id}"
+        return f"Zone {zone_id}"
+
+    def _resolve_current_zone_hidden(self, zone_id: str, data: Any, options: dict) -> bool:
+        """Return the current hidden state for zone_id."""
+        from .const import CONF_SMART_ZONE_HIDDEN
+        from .models import MapCapability
+
+        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+            for zone in data.zone_store.zones:
+                if str(zone.id) == zone_id:
+                    return zone.hidden
+            return False
+        return zone_id in options.get(CONF_SMART_ZONE_HIDDEN, [])
+
+    def _save_zone_edits_atomic(self) -> ConfigFlowResult:
+        """Apply all pending zone edits atomically in a single options write."""
+        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
+        from .models import MapCapability
+
+        data = self.config_entry.runtime_data
+        options = dict(self.config_entry.options)
+
+        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+            for zone_id_str, edit in self._pending_zone_edits.items():
+                zone_id = int(zone_id_str)
+                if edit.get("hidden"):
+                    data.zone_store.hide_zone(zone_id)
+                else:
+                    data.zone_store.unhide_zone(zone_id)
+                    name = edit.get("display_name", "").strip()
+                    if name:
+                        data.zone_store.rename_zone(zone_id, name)
+            self.hass.async_create_task(
+                data.zone_store.async_save(self.hass, self.config_entry.entry_id),
+                name="roomba_plus_zone_store_save",
+            )
+        else:
+            # SMART: alias layer in options
+            aliases: dict = dict(options.get(CONF_SMART_ZONE_ALIASES, {}))
+            hidden: list = list(options.get(CONF_SMART_ZONE_HIDDEN, []))
+            zone_data: dict = options.get("smart_zone_data", {})
+
+            for region_id, edit in self._pending_zone_edits.items():
+                display_name = edit.get("display_name", "").strip()
+                # Resolve cloud name for alias-clear-on-match logic
+                cloud_name: str | None = None
+                if data.has_cloud:
+                    for r in data.cloud_coordinator.regions:
+                        if str(r.get("id")) == region_id:
+                            cloud_name = r.get("name")
+                            break
+                if not cloud_name:
+                    cloud_name = zone_data.get(region_id, {}).get("name")
+
+                # Alias-clear-on-match: delete alias when name equals cloud name
+                # to prevent shadowing future cloud renames.
+                if display_name and display_name != cloud_name:
+                    aliases[region_id] = display_name
+                elif region_id in aliases:
+                    del aliases[region_id]
+
+                if edit.get("hidden"):
+                    if region_id not in hidden:
+                        hidden.append(region_id)
+                else:
+                    if region_id in hidden:
+                        hidden.remove(region_id)
+
+            options[CONF_SMART_ZONE_ALIASES] = aliases
+            options[CONF_SMART_ZONE_HIDDEN] = hidden
+
+        self._pending_zone_edits = {}
+        return self.async_create_entry(title="", data=options)
 
     async def async_step_zones(
         self, user_input: dict[str, Any] | None = None

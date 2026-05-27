@@ -1,12 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.6.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.7.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.6 completes the optional iRobot cloud integration** with multi-map support, lifetime statistics, Smart Map saving indicator, and a fully production-ready hybrid local/cloud architecture.
+Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.7 adds three independent intelligence layers:** consumable reset services with replacement timestamps, blocking-sensor gates for smart starts, and a unified zone management UI with aliases and hidden zones.
 
 ---
 
@@ -31,11 +31,11 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 
 ## Features
 
-### Sensors (35 local + 3 cloud)
+### Sensors (39 local + 3 cloud)
 
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
-- **Maintenance** — filter remaining, brushes remaining, charge cycles
+- **Maintenance** — filter remaining (with threshold), brushes remaining (with threshold), charge cycles, filter last replaced, brushes last replaced, battery last replaced, cleaning pad last replaced (Braava)
 - **Missions** — total, successful, cancelled, failed, total time, avg. duration, cleaned area, last mission, mission start, mission elapsed, recharge time, expire time
 - **Connectivity** — connected, bin full, battery, RSSI, SNR, signal noise, IP address
 - **Clean Base** — dock status, dock tank level
@@ -50,6 +50,8 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Connected** — MQTT connectivity
 - **Mop ready / tank present / lid closed** — Braava m6
 - **Smart Map saving (v1.6)** — ON while the robot is saving or uploading its Smart Map after a training run or boundary edit. Only present on Smart Map robots (i/s/j/Braava). Useful for automations that need to wait before issuing zone clean commands.
+- **Maintenance due (v1.7)** — ON when any consumable has reached zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). One automation trigger instead of four separate threshold checks.
+- **Start blocked (v1.7)** — ON while a `smart_start` is queued waiting for blocking sensors to clear. Attributes: `blocking_entities`, `queued_since`, `timeout_at`.
 
 ### Controls
 
@@ -57,7 +59,8 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Edge cleaning** — On/Off (switch)
 - **Always finish** — keep cleaning even when the bin is full (switch, i7+/s9+/j7+ with Clean Base only)
 - **Schedule hold** — freeze the cleaning schedule without deleting it (switch, i/s/j/Braava)
-- **Maintenance reset** — confirm filter, brush, and battery replacement (buttons)
+- **Maintenance reset** — confirm filter, brush, and battery replacement (buttons and named HA actions: `reset_filter`, `reset_brush`, `reset_battery`, `reset_pad`)
+- **Smart start (v1.7)** — `roomba_plus.smart_start` action with blocking-sensor gate; supports optional room list (SMART robots) and `override_blocking` field
 - **Locate robot** — play find-me tone (button)
 - **Evacuate bin** — Clean Base models (button)
 
@@ -87,6 +90,63 @@ When you enter your iRobot app email and password during setup (or later via **C
 - **Repair flow suppressed** — when cloud is active the `smart_zones_need_naming` repair issue is not raised; names are always current from the cloud.
 
 > Cloud credentials are stored in the HA config entry (encrypted at rest by HA). All robot control commands continue to go through local MQTT — only map metadata is fetched from the cloud.
+
+
+### Consumable Intelligence — all robots (v1.7)
+
+Four new timestamp sensors record when each consumable was last replaced:
+
+| Sensor | Created for |
+|---|---|
+| `sensor.roomba_filter_last_replaced` | All robots |
+| `sensor.roomba_brushes_last_replaced` | Vacuums (not Braava) |
+| `sensor.roomba_cleaning_pad_last_replaced` | Braava only |
+| `sensor.roomba_battery_last_replaced` | All robots |
+
+Existing remaining-hours sensors now expose `threshold_hours` as an attribute — the Lovelace card (v1.8) uses this to render health bars without hard-coded thresholds.
+
+Named HA actions callable from automations: `reset_filter`, `reset_brush`, `reset_battery`, `reset_pad`. These call the same store methods as the reset buttons — both surfaces remain valid.
+
+### Blocking Sensors & Smart Start — all robots (v1.7)
+
+A pre-start environment gate that checks configured binary sensors before allowing a clean to begin. Useful for preventing cleaning while a door is open, a room is occupied, or people are home.
+
+Configure via **Settings → Devices & Services → Roomba+ → Configure → Blocking sensors**.
+
+| Option | Values | Default |
+|---|---|---|
+| Blocking sensors | Any binary sensor entity IDs | (empty) |
+| Behavior when blocked | `abort` or `queue and wait` | `queue and wait` |
+| Queue timeout | 5–120 min | 30 min |
+
+Use `roomba_plus.smart_start` instead of `vacuum.start` in automations:
+
+```yaml
+action: roomba_plus.smart_start
+target:
+  entity_id: vacuum.roomba
+data:
+  override_blocking: false   # set true to bypass sensors
+  # rooms: [Kitchen, Hallway]  # SMART robots only
+```
+
+- **abort** — fires `roomba_plus_start_blocked` event immediately if any sensor is ON
+- **queue** — waits until all sensors clear (up to timeout), then starts; fires `roomba_plus_start_timeout` if expired
+- Unavailable/unknown sensors are treated as non-blocking
+
+### Zone Management UI — EPHEMERAL + SMART robots (v1.7)
+
+A unified config flow step replaces the disconnected rename + textarea + repair flows:
+
+**Settings → Devices & Services → Roomba+ → Configure → Zone management**
+
+- Browse all zones in a structured index
+- Rename any zone with a text input (SMART robots: alias overrides cloud name)
+- Hide zones: removed from selectors, clean_room, and repair issues
+- Changes saved atomically — one write, no partial state
+- Alias-clear-on-match: if you type the same name as the cloud name, the alias is deleted (future cloud renames flow through automatically)
+
+**Options menu order (v1.7):** Settings → Zone management → Cloud credentials → Blocking sensors
 
 ### Cleaning map (Roomba 900 / i / s / j / Braava m6)
 
@@ -311,6 +371,10 @@ automation:
 | Idle / Stopped phase detection | ❌ | ✅ |
 | Error codes (80+) | ❌ | ✅ |
 | Device triggers | ❌ | ✅ |
+| Consumable timestamp sensors | ❌ | ✅ (v1.7) |
+| Blocking sensor gate (smart_start) | ❌ | ✅ (v1.7) |
+| Zone management UI (alias / hide) | ❌ | ✅ (v1.7) |
+| Mid-mission area + elapsed attrs | ❌ | ✅ (v1.7) |
 | Spot / quick clean (980) | ❌ | ✅ (v1.6, experimental) |
 | Sleep / power off (980) | ❌ | ✅ (v1.6, experimental) |
 | Carpet Boost (980) | ❌ | ✅ |
@@ -320,6 +384,22 @@ automation:
 ---
 
 ## Troubleshooting
+
+**Blocking sensors step missing from options menu**
+
+The blocking sensors step appears for all robots. If it is not visible, ensure you are running v1.7.0 and have restarted HA after upgrading.
+
+**smart_start queues forever / never starts**
+
+Check that the blocking sensors are reporting correctly. Unavailable or unknown sensors are treated as non-blocking. If the queue expires, `roomba_plus_start_timeout` is fired — automate on this event to alert or retry.
+
+**Zone management — changes not reflected in dropdown immediately**
+
+Alias and hidden changes write to config options immediately, but the zone select dropdown in the UI may take one MQTT message cycle to refresh (typically seconds when the robot is active). This is a known limitation addressed in v1.7.1.
+
+**filter_last_replaced / brush_last_replaced shows Unknown**
+
+These sensors are Unknown until the first reset is performed after upgrading to v1.7.0. Press the reset button or call the reset action to populate them.
 
 **"Failed to connect" during setup**
 

@@ -31,3 +31,74 @@ clean_room:
       default: true
       selector:
         boolean:
+
+reset_filter:
+  name: Reset filter
+  description: >
+    Record the current time as the filter replacement date and restart the
+    remaining-life counter. Use after physically replacing the filter.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_brush:
+  name: Reset brushes
+  description: >
+    Record the current time as the brush replacement date and restart the
+    remaining-life counter. Use after physically replacing the brush roll.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_battery:
+  name: Reset battery
+  description: >
+    Record the current time as the battery replacement date.
+    Use after physically replacing the battery pack.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_pad:
+  name: Reset cleaning pad
+  description: >
+    Record the current time as the pad replacement date (Braava mops only).
+    Use after replacing the reusable or disposable cleaning pad.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+smart_start:
+  name: Smart start
+  description: >
+    Start a clean with blocking-sensor checks. If any configured blocking
+    sensors are active, the start is queued or aborted depending on the
+    integration configuration. Use in automations instead of vacuum.start
+    when you want to prevent cleaning while doors are open or rooms occupied.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    rooms:
+      name: Rooms
+      description: >
+        Optional list of room names to clean (SMART robots only).
+        Names must match the labels configured in Roomba+ options.
+      required: false
+      selector:
+        text:
+          multiple: true
+    override_blocking:
+      name: Override blocking sensors
+      description: >
+        When true, start immediately even if blocking sensors are active.
+        Useful for manual overrides in time-sensitive situations.
+      required: false
+      default: false
+      selector:
+        boolean:

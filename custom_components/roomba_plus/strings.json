@@ -63,7 +63,9 @@
         "menu_options": {
           "settings": "Connection settings",
           "smart_zones_manual": "Manually enter Smart Map zones",
-          "cloud_credentials": "iRobot cloud credentials"
+          "cloud_credentials": "iRobot cloud credentials",
+          "blocking_sensors": "Blocking sensors",
+          "map_management": "Zone management"
         }
       },
       "zones": {
@@ -120,6 +122,39 @@
         "data": {
           "irobot_username": "iRobot email",
           "irobot_password": "iRobot password"
+        }
+      },
+      "blocking_sensors": {
+        "title": "Blocking sensors",
+        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "data": {
+          "blocking_sensors": "Blocking sensors",
+          "blocking_behavior": "Behavior when blocked",
+          "blocking_timeout_min": "Queue timeout (minutes)"
+        },
+        "data_description": {
+          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
+          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
+          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
+        }
+      },
+      "map_management": {
+        "title": "Zone management",
+        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}",
+        "data": {
+          "selected_zone": "Zone to edit"
+        }
+      },
+      "map_management_edit": {
+        "title": "Edit zone: {zone_name}",
+        "description": "Set a display name and visibility for this zone.",
+        "data": {
+          "display_name": "Display name",
+          "hidden": "Hide this zone"
+        },
+        "data_description": {
+          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
+          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
         }
       }
     },
@@ -246,6 +281,18 @@
       },
       "lifetime_missions": {
         "name": "Lifetime missions"
+      },
+      "filter_last_replaced": {
+        "name": "Filter last replaced"
+      },
+      "brush_last_replaced": {
+        "name": "Brushes last replaced"
+      },
+      "pad_last_replaced": {
+        "name": "Cleaning pad last replaced"
+      },
+      "battery_last_replaced": {
+        "name": "Battery last replaced"
       }
     },
     "binary_sensor": {
@@ -269,6 +316,39 @@
       },
       "map_saving": {
         "name": "Smart Map saving"
+      },
+      "maintenance_due": {
+        "name": "Maintenance due",
+        "state": {
+          "off": "OK",
+          "on": "Due"
+        },
+        "state_attributes": {
+          "due": {
+            "name": "Due consumables"
+          },
+          "overdue_by_hours": {
+            "name": "Overdue by (hours)"
+          }
+        }
+      },
+      "start_blocked": {
+        "name": "Start blocked",
+        "state": {
+          "off": "Clear",
+          "on": "Blocked"
+        },
+        "state_attributes": {
+          "blocking_entities": {
+            "name": "Blocking entities"
+          },
+          "queued_since": {
+            "name": "Queued since"
+          },
+          "timeout_at": {
+            "name": "Timeout at"
+          }
+        }
       }
     },
     "button": {
@@ -413,6 +493,26 @@
           "description": "Clean rooms in the order supplied rather than letting the robot choose."
         }
       }
+    },
+    "reset_filter": {
+      "name": "Reset filter",
+      "description": "Record the current time as the filter replacement date."
+    },
+    "reset_brush": {
+      "name": "Reset brushes",
+      "description": "Record the current time as the brush replacement date."
+    },
+    "reset_battery": {
+      "name": "Reset battery",
+      "description": "Record the current time as the battery replacement date."
+    },
+    "reset_pad": {
+      "name": "Reset cleaning pad",
+      "description": "Record the current time as the pad replacement date (Braava only)."
+    },
+    "smart_start": {
+      "name": "Smart start",
+      "description": "Start a clean with blocking-sensor checks."
     }
   },
   "exceptions": {

@@ -184,6 +184,12 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             else:
                 attrs[ATTR_POSITION] = None
 
+        # v1.7.0 — mid-mission attributes consumed by Lovelace card (v1.8).
+        # Available on all robots; None for 600-series (no sqft) and when docked.
+        mission = state.get("cleanMissionStatus", {})
+        attrs["mission_elapsed_min"] = mission.get("mssnM")     # int | None
+        attrs["mission_area_sqft"]   = mission.get("sqft")      # int | None, 600=None
+
         return attrs
 
     def _get_cleaning_status(

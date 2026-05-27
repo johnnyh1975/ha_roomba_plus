@@ -43,6 +43,18 @@ CONF_MAP_SCALE: Final = "map_scale_mm_per_px"
 CONF_FILTER_HOURS: Final = "filter_threshold_hours"
 CONF_BRUSH_HOURS: Final = "brush_threshold_hours"
 
+# ── v1.7.0 — L5 Blocking sensors ─────────────────────────────────────────────
+CONF_BLOCKING_SENSORS: Final = "blocking_sensors"        # list[str] entity IDs
+CONF_BLOCKING_BEHAVIOR: Final = "blocking_behavior"      # "abort" | "queue"
+CONF_BLOCKING_TIMEOUT_MIN: Final = "blocking_timeout_min"
+
+DEFAULT_BLOCKING_BEHAVIOR: Final = "queue"
+DEFAULT_BLOCKING_TIMEOUT_MIN: Final = 30
+
+# ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
+CONF_SMART_ZONE_ALIASES: Final = "smart_zone_aliases"   # dict[str, str]: region_id → display name
+CONF_SMART_ZONE_HIDDEN: Final = "smart_zone_hidden"     # list[str]: hidden region IDs
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_CONTINUOUS: Final = True
 DEFAULT_DELAY: Final = 30
@@ -65,6 +77,15 @@ ATTR_ORDERED: Final = "ordered"
 # Replaces the older flat smart_zone_labels dict; both are written on save
 # so that a rollback to an older version still sees the label names.
 CONF_SMART_ZONE_DATA: Final = "smart_zone_data"
+
+# ── v1.7.0 — Services ────────────────────────────────────────────────────────
+SERVICE_RESET_FILTER: Final = "reset_filter"
+SERVICE_RESET_BRUSH: Final = "reset_brush"
+SERVICE_RESET_BATTERY: Final = "reset_battery"
+SERVICE_RESET_PAD: Final = "reset_pad"
+SERVICE_SMART_START: Final = "smart_start"
+ATTR_ROOMS: Final = "rooms"
+ATTR_OVERRIDE_BLOCKING: Final = "override_blocking"
 
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width
@@ -314,21 +335,11 @@ DIAG_REDACT_KEYS: Final[set[str]] = {
 }
 
 # ── Capability detection ───────────────────────────────────────────────────────
-# Used by vacuum.py, sensor.py, __init__.py, map_renderer.py, zone_store.py
-#
-# Carpet boost detection:
-#   - i/s/j series: cap.carpetBoost == 1
-#   - 900 series (980/985): cap.carpetBoost absent, but "carpetBoost" + "vacHigh"
-#     both present as top-level state keys.
-# → Use has_carpet_boost(state) everywhere instead of raw cap check.
-
 def has_carpet_boost(state: dict) -> bool:
     """Return True if this robot supports carpet boost / fan speed control."""
     cap = state.get("cap", {})
-    # i/s/j series: explicit cap flag
     if cap.get("carpetBoost") == 1:
         return True
-    # 900 series: top-level keys present but NOT in cap{}
     return (
         "carpetBoost" in state
         and "vacHigh" in state
