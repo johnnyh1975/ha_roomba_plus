@@ -751,8 +751,8 @@ async def async_setup_entry(
                         changed = True
                     _last_pmapv[pid] = pmapv
             if changed:
-                hass.async_create_task(
-                    cloud_coordinator.async_request_refresh()
+                asyncio.run_coroutine_threadsafe(
+                    cloud_coordinator.async_request_refresh(), hass.loop
                 )
 
         config_entry.runtime_data.roomba.register_on_message_callback(
@@ -868,11 +868,11 @@ async def async_setup_entry(
             _current_mission_zones = _capture_zone_names(config_entry, reported)
 
         if phase in _MISSION_END_PHASES and _last_phase in _CLEANING_PHASES:
-            hass.async_create_task(
+            asyncio.run_coroutine_threadsafe(
                 _async_record_mission(
                     config_entry, mission, reported, list(_current_mission_zones)
                 ),
-                name="roomba_plus_mission_record",
+                hass.loop,
             )
             _current_mission_zones = []
 
