@@ -28,6 +28,7 @@ Persistence:
 """
 from __future__ import annotations
 
+import asyncio
 import collections
 import datetime
 import io
@@ -212,8 +213,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
     def _handle_mission_end(self) -> None:
+        # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
+        # hass.async_create_task() is not thread-safe and raises RuntimeError
+        # on recent HA versions when called from a foreign thread.
+        # All coroutine scheduling must go through asyncio.run_coroutine_threadsafe().
         if not self._mission_points:
             return
+
+        loop = self.hass.loop
 
         if (self._map_capability == MapCapability.EPHEMERAL
                 and self._zone_store
@@ -226,9 +233,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             ts = dt_util.now(datetime.timezone.utc).timestamp()
             new_zones = self._zone_store.process_mission(self._mission_points, ts)
             if new_zones:
-                self.hass.async_create_task(self._trigger_zone_issue())
-            self.hass.async_create_task(
-                self._zone_store.async_save(self.hass, self._config_entry.entry_id)
+                asyncio.run_coroutine_threadsafe(self._trigger_zone_issue(), loop)
+            asyncio.run_coroutine_threadsafe(
+                self._zone_store.async_save(self.hass, self._config_entry.entry_id),
+                loop,
             )
 
             # Update geometry store from this mission's gap midpoints.
@@ -239,14 +247,17 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 if drift_vector != (0.0, 0.0):
                     threshold_exceeded = data.geometry_store.record_drift(*drift_vector)
                     if threshold_exceeded:
-                        self.hass.async_create_task(self._trigger_drift_issue())
-                self.hass.async_create_task(
-                    data.geometry_store.async_save(self.hass, self._config_entry.entry_id)
+                        asyncio.run_coroutine_threadsafe(
+                            self._trigger_drift_issue(), loop
+                        )
+                asyncio.run_coroutine_threadsafe(
+                    data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
+                    loop,
                 )
 
         # Persist renderer state so the map survives an HA restart
         if self._renderer and self._renderer.has_data:
-            self.hass.async_create_task(self._async_save_map_state())
+            asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
 
         self._mission_points = []
 
