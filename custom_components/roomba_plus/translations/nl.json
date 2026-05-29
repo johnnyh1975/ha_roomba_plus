@@ -359,17 +359,17 @@
         "name": "Smart Map opslaan"
       },
       "maintenance_due": {
-        "name": "Maintenance due",
+        "name": "Onderhoud – Vereist",
         "state": {
-          "off": "OK",
-          "on": "Due"
+          "on": "Vereist",
+          "off": "OK"
         }
       },
       "start_blocked": {
-        "name": "Start blocked",
+        "name": "Start geblokkeerd",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
+          "on": "Geblokkeerd",
+          "off": "Vrij"
         }
       },
       "schedule_hold_active": {

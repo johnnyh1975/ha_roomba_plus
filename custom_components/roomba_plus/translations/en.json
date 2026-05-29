@@ -361,15 +361,15 @@
       "maintenance_due": {
         "name": "Maintenance due",
         "state": {
-          "off": "OK",
-          "on": "Due"
+          "on": "Due",
+          "off": "OK"
         }
       },
       "start_blocked": {
         "name": "Start blocked",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
+          "on": "Blocked",
+          "off": "Clear"
         }
       },
       "schedule_hold_active": {

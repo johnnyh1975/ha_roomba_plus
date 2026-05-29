@@ -359,17 +359,17 @@
         "name": "Salvataggio Smart Map"
       },
       "maintenance_due": {
-        "name": "Maintenance due",
+        "name": "Manutenzione – Necessaria",
         "state": {
-          "off": "OK",
-          "on": "Due"
+          "on": "Necessaria",
+          "off": "OK"
         }
       },
       "start_blocked": {
-        "name": "Start blocked",
+        "name": "Avvio bloccato",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
+          "on": "Bloccato",
+          "off": "Libero"
         }
       },
       "schedule_hold_active": {

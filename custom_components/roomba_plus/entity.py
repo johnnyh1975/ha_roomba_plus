@@ -76,8 +76,19 @@ class IRobotEntity(Entity):
 
     @property
     def run_stats(self) -> dict[str, Any]:
-        """Lifetime run statistics (bbrun)."""
-        return self.vacuum_state.get("bbrun", {})
+        """Lifetime run statistics — merged from runtimeStats (i/s/j) and bbrun (900-series).
+
+        On i/s/j-series (lewis firmware) hr, sqft, and min live in the separate
+        runtimeStats MQTT key. On 900-series they appear in bbrun directly.
+        Merging both sources with runtimeStats taking priority gives a single
+        consistent interface for all sensor code regardless of firmware variant.
+
+        Event counters (nPanics, nCliffsF, nScrubs, nStuck etc.) come exclusively
+        from bbrun and are unaffected by the merge.
+        """
+        bbrun = self.vacuum_state.get("bbrun", {})
+        runtime = self.vacuum_state.get("runtimeStats", {})
+        return {**bbrun, **runtime}  # runtimeStats wins on key collision (hr, sqft, min)
 
     @property
     def mission_stats(self) -> dict[str, Any]:

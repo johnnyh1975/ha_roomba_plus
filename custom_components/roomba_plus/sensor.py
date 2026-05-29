@@ -402,7 +402,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
-            e.battery_stats.get("nLithChrg") or e.battery_stats.get("nNimhChrg")
+            # nLithChrg / nNimhChrg: 900-series and some older firmware.
+            # nAvail: i/s/j-series (lewis firmware) — the correct cycle counter
+            # for these models. All three map to the same concept: total charge
+            # cycles completed. nAvail is tried last so explicit lithium/NiMH
+            # counters take precedence when present.
+            e.battery_stats.get("nLithChrg")
+            or e.battery_stats.get("nNimhChrg")
+            or e.battery_stats.get("nAvail")
         ),
     ),
 
@@ -998,7 +1005,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                    "scrubs_count", "total_cleaning_time",
                    "filter_last_replaced", "brush_last_replaced",
                    "pad_last_replaced", "battery_last_replaced"):
-            return "bbrun" in new_state
+            # bbrun: 900-series source for hr/sqft; runtimeStats: i/s/j-series source.
+            # Both must trigger updates so the merged run_stats property stays current.
+            return "bbrun" in new_state or "runtimeStats" in new_state
         if key in ("total_missions", "successful_missions", "canceled_missions",
                    "failed_missions", "average_mission_time", "last_mission"):
             return "bbmssn" in new_state

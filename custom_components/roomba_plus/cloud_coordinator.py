@@ -62,11 +62,14 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=_CLOUD_POLL_INTERVAL,
         )
         self.blid = blid
+        country_code = (hass.config.country or "US").upper()
         self.api = IrobotCloudApi(
             username=username,
             password=password,
             session=async_get_clientsession(hass),
+            country_code=country_code,
         )
+        _LOGGER.debug("iRobot cloud: using country_code=%s for endpoint discovery", country_code)
 
     async def _async_setup(self) -> None:
         """Authenticate once when the coordinator is first started."""

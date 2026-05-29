@@ -373,34 +373,15 @@
       "maintenance_due": {
         "name": "Maintenance due",
         "state": {
-          "off": "OK",
-          "on": "Due"
-        },
-        "state_attributes": {
-          "due": {
-            "name": "Due consumables"
-          },
-          "overdue_by_hours": {
-            "name": "Overdue by (hours)"
-          }
+          "on": "Due",
+          "off": "OK"
         }
       },
       "start_blocked": {
         "name": "Start blocked",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
-        },
-        "state_attributes": {
-          "blocking_entities": {
-            "name": "Blocking entities"
-          },
-          "queued_since": {
-            "name": "Queued since"
-          },
-          "timeout_at": {
-            "name": "Timeout at"
-          }
+          "on": "Blocked",
+          "off": "Clear"
         }
       },
       "schedule_hold_active": {

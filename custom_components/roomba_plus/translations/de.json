@@ -355,17 +355,17 @@
         "name": "Smart Map wird gespeichert"
       },
       "maintenance_due": {
-        "name": "Maintenance due",
+        "name": "Wartung – Fällig",
         "state": {
-          "off": "OK",
-          "on": "Due"
+          "on": "Fällig",
+          "off": "Kein Bedarf"
         }
       },
       "start_blocked": {
-        "name": "Start blocked",
+        "name": "Start blockiert",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
+          "on": "Blockiert",
+          "off": "Frei"
         }
       },
       "schedule_hold_active": {

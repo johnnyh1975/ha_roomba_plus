@@ -359,17 +359,17 @@
         "name": "Guardando Smart Map"
       },
       "maintenance_due": {
-        "name": "Maintenance due",
+        "name": "Mantenimiento – Requerido",
         "state": {
-          "off": "OK",
-          "on": "Due"
+          "on": "Requerido",
+          "off": "OK"
         }
       },
       "start_blocked": {
-        "name": "Start blocked",
+        "name": "Inicio bloqueado",
         "state": {
-          "off": "Clear",
-          "on": "Blocked"
+          "on": "Bloqueado",
+          "off": "Libre"
         }
       },
       "schedule_hold_active": {

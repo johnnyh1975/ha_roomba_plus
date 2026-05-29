@@ -823,11 +823,17 @@ async def async_setup_entry(
         else:
             result = "completed"
 
+        # Compute duration from wall-clock elapsed time rather than mssnM.
+        # mssnM is reset to 0 by the robot before the mission-end MQTT message
+        # arrives, so mission.get("mssnM") is always 0 at recording time.
+        elapsed_sec = (now - started_at).total_seconds()
+        duration_min = max(0, round(elapsed_sec / 60))
+
         record: dict[str, Any] = {
             "id": f"m_{int(started_at.timestamp())}",
             "started_at": started_at.isoformat(),
             "ended_at": now.isoformat(),
-            "duration_min": mission.get("mssnM") or 0,
+            "duration_min": duration_min,
             "area_sqft": mission.get("sqft"),   # None for 600-series — correct
             "result": result,
             "initiator": mission.get("initiator", "none"),

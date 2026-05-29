@@ -31,7 +31,15 @@ import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
-DISCOVERY_URL = "https://disc-prod.iot.irobotapi.com/v1/discover/endpoints?country_code=US"
+def _discovery_url(country_code: str) -> str:
+    """Return the iRobot endpoint discovery URL for the given ISO 3166-1 country code.
+
+    iRobot splits its backend by region. Using the wrong country code results
+    in /missionhistory and other endpoints returning empty data for EU accounts.
+    The correct code is read from hass.config.country at coordinator startup.
+    Falls back to "US" when HA has no country configured.
+    """
+    return f"https://disc-prod.iot.irobotapi.com/v1/discover/endpoints?country_code={country_code}"
 
 _USER_AGENT_APP = "iRobot/7.16.2.140449 CFNetwork/1568.100.1.2.1 Darwin/24.0.0"
 _USER_AGENT_AWS = "aws-sdk-iOS/2.27.6 iOS/18.0.1 en_US"
@@ -151,10 +159,12 @@ class IrobotCloudApi:
         username: str,
         password: str,
         session: aiohttp.ClientSession,
+        country_code: str = "US",
     ) -> None:
         self._username = username
         self._password = password
         self._session = session
+        self._country_code = country_code
 
         self._app_id = str(uuid.uuid4())
         self._device_id = str(uuid.uuid4())
@@ -175,7 +185,7 @@ class IrobotCloudApi:
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
 
     async def _discover(self) -> dict[str, Any]:
-        async with self._session.get(DISCOVERY_URL) as resp:
+        async with self._session.get(_discovery_url(self._country_code)) as resp:
             if resp.status != 200:
                 raise CloudApiError(f"Endpoint discovery failed: {resp.status}")
             data = await resp.json()
