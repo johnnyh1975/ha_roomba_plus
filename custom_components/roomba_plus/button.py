@@ -74,6 +74,20 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
         command="find",
         filter_fn=None,
     ),
+    # ── v1.9.0 — Map Training Run ─────────────────────────────────────────────
+    # Confirmed in dorita980 v2. Triggers a mapping survey without cleaning.
+    # Only meaningful on SMART robots (i/s/j-series) that support persistent
+    # pmaps — 980/EPHEMERAL don't benefit from a training run.
+    # Enabled by default: intentional action, no side effects, clearly labelled.
+    RoombaButtonDescription(
+        key="map_training",
+        translation_key="map_training",
+        icon="mdi:map-plus",
+        entity_category=EntityCategory.CONFIG,
+        command="train",
+        filter_fn=lambda s: bool(s.get("pmaps")),
+        entity_registry_enabled_default=True,
+    ),
     # ── Experimental — disabled by default ────────────────────────────────────
     # Confirmed in iRobot firmware protocol (dorita980 issue #39).
     # Gated on EPHEMERAL (900-series) where behaviour is known.

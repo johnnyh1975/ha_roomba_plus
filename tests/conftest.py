@@ -108,7 +108,7 @@ ha_const = _make_module("homeassistant.const",
     # Units
     PERCENTAGE="%",
     UnitOfArea=types.SimpleNamespace(SQUARE_METERS="m²", SQUARE_FEET="ft²"),
-    UnitOfTime=types.SimpleNamespace(HOURS="h", MINUTES="min", SECONDS="s"),
+    UnitOfTime=types.SimpleNamespace(HOURS="h", MINUTES="min", SECONDS="s", DAYS="d"),
 )
 
 # homeassistant.exceptions
@@ -261,7 +261,7 @@ _make_module("homeassistant.components.binary_sensor",
     BinarySensorEntity=object,
     BinarySensorDeviceClass=types.SimpleNamespace(
         PROBLEM="problem", PRESENCE="presence", CONNECTIVITY="connectivity",
-        OPENING="opening", UPDATE="update", RUNNING="running",
+        OPENING="opening", UPDATE="update", RUNNING="running", BATTERY_CHARGING="battery_charging",
     ),
 )
 

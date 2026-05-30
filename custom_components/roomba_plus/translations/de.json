@@ -330,6 +330,45 @@
       },
       "next_likely_clean_window": {
         "name": "Anwesenheit – Nächstes Reinigungsfenster"
+      },
+      "filter_wear_rate": {
+        "name": "Wartung – Filter Verschleißrate"
+      },
+      "brush_wear_rate": {
+        "name": "Wartung – Bürsten Verschleißrate"
+      },
+      "pad_wear_rate": {
+        "name": "Wartung – Pad Verschleißrate"
+      },
+      "filter_days_until_due": {
+        "name": "Wartung – Filter Tage bis fällig"
+      },
+      "brush_days_until_due": {
+        "name": "Wartung – Bürsten Tage bis fällig"
+      },
+      "pad_days_until_due": {
+        "name": "Wartung – Pad Tage bis fällig"
+      },
+      "battery_capacity_mah": {
+        "name": "Akkukapazität"
+      },
+      "nav_panics": {
+        "name": "Navigations-Panik-Ereignisse"
+      },
+      "cliff_events_front": {
+        "name": "Absturzsensoren – Vorne"
+      },
+      "cliff_events_rear": {
+        "name": "Absturzsensoren – Hinten"
+      },
+      "mission_recharge_minutes": {
+        "name": "Mission – Verbleibende Ladezeit"
+      },
+      "mission_expire_minutes": {
+        "name": "Mission – Zeit bis Ablauf"
+      },
+      "mission_id": {
+        "name": "Mission – ID"
       }
     },
     "binary_sensor": {
@@ -379,6 +418,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Deckel offen"
+      },
+      "mop_tank_present_direct": {
+        "name": "Tank vorhanden"
+      },
+      "mid_mission_recharge": {
+        "name": "Zwischenladung aktiv"
       }
     },
     "button": {
@@ -420,6 +468,9 @@
       },
       "power_off": {
         "name": "Ausschalten (experimentell)"
+      },
+      "map_training": {
+        "name": "Aktion – Kartierungs-Scan starten"
       }
     },
     "switch": {
@@ -445,6 +496,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Zone auswählen (Cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Einweg-Pad Nässe",
+        "state": {
+          "1": "Niedrig",
+          "2": "Mittel",
+          "3": "Hoch"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Wiederverwendbares Pad Nässe",
+        "state": {
+          "1": "Niedrig",
+          "2": "Mittel",
+          "3": "Hoch"
+        }
       }
     },
     "image": {

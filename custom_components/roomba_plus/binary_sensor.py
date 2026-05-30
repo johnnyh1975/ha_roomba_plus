@@ -85,6 +85,15 @@ async def async_setup_entry(
     if "schedHold" in state:
         entities.append(RoombaScheduleHoldActive(roomba, blid, config_entry))
 
+    # v1.9.0 — Braava lid and tank direct sensors
+    if "lidOpen" in state:
+        entities.append(RoombaMopLidOpen(roomba, blid))
+    if "tankPresent" in state:
+        entities.append(RoombaMopTankPresentDirect(roomba, blid))
+
+    # v1.9.3 — Mid-mission recharge sensor (all robots)
+    entities.append(RoombaMidMissionRecharge(roomba, blid))
+
     async_add_entities(entities)
 
 
@@ -490,3 +499,87 @@ class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "schedHold" in new_state
+
+
+class RoombaMopLidOpen(IRobotEntity, BinarySensorEntity):
+    """Binary sensor: ON when the Braava lid is open.
+
+    A pre-clean alert — if the lid is open the robot refuses to start a
+    mission. Pair with an automation that warns the user before a scheduled
+    mopping run begins.
+
+    Reads the top-level `lidOpen` MQTT field.
+    Only created when `lidOpen` is present in the initial state.
+    """
+
+    _attr_translation_key = "mop_lid_open"
+    _attr_device_class = BinarySensorDeviceClass.OPENING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_lid_open"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(roomba_reported_state(self.vacuum).get("lidOpen", False))
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "lidOpen" in new_state
+
+
+class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
+    """Binary sensor: ON when the Braava water tank is physically present.
+
+    Reads the top-level `tankPresent` MQTT field — distinct from
+    `mopReady.tankPresent` which combines tank presence with lid state.
+    Both sensors coexist without conflict.
+
+    Only created when `tankPresent` is present as a top-level state key.
+    """
+
+    _attr_translation_key = "mop_tank_present_direct"
+    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present_direct"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(roomba_reported_state(self.vacuum).get("tankPresent", True))
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "tankPresent" in new_state
+
+
+class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
+    """Binary sensor: ON when the robot is recharging mid-mission.
+
+    Distinguishes two states that the standard VacuumActivity.PAUSED covers:
+    - mid-mission recharge: phase=charge AND cycle≠none (this sensor is ON)
+    - user-paused:          phase=stop  AND cycle≠none (this sensor is OFF)
+
+    Pair with mission_recharge_minutes to show time remaining until resume.
+    Always created on all robots — the condition is universal across firmware.
+    """
+
+    _attr_translation_key = "mid_mission_recharge"
+    _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mid_mission_recharge"
+
+    @property
+    def is_on(self) -> bool:
+        status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
+        return (
+            status.get("phase") == "charge"
+            and status.get("cycle", "none") != "none"
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state

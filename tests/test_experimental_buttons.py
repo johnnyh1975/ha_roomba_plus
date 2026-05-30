@@ -78,7 +78,7 @@ class TestExperimentalButtonsPresent:
 
     def test_total_button_count(self):
         """Ensure we have the expected number of buttons total (2 standard + 4 experimental)."""
-        assert len(COMMAND_BUTTONS) == 6
+        assert len(COMMAND_BUTTONS) == 7  # +1 map_training (v1.9.0)
 
 
 # ── Disabled by default ────────────────────────────────────────────────────────

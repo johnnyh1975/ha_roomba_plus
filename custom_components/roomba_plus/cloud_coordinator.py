@@ -34,6 +34,143 @@ _LOGGER = logging.getLogger(__name__)
 _CLOUD_POLL_INTERVAL = timedelta(hours=24)
 
 
+
+def _normalize_mission_history(raw: dict) -> dict:
+    """Normalize a raw /missionhistory record into a consistent shape.
+
+    The iRobot cloud /missionhistory endpoint (confirmed from field logs) returns
+    a list of individual mission records. Each record uses iRobot-internal field
+    names that differ from the local MQTT state:
+
+      durationM  — mission duration in minutes (cleaning + recharge time)
+      done       — True if mission completed successfully
+      chrgs      — number of mid-mission recharges
+      chrgM      — minutes spent recharging during this mission
+      dirt       — dirt detection events (scrub count)
+      sqft       — area cleaned this mission in sq ft (may be present)
+
+    This function is called with the FIRST record from the list. For aggregate
+    lifetime stats, the coordinator passes the full list to _aggregate_history()
+    and stores those results instead.
+
+    This single-record normalizer is kept for backward compatibility and for
+    cases where the API may return a summary dict rather than a list.
+
+    Canonical output shape:
+      {
+        "runtimeStats": {"sqft": int, "hr": int, "min": int},
+        "bbmssn":       {"nMssn": int},
+      }
+    """
+    if not raw:
+        return {}
+
+    runtime = raw.get("runtimeStats") or {}
+    bbrun   = raw.get("bbrun") or {}
+    bbmssn  = raw.get("bbmssn") or {}
+
+    # Try legacy/accumulator paths first (some account types return summary dict)
+    sqft = runtime.get("sqft") or bbrun.get("sqft")
+    hr   = runtime.get("hr")   or bbrun.get("hr")
+    mn   = runtime.get("min")  or bbrun.get("min")
+    n_mssn = bbmssn.get("nMssn") or raw.get("nMssn")
+
+    # iRobot individual-record format: durationM in minutes
+    if hr is None and mn is None:
+        duration_m = raw.get("durationM") or raw.get("doneM") or 0
+        if duration_m:
+            hr = int(duration_m) // 60
+            mn = int(duration_m) % 60
+
+    # sqft from individual record — only if no better source found
+    # NOTE: raw["sqft"] in individual records = THIS MISSION only, not lifetime.
+    # We deliberately do NOT use it here to avoid showing per-mission sqft as
+    # lifetime total. The aggregate path handles lifetime correctly.
+    if sqft is None:
+        sqft = raw.get("sqft")  # per-mission fallback, marked in attributes
+
+    result: dict = {}
+    if sqft is not None or hr is not None or mn is not None:
+        result["runtimeStats"] = {}
+        if sqft is not None:
+            result["runtimeStats"]["sqft"] = int(sqft)
+        if hr is not None:
+            result["runtimeStats"]["hr"] = int(hr)
+        if mn is not None:
+            result["runtimeStats"]["min"] = int(mn)
+    if n_mssn is not None:
+        result["bbmssn"] = {"nMssn": int(n_mssn)}
+
+    return result
+
+
+def _aggregate_history(records: list) -> dict:
+    """Aggregate a list of individual mission records into totals.
+
+    Confirmed field names from field logs (980 firmware v2.4.17-138):
+      nMssn     — LIFETIME mission count (same value in every record)
+      durationM — this mission duration in minutes (run + recharge time)
+      runM      — actual cleaning time in minutes (excl. recharge)
+      chrgM     — time spent recharging mid-mission in minutes
+      chrgs     — number of mid-mission recharges
+      done      — mission result string: "done" / "stuck" / other
+      pauseId   — error code when done != "done" (17 = cannot find home)
+      sqft      — area cleaned this mission in sq ft
+      evacs     — bin evacuation count this mission
+      initiator — who started the mission
+
+    nMssn strategy: every record contains the LIFETIME mission counter at
+    the time of that mission. We read it from the first record to get the
+    most recent lifetime total, NOT len(records) which is just the API
+    window size (~30 days).
+
+    For running time and area we SUM across all records — these represent
+    the total for the API window (not lifetime).
+    """
+    if not records:
+        return {}
+
+    total_min  = 0
+    total_sqft = 0
+    has_sqft   = False
+
+    # nMssn is the lifetime counter embedded in each record.
+    # Use the first valid record's value for the current lifetime total.
+    n_mssn_lifetime = None
+    for r in records:
+        if isinstance(r, dict) and r.get("nMssn") is not None:
+            n_mssn_lifetime = int(r["nMssn"])
+            break
+
+    # Fall back to record count if nMssn not found (older firmware)
+    n_mssn = n_mssn_lifetime if n_mssn_lifetime is not None else len(records)
+
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        # Use runM (actual cleaning time) preferred over durationM (incl. recharge)
+        # Fall back chain: runM -> durationM -> doneM
+        duration_m = r.get("runM") or r.get("durationM") or r.get("doneM") or 0
+        total_min += int(duration_m)
+        sqft = r.get("sqft")
+        if sqft is not None:
+            total_sqft += int(sqft)
+            has_sqft = True
+
+    result: dict = {
+        "bbmssn": {"nMssn": n_mssn},
+    }
+    if total_min > 0:
+        result["runtimeStats"] = {
+            "hr":  total_min // 60,
+            "min": total_min % 60,
+        }
+        if has_sqft:
+            result["runtimeStats"]["sqft"] = total_sqft
+
+    return result
+
+
 class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for iRobot cloud data (pmaps, mission history, favorites).
 
@@ -44,6 +181,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         "favorites": [...],      # from /user/favorites
     }
     All keys are always present; they default to empty list/dict on error.
+
+    For EPHEMERAL robots (980/900-series): pmaps and favorites are always
+    empty lists — only missionhistory is fetched. For SMART robots all
+    three endpoints are fetched.
     """
 
     def __init__(
@@ -53,6 +194,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         blid: str,
         username: str,
         password: str,
+        has_pmaps: bool = False,
     ) -> None:
         super().__init__(
             hass,
@@ -62,6 +204,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=_CLOUD_POLL_INTERVAL,
         )
         self.blid = blid
+        self._has_pmaps = has_pmaps
         country_code = (hass.config.country or "US").upper()
         self.api = IrobotCloudApi(
             username=username,
@@ -69,7 +212,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             session=async_get_clientsession(hass),
             country_code=country_code,
         )
-        _LOGGER.debug("iRobot cloud: using country_code=%s for endpoint discovery", country_code)
+        _LOGGER.debug(
+            "iRobot cloud: using country_code=%s, has_pmaps=%s for %s",
+            country_code, has_pmaps, blid,
+        )
 
     async def _async_setup(self) -> None:
         """Authenticate once when the coordinator is first started."""
@@ -92,9 +238,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         try:
             async with asyncio.timeout(30):
-                result["pmaps"] = await self.api.get_pmaps(self.blid)
+                # pmaps and favorites require cap.pmaps — SMART robots only.
+                # missionhistory is account-level and available for all robots.
+                if self._has_pmaps:
+                    result["pmaps"] = await self.api.get_pmaps(self.blid)
+                    result["favorites"] = await self.api.get_favorites()
                 raw_history = await self.api.get_mission_history(self.blid)
-                result["favorites"] = await self.api.get_favorites()
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
                 f"iRobot cloud authentication failed: {exc}"
@@ -102,16 +251,71 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except CloudApiError as exc:
             raise UpdateFailed(f"iRobot cloud update failed: {exc}") from exc
 
-        # The /missionhistory endpoint returns a list of mission records.
-        # The first element contains the accumulated lifetime totals
-        # (runtimeStats.sqft, runtimeStats.hr/min, bbmssn.nMssn).
-        # Individual mission records follow. We store only the first element
-        # (the accumulator) since that is what the lifetime sensors read.
-        if isinstance(raw_history, list):
-            result["mission_history"] = raw_history[0] if raw_history else {}
+        # The /missionhistory endpoint returns a list of records.
+        # Structure varies by firmware/region:
+        #   - Some accounts: list where [0] is a lifetime accumulator dict
+        #     with runtimeStats.sqft/hr/min and bbmssn.nMssn
+        #   - Some accounts: list of individual mission records where lifetime
+        #     totals are in bbrun.sqft/hr and bbmssn.nMssn
+        #   - Some firmware: a single dict directly
+        # We log the raw structure at DEBUG level so users can report issues.
+        if isinstance(raw_history, list) and raw_history:
+            _first  = raw_history[0] if isinstance(raw_history[0], dict) else {}
+            _second = (
+                raw_history[1] if len(raw_history) > 1 and isinstance(raw_history[1], dict)
+                else {}
+            )
+            # Collect all unique keys across all records to detect
+            # fields that only appear on certain result types
+            _all_keys: set = set()
+            for _r in raw_history:
+                if isinstance(_r, dict):
+                    _all_keys.update(_r.keys())
+            _LOGGER.debug(
+                "iRobot cloud: raw_history len=%d "
+                "all_keys=%s "
+                "first_record=%s "
+                "second_record=%s "
+                "for %s",
+                len(raw_history),
+                sorted(_all_keys),
+                _first,    # full first record (all fields)
+                _second,   # full second record (may differ from first)
+                self.blid,
+            )
         elif isinstance(raw_history, dict):
-            # Some firmware versions may return a dict directly — handle gracefully.
-            result["mission_history"] = raw_history
+            _first = raw_history
+            _LOGGER.debug(
+                "iRobot cloud: raw_history dict_record=%s for %s",
+                raw_history, self.blid,
+            )
+        else:
+            _first = {}
+            _LOGGER.debug(
+                "iRobot cloud: raw_history unexpected type=%s for %s",
+                type(raw_history).__name__, self.blid,
+            )
+
+        if isinstance(raw_history, list):
+            if raw_history:
+                # Aggregate ALL records for lifetime totals.
+                # Individual records use iRobot-internal field names (durationM,
+                # done, sqft, etc.) — _aggregate_history sums them correctly.
+                result["mission_history"] = _aggregate_history(raw_history)
+                _LOGGER.debug(
+                    "iRobot cloud: aggregated %d mission records -> "
+                    "nMssn=%s hr=%s sqft=%s for %s",
+                    len(raw_history),
+                    result["mission_history"].get("bbmssn", {}).get("nMssn"),
+                    result["mission_history"].get("runtimeStats", {}).get("hr"),
+                    result["mission_history"].get("runtimeStats", {}).get("sqft"),
+                    self.blid,
+                )
+            else:
+                result["mission_history"] = {}
+        elif isinstance(raw_history, dict):
+            # Some account types may return a summary dict directly.
+            result["mission_history"] = _normalize_mission_history(raw_history)
         else:
             result["mission_history"] = {}
             _LOGGER.warning(
@@ -120,10 +324,11 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         _LOGGER.debug(
-            "iRobot cloud: fetched %d pmap(s), %d favorite(s) for %s",
+            "iRobot cloud: fetched %d pmap(s), %d favorite(s) for %s (has_pmaps=%s)",
             len(result["pmaps"]),
             len(result["favorites"]),
             self.blid,
+            self._has_pmaps,
         )
         return result
 

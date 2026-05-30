@@ -334,6 +334,45 @@
       },
       "next_likely_clean_window": {
         "name": "Aanwezigheid – Volgend schoonmaakvenster"
+      },
+      "filter_wear_rate": {
+        "name": "Onderhoud – Filter slijtage"
+      },
+      "brush_wear_rate": {
+        "name": "Onderhoud – Borstel slijtage"
+      },
+      "pad_wear_rate": {
+        "name": "Onderhoud – Pad slijtage"
+      },
+      "filter_days_until_due": {
+        "name": "Onderhoud – Filter dagen resterend"
+      },
+      "brush_days_until_due": {
+        "name": "Onderhoud – Borstel dagen resterend"
+      },
+      "pad_days_until_due": {
+        "name": "Onderhoud – Pad dagen resterend"
+      },
+      "battery_capacity_mah": {
+        "name": "Batterijcapaciteit"
+      },
+      "nav_panics": {
+        "name": "Navigatie paniek-gebeurtenissen"
+      },
+      "cliff_events_front": {
+        "name": "Randdetecties – Voor"
+      },
+      "cliff_events_rear": {
+        "name": "Randdetecties – Achter"
+      },
+      "mission_recharge_minutes": {
+        "name": "Missie – Resterende oplaadtijd"
+      },
+      "mission_expire_minutes": {
+        "name": "Missie – Tijd tot vervaldatum"
+      },
+      "mission_id": {
+        "name": "Missie – ID"
       }
     },
     "binary_sensor": {
@@ -383,6 +422,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Deksel open"
+      },
+      "mop_tank_present_direct": {
+        "name": "Tank aanwezig"
+      },
+      "mid_mission_recharge": {
+        "name": "Tussenladen actief"
       }
     },
     "button": {
@@ -424,6 +472,9 @@
       },
       "power_off": {
         "name": "Uitschakelen (experimenteel)"
+      },
+      "map_training": {
+        "name": "Actie – Start kartering"
       }
     },
     "switch": {
@@ -449,6 +500,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Zone selecteren (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Wegwerp pad vochtigheid",
+        "state": {
+          "1": "Laag",
+          "2": "Gemiddeld",
+          "3": "Hoog"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Herbruikbaar pad vochtigheid",
+        "state": {
+          "1": "Laag",
+          "2": "Gemiddeld",
+          "3": "Hoog"
+        }
       }
     },
     "image": {

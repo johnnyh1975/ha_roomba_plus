@@ -190,6 +190,20 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         attrs["mission_elapsed_min"] = mission.get("mssnM")     # int | None
         attrs["mission_area_sqft"]   = mission.get("sqft")      # int | None, 600=None
 
+        # v1.9.3 — mission phase intelligence attributes
+        # Allows dashboards to distinguish mid-mission recharge from user-pause
+        # and to show time-remaining without needing separate sensor entities.
+        cycle = mission.get("cycle", "none")
+        phase = mission.get("phase", "")
+        attrs["mid_mission_recharge"] = (
+            phase == "charge" and cycle != "none"
+        )
+        recharge_m = mission.get("rechrgM", 0)
+        attrs["recharge_minutes_remaining"] = recharge_m if recharge_m else None
+        expire_m = mission.get("expireM", 0)
+        attrs["expire_minutes_remaining"] = expire_m if expire_m else None
+        attrs["mission_id"] = mission.get("missionId") or None
+
         return attrs
 
     def _get_cleaning_status(

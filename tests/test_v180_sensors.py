@@ -115,7 +115,7 @@ class TestAreaCleanedToday:
             _make_record(0, "completed", area_sqft=200.0),
             _make_record(0, "completed", area_sqft=150.0),
         )
-        assert _area_cleaned_today(store) == 350.0
+        assert _area_cleaned_today(store) == round(350.0 * 0.0929, 1)  # sqft→m²
 
     @pytest.mark.asyncio
     async def test_excludes_yesterday(self):
@@ -123,7 +123,7 @@ class TestAreaCleanedToday:
             _make_record(0, "completed", area_sqft=200.0),
             _make_record(1, "completed", area_sqft=999.0),
         )
-        assert _area_cleaned_today(store) == 200.0
+        assert _area_cleaned_today(store) == round(200.0 * 0.0929, 1)  # sqft→m²
 
     @pytest.mark.asyncio
     async def test_none_when_no_today_records(self):

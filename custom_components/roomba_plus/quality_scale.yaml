@@ -1,0 +1,160 @@
+rules:
+  # ── Bronze ────────────────────────────────────────────────────────────────
+  action-setup:
+    status: done
+    comment: >
+      All services (reset_filter, reset_brush, reset_battery, reset_pad,
+      clean_room, smart_start) registered in async_setup_entry, not at
+      module level.
+  appropriate-polling:
+    status: done
+    comment: >
+      Integration is local_push (MQTT). Cloud coordinator polls on a 24h
+      interval — appropriate for slowly-changing pmap/favorites data.
+  brands:
+    status: todo
+    comment: Brands PR not yet submitted to home-assistant/brands.
+  common-modules:
+    status: done
+    comment: >
+      entity.py (IRobotEntity base), models.py (RoombaData, MapCapability),
+      const.py (all constants), separate store modules for mission/maintenance/
+      zone/geometry data.
+  config-flow:
+    status: done
+    comment: Full config flow with DHCP/Zeroconf discovery and options flow.
+  config-flow-test-coverage:
+    status: todo
+    comment: >
+      Config flow tested via stub-based unit tests. Full pytest-homeassistant-
+      custom-component integration tests planned for v2.0.
+  dependency-transparency:
+    status: done
+    comment: roombapy==1.9.1 pinned in manifest.requirements.
+  docs-actions:
+    status: todo
+  docs-configuration-parameters:
+    status: todo
+  docs-installation-instructions:
+    status: done
+    comment: README covers HACS and manual install.
+  entity-event-setup:
+    status: done
+    comment: >
+      All entity state updates driven by roombapy MQTT callbacks via
+      new_state_filter + schedule_update_ha_state(). No polling in entities.
+  entity-unique-id:
+    status: done
+    comment: All entities set _attr_unique_id in __init__.
+  has-entity-name:
+    status: done
+    comment: All entities use translation_key + strings.json — no hardcoded names.
+  runtime-data:
+    status: done
+    comment: >
+      All runtime state in config_entry.runtime_data (RoombaData dataclass).
+      No hass.data[DOMAIN] usage anywhere.
+  test-before-setup:
+    status: done
+    comment: >
+      MQTT connection established and confirmed before async_setup_entry
+      returns. Cloud coordinator failure is caught and logged — local MQTT
+      always succeeds or raises ConfigEntryNotReady.
+  unique-config-entry:
+    status: done
+    comment: BLID used as unique_id in config flow — prevents duplicate entries.
+
+  # ── Silver ────────────────────────────────────────────────────────────────
+  action-exceptions:
+    status: done
+    comment: Services raise ServiceValidationError with translation keys.
+  config-entry-unloading:
+    status: done
+    comment: async_unload_entry implemented — unloads all platforms cleanly.
+  docs-supported-functions:
+    status: todo
+  entity-translations:
+    status: done
+    comment: >
+      102 entity keys across sensor, binary_sensor, select, button platforms.
+      7 languages (EN/DE/FR/ES/IT/NL/PT). All keys present in strings.json
+      and all translation files.
+  integration-owner:
+    status: done
+    comment: codeowners set in manifest.
+  log-when-unavailable:
+    status: done
+    comment: >
+      Disconnect logged by roombapy at WARNING level. Reconnect attempts
+      logged at INFO. Cloud failures logged at WARNING.
+  parallel-updates:
+    status: done
+    comment: >
+      MQTT push integration — no coordinator polling for local data.
+      Entities update independently via new_state_filter callbacks.
+  reauthentication-flow:
+    status: done
+    comment: Cloud coordinator raises ConfigEntryAuthFailed on auth failure.
+  test-coverage:
+    status: done
+    comment: >
+      734 unit tests across 25 test files. Stub-based — no HA install
+      required. Covers all stores, sensors, cloud coordinator, config
+      flow logic, zone management, and blocking/presence managers.
+
+  # ── Gold ──────────────────────────────────────────────────────────────────
+  devices:
+    status: done
+    comment: Single DeviceInfo per robot in IRobotEntity base class.
+  diagnostics:
+    status: done
+    comment: diagnostics.py exposes full runtime state as downloadable JSON.
+  discovery:
+    status: done
+    comment: DHCP (4 MAC prefixes) and Zeroconf discovery configured.
+  docs-high-level-description:
+    status: todo
+  entity-category:
+    status: done
+    comment: >
+      All non-primary entities use EntityCategory.DIAGNOSTIC or CONFIG.
+      Primary vacuum control has no category (visible by default).
+  entity-disabled-by-default:
+    status: done
+    comment: >
+      Opt-in diagnostic sensors (nav_panics, cliff counters, battery_capacity,
+      rssi, snr, ip_address) set entity_registry_enabled_default=False.
+  exception-translations:
+    status: done
+    comment: All ServiceValidationError and ConfigEntryAuthFailed use translation keys.
+  icon-translations:
+    status: todo
+    comment: Icons set via _attr_icon — migration to icons.json planned for v2.0.
+  reconfiguration-flow:
+    status: todo
+    comment: Reconfigure flow (host/password change without re-adding) planned for v2.0.
+  repair-issues:
+    status: done
+    comment: repairs.py raises RepairIssues for dock drift, unconfirmed zones, cloud auth.
+  stale-devices:
+    status: todo
+    comment: Stale device cleanup not yet implemented.
+  strict-typing:
+    status: todo
+    comment: Partial — all new code typed, legacy entity methods partially typed.
+
+  # ── Platinum ─────────────────────────────────────────────────────────────
+  async-dependency:
+    status: done
+    comment: roombapy is async-capable via paho-MQTT thread. Cloud via aiohttp.
+  inject-websession:
+    status: done
+    comment: Cloud API uses async_get_clientsession(hass) — no standalone sessions.
+  migration:
+    status: todo
+    comment: >
+      Config entry version is 1. async_migrate_entry planned for v2.0 when
+      __init__.py is split and entry schema changes.
+  test-before-configure:
+    status: done
+    comment: MQTT credentials verified during config flow before entry is created.

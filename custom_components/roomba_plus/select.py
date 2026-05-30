@@ -115,6 +115,11 @@ async def async_setup_entry(
         else:
             entities.append(SmartZoneSelect(roomba, blid, config_entry))
 
+    # v1.9.0 — Braava Pad Wetness selects
+    if "padWetness" in state:
+        entities.append(DisposablePadWetnessSelect(roomba, blid))
+        entities.append(ReusablePadWetnessSelect(roomba, blid))
+
     async_add_entities(entities)
 
 
@@ -679,3 +684,89 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         # Cloud entity doesn't update from MQTT — coordinator handles refresh.
         return False
+
+
+# ── v1.9.0 — Braava Pad Wetness ───────────────────────────────────────────────
+
+_PAD_WET_OPTIONS: list[str] = ["1", "2", "3"]
+
+
+class DisposablePadWetnessSelect(IRobotEntity, SelectEntity):
+    """Select entity: disposable pad wetness level for Braava (1–3).
+
+    Reads padWetness.disposable from MQTT state.
+    Writes via set_preference('padWetness', {disposable: level}).
+
+    When writing, the current value of the other key (reusable) is preserved
+    by reading it from the live MQTT state — never blindly overwritten.
+
+    Options are the iRobot-internal integers as strings ("1", "2", "3") so
+    that translation via state-keys in strings.json works correctly.
+
+    Only created when 'padWetness' dict is present in the initial state.
+    """
+
+    _attr_translation_key = "disposable_pad_wetness"
+    _attr_icon = "mdi:water-percent"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = _PAD_WET_OPTIONS
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_disposable_pad_wetness"
+
+    @property
+    def current_option(self) -> str | None:
+        val = self.vacuum_state.get("padWetness", {}).get("disposable")
+        return str(val) if val is not None else None
+
+    async def async_select_option(self, option: str) -> None:
+        level = int(option)
+        current = self.vacuum_state.get("padWetness", {})
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference,
+            "padWetness",
+            {"disposable": level, "reusable": current.get("reusable", level)},
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "padWetness" in new_state
+
+
+class ReusablePadWetnessSelect(IRobotEntity, SelectEntity):
+    """Select entity: reusable pad wetness level for Braava (1–3).
+
+    Reads padWetness.reusable from MQTT state.
+    Writes via set_preference('padWetness', {reusable: level}).
+
+    When writing, the current value of disposable is preserved by reading
+    it from the live MQTT state — never blindly overwritten.
+
+    Only created when 'padWetness' dict is present in the initial state.
+    """
+
+    _attr_translation_key = "reusable_pad_wetness"
+    _attr_icon = "mdi:water-sync"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = _PAD_WET_OPTIONS
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_reusable_pad_wetness"
+
+    @property
+    def current_option(self) -> str | None:
+        val = self.vacuum_state.get("padWetness", {}).get("reusable")
+        return str(val) if val is not None else None
+
+    async def async_select_option(self, option: str) -> None:
+        level = int(option)
+        current = self.vacuum_state.get("padWetness", {})
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference,
+            "padWetness",
+            {"disposable": current.get("disposable", level), "reusable": level},
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "padWetness" in new_state

@@ -212,3 +212,58 @@ class MissionStore:
             streak += 1
             day -= timedelta(days=1)
         return streak
+
+    def wear_data(self, days: int) -> list[dict[str, Any]]:
+        """Return daily bbrun.hr snapshots for the last `days` days.
+
+        Returns one entry per calendar day — the highest recorded bbrun_hr
+        value for that day — sorted ascending by date. Used by L4 wear
+        intelligence to compute daily wear rates without needing consecutive-
+        record arithmetic in the sensor layer.
+
+        Returns an empty list when fewer than 2 days of data exist (not enough
+        to compute a meaningful rate).
+        """
+        buckets: dict[date, int] = {}
+        for r in self.query(days):
+            dt = dt_util.parse_datetime(r.get("started_at", ""))
+            if dt and r.get("bbrun_hr") is not None:
+                day = dt_util.as_local(dt).date()
+                if day not in buckets or r["bbrun_hr"] > buckets[day]:
+                    buckets[day] = r["bbrun_hr"]
+        return sorted(
+            [{"date": d.isoformat(), "bbrun_hr": hr} for d, hr in buckets.items()],
+            key=lambda x: x["date"],
+        )
+
+    def wear_rate_since_reset(
+        self,
+        reset_hr: int,
+        reset_at: str | None,
+        current_hr: int,
+    ) -> float | None:
+        """Return average bbrun hours consumed per day since the last part reset.
+
+        Returns None when:
+        - reset_at is unknown (reset never recorded or store was empty)
+        - current_hr has not advanced beyond reset_hr (robot not yet used)
+        - fewer than 3 days have elapsed since reset (insufficient baseline)
+        - reset_at cannot be parsed
+
+        Never returns a negative value.
+        """
+        if reset_at is None or current_hr <= reset_hr:
+            return None
+        try:
+            reset_dt = dt_util.parse_datetime(reset_at)
+        except (ValueError, TypeError):
+            return None
+        if reset_dt is None:
+            return None
+        if reset_dt.tzinfo is None:
+            reset_dt = reset_dt.replace(tzinfo=timezone.utc)
+        days_elapsed = (dt_util.utcnow() - reset_dt).total_seconds() / 86400
+        if days_elapsed < 3:
+            return None
+        rate = (current_hr - reset_hr) / days_elapsed
+        return round(max(0.0, rate), 2)

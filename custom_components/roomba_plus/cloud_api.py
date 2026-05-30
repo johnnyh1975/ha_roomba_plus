@@ -41,6 +41,10 @@ def _discovery_url(country_code: str) -> str:
     """
     return f"https://disc-prod.iot.irobotapi.com/v1/discover/endpoints?country_code={country_code}"
 
+
+# Backward-compatible name used by existing tests (v1.8.3+: parameterised by country_code)
+DISCOVERY_URL: str = _discovery_url("US")
+
 _USER_AGENT_APP = "iRobot/7.16.2.140449 CFNetwork/1568.100.1.2.1 Darwin/24.0.0"
 _USER_AGENT_AWS = "aws-sdk-iOS/2.27.6 iOS/18.0.1 en_US"
 

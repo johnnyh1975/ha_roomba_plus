@@ -334,6 +334,45 @@
       },
       "next_likely_clean_window": {
         "name": "Presencia – Próxima ventana de limpieza"
+      },
+      "filter_wear_rate": {
+        "name": "Mantenimiento – Tasa desgaste filtro"
+      },
+      "brush_wear_rate": {
+        "name": "Mantenimiento – Tasa desgaste cepillos"
+      },
+      "pad_wear_rate": {
+        "name": "Mantenimiento – Tasa desgaste pad"
+      },
+      "filter_days_until_due": {
+        "name": "Mantenimiento – Filtro días restantes"
+      },
+      "brush_days_until_due": {
+        "name": "Mantenimiento – Cepillos días restantes"
+      },
+      "pad_days_until_due": {
+        "name": "Mantenimiento – Pad días restantes"
+      },
+      "battery_capacity_mah": {
+        "name": "Capacidad batería"
+      },
+      "nav_panics": {
+        "name": "Eventos pánico navegación"
+      },
+      "cliff_events_front": {
+        "name": "Eventos borde – Frontal"
+      },
+      "cliff_events_rear": {
+        "name": "Eventos borde – Trasero"
+      },
+      "mission_recharge_minutes": {
+        "name": "Misión – Tiempo de carga restante"
+      },
+      "mission_expire_minutes": {
+        "name": "Misión – Tiempo hasta expirar"
+      },
+      "mission_id": {
+        "name": "Misión – ID"
       }
     },
     "binary_sensor": {
@@ -383,6 +422,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Tapa abierta"
+      },
+      "mop_tank_present_direct": {
+        "name": "Depósito presente"
+      },
+      "mid_mission_recharge": {
+        "name": "Recarga intermedia activa"
       }
     },
     "button": {
@@ -424,6 +472,9 @@
       },
       "power_off": {
         "name": "Apagar (experimental)"
+      },
+      "map_training": {
+        "name": "Acción – Iniciar mapeo"
       }
     },
     "switch": {
@@ -449,6 +500,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Seleccionar zona (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Humedad pad desechable",
+        "state": {
+          "1": "Bajo",
+          "2": "Medio",
+          "3": "Alto"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Humedad pad reutilizable",
+        "state": {
+          "1": "Bajo",
+          "2": "Medio",
+          "3": "Alto"
+        }
       }
     },
     "image": {

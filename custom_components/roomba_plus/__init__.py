@@ -389,6 +389,45 @@ async def _async_handle_clean_room(call: ServiceCall) -> None:
     return {}
 
 
+
+
+def _async_signal_entities(
+    hass: "HomeAssistant",
+    entry_id: str,
+    keys: list[str],
+) -> None:
+    """Force-refresh sensor/binary_sensor entities after non-MQTT state changes.
+
+    Called after maintenance resets to immediately reflect the new baseline
+    in timestamp sensors and L4 wear sensors, without waiting for the next
+    MQTT push from the robot.
+
+    Silent on any failure — missing entities are not an error condition.
+    """
+    from homeassistant.helpers import entity_registry as er
+    ent_reg = er.async_get(hass)
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None:
+        return
+    data = entry.runtime_data
+    robot_uid = f"roomba_plus_{data.blid}"
+    for key in keys:
+        for platform in ("sensor", "binary_sensor"):
+            entity_id = ent_reg.async_get_entity_id(
+                platform, DOMAIN, f"{robot_uid}_{key}"
+            )
+            if entity_id:
+                current = hass.states.get(entity_id)
+                if current:
+                    hass.states.async_set(
+                        entity_id,
+                        current.state,
+                        current.attributes,
+                        force_update=True,
+                    )
+                break
+
+
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> bool:
@@ -496,22 +535,22 @@ async def async_setup_entry(
     await mission_store.async_load(hass, config_entry.entry_id)
 
     # Restore L3 last-error state from the mission history.
-    # Walk records newest-first: if the most recent completed mission came
-    # AFTER the most recent error, the error is cleared (robot recovered).
+    # Semantics aligned with v1.9.1 live behaviour: error persists until the
+    # NEXT error, not until any completed mission. Walk newest-first and take
+    # the most recent error/stuck record regardless of what follows it.
     # Must be determined BEFORE RoombaData is constructed.
     last_error_code: int | None = None
     last_error_at: str | None = None
     last_error_zone: str | None = None
     for _rec in reversed(mission_store._records):
         _res = _rec.get("result")
-        if _res == "completed":
-            # A successful mission after any error — error is cleared
-            break
         if _res in ("error", "stuck") and _rec.get("error_code"):
             last_error_code = _rec["error_code"]
             last_error_at   = _rec.get("ended_at")
             last_error_zone = (_rec.get("zones") or [None])[0]
             break
+        # completed/cancelled missions do NOT clear the error — consistent with
+        # live behaviour in _async_record_mission (v1.9.1).
 
     # ── v1.7.0 L5 — Blocking manager ─────────────────────────────────────────
     blocking_manager: BlockingManager | None = None
@@ -528,25 +567,32 @@ async def async_setup_entry(
         presence_manager = PresenceManager(hass, config_entry)
         _LOGGER.debug("Roomba+ presence manager active")
 
-    # ── Cloud coordinator (SMART robots + credentials only) ────────────────
+    # ── Cloud coordinator (EPHEMERAL + SMART robots with credentials) ────────
+    # EPHEMERAL (980/900-series): missionhistory endpoint available — unlocks
+    #   lifetime_missions, lifetime_cleaning_time, lifetime_cleaned_area sensors.
+    # SMART (i/s/j-series): additionally pmaps, favorites, zone data.
+    # NONE (600-series): no cloud account — coordinator never created.
     cloud_coordinator: IrobotCloudCoordinator | None = None
     irobot_username = config_entry.data.get(CONF_IROBOT_USERNAME)
     irobot_password = config_entry.data.get(CONF_IROBOT_PASSWORD)
 
-    if map_capability == MapCapability.SMART and irobot_username and irobot_password:
+    if map_capability != MapCapability.NONE and irobot_username and irobot_password:
+        has_pmaps = map_capability == MapCapability.SMART
         cloud_coordinator = IrobotCloudCoordinator(
             hass=hass,
             config_entry=config_entry,
             blid=config_entry.data[CONF_BLID],
             username=irobot_username,
             password=irobot_password,
+            has_pmaps=has_pmaps,
         )
         try:
             await cloud_coordinator.async_config_entry_first_refresh()
             _LOGGER.info(
-                "Roomba+ cloud: coordinator active for %s (%d pmap(s))",
+                "Roomba+ cloud: coordinator active for %s (%d pmap(s), mode=%s)",
                 config_entry.data[CONF_BLID],
                 len(cloud_coordinator.data.get("pmaps", [])),
+                map_capability.value,
             )
         except Exception:  # noqa: BLE001
             # Cloud failure must never prevent local MQTT from working.
@@ -656,9 +702,29 @@ async def async_setup_entry(
                     translation_key="maintenance_store_unavailable",
                 )
             state = data.roomba_reported_state()
-            current_hr: int = state.get("bbrun", {}).get("hr", 0)
+            # Merge bbrun + runtimeStats — mirrors entity.py run_stats.
+            # On i-series (lewis firmware) hr lives in runtimeStats, not bbrun.
+            # Storing the wrong hr=0 as reset baseline would produce wildly
+            # inflated wear rates for all i-series users.
+            _bbrun   = state.get("bbrun", {})
+            _runtime = state.get("runtimeStats", {})
+            current_hr: int = _bbrun.get("hr") or _runtime.get("hr") or 0
             getattr(data.maintenance_store, f"reset_{part}")(current_hr)
             await data.maintenance_store.async_save(hass, cfg.entry_id)
+            _async_signal_entities(hass, cfg.entry_id, [
+                # Timestamp sensors — show new reset date immediately
+                "filter_last_replaced",
+                "brush_last_replaced",
+                "pad_last_replaced",
+                "battery_last_replaced",
+                # L4 Wear Intelligence — baseline changed, rate resets to None
+                "filter_wear_rate",
+                "brush_wear_rate",
+                "pad_wear_rate",
+                "filter_days_until_due",
+                "brush_days_until_due",
+                "pad_days_until_due",
+            ])
             _LOGGER.info("reset_%s: executed for %s at %dh", part, eid, current_hr)
 
     _RESET_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_ids})
@@ -765,6 +831,8 @@ async def async_setup_entry(
     # to mission_store to avoid double-counting.
     _last_phase: str = ""
     _current_mission_zones: list[str] = []
+    _mission_start_ts: int = 0   # cached mssnStrtTm from first cleaning-phase update
+    _nstuck_at_start: int = 0    # bbrun.nStuck at mission start — delta used for result
 
     _CLEANING_PHASES:    frozenset = frozenset({"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "evac"})
     _MISSION_END_PHASES: frozenset = frozenset({"completed", "cancelled", "charge", "stop"})
@@ -798,19 +866,38 @@ async def async_setup_entry(
         mission: dict[str, Any],
         reported: dict[str, Any],
         zones: list[str],
+        start_ts: int,
+        nstuck_delta: int,
     ) -> None:
-        """Build and append a mission record to MissionStore."""
+        """Build and append a mission record to MissionStore.
+
+        Args:
+            start_ts:     mssnStrtTm cached at mission START (not end — robot
+                          resets it to 0 on 980/900-series firmware before the
+                          end MQTT message arrives).
+            nstuck_delta: bbrun.nStuck delta since mission start — used instead
+                          of the lifetime counter to avoid marking every mission
+                          as stuck when bbrun arrives in the same MQTT packet.
+        """
         _data: RoombaData = entry.runtime_data
         if _data.mission_store is None:
             return
 
         now = dt_util.utcnow()
-        started_ts = mission.get("mssnStrtTm") or 0
-        started_at = (
-            datetime.datetime.fromtimestamp(started_ts, datetime.timezone.utc)
-            if started_ts
-            else now
-        )
+
+        # Use cached start_ts from mission-start phase transition.
+        # mssnStrtTm in the final MQTT message is 0 on 980/900-series firmware.
+        if start_ts:
+            started_at = datetime.datetime.fromtimestamp(
+                start_ts, datetime.timezone.utc
+            )
+        else:
+            # Fallback: wall-clock at recording time (duration will be ~0).
+            # This path should not be reached after the closure fix — log it.
+            started_at = now
+            _LOGGER.warning(
+                "MissionStore: no cached start_ts for mission — duration will be 0"
+            )
 
         phase = mission.get("phase", "")
         error_code: int = mission.get("error", 0) or 0
@@ -818,16 +905,21 @@ async def async_setup_entry(
             result = "error"
         elif phase == "cancelled":
             result = "cancelled"
-        elif mission.get("nStuck", 0) or reported.get("bbrun", {}).get("nStuck", 0):
+        elif nstuck_delta > 0:
+            # Use delta, not lifetime counter — bbrun.nStuck is cumulative and
+            # would mark every mission as stuck if bbrun arrives with cleanMissionStatus.
             result = "stuck"
         else:
             result = "completed"
 
-        # Compute duration from wall-clock elapsed time rather than mssnM.
-        # mssnM is reset to 0 by the robot before the mission-end MQTT message
-        # arrives, so mission.get("mssnM") is always 0 at recording time.
         elapsed_sec = (now - started_at).total_seconds()
         duration_min = max(0, round(elapsed_sec / 60))
+
+        # bbrun_hr: merge bbrun + runtimeStats (mirrors entity.py run_stats).
+        # On i-series (lewis firmware) hr lives in runtimeStats, not bbrun.
+        bbrun = reported.get("bbrun", {})
+        runtime = reported.get("runtimeStats", {})
+        bbrun_hr = bbrun.get("hr") or runtime.get("hr") or 0
 
         record: dict[str, Any] = {
             "id": f"m_{int(started_at.timestamp())}",
@@ -839,48 +931,62 @@ async def async_setup_entry(
             "initiator": mission.get("initiator", "none"),
             "zones": zones,
             "error_code": error_code if error_code else None,
-            "bbrun_hr": reported.get("bbrun", {}).get("hr", 0),
+            "bbrun_hr": bbrun_hr,
         }
 
         await _data.mission_store.async_append(record)
         await _data.mission_store.async_save(hass, entry.entry_id)
 
-        # Update L3 runtime error state
+        # Update L3 runtime error state.
+        # Only update on error/stuck — do NOT clear on completed so the last
+        # error remains visible until the next error occurs.
         if result in ("error", "stuck"):
             _data.last_error_code = error_code if error_code else None
             _data.last_error_at   = now.isoformat()
             _data.last_error_zone = zones[0] if zones else None
-        elif result == "completed":
-            _data.last_error_code = None
-            _data.last_error_at   = None
-            _data.last_error_zone = None
 
         _LOGGER.debug(
-            "MissionStore: recorded %s result=%s zones=%s",
-            record["id"], result, zones,
+            "MissionStore: recorded %s result=%s duration=%dmin zones=%s",
+            record["id"], result, duration_min, zones,
         )
 
     def _on_mission_message(json_data: dict[str, Any]) -> None:
-        nonlocal _last_phase, _current_mission_zones
+        nonlocal _last_phase, _current_mission_zones, _mission_start_ts, _nstuck_at_start
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
             return
         mission = reported["cleanMissionStatus"]
         phase = mission.get("phase", "")
 
-        # Capture zone names at mission START — lastCommand.regions is fresh here.
-        # By mission end it may be overwritten by dock/schedule commands.
+        # Capture zone names and start metadata at mission START.
+        # lastCommand.regions is fresh at start — may be overwritten by end.
+        # mssnStrtTm is cached here because 980/900-series firmware resets it
+        # to 0 in the mission-end MQTT message (same as mssnM).
         if phase in _CLEANING_PHASES and _last_phase not in _CLEANING_PHASES:
             _current_mission_zones = _capture_zone_names(config_entry, reported)
+            _mission_start_ts = mission.get("mssnStrtTm") or 0
+            # Cache current lifetime nStuck so we can compute delta at end.
+            bbrun = reported.get("bbrun", {})
+            _nstuck_at_start = bbrun.get("nStuck", 0)
+            _LOGGER.debug(
+                "MissionStore: mission started ts=%s nstuck_baseline=%d",
+                _mission_start_ts, _nstuck_at_start,
+            )
 
         if phase in _MISSION_END_PHASES and _last_phase in _CLEANING_PHASES:
+            bbrun_end = reported.get("bbrun", {})
+            nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - _nstuck_at_start)
             asyncio.run_coroutine_threadsafe(
                 _async_record_mission(
-                    config_entry, mission, reported, list(_current_mission_zones)
+                    config_entry, mission, reported, list(_current_mission_zones),
+                    start_ts=_mission_start_ts,
+                    nstuck_delta=nstuck_delta,
                 ),
                 hass.loop,
             )
             _current_mission_zones = []
+            _mission_start_ts = 0
+            _nstuck_at_start = 0
 
         _last_phase = phase
 

@@ -334,6 +334,45 @@
       },
       "next_likely_clean_window": {
         "name": "Présence – Prochaine fenêtre de nettoyage"
+      },
+      "filter_wear_rate": {
+        "name": "Maintenance – Taux d’usure filtre"
+      },
+      "brush_wear_rate": {
+        "name": "Maintenance – Taux d’usure brosses"
+      },
+      "pad_wear_rate": {
+        "name": "Maintenance – Taux d’usure pad"
+      },
+      "filter_days_until_due": {
+        "name": "Maintenance – Filtre jours avant"
+      },
+      "brush_days_until_due": {
+        "name": "Maintenance – Brosses jours avant"
+      },
+      "pad_days_until_due": {
+        "name": "Maintenance – Pad jours avant"
+      },
+      "battery_capacity_mah": {
+        "name": "Capacité batterie"
+      },
+      "nav_panics": {
+        "name": "Événements panique nav."
+      },
+      "cliff_events_front": {
+        "name": "Détections bord – Avant"
+      },
+      "cliff_events_rear": {
+        "name": "Détections bord – Arrière"
+      },
+      "mission_recharge_minutes": {
+        "name": "Mission – Temps de recharge restant"
+      },
+      "mission_expire_minutes": {
+        "name": "Mission – Temps avant expiration"
+      },
+      "mission_id": {
+        "name": "Mission – ID"
       }
     },
     "binary_sensor": {
@@ -383,6 +422,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Couvercle ouvert"
+      },
+      "mop_tank_present_direct": {
+        "name": "Réservoir présent"
+      },
+      "mid_mission_recharge": {
+        "name": "Recharge en cours de mission"
       }
     },
     "button": {
@@ -424,6 +472,9 @@
       },
       "power_off": {
         "name": "Éteindre (expérimental)"
+      },
+      "map_training": {
+        "name": "Action – Démarrer cartographie"
       }
     },
     "switch": {
@@ -449,6 +500,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Sélectionner une zone (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Humidité pad jetable",
+        "state": {
+          "1": "Faible",
+          "2": "Moyen",
+          "3": "Élevé"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Humidité pad réutilisable",
+        "state": {
+          "1": "Faible",
+          "2": "Moyen",
+          "3": "Élevé"
+        }
       }
     },
     "image": {

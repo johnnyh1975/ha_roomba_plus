@@ -1,12 +1,12 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.8.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-1.9.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.8 adds mission intelligence:** a persistent mission log, error diagnosis with suggested actions, presence-aware schedule control, a REST history API for the Lovelace card, and a bugfix for silent wrong-map cleans when multiple Smart Maps exist in the same iRobot account.
+Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.9 adds wear intelligence, device diagnostics, Braava controls, and cloud mission history for 900-series robots.** v1.8 added mission intelligence: a persistent mission log, error diagnosis, presence-aware schedule control, and a REST history API.
 
 ---
 
@@ -17,7 +17,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 | Series | Examples | Map | Zones | Cloud features | Schedule hold | Bin present | Tested |
 |---|---|---|---|---|---|---|---|
 | **600** (Bump & Run) | Roomba 694, 692 | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ untested |
-| **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ❌ | ❌ | ❌ | ✅ **Roomba 980** |
+| **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ✅ mission history | ❌ | ❌ | ✅ **Roomba 980** |
 | **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **i7+** |
 | **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
 | **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
@@ -31,7 +31,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 
 ## Features
 
-### Sensors (53 local + 3 cloud)
+### Sensors (69 local + 3 cloud)
 
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
@@ -45,6 +45,9 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Mission log (v1.8)** — clean streak (days), missions last 30 days, completion rate 30 days, area cleaned today (VSLAM robots), last mission result, last mission duration
 - **Error intelligence (v1.8)** — last error code (with `description` and `action` attributes), last error time, last error zone, stuck events 30 days, problem zone (most frequent stuck zone, VSLAM robots)
 - **Presence analytics (v1.8)** — clean opportunities 7 days, clean utilisation 7 days, next likely clean window
+- **Mission Phase Intelligence (v1.9)** — `mission_recharge_minutes` (minutes until robot resumes after mid-mission dock), `mission_expire_minutes` (minutes until mission expires), `mission_id` (opt-in, stable string across all recharge cycles of one mission — useful for grouping related events in dashboards).
+- **Wear Intelligence (v1.9)** — filter wear rate (h/day), brush wear rate (h/day), filter days until due, brush days until due. Equivalent pad sensors for Braava. Recalculated after every maintenance reset — all show `Unknown` until 3 days of data accumulate after the first reset.
+- **Device diagnostics (v1.9, opt-in)** — battery capacity (mAh), navigation panic events, cliff events front, cliff events rear. Disabled by default — enable via the entity list.
 
 ### Binary sensors
 
@@ -56,6 +59,9 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Maintenance due (v1.7)** — ON when any consumable has reached zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). One automation trigger instead of four separate threshold checks.
 - **Start blocked (v1.7)** — ON while a `smart_start` is queued waiting for blocking sensors to clear. Attributes: `blocking_entities`, `queued_since`, `timeout_at`.
 - **Schedule hold active (v1.8)** — ON when `schedHold` is true for any reason. Attribute `source` distinguishes `presence_manager` (automated by Roomba+) from `manual` (toggled by the switch). Only present on i/s/j/Braava robots.
+- **Mid-mission recharge (v1.9)** — ON when the robot is recharging between cleaning passes (`phase=charge`, `cycle≠none`). Distinguishes mid-mission recharge from user-pause (both show `Paused` in HA) and from completed charging (`Docked`). Use this to drive dynamic dashboards that keep showing mission tiles during recharge.
+- **Lid open (v1.9)** — ON when the Braava lid is open. Only present on Braava. Useful in automations to warn before a scheduled mopping run.
+- **Tank present (v1.9)** — ON when the Braava water tank is physically installed (top-level MQTT field, distinct from `mop_ready.tank_present`). Only present on Braava.
 
 ### Controls
 
@@ -67,6 +73,8 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Smart start (v1.7)** — `roomba_plus.smart_start` action with blocking-sensor gate; supports optional room list (SMART robots) and `override_blocking` field
 - **Locate robot** — play find-me tone (button)
 - **Evacuate bin** — Clean Base models (button)
+- **Start map training (v1.9)** — triggers a mapping survey without cleaning (button, Smart Map robots only — i/s/j-series). Useful after moving furniture or adding a new room before the robot rebuilds its Smart Map.
+- **Braava pad wetness (v1.9)** — select wetness level (Low / Medium / High) independently for disposable and reusable pads. Only present on Braava when `padWetness` is reported in MQTT state.
 
 ### Experimental buttons — 900-series / 980 (v1.5.1, disabled by default)
 
@@ -81,9 +89,17 @@ Four additional buttons are available for 900-series robots (980/985), disabled 
 
 > `sleep` and `power off` are most useful in power management automations. Note that after `power off` the robot will not respond to local MQTT commands until physically woken — press the Clean button or use the iRobot app.
 
-### Cloud features — Smart Map robots with iRobot credentials (v1.5, optional)
+### Cloud features — all robots with iRobot credentials (v1.5/v1.9, optional)
 
-When you enter your iRobot app email and password during setup (or later via **Configure → iRobot cloud credentials**), Roomba+ connects to the iRobot cloud to fetch authoritative Smart Map data:
+When you enter your iRobot app email and password during setup (or later via **Configure → iRobot cloud credentials**), Roomba+ connects to the iRobot cloud.
+
+**For 900-series robots (980, 985) — v1.9:**
+- **Mission statistics from iRobot cloud** — three sensors populated from the `/missionhistory` API:
+  - **Total missions** (`lifetime_missions`) — the true lifetime mission count. The iRobot firmware embeds this counter in every cloud record; it reflects the full history, not just the API window.
+  - **Cleaned area** (`lifetime_cleaned_area`) — sum of area across the API response window (~30 recent missions). The iRobot cloud does not expose a cumulative lifetime area, so this reflects recent activity. The sensor attribute `source: recent_mission_window` documents this.
+  - **Cleaning time** (`lifetime_cleaning_time`) — sum of actual cleaning time (`runM`, excluding mid-mission recharge) across the API window. Same caveat as area. Available even though the 980 has no persistent Smart Map.
+
+**For Smart Map robots (i/s/j/Braava m6) — available since v1.5:**
 
 - **Zone select from cloud** — room and zone names come directly from your Smart Map; no manual repair-flow naming required. One select entity per floor.
 - **Multi-map support** — robots with more than one stored Smart Map get one zone select entity per map. The active map is enabled by default; legacy/inactive maps are disabled by default and labelled `(inactive)`. Zones from inactive maps cannot conflict with cleaning operations.
@@ -645,6 +661,10 @@ Upgrade to v1.6. Earlier versions required the repair naming flow to populate zo
 
 They are disabled by default. Go to Settings → Devices & Services → Roomba+ → your device → the entity list (including disabled entities) → enable the ones you want. They only appear on 900-series robots (980/985) — Smart Map robots (i/s/j) do not get them.
 
+**Wear Intelligence sensors show Unknown for first 3 days after a reset**
+
+This is expected — the wear rate calculation requires at least 3 days of mission data. They will populate automatically.
+
 **Mission log sensors show "Unknown" after upgrading to v1.8.0**
 
 The mission log is populated going forward — it has no history from before the upgrade. The streak, completion rate, and area sensors will be `Unknown` until the first mission completes. This is expected.
@@ -656,6 +676,18 @@ The error state is cleared automatically when the next mission completes success
 **Presence-aware scheduling step not visible in options menu**
 
 The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
+
+**Wear rate sensors show Unknown after replacement reset**
+
+Wear Intelligence sensors need at least 3 days of mission data recorded since the reset to calculate a meaningful rate. This is by design — a rate based on fewer days would be unreliable. The sensors will populate automatically once 3 days have elapsed.
+
+**Lifetime cleaned area / cleaning time show surprisingly low values**
+
+These sensors aggregate data from the iRobot cloud API response window (the most recent ~30 missions). The iRobot API does not expose a single lifetime accumulator for area or time — only the per-mission values are available. The sensor `extra_state_attributes` include `source: recent_mission_window` and a note explaining this. The **total missions** sensor is different: it reads the lifetime counter that the robot embeds in every cloud record, so it reflects the true lifetime count.
+
+**Cloud mission history not available for my Roomba 980**
+
+Cloud mission history for 900-series robots was introduced in v1.9. If you upgraded from an earlier version, go to **Settings → Devices → Roomba+ → Configure → iRobot cloud credentials** and re-enter (or just save) your credentials to activate the feature. A restart is required for the lifetime sensors to appear.
 
 **Presence manager unfreezes schedule but robot doesn't clean**
 

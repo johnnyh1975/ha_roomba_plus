@@ -376,12 +376,14 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         # Build model-appropriate menu.
         # All robots: settings, blocking_sensors (L5, model-agnostic).
         # EPHEMERAL + SMART: additionally map_management (L7).
-        # SMART: additionally cloud_credentials.
+        # EPHEMERAL + SMART: additionally cloud_credentials (v1.9.0).
+        #   SMART: unlocks zones, favorites, lifetime stats.
+        #   EPHEMERAL (980/900): unlocks lifetime mission stats only.
         # v1.8.0 L6 — presence_scheduling added when robot supports schedHold
         menu: list[str] = ["settings", "blocking_sensors"]
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.insert(1, "map_management")
-        if has_smart_map(state):
+        if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.append("cloud_credentials")
         if "schedHold" in state:
             menu.append("presence_scheduling")

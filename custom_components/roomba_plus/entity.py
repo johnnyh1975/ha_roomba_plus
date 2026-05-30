@@ -117,7 +117,13 @@ class IRobotEntity(Entity):
 
     @property
     def last_mission(self) -> Any | None:
-        """Start time of the last mission as a timezone-aware datetime, or None."""
+        """Start time of the current or last mission from live MQTT state, or None.
+
+        Returns None when mssnStrtTm is 0 (robot on dock, 900-series firmware).
+        The last_mission sensor uses MissionStore instead of this property to
+        avoid the permanent-None problem on 900-series — this property is kept
+        for other uses (e.g. mission duration display during active missions).
+        """
         ts = self.clean_mission_status.get("mssnStrtTm")
         if ts is None or ts == 0:
             return None
@@ -213,7 +219,13 @@ class IRobotEntity(Entity):
 
         Refreshes the local vacuum_state snapshot and schedules a HA state
         write if new_state_filter() returns True.
+
+        Disabled entities are skipped entirely — HA raises a warning if
+        schedule_update_ha_state() is called on a disabled entity, and there
+        is no point updating state that will not be written to the state machine.
         """
+        if not self.enabled:
+            return
         state = json_data.get("state", {}).get("reported", {})
         if self.new_state_filter(state):
             self.vacuum_state = roomba_reported_state(self.vacuum)

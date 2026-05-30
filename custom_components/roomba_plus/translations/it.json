@@ -334,6 +334,45 @@
       },
       "next_likely_clean_window": {
         "name": "Presenza – Prossima finestra di pulizia"
+      },
+      "filter_wear_rate": {
+        "name": "Manutenzione – Tasso usura filtro"
+      },
+      "brush_wear_rate": {
+        "name": "Manutenzione – Tasso usura spazzole"
+      },
+      "pad_wear_rate": {
+        "name": "Manutenzione – Tasso usura pad"
+      },
+      "filter_days_until_due": {
+        "name": "Manutenzione – Filtro giorni rimasti"
+      },
+      "brush_days_until_due": {
+        "name": "Manutenzione – Spazzole giorni rimasti"
+      },
+      "pad_days_until_due": {
+        "name": "Manutenzione – Pad giorni rimasti"
+      },
+      "battery_capacity_mah": {
+        "name": "Capacità batteria"
+      },
+      "nav_panics": {
+        "name": "Eventi panico navigazione"
+      },
+      "cliff_events_front": {
+        "name": "Rilevamenti bordo – Anteriore"
+      },
+      "cliff_events_rear": {
+        "name": "Rilevamenti bordo – Posteriore"
+      },
+      "mission_recharge_minutes": {
+        "name": "Missione – Tempo ricarica rimanente"
+      },
+      "mission_expire_minutes": {
+        "name": "Missione – Tempo alla scadenza"
+      },
+      "mission_id": {
+        "name": "Missione – ID"
       }
     },
     "binary_sensor": {
@@ -383,6 +422,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Coperchio aperto"
+      },
+      "mop_tank_present_direct": {
+        "name": "Serbatoio presente"
+      },
+      "mid_mission_recharge": {
+        "name": "Ricarica intermedia attiva"
       }
     },
     "button": {
@@ -424,6 +472,9 @@
       },
       "power_off": {
         "name": "Spegni (sperimentale)"
+      },
+      "map_training": {
+        "name": "Azione – Avvia mappatura"
       }
     },
     "switch": {
@@ -449,6 +500,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Seleziona zona (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Umidità pad usa e getta",
+        "state": {
+          "1": "Basso",
+          "2": "Medio",
+          "3": "Alto"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Umidità pad riutilizzabile",
+        "state": {
+          "1": "Basso",
+          "2": "Medio",
+          "3": "Alto"
+        }
       }
     },
     "image": {

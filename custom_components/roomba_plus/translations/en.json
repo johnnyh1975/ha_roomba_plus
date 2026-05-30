@@ -334,6 +334,45 @@
       },
       "next_likely_clean_window": {
         "name": "Presence – Next clean window"
+      },
+      "filter_wear_rate": {
+        "name": "Maintenance – Filter wear rate"
+      },
+      "brush_wear_rate": {
+        "name": "Maintenance – Brush wear rate"
+      },
+      "pad_wear_rate": {
+        "name": "Maintenance – Pad wear rate"
+      },
+      "filter_days_until_due": {
+        "name": "Maintenance – Filter days until due"
+      },
+      "brush_days_until_due": {
+        "name": "Maintenance – Brush days until due"
+      },
+      "pad_days_until_due": {
+        "name": "Maintenance – Pad days until due"
+      },
+      "battery_capacity_mah": {
+        "name": "Battery capacity"
+      },
+      "nav_panics": {
+        "name": "Navigation panic events"
+      },
+      "cliff_events_front": {
+        "name": "Cliff events – Front"
+      },
+      "cliff_events_rear": {
+        "name": "Cliff events – Rear"
+      },
+      "mission_recharge_minutes": {
+        "name": "Mission – Recharge time remaining"
+      },
+      "mission_expire_minutes": {
+        "name": "Mission – Time until expiry"
+      },
+      "mission_id": {
+        "name": "Mission – ID"
       }
     },
     "binary_sensor": {
@@ -383,6 +422,15 @@
             }
           }
         }
+      },
+      "mop_lid_open": {
+        "name": "Lid open"
+      },
+      "mop_tank_present_direct": {
+        "name": "Tank present"
+      },
+      "mid_mission_recharge": {
+        "name": "Mid-mission recharge"
       }
     },
     "button": {
@@ -424,6 +472,9 @@
       },
       "power_off": {
         "name": "Power off (experimental)"
+      },
+      "map_training": {
+        "name": "Action – Start map training"
       }
     },
     "switch": {
@@ -449,6 +500,22 @@
       },
       "cloud_smart_zone_select": {
         "name": "Select zone (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Disposable pad wetness",
+        "state": {
+          "1": "Low",
+          "2": "Medium",
+          "3": "High"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Reusable pad wetness",
+        "state": {
+          "1": "Low",
+          "2": "Medium",
+          "3": "High"
+        }
       }
     },
     "image": {
