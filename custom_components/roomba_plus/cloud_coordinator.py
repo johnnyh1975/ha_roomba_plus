@@ -35,6 +35,74 @@ _CLOUD_POLL_INTERVAL = timedelta(hours=24)
 
 
 
+def classify_mission_result(record: dict) -> str:
+    """Classify a raw /missionhistory record into a canonical result string.
+
+    Uses the v2.0 classification scheme, which is more granular than the
+    v1.9 MQTT-based scheme in callbacks.py:
+
+      "completed"          — done="done"
+      "cancelled_by_user"  — done_raw="usrEnd" (user pressed stop in the app)
+      "cancelled"          — done="cncl" but not user-initiated
+      "error_{code}"       — done="stuck" + pauseId>0, e.g. "error_17"
+      "stuck"              — done="stuck" + pauseId=0 (no specific code)
+      "unknown"            — unrecognised done value, logged for analysis
+
+    Priority: done_raw wins over done for user-cancellation detection because
+    the iRobot cloud normalises "usrEnd" → "cncl" in the done field, losing
+    the user-intent signal. pauseId is the authoritative error code from the
+    cloud — more reliable than cleanMissionStatus.error from MQTT, which
+    sometimes never arrives on 900-series firmware.
+
+    Args:
+        record: A single raw record dict from /missionhistory.
+
+    Returns:
+        Canonical result string for use in sensors and REST API.
+    """
+    done: str = record.get("done", "") or ""
+    done_raw: str = record.get("done_raw", "") or ""
+    pause_id: int = int(record.get("pauseId", 0) or 0)
+
+    if done == "done":
+        return "completed"
+
+    if done_raw == "usrEnd":
+        return "cancelled_by_user"
+
+    if done in ("cncl",):
+        return "cancelled"
+
+    if done == "stuck":
+        if pause_id > 0:
+            return f"error_{pause_id}"
+        return "stuck"
+
+    # Known done values confirmed from field logs (June 2026, Roomba 980 v2.4.17):
+    if done == "ok":
+        return "completed"
+
+    if done == "full":
+        return "cancelled"
+
+    if done == "bat":
+        return "error_battery"
+
+    if done == "schErr":
+        if pause_id > 0:
+            return f"error_{pause_id}"
+        return "cancelled"
+
+    if done:
+        import logging
+        logging.getLogger(__name__).debug(
+            "classify_mission_result: unknown done=%r done_raw=%r pauseId=%d — "
+            "logging for further analysis",
+            done, done_raw, pause_id,
+        )
+    return "unknown"
+
+
 def _normalize_mission_history(raw: dict) -> dict:
     """Normalize a raw /missionhistory record into a consistent shape.
 
@@ -234,6 +302,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result: dict[str, Any] = {
             "pmaps": [],
             "mission_history": {},
+            "mission_history_raw": [],   # v2.0: full per-mission record list
             "favorites": [],
         }
         try:
@@ -298,9 +367,17 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if isinstance(raw_history, list):
             if raw_history:
+                # Store raw per-mission records for v2.0 sensors and REST API.
+                # Each record preserves all 28 confirmed fields from the API
+                # (startTime, timestamp, sqft, done, done_raw, pauseId, wlBars, etc.)
+                # A pre-computed "classified_result" field is added so consumers
+                # don't need to call classify_mission_result() themselves.
+                result["mission_history_raw"] = [
+                    {**r, "classified_result": classify_mission_result(r)}
+                    for r in raw_history
+                    if isinstance(r, dict)
+                ]
                 # Aggregate ALL records for lifetime totals.
-                # Individual records use iRobot-internal field names (durationM,
-                # done, sqft, etc.) — _aggregate_history sums them correctly.
                 result["mission_history"] = _aggregate_history(raw_history)
                 _LOGGER.debug(
                     "iRobot cloud: aggregated %d mission records -> "
@@ -313,6 +390,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             else:
                 result["mission_history"] = {}
+                result["mission_history_raw"] = []
         elif isinstance(raw_history, dict):
             # Some account types may return a summary dict directly.
             result["mission_history"] = _normalize_mission_history(raw_history)
@@ -333,6 +411,21 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return result
 
     # ── Helpers used by platforms ─────────────────────────────────────────────
+
+    @property
+    def raw_records(self) -> list[dict[str, Any]]:
+        """Return the raw per-mission records from the last /missionhistory fetch.
+
+        Records are ordered newest-first (as returned by the API).
+        Each record contains all confirmed fields: startTime, timestamp, sqft,
+        done, done_raw, pauseId, wlBars, runM, chrgs, evacs, dirt, initiator, etc.
+
+        Returns an empty list when no cloud data is available or the API
+        returned an empty/non-list response.
+        """
+        if not self.data:
+            return []
+        return self.data.get("mission_history_raw", [])
 
     @property
     def active_pmap_id(self) -> str | None:

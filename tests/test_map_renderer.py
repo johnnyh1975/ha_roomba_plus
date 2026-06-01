@@ -345,14 +345,11 @@ class TestInferenceSuggestionsLayer:
         from PIL import Image
         import io
         img = Image.open(io.BytesIO(png)).convert("RGBA")
-        pixels = list(img.get_flattened_data())
-        # get_flattened_data returns flat sequence r,g,b,a,r,g,b,a,...
+        pixels = list(img.getdata())
+        # getdata() returns a sequence of (r,g,b,a) tuples
         # Check that not every pixel is white (255,255,255,255)
         white_pixel = (255, 255, 255, 255)
-        all_white = all(
-            tuple(pixels[i:i+4]) == white_pixel
-            for i in range(0, len(pixels), 4)
-        )
+        all_white = all(p == white_pixel for p in pixels)
         assert not all_white
 
     def test_suggestion_suppressed_when_user_geometry_exists(self):

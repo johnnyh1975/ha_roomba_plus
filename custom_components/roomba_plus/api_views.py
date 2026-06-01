@@ -1,10 +1,50 @@
 """REST API view for Roomba+ — mission history endpoint.
 
-GET /api/roomba_plus/{entry_id}/mission_history?days=28
+GET /api/roomba_plus/{entry_id}/mission_history
 
-Returns a JSON array of DaySummary records used by the Lovelace card
-heatmap. Entity state cannot carry 28 days of history — this endpoint
-is the only way to deliver it to the card.
+Query parameters:
+  days:   int  (1–90, default 28)   — lookback window for day-summary format
+  format: str  ("summary" | "records", default "summary")
+            summary  — day-aggregated DaySummary array (v0.1-beta card format,
+                       always available, sourced from local MissionStore)
+            records  — per-mission array (v1.0 card format, sourced from cloud
+                       raw_records when available, falls back to local
+                       MissionStore records for robots without cloud credentials)
+
+Response shapes
+───────────────
+format=summary (default — backward compatible):
+  [
+    {
+      "date":       "2026-05-01",   // ISO date
+      "total":      2,
+      "completed":  2,
+      "stuck":      0,
+      "area_sqft":  340.0,          // null for 600-series
+      "result":     "completed"     // dominant result for the day
+    }
+  ]
+
+format=records:
+  [
+    {
+      "id":               "m_1700000000",   // unique mission id
+      "started_at":       "2026-05-01T...", // ISO datetime UTC
+      "ended_at":         "2026-05-01T...", // ISO datetime UTC
+      "duration_min":     55,               // total duration incl. recharge
+      "run_min":          50,               // clean time excl. recharge (cloud only, else null)
+      "area_sqft":        180,              // null for 600-series
+      "result":           "completed",      // classified_result (cloud) or local result
+      "initiator":        "schedule",       // "schedule"|"localApp"|"remote"|"none"
+      "zones":            ["Kitchen"],      // zone names (local MissionStore)
+      "error_code":       null,             // pauseId (cloud) or local error_code
+      "recharges":        0,                // chrgs (cloud only, else null)
+      "evacuations":      1,                // evacs (cloud only, else null)
+      "dirt_events":      12,               // dirt (cloud only, else null)
+      "wifi_signal":      [70,68,65,60,62], // wlBars (cloud only, else null)
+      "source":           "cloud"           // "cloud" | "local"
+    }
+  ]
 
 Registered once per HA instance (sentinel guard in __init__.py).
 
@@ -13,8 +53,9 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import datetime
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -28,13 +69,81 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw cloud /missionhistory record to the unified per-mission shape.
+
+    Cloud records use Unix timestamps (startTime, timestamp) and iRobot field
+    names (sqft, runM, chrgs, evacs, dirt, wlBars, pauseId, initiator).
+    classified_result is pre-computed by the coordinator.
+    """
+    start_ts = record.get("startTime")
+    end_ts   = record.get("timestamp")
+
+    started_at = (
+        datetime.datetime.fromtimestamp(int(start_ts), tz=datetime.timezone.utc).isoformat()
+        if start_ts else None
+    )
+    ended_at = (
+        datetime.datetime.fromtimestamp(int(end_ts), tz=datetime.timezone.utc).isoformat()
+        if end_ts else None
+    )
+
+    duration_min = int(record.get("durationM") or record.get("doneM") or 0)
+    run_min      = record.get("runM")
+    pause_id     = record.get("pauseId")
+    error_code   = int(pause_id) if pause_id and int(pause_id) > 0 else None
+
+    return {
+        "id":           f"c_{start_ts}" if start_ts else f"c_{end_ts}",
+        "started_at":   started_at,
+        "ended_at":     ended_at,
+        "duration_min": duration_min,
+        "run_min":      int(run_min) if run_min is not None else None,
+        "area_sqft":    record.get("sqft"),
+        "result":       record.get("classified_result", "unknown"),
+        "initiator":    record.get("initiator", "none"),
+        "zones":        [],        # cloud records carry no zone-name data
+        "error_code":   error_code,
+        "recharges":    record.get("chrgs"),
+        "evacuations":  record.get("evacs"),
+        "dirt_events":  record.get("dirt"),
+        "wifi_signal":  record.get("wlBars"),
+        "source":       "cloud",
+    }
+
+
+def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
+    """Convert a local MissionStore record to the unified per-mission shape.
+
+    Local records use ISO datetime strings and are always present for all
+    robot types. Cloud-only fields are null.
+    """
+    return {
+        "id":           record.get("id", ""),
+        "started_at":   record.get("started_at"),
+        "ended_at":     record.get("ended_at"),
+        "duration_min": record.get("duration_min"),
+        "run_min":      None,       # not available from local MQTT
+        "area_sqft":    record.get("area_sqft"),
+        "result":       record.get("result", "unknown"),
+        "initiator":    record.get("initiator", "none"),
+        "zones":        record.get("zones", []),
+        "error_code":   record.get("error_code"),
+        "recharges":    None,       # not available from local MQTT
+        "evacuations":  None,       # not available from local MQTT
+        "dirt_events":  None,       # not available from local MQTT
+        "wifi_signal":  None,       # not available from local MQTT
+        "source":       "local",
+    }
+
+
 class MissionHistoryView(HomeAssistantView):
     """GET /api/roomba_plus/{entry_id}/mission_history
 
-    Query params:
-      days: int (1–90, default 28) — lookback window
-
-    Response: JSON array of DaySummary dicts sorted by date ascending.
+    Supports two response formats via the `format` query parameter:
+      summary  (default) — day-aggregated DaySummary array, backward compatible
+                           with the v0.1-beta Lovelace card.
+      records             — per-mission unified array for the v1.0 card.
     """
 
     url = "/api/roomba_plus/{entry_id}/mission_history"
@@ -48,25 +157,52 @@ class MissionHistoryView(HomeAssistantView):
             return self.json_message("Entry not found", status_code=404)
 
         data: RoombaData = entry.runtime_data
-        if data.mission_store is None:
-            return self.json([], status_code=200)
+        fmt = request.query.get("format", "summary").strip().lower()
 
-        try:
-            days = int(request.query.get("days", 28))
-            days = max(1, min(days, 90))
-        except (ValueError, TypeError):
-            days = 28
+        # ── format=summary (default, backward compatible) ─────────────────────
+        if fmt != "records":
+            if data.mission_store is None:
+                return self.json([], status_code=200)
+            try:
+                days = int(request.query.get("days", 28))
+                days = max(1, min(days, 90))
+            except (ValueError, TypeError):
+                days = 28
 
-        by_day = data.mission_store.query_by_day(days)
-        result = [
-            {
-                "date": summary.date.isoformat(),
-                "total": summary.total,
-                "completed": summary.completed,
-                "stuck": summary.stuck,
-                "area_sqft": summary.area_sqft,
-                "result": summary.result,
-            }
-            for summary in sorted(by_day.values(), key=lambda s: s.date)
-        ]
-        return self.json(result)
+            by_day = data.mission_store.query_by_day(days)
+            result = [
+                {
+                    "date":      summary.date.isoformat(),
+                    "total":     summary.total,
+                    "completed": summary.completed,
+                    "stuck":     summary.stuck,
+                    "area_sqft": summary.area_sqft,
+                    "result":    summary.result,
+                }
+                for summary in sorted(by_day.values(), key=lambda s: s.date)
+            ]
+            return self.json(result)
+
+        # ── format=records ────────────────────────────────────────────────────
+        # Prefer cloud raw_records when available — they carry richer data
+        # (run_min, recharges, evacuations, dirt_events, wifi_signal, pauseId).
+        # Fall back to local MissionStore records for all robot types.
+        if data.has_cloud and data.cloud_coordinator.raw_records:
+            records = [
+                _cloud_record_to_unified(r)
+                for r in data.cloud_coordinator.raw_records
+            ]
+            # Cloud records are newest-first — reverse to ascending for card
+            records = list(reversed(records))
+        elif data.mission_store is not None:
+            try:
+                days = int(request.query.get("days", 90))
+                days = max(1, min(days, 90))
+            except (ValueError, TypeError):
+                days = 90
+            local = data.mission_store.query(days)   # already ascending
+            records = [_local_record_to_unified(r) for r in local]
+        else:
+            records = []
+
+        return self.json(records)

@@ -61,7 +61,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="evac",
         translation_key="evac",
-        icon="mdi:delete-sweep-outline",
         entity_category=EntityCategory.CONFIG,
         command="evac",
         filter_fn=lambda s: s.get("cap", {}).get("dockComm") == 1,
@@ -69,7 +68,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="locate",
         translation_key="locate",
-        icon="mdi:map-marker-radius-outline",
         entity_category=EntityCategory.CONFIG,
         command="find",
         filter_fn=None,
@@ -82,7 +80,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="map_training",
         translation_key="map_training",
-        icon="mdi:map-plus",
         entity_category=EntityCategory.CONFIG,
         command="train",
         filter_fn=lambda s: bool(s.get("pmaps")),
@@ -95,7 +92,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="spot",
         translation_key="spot",
-        icon="mdi:map-marker-circle",
         entity_category=EntityCategory.CONFIG,
         command="spot",
         filter_fn=lambda s: not s.get("pmaps"),  # EPHEMERAL: no persistent pmaps
@@ -104,7 +100,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="quick",
         translation_key="quick",
-        icon="mdi:fast-forward-outline",
         entity_category=EntityCategory.CONFIG,
         command="quick",
         filter_fn=lambda s: not s.get("pmaps"),
@@ -113,7 +108,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="sleep",
         translation_key="sleep",
-        icon="mdi:sleep",
         entity_category=EntityCategory.CONFIG,
         command="sleep",
         filter_fn=lambda s: not s.get("pmaps"),
@@ -122,7 +116,6 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="power_off",
         translation_key="power_off",
-        icon="mdi:power",
         entity_category=EntityCategory.CONFIG,
         command="off",
         filter_fn=lambda s: not s.get("pmaps"),
@@ -235,7 +228,7 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
         """Return current bbrun.hr (lifetime operating hours)."""
         return self.vacuum_state.get("bbrun", {}).get("hr", 0)
 
-    def _maintenance_store(self):
+    def _maintenance_store(self) -> Any:
         """Return the MaintenanceStore from runtime_data."""
         return self._config_entry.runtime_data.maintenance_store
 
@@ -252,9 +245,8 @@ class FilterResetButton(_MaintenanceResetButton):
     """Button: mark filter as replaced → restart filter-life countdown."""
 
     _attr_translation_key = "reset_filter"
-    _attr_icon = "mdi:air-filter"
 
-    def __init__(self, roomba, blid, config_entry):
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_reset_filter"
 
@@ -271,9 +263,8 @@ class BrushResetButton(_MaintenanceResetButton):
     """Button: mark brushes as replaced → restart brush-life countdown."""
 
     _attr_translation_key = "reset_brush"
-    _attr_icon = "mdi:brush"
 
-    def __init__(self, roomba, blid, config_entry):
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_reset_brush"
 
@@ -290,9 +281,8 @@ class BatteryResetButton(_MaintenanceResetButton):
     """Button: mark battery as replaced → restart battery-hour tracking."""
 
     _attr_translation_key = "reset_battery"
-    _attr_icon = "mdi:battery-plus-outline"
 
-    def __init__(self, roomba, blid, config_entry):
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_reset_battery"
 
@@ -322,10 +312,9 @@ class ZoneCleanButton(_MaintenanceResetButton):
     """
 
     _attr_translation_key = "clean_zone"
-    _attr_icon = "mdi:map-marker-check-outline"
     _attr_entity_category = None   # visible by default — primary action
 
-    def __init__(self, roomba, blid, config_entry):
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_clean_zone"
 
@@ -383,10 +372,9 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
     """
 
     _attr_translation_key = "repeat_mission"
-    _attr_icon = "mdi:repeat"
     _attr_entity_category = None   # primary action → Steuerelemente
 
-    def __init__(self, roomba, blid):
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_repeat_mission"
 
@@ -436,10 +424,9 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
     """
 
     _attr_translation_key = "clean_smart_zone"
-    _attr_icon = "mdi:map-marker-check-outline"
     _attr_entity_category = None   # primary action — visible by default
 
-    def __init__(self, roomba, blid, config_entry):
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_clean_smart_zone"
         self._config_entry = config_entry
@@ -573,7 +560,6 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
     """
 
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_icon = "mdi:star-outline"
 
     def __init__(
         self,

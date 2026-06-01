@@ -73,7 +73,7 @@ class BlockingManager:
 
     # ── Public state ──────────────────────────────────────────────────────────
 
-    def register_state_callback(self, callback_fn: Any):
+    def register_state_callback(self, callback_fn: Any) -> None:
         """Register a callable invoked when queue state changes.
 
         Used by RoombaStartBlocked to receive immediate updates without

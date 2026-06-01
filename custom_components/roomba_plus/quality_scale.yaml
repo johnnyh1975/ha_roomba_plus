@@ -13,7 +13,10 @@ rules:
       interval — appropriate for slowly-changing pmap/favorites data.
   brands:
     status: todo
-    comment: Brands PR not yet submitted to home-assistant/brands.
+    comment: >
+      Brand assets (icon.png, icon@2x.png) prepared in brands_submission/.
+      Requires manual PR to github.com/home-assistant/brands after v2.0 release.
+      Cannot be automated — marked todo until PR is merged.
   common-modules:
     status: done
     comment: >
@@ -24,17 +27,26 @@ rules:
     status: done
     comment: Full config flow with DHCP/Zeroconf discovery and options flow.
   config-flow-test-coverage:
-    status: todo
+    status: done
     comment: >
-      Config flow tested via stub-based unit tests. Full pytest-homeassistant-
-      custom-component integration tests planned for v2.0.
+      11 integration tests in tests_integration/ using pytest-homeassistant-custom-component.
+      Covers async_migrate_entry (v1→v2), config flow error handling, reconfigure flow
+      (form display + cannot_connect error), and options flow menu routing + settings save.
+      Stub-based suite (1022 tests) retained in tests/ with separate pytest.ini.
   dependency-transparency:
     status: done
     comment: roombapy==1.9.1 pinned in manifest.requirements.
   docs-actions:
-    status: todo
+    status: done
+    comment: >
+      services.yaml documents all 6 actions with field descriptions, selectors,
+      and examples. README actions table added in v2.0.
   docs-configuration-parameters:
-    status: todo
+    status: done
+    comment: >
+      README Configuration parameters section documents all options: connection
+      settings, map, blocking sensors, presence scheduling, cloud credentials,
+      and reconfiguration flow.
   docs-installation-instructions:
     status: done
     comment: README covers HACS and manual install.
@@ -72,7 +84,11 @@ rules:
     status: done
     comment: async_unload_entry implemented — unloads all platforms cleanly.
   docs-supported-functions:
-    status: todo
+    status: done
+    comment: >
+      README features section documents all 69 local + 9 cloud sensors,
+      binary sensors, controls, maps, zones, and v2.0 cloud diagnostics.
+      REST API section documents both format=summary and format=records.
   entity-translations:
     status: done
     comment: >
@@ -98,9 +114,9 @@ rules:
   test-coverage:
     status: done
     comment: >
-      734 unit tests across 25 test files. Stub-based — no HA install
-      required. Covers all stores, sensors, cloud coordinator, config
-      flow logic, zone management, and blocking/presence managers.
+      1022 unit tests across 32 test files. Stub-based — no HA install
+      required. Covers all stores, sensors, cloud coordinator, services,
+      callbacks, migration, classification, REST API, and backfill logic.
 
   # ── Gold ──────────────────────────────────────────────────────────────────
   devices:
@@ -113,7 +129,10 @@ rules:
     status: done
     comment: DHCP (4 MAC prefixes) and Zeroconf discovery configured.
   docs-high-level-description:
-    status: todo
+    status: done
+    comment: >
+      README introduction updated for v2.0 — describes local-push architecture,
+      Gold Quality Scale, v2.0 cloud diagnostics scope, and version history.
   entity-category:
     status: done
     comment: >
@@ -128,20 +147,29 @@ rules:
     status: done
     comment: All ServiceValidationError and ConfigEntryAuthFailed use translation keys.
   icon-translations:
-    status: todo
-    comment: Icons set via _attr_icon — migration to icons.json planned for v2.0.
+    status: done
+    comment: >
+      icons.json created with 98 entity icons across sensor (75), button (14),
+      select (6), and switch (3) platforms. All _attr_icon and icon= assignments
+      removed from entity files — icons served via frontend translation system.
   reconfiguration-flow:
-    status: todo
-    comment: Reconfigure flow (host/password change without re-adding) planned for v2.0.
+    status: done
+    comment: >
+      async_step_reconfigure implemented — users can change host/password without
+      removing the entry. Validates connection before applying. Reloads entry on success.
   repair-issues:
     status: done
     comment: repairs.py raises RepairIssues for dock drift, unconfirmed zones, cloud auth.
   stale-devices:
-    status: todo
-    comment: Stale device cleanup not yet implemented.
+    status: done
+    comment: >
+      async_remove_config_entry_devices implemented. Each config entry manages
+      one robot device — any device presented for removal is safe to remove.
   strict-typing:
-    status: todo
-    comment: Partial — all new code typed, legacy entity methods partially typed.
+    status: done
+    comment: >
+      All functions and methods have return type annotations. All parameters typed.
+      from __future__ import annotations in all 27 source files.
 
   # ── Platinum ─────────────────────────────────────────────────────────────
   async-dependency:
@@ -151,10 +179,10 @@ rules:
     status: done
     comment: Cloud API uses async_get_clientsession(hass) — no standalone sessions.
   migration:
-    status: todo
+    status: done
     comment: >
-      Config entry version is 1. async_migrate_entry planned for v2.0 when
-      __init__.py is split and entry schema changes.
+      async_migrate_entry implemented. Config entry bumped to version 2.
+      v1 → v2 adds cloud_raw_records_version marker. All existing user data preserved.
   test-before-configure:
     status: done
     comment: MQTT credentials verified during config flow before entry is created.

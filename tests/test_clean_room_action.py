@@ -319,28 +319,28 @@ class TestResolveRoomsProduction:
     """
 
     def test_stored_pmap_used(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
         result = _resolve_rooms(data, ["Kitchen"], state)
         assert result == [("3", "map_a")]
 
     def test_empty_pmap_resolved_from_state(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"pmaps": [{"abc123": "v42"}]}
         result = _resolve_rooms(data, ["Corridor"], state)
         assert result == [("21", "abc123")]
 
     def test_empty_pmap_no_state_raises(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         with pytest.raises(ServiceValidationError):
             _resolve_rooms(data, ["Corridor"], {})
 
     def test_unknown_room_raises(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
@@ -348,7 +348,7 @@ class TestResolveRoomsProduction:
             _resolve_rooms(data, ["Bathroom"], state)
 
     def test_mixed_pmap_resolves(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {
             "21": {"name": "Corridor", "pmap_id": ""},
             "22": {"name": "Kitchen",  "pmap_id": "abc123"},
@@ -359,7 +359,7 @@ class TestResolveRoomsProduction:
         assert result[1] == ("22", "abc123")
 
     def test_cross_floor_raises(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {
             "3": {"name": "Kitchen", "pmap_id": "floor1"},

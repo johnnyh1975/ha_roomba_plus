@@ -1,12 +1,16 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-1.9.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.0.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
-[![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Silver-silver.svg)](https://www.home-assistant.io/docs/quality_scale/)
+[![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
-Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no cloud required, no subscription — significantly more sensors, map, and zone features than the built-in HA integration. **v1.9 adds wear intelligence, device diagnostics, Braava controls, and cloud mission history for 900-series robots.** v1.8 added mission intelligence: a persistent mission log, error diagnosis, presence-aware schedule control, and a REST history API.
+Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription. It exposes significantly more sensors, intelligence, and controls than the built-in HA integration, while remaining fully functional without internet access.
+
+**v2.0** brings complete cloud diagnostics: per-mission history from the iRobot cloud API, six new cloud sensors (completion rate, recharges, evacuations, dirt events, cloud error code and time), automatic timestamp correction for 900-series robots, and a per-mission REST API for the companion Lovelace card. Architecture refactored into focused modules (`callbacks.py`, `services.py`). Gold Quality Scale. 1022 unit tests + 11 integration tests.
+
+**v1.9** added wear intelligence, device diagnostics, Braava controls, cloud mission history for 900/980, and Mission Phase Intelligence. **v1.8** added the mission log, error intelligence, presence-aware scheduling, and REST history API.
 
 ---
 
@@ -31,7 +35,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 
 ## Features
 
-### Sensors (69 local + 3 cloud)
+### Sensors (69 local + 9 cloud)
 
 - **Status** — phase (with Idle/Stopped detection), error (80+ codes), readiness, job initiator, next scheduled clean
 - **Settings** — cleaning passes, carpet boost mode (900/i/s/j)
@@ -42,6 +46,7 @@ Home Assistant Custom Integration for iRobot Roomba and Braava. Fully local, no 
 - **Braava** — tank level, mop pad type, mop behaviour, mop tank level
 - **Navigation** — navigation quality / l_squal (VSLAM robots, opt-in)
 - **Cloud history (v1.6)** — lifetime cleaned area (m²), lifetime cleaning time, lifetime mission count — available for all robots when cloud credentials are configured, including the 980
+- **Cloud diagnostics (v2.0)** — recent completion rate (%), recent mid-mission recharges, recent Clean Base evacuations, recent dirt events, recent error code (cloud, with `label`/`description`/`action` attributes from the iRobot error catalogue), recent error time (cloud) — sourced from `/missionhistory` API, ~30-day window
 - **Mission log (v1.8)** — clean streak (days), missions last 30 days, completion rate 30 days, area cleaned today (VSLAM robots), last mission result, last mission duration
 - **Error intelligence (v1.8)** — last error code (with `description` and `action` attributes), last error time, last error zone, stuck events 30 days, problem zone (most frequent stuck zone, VSLAM robots)
 - **Presence analytics (v1.8)** — clean opportunities 7 days, clean utilisation 7 days, next likely clean window
@@ -89,11 +94,11 @@ Four additional buttons are available for 900-series robots (980/985), disabled 
 
 > `sleep` and `power off` are most useful in power management automations. Note that after `power off` the robot will not respond to local MQTT commands until physically woken — press the Clean button or use the iRobot app.
 
-### Cloud features — all robots with iRobot credentials (v1.5/v1.9, optional)
+### Cloud features — all robots with iRobot credentials (v1.5/v2.0, optional)
 
 When you enter your iRobot app email and password during setup (or later via **Configure → iRobot cloud credentials**), Roomba+ connects to the iRobot cloud.
 
-**For 900-series robots (980, 985) — v1.9:**
+**For 900-series robots (980, 985) — v1.9/v2.0:**
 - **Mission statistics from iRobot cloud** — three sensors populated from the `/missionhistory` API:
   - **Total missions** (`lifetime_missions`) — the true lifetime mission count. The iRobot firmware embeds this counter in every cloud record; it reflects the full history, not just the API window.
   - **Cleaned area** (`lifetime_cleaned_area`) — sum of area across the API response window (~30 recent missions). The iRobot cloud does not expose a cumulative lifetime area, so this reflects recent activity. The sensor attribute `source: recent_mission_window` documents this.
@@ -304,7 +309,28 @@ When new room IDs are discovered via MQTT, a **HA Repair Issue** is raised autom
 - **Cloud subsystem (v1.5):** coordinator status, last exception
 - **Cloud subsystem (v1.8):** `pmap_count_total` (all maps from API), `active_pmap_id`, `region_count_active` (active pmap only, after filter) — visible difference when a disabled old map is present
 
-### REST History API (v1.8)
+### REST History API (v1.8 / v2.0)
+
+The integration exposes a REST endpoint for the companion Lovelace card and custom dashboards:
+
+```
+GET /api/roomba_plus/{entry_id}/mission_history
+```
+
+**Query parameters:**
+
+| Parameter | Default | Values | Description |
+|---|---|---|---|
+| `format` | `summary` | `summary` / `records` | Response shape (see below) |
+| `days` | `28` | `1`–`90` | Lookback window (summary format only) |
+
+**`format=summary`** (default, backward compatible with card v0.1-beta):
+Returns day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`.
+
+**`format=records`** (v2.0, for card v1.0):
+Returns per-mission records with unified shape regardless of robot type or cloud availability. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`.
+
+The `entry_id` is found in **Settings → Devices → Roomba+ → ⋮ → System information**.
 
 The mission log is available to the Lovelace card via an authenticated REST endpoint:
 
@@ -330,6 +356,66 @@ Returns a JSON array of daily summaries, sorted ascending by date:
 
 `days` parameter: 1–90, default 28. The endpoint is used by the Roomba+ Lovelace card to render the cleaning history heatmap. It requires a valid HA long-lived access token.
 
+
+---
+
+
+### Cloud Diagnostics — all robots with iRobot credentials (v2.0)
+
+Roomba+ v2.0 fetches per-mission records from the iRobot `/missionhistory` cloud API and exposes them as six new sensors:
+
+| Sensor | Description |
+|---|---|
+| Recent completion rate | % of missions completed in the last ~30 days |
+| Recent mid-mission recharges | Total mid-mission recharge events (~30 days) |
+| Recent Clean Base evacuations | Total bin evacuations (~30 days) |
+| Recent dirt events | Total dirt detection events (~30 days) |
+| Recent error code (cloud) | `pauseId` from the most recent failed mission — more reliable than MQTT error codes. Attributes: `label`, `description`, `action` from the iRobot error catalogue |
+| Recent error time (cloud) | Timestamp of the most recent failed mission |
+
+**Timestamp backfill:** On 980/900-series robots, firmware resets `mssnStrtTm=0` at mission end, causing local mission records to show `duration=0`. v2.0 automatically corrects these timestamps using the authoritative cloud `startTime`/`timestamp` fields on the next HA start.
+
+---
+
+### Actions (v2.0)
+
+All Roomba+ actions are available in **Settings → Automations → Actions → Roomba+**. Full field documentation is available in the action UI.
+
+| Action | Applies to | Description |
+|---|---|---|
+| `roomba_plus.clean_room` | SMART robots (i/s/j) | Clean one or more named rooms. Room names must match the labels you assigned in Roomba+ options. |
+| `roomba_plus.smart_start` | All robots | Start with blocking-sensor check. Queues or aborts if blocking sensors are active. Optionally targets rooms (SMART robots). |
+| `roomba_plus.reset_filter` | All robots | Record filter replacement and restart remaining-life counter. |
+| `roomba_plus.reset_brush` | All robots | Record brush replacement and restart remaining-life counter. |
+| `roomba_plus.reset_battery` | All robots | Record battery replacement date. |
+| `roomba_plus.reset_pad` | Braava | Record cleaning pad replacement date. |
+
+---
+
+### Configuration parameters
+
+All options are available under **Settings → Devices → Roomba+ → Configure**.
+
+**Connection settings:**
+| Parameter | Default | Description |
+|---|---|---|
+| Continuous connection | `true` | Keep MQTT connection open permanently. Disable on flaky networks. |
+| Connection delay (s) | `30` | Seconds between reconnect attempts. |
+| Map enabled | `true` | Enable live map rendering (900-series / EPHEMERAL robots). |
+| Map size (px) | `600` | Rendered map image size in pixels (400–1200). |
+| Map scale (mm/px) | `10.0` | Millimetres per pixel. Lower = more detail, smaller coverage area. |
+
+**Blocking sensors (L5):**
+Configure one or more `binary_sensor` entities whose active state should block automatic cleaning. When a blocking sensor is active, `smart_start` either queues the start (queue mode) or aborts it (abort mode).
+
+**Presence-aware scheduling (L6):**
+Configure `person` entities to track. When all tracked persons are away, the scheduled clean is unfrozen (`schedHold` lifted). Requires at least one `person` entity.
+
+**iRobot cloud credentials:**
+Optional. Required for cloud features (lifetime stats, per-mission history, Smart Map zone sync). Enter your iRobot app email and password. Credentials are stored encrypted in HA. Can be added, updated, or cleared at any time without re-adding the robot.
+
+**Reconfiguration:**
+Host IP address and password can be changed without removing and re-adding the integration via **Settings → Devices → Roomba+ → ⋮ → Reconfigure**.
 
 ---
 

@@ -267,3 +267,124 @@ class MissionStore:
             return None
         rate = (current_hr - reset_hr) / days_elapsed
         return round(max(0.0, rate), 2)
+
+    def backfill_from_cloud(
+        self,
+        cloud_records: list[dict],
+        tolerance_sec: int = 120,
+    ) -> int:
+        """Correct local MissionStore records using cloud /missionhistory timestamps.
+
+        The 980/900-series firmware resets mssnStrtTm to 0 in the mission-end
+        MQTT message. When callbacks.py cannot capture a valid start timestamp,
+        started_at falls back to wall-clock at recording time, making
+        duration_min ≈ 0 and the record id incorrect.
+
+        Matches each local record against cloud records by end timestamp
+        (±tolerance_sec), then corrects:
+          - started_at  — from cloud startTime
+          - ended_at    — from cloud timestamp
+          - duration_min — recomputed from corrected timestamps
+          - id          — regenerated from corrected started_at
+          - area_sqft   — from cloud sqft when local value is None
+
+        Matching uses ended_at (local) vs timestamp (cloud) because ended_at
+        is always reliably recorded at wall-clock time.
+
+        Args:
+            cloud_records: raw cloud records, newest-first from API.
+            tolerance_sec: max seconds between local ended_at and cloud
+                           timestamp to count as the same mission. Default 120 s
+                           covers MQTT delivery lag and clock skew.
+
+        Returns:
+            Number of records corrected.
+        """
+        if not cloud_records or not self._records:
+            return 0
+
+        # Build index of cloud records keyed by end timestamp for O(1) lookup.
+        cloud_by_end: dict[int, dict] = {}
+        for cr in cloud_records:
+            ts = cr.get("timestamp")
+            if ts is not None:
+                cloud_by_end.setdefault(int(ts), cr)
+
+        corrected = 0
+        for local in self._records:
+            ended_str = local.get("ended_at", "")
+            if not ended_str:
+                continue
+            try:
+                ended_dt = datetime.fromisoformat(ended_str)
+            except (ValueError, TypeError):
+                continue
+            if ended_dt.tzinfo is None:
+                ended_dt = ended_dt.replace(tzinfo=timezone.utc)
+            local_end_ts = int(ended_dt.timestamp())
+
+            # Find nearest cloud record within tolerance
+            best_cr: dict | None = None
+            best_delta = tolerance_sec + 1
+            for cloud_ts, cr in cloud_by_end.items():
+                delta = abs(cloud_ts - local_end_ts)
+                if delta <= tolerance_sec and delta < best_delta:
+                    best_delta = delta
+                    best_cr = cr
+
+            if best_cr is None:
+                continue
+
+            cloud_start = best_cr.get("startTime")
+            cloud_end   = best_cr.get("timestamp")
+            if not cloud_start or not cloud_end:
+                continue
+
+            new_started = datetime.fromtimestamp(
+                int(cloud_start), tz=timezone.utc
+            )
+            new_ended = datetime.fromtimestamp(
+                int(cloud_end), tz=timezone.utc
+            )
+
+            # Only correct if timestamps differ meaningfully (>5 min)
+            old_started_str = local.get("started_at", "")
+            try:
+                old_started = datetime.fromisoformat(old_started_str)
+                if old_started.tzinfo is None:
+                    old_started = old_started.replace(tzinfo=timezone.utc)
+                delta_start = abs((new_started - old_started).total_seconds())
+            except (ValueError, TypeError):
+                delta_start = float("inf")
+
+            if delta_start < 300:
+                continue
+
+            new_duration = max(0, round(
+                (new_ended - new_started).total_seconds() / 60
+            ))
+            new_id = f"m_{int(new_started.timestamp())}"
+
+            local["started_at"]   = new_started.isoformat()
+            local["ended_at"]     = new_ended.isoformat()
+            local["duration_min"] = new_duration
+            local["id"]           = new_id
+
+            # Backfill area_sqft from cloud when local has None
+            if local.get("area_sqft") is None and best_cr.get("sqft") is not None:
+                local["area_sqft"] = best_cr["sqft"]
+
+            corrected += 1
+            _LOGGER.debug(
+                "MissionStore backfill: corrected %s → started_at=%s "
+                "duration=%dmin (was %s, delta=%.0fs)",
+                new_id, new_started.isoformat(),
+                new_duration, old_started_str, delta_start,
+            )
+
+        if corrected:
+            _LOGGER.info(
+                "MissionStore backfill: corrected %d record(s) from cloud timestamps",
+                corrected,
+            )
+        return corrected

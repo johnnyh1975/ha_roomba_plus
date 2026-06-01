@@ -40,6 +40,17 @@
           "irobot_username": "Het e-mailadres waarmee je inlogt op de iRobot-app.",
           "irobot_password": "Je wachtwoord van de iRobot-app."
         }
+      },
+      "reconfigure": {
+        "description": "Update the connection settings for {name}.",
+        "data": {
+          "host": "IP address",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "The local IP address of the Roomba.",
+          "password": "The robot password (hold HOME button to retrieve)."
+        }
       }
     },
     "error": {
@@ -53,7 +64,8 @@
       "already_configured": "Deze robot is al geconfigureerd.",
       "not_irobot_device": "Het gevonden apparaat is geen iRobot-apparaat.",
       "short_blid": "Er is al een configuratiestroom actief voor deze robot.",
-      "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken."
+      "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken.",
+      "reconfigure_successful": "Connection settings updated successfully."
     }
   },
   "options": {
@@ -373,6 +385,24 @@
       },
       "mission_id": {
         "name": "Missie – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Voltooiingspercentage (30 dagen)"
+      },
+      "recent_recharges": {
+        "name": "Tussentijdse oplaadbeurten (30 dagen)"
+      },
+      "recent_evacuations": {
+        "name": "Clean Base-ledigingen (30 dagen)"
+      },
+      "recent_dirt_events": {
+        "name": "Vuildetecties (30 dagen)"
+      },
+      "recent_error_code": {
+        "name": "Fout – Laatste code (cloud)"
+      },
+      "recent_error_time": {
+        "name": "Fout – Laatste tijdstip (cloud)"
       }
     },
     "binary_sensor": {

@@ -253,7 +253,7 @@ _make_module("homeassistant.components.sensor",
         BATTERY="battery", SIGNAL_STRENGTH="signal_strength",
         AREA="area",
     ),
-    SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement", TOTAL_INCREASING="total_increasing"),
+    SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement", TOTAL_INCREASING="total_increasing", TOTAL="total"),
 )
 
 # homeassistant.components.binary_sensor

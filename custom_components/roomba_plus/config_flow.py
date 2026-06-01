@@ -91,7 +91,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     and full manual fallback with explicit password entry.
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialise the flow."""
@@ -357,6 +357,55 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 # ── Options Flow ──────────────────────────────────────────────────────────────
+
+
+    # ── Reconfiguration flow ──────────────────────────────────────────────────
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Allow the user to change host or password without removing the entry.
+
+        Validates the new connection before applying. BLID must match the stored
+        robot — pointing to a different robot requires a new config entry.
+        """
+        errors: dict[str, str] = {}
+        current = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            new_host     = user_input[CONF_HOST].strip()
+            new_password = user_input[CONF_PASSWORD].strip()
+
+            config = {
+                **current.data,
+                CONF_HOST:     new_host,
+                CONF_PASSWORD: new_password,
+                **DEFAULT_OPTIONS,
+            }
+            try:
+                await validate_input(self.hass, config)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+
+            if not errors:
+                self.hass.config_entries.async_update_entry(
+                    current,
+                    data={**current.data, CONF_HOST: new_host, CONF_PASSWORD: new_password},
+                )
+                await self.hass.config_entries.async_reload(current.entry_id)
+                return self.async_abort(reason="reconfigure_successful")
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_HOST, default=current.data.get(CONF_HOST, "")): str,
+                vol.Required(CONF_PASSWORD, default=""): str,
+            }),
+            errors=errors,
+            description_placeholders={
+                "name": current.data.get(CONF_BLID, ""),
+            },
+        )
 
 class RoombaPlusOptionsFlow(OptionsFlow):
     """Handle Roomba+ options (connection settings)."""

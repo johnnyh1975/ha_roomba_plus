@@ -40,6 +40,17 @@
           "irobot_username": "The email address used to log into the iRobot app.",
           "irobot_password": "Your iRobot app password."
         }
+      },
+      "reconfigure": {
+        "description": "Update the connection settings for {name}.",
+        "data": {
+          "host": "IP address",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "The local IP address of the Roomba.",
+          "password": "The robot password (hold HOME button to retrieve)."
+        }
       }
     },
     "error": {
@@ -53,7 +64,8 @@
       "already_configured": "This robot is already configured.",
       "not_irobot_device": "The discovered device is not an iRobot device.",
       "short_blid": "A configuration flow for this robot is already in progress.",
-      "cannot_connect": "Cannot reach the robot at the specified address."
+      "cannot_connect": "Cannot reach the robot at the specified address.",
+      "reconfigure_successful": "Connection settings updated successfully."
     }
   },
   "options": {
@@ -373,6 +385,24 @@
       },
       "mission_id": {
         "name": "Mission – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Recent completion rate"
+      },
+      "recent_recharges": {
+        "name": "Recent mid-mission recharges"
+      },
+      "recent_evacuations": {
+        "name": "Recent Clean Base evacuations"
+      },
+      "recent_dirt_events": {
+        "name": "Recent dirt events"
+      },
+      "recent_error_code": {
+        "name": "Recent error code (cloud)"
+      },
+      "recent_error_time": {
+        "name": "Recent error time (cloud)"
       }
     },
     "binary_sensor": {

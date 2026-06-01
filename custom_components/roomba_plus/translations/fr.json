@@ -40,6 +40,17 @@
           "irobot_username": "L'adresse e-mail utilisée pour se connecter à l'application iRobot.",
           "irobot_password": "Votre mot de passe de l'application iRobot."
         }
+      },
+      "reconfigure": {
+        "description": "Update the connection settings for {name}.",
+        "data": {
+          "host": "IP address",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "The local IP address of the Roomba.",
+          "password": "The robot password (hold HOME button to retrieve)."
+        }
       }
     },
     "error": {
@@ -53,7 +64,8 @@
       "already_configured": "Ce robot est déjà configuré.",
       "not_irobot_device": "L'appareil découvert n'est pas un appareil iRobot.",
       "short_blid": "Une configuration pour ce robot est déjà en cours.",
-      "cannot_connect": "Impossible d'atteindre le robot à l'adresse spécifiée."
+      "cannot_connect": "Impossible d'atteindre le robot à l'adresse spécifiée.",
+      "reconfigure_successful": "Connection settings updated successfully."
     }
   },
   "options": {
@@ -373,6 +385,24 @@
       },
       "mission_id": {
         "name": "Mission – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Taux de complétion (30 jours)"
+      },
+      "recent_recharges": {
+        "name": "Recharges intermédiaires (30 jours)"
+      },
+      "recent_evacuations": {
+        "name": "Vidages Clean Base (30 jours)"
+      },
+      "recent_dirt_events": {
+        "name": "Détections de saleté (30 jours)"
+      },
+      "recent_error_code": {
+        "name": "Erreur – Dernier code (nuage)"
+      },
+      "recent_error_time": {
+        "name": "Erreur – Dernière heure (nuage)"
       }
     },
     "binary_sensor": {

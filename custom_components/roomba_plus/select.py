@@ -130,7 +130,6 @@ class CleaningPassesSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "cleaning_passes"
-    _attr_icon = "mdi:replay"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = [OPT_AUTO, OPT_ONE, OPT_TWO]
 
@@ -190,7 +189,6 @@ class ZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "zone_select"
-    _attr_icon = "mdi:map-marker-outline"
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -205,7 +203,7 @@ class ZoneSelect(IRobotEntity, SelectEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_zone_select"
 
     @property
-    def _zone_store(self):
+    def _zone_store(self) -> Any:
         return self._config_entry.runtime_data.zone_store
 
     @property
@@ -257,7 +255,6 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "smart_zone_select"
-    _attr_icon = "mdi:map-marker-outline"
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -557,7 +554,6 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     button requires no changes.
     """
 
-    _attr_icon = "mdi:map-marker-outline"
     _attr_entity_category = None   # primary control — visible by default
 
     def __init__(
@@ -707,7 +703,6 @@ class DisposablePadWetnessSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "disposable_pad_wetness"
-    _attr_icon = "mdi:water-percent"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = _PAD_WET_OPTIONS
 
@@ -746,7 +741,6 @@ class ReusablePadWetnessSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "reusable_pad_wetness"
-    _attr_icon = "mdi:water-sync"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = _PAD_WET_OPTIONS
 

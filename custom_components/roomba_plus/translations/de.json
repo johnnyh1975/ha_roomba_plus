@@ -36,6 +36,17 @@
           "irobot_username": "iRobot E-Mail",
           "irobot_password": "iRobot Passwort"
         }
+      },
+      "reconfigure": {
+        "description": "Verbindungseinstellungen für {name} aktualisieren.",
+        "data": {
+          "host": "IP-Adresse",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "host": "Die lokale IP-Adresse des Roomba.",
+          "password": "Das Roboter-Passwort (HOME-Taste gedrückt halten zum Abrufen)."
+        }
       }
     },
     "error": {
@@ -49,7 +60,8 @@
       "already_configured": "Dieser Roboter ist bereits eingerichtet.",
       "not_irobot_device": "Das entdeckte Gerät ist kein iRobot-Gerät.",
       "short_blid": "Ein Konfigurationsablauf für diesen Roboter ist bereits aktiv.",
-      "cannot_connect": "Der Roboter ist unter der angegebenen Adresse nicht erreichbar."
+      "cannot_connect": "Der Roboter ist unter der angegebenen Adresse nicht erreichbar.",
+      "reconfigure_successful": "Verbindungseinstellungen erfolgreich aktualisiert."
     }
   },
   "options": {
@@ -369,6 +381,24 @@
       },
       "mission_id": {
         "name": "Mission – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Abschlussrate (letzte 30 Tage)"
+      },
+      "recent_recharges": {
+        "name": "Zwischenladungen (letzte 30 Tage)"
+      },
+      "recent_evacuations": {
+        "name": "Clean-Base-Leerungen (letzte 30 Tage)"
+      },
+      "recent_dirt_events": {
+        "name": "Schmutz-Events (letzte 30 Tage)"
+      },
+      "recent_error_code": {
+        "name": "Letzter Fehlercode (letzte 30 Tage)"
+      },
+      "recent_error_time": {
+        "name": "Letzter Fehlerzeitpunkt (letzte 30 Tage)"
       }
     },
     "binary_sensor": {

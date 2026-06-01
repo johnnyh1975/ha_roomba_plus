@@ -239,14 +239,14 @@ class TestResolveRoomsWithCloudPmapId:
     """Verify that cloud_pmap_id takes priority over the MQTT cascade."""
 
     def test_cloud_pmap_id_used_for_empty_stored_pmap(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {}  # no MQTT pmap data at all
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
         assert result == [("21", "cloud_map_123")]
 
     def test_cloud_pmap_id_overrides_mqtt_cascade(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_map"}, "pmaps": [{"mqtt_map": "v1"}]}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
@@ -254,14 +254,14 @@ class TestResolveRoomsWithCloudPmapId:
 
     def test_stored_pmap_id_still_used_over_cloud(self):
         """Stored pmap_id in zone_data takes priority over everything."""
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": "stored_map"}}
         state = {}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
         assert result == [("21", "stored_map")]
 
     def test_no_cloud_pmap_falls_back_to_mqtt(self):
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_pmap"}}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id=None)
@@ -269,7 +269,7 @@ class TestResolveRoomsWithCloudPmapId:
 
     def test_empty_cloud_pmap_treated_as_none(self):
         """cloud_pmap_id='' should not override the MQTT fallback."""
-        from custom_components.roomba_plus import _resolve_rooms
+        from custom_components.roomba_plus.services import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_pmap"}}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="")
