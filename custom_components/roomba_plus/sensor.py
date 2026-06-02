@@ -42,6 +42,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import StateType
 import datetime
 import datetime as dt_stdlib
@@ -203,45 +204,58 @@ def _ts_or_none(ts: int | None) -> "datetime.datetime | None":
 def _recharge_minutes_remaining(mission: dict[str, Any]) -> StateType:
     """Return remaining mid-mission recharge time in minutes.
 
-    Two firmware families report this differently:
-      - 980/900-series: rechrgM is pre-computed remaining minutes (integer).
-      - lewis (i/s/j-series): rechrgM=0, rechrgTm is the Unix timestamp when
-        recharge ends. Remaining time is computed as rechrgTm - now().
+    Both firmware families send rechrgTm (a Unix timestamp for when recharge
+    ends).  We always prefer the timestamp because it self-decrements via
+    dt_util.utcnow() — this is what the iRobot app displays.
 
-    Returns None when the robot is not mid-mission recharging, so the sensor
-    stays unavailable during normal cleaning or when fully docked.
+      - lewis (i/s/j-series): rechrgM=0, rechrgTm set → compute from timestamp.
+      - 980/900-series: rechrgM is a pre-computed static snapshot sent once at
+        recharge start and never updated.  rechrgTm is also set and is correct.
+        We prefer rechrgTm so the value decrements correctly during charging.
+
+    Falls back to rechrgM only when rechrgTm is absent (very old firmware).
+    Returns None when the robot is not mid-mission recharging.
+
+    NOTE: Between MQTT pushes the value is recomputed from the stored timestamp
+    by the 60-second periodic tick in RoombaSensor.async_added_to_hass().
     """
-    recharge_m: int = int(mission.get("rechrgM", 0) or 0)
-    if recharge_m > 0:
-        return recharge_m
-
     recharge_ts: int = int(mission.get("rechrgTm", 0) or 0)
     if recharge_ts > 0:
         remaining = recharge_ts - int(dt_util.utcnow().timestamp())
         if remaining > 0:
             return max(1, round(remaining / 60))
+        # rechrgTm is in the past — recharge finished but state not yet cleared.
+        return None
+
+    # Fallback: very old firmware only sets rechrgM (static, no timestamp).
+    recharge_m: int = int(mission.get("rechrgM", 0) or 0)
+    if recharge_m > 0:
+        return recharge_m
 
     return None
 
 
 def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
+def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
     """Return remaining mission expiry time in minutes.
 
-    Same two-firmware pattern as _recharge_minutes_remaining:
-      - 980/900-series: expireM is pre-computed.
-      - lewis firmware: expireM=0, expireTm is the Unix expiry timestamp.
+    Same timestamp-first logic as _recharge_minutes_remaining:
+    Prefer expireTm (Unix timestamp) so the value self-decrements.
+    Falls back to expireM (static snapshot) only when expireTm is absent.
 
     Returns None when expiry is not applicable.
     """
-    expire_m: int = int(mission.get("expireM", 0) or 0)
-    if expire_m > 0:
-        return expire_m
-
     expire_ts: int = int(mission.get("expireTm", 0) or 0)
     if expire_ts > 0:
         remaining = expire_ts - int(dt_util.utcnow().timestamp())
         if remaining > 0:
             return max(1, round(remaining / 60))
+        return None
+
+    # Fallback: old firmware without expireTm.
+    expire_m: int = int(mission.get("expireM", 0) or 0)
+    if expire_m > 0:
+        return expire_m
 
     return None
 
@@ -1148,10 +1162,14 @@ async def async_setup_entry(
             for desc in CLOUD_HISTORY_SENSORS
         ])
         # v2.0: per-mission raw record sensors (recent window + cloud error)
-        entities.extend([
-            CloudRawSensor(roomba, blid, cc, desc)
-            for desc in CLOUD_RAW_SENSORS
-        ])
+        # recent_evacuations is only meaningful when a Clean Base is present.
+        # Without one the cloud always records evacs=0 — suppress the entity
+        # so 980/900-series robots without a Clean Base don't show a
+        # permanently-zero sensor.
+        for desc in CLOUD_RAW_SENSORS:
+            if desc.key == "recent_evacuations" and not has_clean_base(state):
+                continue
+            entities.append(CloudRawSensor(roomba, blid, cc, desc))
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
@@ -1174,6 +1192,37 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
+        self._unsub_tick: Callable[[], None] | None = None
+
+    # ── Countdown tick for recharge/expire minute sensors ────────────────────
+    # iRobot firmware sends rechrgTm / expireTm once at recharge start and does
+    # not push further cleanMissionStatus updates during charging.  Without a
+    # periodic tick the sensor value stays frozen at the initial reading.
+    # We schedule a 60-second interval whenever the sensor is enabled so the
+    # value decrements correctly, matching what the iRobot app displays.
+
+    _TICK_SENSORS = frozenset({"mission_recharge_minutes", "mission_expire_minutes"})
+
+    async def async_added_to_hass(self) -> None:
+        """Register MQTT callback and start the 60-second countdown tick."""
+        await super().async_added_to_hass()
+        if self.entity_description.key in self._TICK_SENSORS:
+            self._unsub_tick = async_track_time_interval(
+                self.hass,
+                self._async_tick,
+                dt_stdlib.timedelta(seconds=60),
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the countdown tick when the entity is removed."""
+        if self._unsub_tick is not None:
+            self._unsub_tick()
+            self._unsub_tick = None
+
+    def _async_tick(self, _now: dt_stdlib.datetime) -> None:
+        """Push a state write every 60 s so the countdown decrements live."""
+        self.async_write_ha_state()
+
 
     @property
     def native_value(self) -> StateType:
