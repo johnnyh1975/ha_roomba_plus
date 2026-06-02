@@ -236,7 +236,6 @@ def _recharge_minutes_remaining(mission: dict[str, Any]) -> StateType:
 
 
 def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
-def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
     """Return remaining mission expiry time in minutes.
 
     Same timestamp-first logic as _recharge_minutes_remaining:
