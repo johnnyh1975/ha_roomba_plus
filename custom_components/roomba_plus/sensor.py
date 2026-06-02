@@ -40,7 +40,7 @@ from homeassistant.const import (
     UnitOfArea,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import StateType
@@ -1218,9 +1218,16 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             self._unsub_tick()
             self._unsub_tick = None
 
+    @callback
     def _async_tick(self, _now: dt_stdlib.datetime) -> None:
-        """Push a state write every 60 s so the countdown decrements live."""
-        self.async_write_ha_state()
+        """Re-evaluate native_value every 60 s so the countdown decrements live.
+
+        async_write_ha_state() would be a no-op if HA thinks the state has not
+        changed.  schedule_update_ha_state(force_refresh=True) forces HA to
+        re-read native_value and unconditionally push the new value to the
+        state machine, which is what we need for the minute countdown.
+        """
+        self.schedule_update_ha_state(force_refresh=True)
 
 
     @property
@@ -1697,6 +1704,7 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
 
+        @callback
         def _on_coordinator_update() -> None:
             self.async_write_ha_state()
 
@@ -1776,6 +1784,7 @@ class CloudHistorySensor(IRobotEntity, SensorEntity):
         """Subscribe to coordinator updates."""
         await super().async_added_to_hass()
 
+        @callback
         def _on_coordinator_update() -> None:
             self.async_write_ha_state()
 
