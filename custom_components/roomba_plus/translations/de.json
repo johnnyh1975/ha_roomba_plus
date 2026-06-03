@@ -242,7 +242,7 @@
         "name": "Wischpad"
       },
       "mop_behavior": {
-        "name": "Wischen – Reinigungsstärke (Legacy)"
+        "name": "Wischverhalten"
       },
       "mop_tank_level": {
         "name": "Wischtank-Füllstand"
@@ -399,76 +399,6 @@
       },
       "recent_error_time": {
         "name": "Letzter Fehlerzeitpunkt (letzte 30 Tage)"
-      },
-      "recent_wifi_floor": {
-        "name": "WLAN – Signalminimum"
-      },
-      "recent_wifi_stability": {
-        "name": "WLAN – Signalstabilität"
-      },
-      "mop_clean_mode": {
-        "name": "Wischen – Reinigungsmodus",
-        "state": {
-          "Dry": "Trocken",
-          "Wet": "Nass",
-          "Unknown": "Unbekannt"
-        }
-      },
-      "mop_tank_status": {
-        "name": "Wischen – Tankstatus",
-        "state": {
-          "Ready": "Bereit",
-          "Fill Tank": "Tank füllen",
-          "Lid Open": "Deckel offen",
-          "Tank Missing": "Tank fehlt"
-        }
-      },
-      "mop_ars_behavior": {
-        "name": "Wischen – ARS-Verhalten",
-        "state": {
-          "No Mop": "Kein Wischen",
-          "Extended": "Erweitert",
-          "Standard": "Standard",
-          "Deep": "Intensiv",
-          "Dirty Pause": "Schmutzpause",
-          "Dry": "Trocken",
-          "Wash": "Waschen",
-          "Dirty Pause + Dry": "Schmutzpause + Trocken",
-          "Dirty Pause + Wash": "Schmutzpause + Waschen",
-          "Dry + Wash": "Trocken + Waschen",
-          "Dirty Pause + Dry + Wash": "Schmutzpause + Trocken + Waschen",
-          "Unknown": "Unbekannt"
-        }
-      },
-      "recent_cleaning_speed": {
-        "name": "Leistung – Reinigungsgeschwindigkeit"
-      },
-      "recent_dirt_density": {
-        "name": "Leistung – Schmutzdichte"
-      },
-      "recent_recharge_fraction": {
-        "name": "Leistung – Ladeanteil"
-      },
-      "cleaning_speed_trend": {
-        "name": "Leistung – Reinigungsgeschwindigkeitstrend",
-        "state": {
-          "improving": "Verbessernd",
-          "stable": "Stabil",
-          "declining": "Abnehmend",
-          "unknown": "Unbekannt"
-        }
-      },
-      "recent_coverage_pct": {
-        "name": "Leistung – Abdeckung"
-      },
-      "battery_capacity_retention": {
-        "name": "Wartung – Akkukapazität"
-      },
-      "estimated_battery_eol": {
-        "name": "Wartung – Gesch. Akkuende"
-      },
-      "consecutive_clean_skips": {
-        "name": "Leistung – Aufeinanderfolgende Ausfälle"
       }
     },
     "binary_sensor": {
@@ -651,45 +581,6 @@
         "error": {
           "no_valid_entries": "Keine gültigen Einträge gefunden. Jeder Eintrag muss das Format id=Name haben — einen pro Zeile oder kommagetrennt.",
           "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist, und versuche es erneut."
-        }
-      }
-    },
-    "maintenance_baselines_reset": {
-      "title": "Roboter-Laufzeitzähler möglicherweise zurückgesetzt",
-      "description": "Der bbrun.hr-Zähler ist niedriger als die gespeicherten Baselines für: {parts}. Verbrauchsmaterial-Stundenschätzungen sind unzuverlässig. Alle Verbrauchsmaterialien zurücksetzen."
-    },
-    "performance_degradation": {
-      "title": "Reinigungsleistung sinkt",
-      "description": "Roomba+ hat einen anhaltenden Geschwindigkeitsrückgang erkannt (Ursache: {cause}). Mögliche Ursachen: verschlissene Bürsten, verstopfter Filter oder veränderte Bodenbedingungen."
-    },
-    "battery_recharge_high": {
-      "title": "Häufiges Zwischenladen bei schwachem Akku",
-      "description": "Der Roboter lädt häufig zwischen, während die Akkukapazität unter 75 % gesunken ist. Akkutausch empfohlen."
-    },
-    "mixed_schedule": {
-      "title": "Konkurrierende Zeitplanquellen erkannt",
-      "description": "{schedule_pct} % der Reinigungen wurden von HA und {app_pct} % von der iRobot-App gestartet. Nur eine Quelle verwenden."
-    },
-    "accident_detected": {
-      "title": "Möglicher Bodenunfall erkannt",
-      "description": "Die letzte Reinigung zeigte ungewöhnlich viele Schmutzdetektionen in sehr kurzer Zeit. Bereich prüfen."
-    },
-    "consecutive_skips": {
-      "title": "Roboter hat {count} Reinigungen in Folge übersprungen",
-      "description": "Blocking-Sensoren oder Anwesenheitsplanung haben {count} Reinigungstermine verhindert. Konfiguration überprüfen."
-    },
-    "map_drift_detected": {
-      "title": "Smart-Map-Drift erkannt",
-      "description": "Der Roboter ist {magnitude_cm} cm (Richtung {bearing}°) von seiner erwarteten Position abgewichen. Dock prüfen und neue Kartierungsfahrt durchführen."
-    },
-    "geometry_drifted": {
-      "title": "Kartenverschiebung erkannt",
-      "description": "Die Positionskarte des Roomba hat sich erheblich verschoben. Bestätigen Sie Ihr Raumlayout neu, um die Karte korrekt zu halten.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Raumlayout neu bestätigen"
-          }
         }
       }
     }

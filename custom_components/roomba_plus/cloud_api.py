@@ -355,26 +355,3 @@ class IrobotCloudApi:
         url = f"{self._deployment['httpBaseAuth']}/v1/user/favorites"
         result = await self._aws_get(url)
         return result if isinstance(result, list) else result.get("favorites", [])
-
-    async def get_automations(self) -> dict[str, Any]:
-        """Return iRobot Genius scheduling automations for the account.
-
-        F7l — fetches /v1/user/automations discovered in rest980 source analysis.
-        The data shape is unknown without a live API trace; the response is logged
-        at DEBUG level on first fetch so the shape can be determined empirically.
-        No entities are created from this data in v2.1 — that follows once the
-        shape is confirmed.
-
-        Returns an empty dict on any error so coordinator update is never blocked.
-        """
-        url = f"{self._deployment['httpBaseAuth']}/v1/user/automations"
-        result = await self._aws_get(url)
-        _LOGGER.debug(
-            "iRobot cloud: automations response type=%s keys=%s"
-            # TODO: remove this debug log once the response shape is confirmed
-            # empirically from a live API trace. Add entity creation in v2.2.
-            " (shape TBD — no entities created yet)",
-            type(result).__name__,
-            list(result.keys()) if isinstance(result, dict) else "n/a",
-        )
-        return result if isinstance(result, dict) else {}

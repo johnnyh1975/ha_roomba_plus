@@ -1,19 +1,50 @@
-"""REST API view for Roomba+ -- mission history endpoint.
+"""REST API view for Roomba+ — mission history endpoint.
 
 GET /api/roomba_plus/{entry_id}/mission_history
 
 Query parameters:
-  days:   int  (1-90, default 28)   -- lookback window for day-summary format
+  days:   int  (1–90, default 28)   — lookback window for day-summary format
   format: str  ("summary" | "records", default "summary")
-            summary  -- day-aggregated DaySummary array (v0.1-beta card format,
-                        always available, sourced from local MissionStore)
-            records  -- per-mission array (v1.0 card format, sourced from cloud
-                        raw_records when available, falls back to local
-                        MissionStore records for robots without cloud credentials)
+            summary  — day-aggregated DaySummary array (v0.1-beta card format,
+                       always available, sourced from local MissionStore)
+            records  — per-mission array (v1.0 card format, sourced from cloud
+                       raw_records when available, falls back to local
+                       MissionStore records for robots without cloud credentials)
 
-v2.1 changes:
-  F4a -- zone names injected into cloud records (120 s timestamp tolerance)
-  F7o -- startup race guard (503), coordinator failure (503), unknown format (400)
+Response shapes
+───────────────
+format=summary (default — backward compatible):
+  [
+    {
+      "date":       "2026-05-01",   // ISO date
+      "total":      2,
+      "completed":  2,
+      "stuck":      0,
+      "area_sqft":  340.0,          // null for 600-series
+      "result":     "completed"     // dominant result for the day
+    }
+  ]
+
+format=records:
+  [
+    {
+      "id":               "m_1700000000",   // unique mission id
+      "started_at":       "2026-05-01T...", // ISO datetime UTC
+      "ended_at":         "2026-05-01T...", // ISO datetime UTC
+      "duration_min":     55,               // total duration incl. recharge
+      "run_min":          50,               // clean time excl. recharge (cloud only, else null)
+      "area_sqft":        180,              // null for 600-series
+      "result":           "completed",      // classified_result (cloud) or local result
+      "initiator":        "schedule",       // "schedule"|"localApp"|"remote"|"none"
+      "zones":            ["Kitchen"],      // zone names (local MissionStore)
+      "error_code":       null,             // pauseId (cloud) or local error_code
+      "recharges":        0,                // chrgs (cloud only, else null)
+      "evacuations":      1,                // evacs (cloud only, else null)
+      "dirt_events":      12,               // dirt (cloud only, else null)
+      "wifi_signal":      [70,68,65,60,62], // wlBars (cloud only, else null)
+      "source":           "cloud"           // "cloud" | "local"
+    }
+  ]
 
 Registered once per HA instance (sentinel guard in __init__.py).
 
@@ -37,66 +68,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# F7o -- valid format values; unknown values return 400
-_VALID_FORMATS = {"summary", "records"}
-
-
-def _build_local_zones_index(mission_store_records: list[dict]) -> dict[int, list[str]]:
-    """Build a ts -> zone-names index from local MissionStore records.
-
-    F4a -- used to inject zone names into cloud records which carry zones=[].
-    Keys are integer Unix timestamps of ended_at. Tolerance matching is done
-    at the call site (120 s window).
-    """
-    index: dict[int, list[str]] = {}
-    for r in mission_store_records:
-        ended_str = r.get("ended_at", "")
-        zones = r.get("zones") or []
-        if not ended_str or not zones:
-            continue
-        try:
-            ended_dt = datetime.datetime.fromisoformat(ended_str)
-        except (ValueError, TypeError):
-            continue
-        if ended_dt.tzinfo is None:
-            ended_dt = ended_dt.replace(tzinfo=datetime.timezone.utc)
-        index[int(ended_dt.timestamp())] = list(zones)
-    return index
-
-
-def _inject_zones(
-    record: dict[str, Any],
-    local_zones_index: dict[int, list[str]],
-    tolerance_sec: int = 120,
-) -> dict[str, Any]:
-    """Return record with zones populated from local MissionStore when available.
-
-    F4a -- matches on the cloud record's ended_at ISO string against the
-    local ended_at index within tolerance_sec.  If a match is found and the
-    local record has zone names, they replace the empty zones list.
-    """
-    end_ts_str = record.get("ended_at")
-    if not end_ts_str or not local_zones_index:
-        return record
-
-    try:
-        end_dt = datetime.datetime.fromisoformat(end_ts_str)
-        if end_dt.tzinfo is None:
-            end_dt = end_dt.replace(tzinfo=datetime.timezone.utc)
-        end_ts_int = int(end_dt.timestamp())
-    except (ValueError, TypeError):
-        return record
-
-    best_ts = min(local_zones_index, key=lambda t: abs(t - end_ts_int), default=None)
-    if best_ts is not None and abs(best_ts - end_ts_int) <= tolerance_sec:
-        zones = local_zones_index[best_ts]
-        if zones:
-            return {**record, "zones": zones}
-    return record
-
 
 def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
-    """Convert a raw cloud /missionhistory record to the unified per-mission shape."""
+    """Convert a raw cloud /missionhistory record to the unified per-mission shape.
+
+    Cloud records use Unix timestamps (startTime, timestamp) and iRobot field
+    names (sqft, runM, chrgs, evacs, dirt, wlBars, pauseId, initiator).
+    classified_result is pre-computed by the coordinator.
+    """
     start_ts = record.get("startTime")
     end_ts   = record.get("timestamp")
 
@@ -123,7 +102,7 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "area_sqft":    record.get("sqft"),
         "result":       record.get("classified_result", "unknown"),
         "initiator":    record.get("initiator", "none"),
-        "zones":        [],   # F4a: populated by _inject_zones() below
+        "zones":        [],        # cloud records carry no zone-name data
         "error_code":   error_code,
         "recharges":    record.get("chrgs"),
         "evacuations":  record.get("evacs"),
@@ -134,28 +113,38 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
-    """Convert a local MissionStore record to the unified per-mission shape."""
+    """Convert a local MissionStore record to the unified per-mission shape.
+
+    Local records use ISO datetime strings and are always present for all
+    robot types. Cloud-only fields are null.
+    """
     return {
         "id":           record.get("id", ""),
         "started_at":   record.get("started_at"),
         "ended_at":     record.get("ended_at"),
         "duration_min": record.get("duration_min"),
-        "run_min":      None,
+        "run_min":      None,       # not available from local MQTT
         "area_sqft":    record.get("area_sqft"),
         "result":       record.get("result", "unknown"),
         "initiator":    record.get("initiator", "none"),
         "zones":        record.get("zones", []),
         "error_code":   record.get("error_code"),
-        "recharges":    None,
-        "evacuations":  None,
-        "dirt_events":  None,
-        "wifi_signal":  None,
+        "recharges":    None,       # not available from local MQTT
+        "evacuations":  None,       # not available from local MQTT
+        "dirt_events":  None,       # not available from local MQTT
+        "wifi_signal":  None,       # not available from local MQTT
         "source":       "local",
     }
 
 
 class MissionHistoryView(HomeAssistantView):
-    """GET /api/roomba_plus/{entry_id}/mission_history"""
+    """GET /api/roomba_plus/{entry_id}/mission_history
+
+    Supports two response formats via the `format` query parameter:
+      summary  (default) — day-aggregated DaySummary array, backward compatible
+                           with the v0.1-beta Lovelace card.
+      records             — per-mission unified array for the v1.0 card.
+    """
 
     url = "/api/roomba_plus/{entry_id}/mission_history"
     name = "api:roomba_plus:mission_history"
@@ -167,24 +156,11 @@ class MissionHistoryView(HomeAssistantView):
         if entry is None or entry.domain != DOMAIN:
             return self.json_message("Entry not found", status_code=404)
 
-        # F7o -- startup race guard: runtime_data may not be ready immediately
-        # after HA start if a request arrives before setup completes.
-        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
-            return self.json_message("Integration initialising", status_code=503)
-
         data: RoombaData = entry.runtime_data
-
         fmt = request.query.get("format", "summary").strip().lower()
 
-        # F7o -- reject unknown format values with a clear 400
-        if fmt not in _VALID_FORMATS:
-            return self.json_message(
-                f"Unknown format '{fmt}'. Valid values: {', '.join(sorted(_VALID_FORMATS))}",
-                status_code=400,
-            )
-
-        # -- format=summary (default, backward compatible) --------------------
-        if fmt == "summary":
+        # ── format=summary (default, backward compatible) ─────────────────────
+        if fmt != "records":
             if data.mission_store is None:
                 return self.json([], status_code=200)
             try:
@@ -207,33 +183,24 @@ class MissionHistoryView(HomeAssistantView):
             ]
             return self.json(result)
 
-        # -- format=records ---------------------------------------------------
-        # F7o -- distinguish coordinator failure from genuinely empty data.
-        if data.has_cloud and not data.cloud_coordinator.last_update_success:
-            return self.json_message("Cloud coordinator unavailable", status_code=503)
-
-        # Build local zone index for F4a injection into cloud records
-        local_zones_index: dict[int, list[str]] = {}
-        if data.mission_store is not None:
-            local_zones_index = _build_local_zones_index(data.mission_store._records)
-
+        # ── format=records ────────────────────────────────────────────────────
+        # Prefer cloud raw_records when available — they carry richer data
+        # (run_min, recharges, evacuations, dirt_events, wifi_signal, pauseId).
+        # Fall back to local MissionStore records for all robot types.
         if data.has_cloud and data.cloud_coordinator.raw_records:
-            unified = [
+            records = [
                 _cloud_record_to_unified(r)
                 for r in data.cloud_coordinator.raw_records
             ]
-            # F4a -- inject zone names from local store into cloud records
-            if local_zones_index:
-                unified = [_inject_zones(r, local_zones_index) for r in unified]
-            # Cloud records are newest-first -- reverse to ascending for card
-            records = list(reversed(unified))
+            # Cloud records are newest-first — reverse to ascending for card
+            records = list(reversed(records))
         elif data.mission_store is not None:
             try:
                 days = int(request.query.get("days", 90))
                 days = max(1, min(days, 90))
             except (ValueError, TypeError):
                 days = 90
-            local = data.mission_store.query(days)
+            local = data.mission_store.query(days)   # already ascending
             records = [_local_record_to_unified(r) for r in local]
         else:
             records = []

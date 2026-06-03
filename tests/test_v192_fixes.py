@@ -31,18 +31,10 @@ def _iso(days_ago: float = 0, hour: int = 10) -> str:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
-import time as _time_mod
-__make_record_seq = 0
-
-def _make_unique_id(days_ago):
-    global __make_record_seq
-    __make_record_seq += 1
-    return f"m_{days_ago}_{__make_record_seq}"
-
 def _make_record(days_ago=0, result="completed", started_at=None, error_code=None):
     started = started_at or _iso(days_ago, hour=8)
     return {
-        "id": _make_unique_id(days_ago),
+        "id": f"m_{days_ago}",
         "started_at": started,
         "ended_at": _iso(days_ago, hour=9),
         "duration_min": 60,

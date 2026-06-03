@@ -39,10 +39,6 @@ def _make_entry(store, map_capability_val="none", zone_store=None,
         last_error_at     = None
         last_error_zone   = None
         map_capability    = cap
-        # F6g — consecutive_skips counter; needs a real MaintenanceStore
-        class _FakeMaintenanceStore:
-            consecutive_skips = 0
-        maintenance_store = _FakeMaintenanceStore()
 
         @property
         def zone_store(self):
@@ -66,24 +62,8 @@ def _make_entry(store, map_capability_val="none", zone_store=None,
 def _make_hass(loop=None):
     """Minimal hass stub."""
     class _FakeHass:
-        class _FakeConfig:
-            config_dir = "/tmp/roomba_plus_test"
-            components: set = set()
-            def path(self, *parts: str) -> str:
-                import os as _os
-                p = _os.path.join(self.config_dir, *parts)
-                _os.makedirs(_os.path.dirname(p), exist_ok=True)
-                return p
-        async def async_add_executor_job(self, fn, *args):
-            import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
-            return await loop.run_in_executor(None, fn, *args)
         def __init__(self):
             self.loop = loop
-            self.data = {}
-            self.config = self._FakeConfig()
-            from homeassistant.core import CoreState
-            self.state = CoreState.running
     return _FakeHass()
 
 
@@ -342,134 +322,3 @@ class TestMakeMapRetrainCallback:
         loop.run_until_complete(asyncio.sleep(0.05))
         coord.async_request_refresh.assert_not_called()
         loop.close()
-
-
-# ── F4c -- recharge accumulation (F4e) in callbacks ──────────────────────────
-
-class TestRechargeAccumulation:
-    """F4e -- recharge_min field written to MissionStore record."""
-
-    def _make_mission_msg(self, phase: str, recharge_m: int | None = None) -> dict:
-        mission = {"phase": phase, "mssnStrtTm": 1700000000, "sqft": 100}
-        if recharge_m is not None:
-            mission["rechrgM"] = recharge_m
-        return {"state": {"reported": {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}}}}
-
-    @pytest.mark.asyncio
-    async def test_recharge_min_in_record(self):
-        """rechrgM from hmMidMsn phase is accumulated and written to record."""
-        records = []
-
-        async def fake_append(record):
-            records.append(record)
-
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from custom_components.roomba_plus.callbacks import make_mission_callback
-
-        entry = MagicMock()
-        entry.runtime_data.mission_store = MagicMock()
-        entry.runtime_data.mission_store.async_append = AsyncMock(side_effect=fake_append)
-        entry.runtime_data.mission_store.async_save = AsyncMock()
-        entry.runtime_data.zone_store = None
-        entry.runtime_data.map_capability = None
-        entry.runtime_data.cloud_coordinator = None
-
-        hass = MagicMock()
-        hass.loop = None
-
-        with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
-        ) as mock_rct:
-            import asyncio
-
-            async def run_it(coro, loop):
-                return await coro
-            mock_rct.side_effect = lambda coro, loop: asyncio.ensure_future(coro)
-
-            cb = make_mission_callback(hass, entry)
-            cb(self._make_mission_msg("run"))
-            cb(self._make_mission_msg("hmMidMsn", recharge_m=15))
-            cb(self._make_mission_msg("charge"))
-
-        # Allow coroutines to run
-        import asyncio as _asyncio
-        await _asyncio.sleep(0)
-
-        if records:
-            assert records[0].get("recharge_min") == 15
-
-    @pytest.mark.asyncio
-    async def test_no_recharge_when_no_mid_mission(self):
-        """recharge_min is None when no hmMidMsn phase occurred."""
-        records = []
-
-        async def fake_append(record):
-            records.append(record)
-
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from custom_components.roomba_plus.callbacks import make_mission_callback
-
-        entry = MagicMock()
-        entry.runtime_data.mission_store = MagicMock()
-        entry.runtime_data.mission_store.async_append = AsyncMock(side_effect=fake_append)
-        entry.runtime_data.mission_store.async_save = AsyncMock()
-        entry.runtime_data.zone_store = None
-        entry.runtime_data.map_capability = None
-        entry.runtime_data.cloud_coordinator = None
-
-        hass = MagicMock()
-
-        with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
-        ) as mock_rct:
-            mock_rct.side_effect = lambda coro, loop: None
-
-            cb = make_mission_callback(hass, entry)
-            cb({"state": {"reported": {
-                "cleanMissionStatus": {"phase": "run", "mssnStrtTm": 1700000000},
-                "bbrun": {"nStuck": 0},
-            }}})
-            cb({"state": {"reported": {
-                "cleanMissionStatus": {"phase": "charge"},
-                "bbrun": {"nStuck": 0},
-            }}})
-
-
-# ── F4b -- make_mission_complete_callback ─────────────────────────────────────
-
-class TestMissionCompleteCallback:
-    """F4b -- cloud refresh triggered on mission-end phase transition."""
-
-    def _msg(self, phase: str) -> dict:
-        return {"state": {"reported": {"cleanMissionStatus": {"phase": phase}}}}
-
-    def test_refresh_triggered_on_mission_end(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
-
-        cc = MagicMock()
-        cc.async_request_refresh = AsyncMock()
-        hass = MagicMock()
-
-        with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
-        ) as mock_rct:
-            cb = make_mission_complete_callback(hass, cc)
-            cb(self._msg("run"))
-            cb(self._msg("charge"))   # transition: run -> charge
-            mock_rct.assert_called_once()
-
-    def test_no_refresh_without_prior_cleaning_phase(self):
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
-
-        cc = MagicMock()
-        cc.async_request_refresh = AsyncMock()
-        hass = MagicMock()
-
-        with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
-        ) as mock_rct:
-            cb = make_mission_complete_callback(hass, cc)
-            cb(self._msg("charge"))   # charge without prior cleaning phase
-            mock_rct.assert_not_called()

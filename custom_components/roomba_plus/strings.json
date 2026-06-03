@@ -258,7 +258,7 @@
         "name": "Mop pad"
       },
       "mop_behavior": {
-        "name": "Mop – Clean passes (legacy)"
+        "name": "Mop behavior"
       },
       "mop_tank_level": {
         "name": "Mop tank level"
@@ -415,78 +415,6 @@
       },
       "recent_error_time": {
         "name": "Recent error time (cloud)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Signal floor",
-        "state_attributes": {}
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Signal stability",
-        "state_attributes": {}
-      },
-      "mop_clean_mode": {
-        "name": "Mop – Clean mode",
-        "state": {
-          "Dry": "Dry",
-          "Wet": "Wet",
-          "Unknown": "Unknown"
-        }
-      },
-      "mop_tank_status": {
-        "name": "Mop – Tank status",
-        "state": {
-          "Ready": "Ready",
-          "Fill Tank": "Fill tank",
-          "Lid Open": "Lid open",
-          "Tank Missing": "Tank missing"
-        }
-      },
-      "mop_ars_behavior": {
-        "name": "Mop – ARS behavior",
-        "state": {
-          "No Mop": "No mop",
-          "Extended": "Extended",
-          "Standard": "Standard",
-          "Deep": "Deep",
-          "Dirty Pause": "Dirty pause",
-          "Dry": "Dry",
-          "Wash": "Wash",
-          "Dirty Pause + Dry": "Dirty pause + dry",
-          "Dirty Pause + Wash": "Dirty pause + wash",
-          "Dry + Wash": "Dry + wash",
-          "Dirty Pause + Dry + Wash": "Dirty pause + dry + wash",
-          "Unknown": "Unknown"
-        }
-      },
-      "recent_cleaning_speed": {
-        "name": "Performance – Cleaning speed"
-      },
-      "recent_dirt_density": {
-        "name": "Performance – Dirt density"
-      },
-      "recent_recharge_fraction": {
-        "name": "Performance – Recharge fraction"
-      },
-      "cleaning_speed_trend": {
-        "name": "Performance – Cleaning speed trend",
-        "state": {
-          "improving": "Improving",
-          "stable": "Stable",
-          "declining": "Declining",
-          "unknown": "Unknown"
-        }
-      },
-      "recent_coverage_pct": {
-        "name": "Performance – Coverage"
-      },
-      "battery_capacity_retention": {
-        "name": "Maintenance – Battery capacity retention"
-      },
-      "estimated_battery_eol": {
-        "name": "Maintenance – Est. battery end of life"
-      },
-      "consecutive_clean_skips": {
-        "name": "Performance – Consecutive clean skips"
       }
     },
     "binary_sensor": {
@@ -682,34 +610,6 @@
           }
         }
       }
-    },
-    "maintenance_baselines_reset": {
-      "title": "Robot runtime counter may have reset",
-      "description": "The robot's bbrun.hr runtime counter is lower than the stored reset baselines for: {parts}. This usually means a firmware update silently reset the counter. Remaining-hours estimates for consumables are now unreliable. Reset all consumables using the Reset buttons."
-    },
-    "performance_degradation": {
-      "title": "Cleaning performance declining",
-      "description": "Roomba+ has detected a sustained decline in cleaning speed over the last several missions (cause: {cause}). This may indicate worn brushes, a clogged filter, or significant changes in floor conditions. Check the device page for consumable status."
-    },
-    "battery_recharge_high": {
-      "title": "High mid-mission recharging with degraded battery",
-      "description": "Your robot is spending a significant proportion of cleaning time recharging mid-mission while battery capacity has dropped below 75% of its original value. Consider replacing the battery."
-    },
-    "mixed_schedule": {
-      "title": "Competing schedule sources detected",
-      "description": "In the last 30 days, {schedule_pct}% of cleans were started by HA schedules and {app_pct}% by the iRobot app. Competing schedules can cause double-cleans and missed rooms. Manage scheduling from one place only."
-    },
-    "accident_detected": {
-      "title": "Possible floor accident detected",
-      "description": "The last mission recorded an unusually high dirt event count in a very short runtime — a possible liquid spill or accident. Check the area before sending the robot back."
-    },
-    "consecutive_skips": {
-      "title": "Robot skipped {count} consecutive cleans",
-      "description": "Blocking sensors or presence scheduling prevented {count} consecutive scheduled cleaning opportunities. Check your blocking sensor configuration or presence schedule — they may be too restrictive."
-    },
-    "map_drift_detected": {
-      "title": "Smart Map drift detected",
-      "description": "The robot's position drifted {magnitude_cm} cm (bearing {bearing}°) from its expected location. This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run."
     }
   },
   "device_automation": {

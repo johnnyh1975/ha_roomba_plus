@@ -246,7 +246,7 @@
         "name": "Almofada de esfregona"
       },
       "mop_behavior": {
-        "name": "Esfrego – Intensidade (legacy)"
+        "name": "Comportamento de esfregona"
       },
       "mop_tank_level": {
         "name": "Nível do depósito de esfregona"
@@ -403,76 +403,6 @@
       },
       "recent_error_time": {
         "name": "Erro – Última hora (nuvem)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Sinal mínimo"
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Estabilidade do sinal"
-      },
-      "mop_clean_mode": {
-        "name": "Esfrego – Modo de limpeza",
-        "state": {
-          "Dry": "Seco",
-          "Wet": "Húmido",
-          "Unknown": "Desconhecido"
-        }
-      },
-      "mop_tank_status": {
-        "name": "Esfrego – Estado do depósito",
-        "state": {
-          "Ready": "Pronto",
-          "Fill Tank": "Encher depósito",
-          "Lid Open": "Tampa aberta",
-          "Tank Missing": "Depósito ausente"
-        }
-      },
-      "mop_ars_behavior": {
-        "name": "Esfrego – Comportamento ARS",
-        "state": {
-          "No Mop": "Sem esfregão",
-          "Extended": "Estendido",
-          "Standard": "Padrão",
-          "Deep": "Profundo",
-          "Dirty Pause": "Pausa sujidade",
-          "Dry": "Seco",
-          "Wash": "Lavar",
-          "Dirty Pause + Dry": "Pausa + seco",
-          "Dirty Pause + Wash": "Pausa + lavar",
-          "Dry + Wash": "Seco + lavar",
-          "Dirty Pause + Dry + Wash": "Pausa + seco + lavar",
-          "Unknown": "Desconhecido"
-        }
-      },
-      "recent_cleaning_speed": {
-        "name": "Desempenho – Velocidade de limpeza"
-      },
-      "recent_dirt_density": {
-        "name": "Desempenho – Densidade de sujidade"
-      },
-      "recent_recharge_fraction": {
-        "name": "Desempenho – Fração de recarga"
-      },
-      "cleaning_speed_trend": {
-        "name": "Desempenho – Tendência de velocidade",
-        "state": {
-          "improving": "A melhorar",
-          "stable": "Estável",
-          "declining": "A declinar",
-          "unknown": "Desconhecido"
-        }
-      },
-      "recent_coverage_pct": {
-        "name": "Desempenho – Cobertura"
-      },
-      "battery_capacity_retention": {
-        "name": "Manutenção – Retenção de capacidade"
-      },
-      "estimated_battery_eol": {
-        "name": "Manutenção – Fim de vida estimado"
-      },
-      "consecutive_clean_skips": {
-        "name": "Desempenho – Limpezas consecutivas ignoradas"
       }
     },
     "binary_sensor": {
@@ -668,34 +598,6 @@
           }
         }
       }
-    },
-    "maintenance_baselines_reset": {
-      "title": "Contador de tempo possivelmente reiniciado",
-      "description": "O contador é inferior às baselines para: {parts}. Redefine todos os consumíveis."
-    },
-    "performance_degradation": {
-      "title": "Desempenho em declínio",
-      "description": "Declínio sustentado de velocidade (causa: {cause}). Possíveis causas: escovas gastas, filtro entupido ou pavimento alterado."
-    },
-    "battery_recharge_high": {
-      "title": "Recargas frequentes com bateria degradada",
-      "description": "Capacidade abaixo de 75 % com recargas frequentes. Considera substituir a bateria."
-    },
-    "mixed_schedule": {
-      "title": "Fontes de agendamento concorrentes",
-      "description": "{schedule_pct} % pelo HA e {app_pct} % pela app. Usa apenas uma fonte."
-    },
-    "accident_detected": {
-      "title": "Possível acidente no chão",
-      "description": "Alto número de eventos de sujidade em pouco tempo. Verifica a área."
-    },
-    "consecutive_skips": {
-      "title": "O robô saltou {count} limpezas consecutivas",
-      "description": "Sensores de bloqueio ou presença impediram {count} limpezas. Verifica a configuração."
-    },
-    "map_drift_detected": {
-      "title": "Deriva do Smart Map",
-      "description": "Deriva de {magnitude_cm} cm (rumo {bearing}°). Verifica a base e efetua novo mapeamento."
     }
   },
   "device_automation": {

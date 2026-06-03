@@ -246,7 +246,7 @@
         "name": "Tampon de lavage"
       },
       "mop_behavior": {
-        "name": "Serpillère – Intensité (legacy)"
+        "name": "Comportement de lavage"
       },
       "mop_tank_level": {
         "name": "Niveau du réservoir de lavage"
@@ -403,76 +403,6 @@
       },
       "recent_error_time": {
         "name": "Erreur – Dernière heure (nuage)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Signal minimum"
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Stabilité signal"
-      },
-      "mop_clean_mode": {
-        "name": "Serpillère – Mode de nettoyage",
-        "state": {
-          "Dry": "Sec",
-          "Wet": "Humide",
-          "Unknown": "Inconnu"
-        }
-      },
-      "mop_tank_status": {
-        "name": "Serpillère – État réservoir",
-        "state": {
-          "Ready": "Prêt",
-          "Fill Tank": "Remplir le réservoir",
-          "Lid Open": "Couvercle ouvert",
-          "Tank Missing": "Réservoir absent"
-        }
-      },
-      "mop_ars_behavior": {
-        "name": "Serpillère – Comportement ARS",
-        "state": {
-          "No Mop": "Pas de serpillère",
-          "Extended": "Étendu",
-          "Standard": "Standard",
-          "Deep": "Intensif",
-          "Dirty Pause": "Pause saleté",
-          "Dry": "Sec",
-          "Wash": "Laver",
-          "Dirty Pause + Dry": "Pause + sec",
-          "Dirty Pause + Wash": "Pause + laver",
-          "Dry + Wash": "Sec + laver",
-          "Dirty Pause + Dry + Wash": "Pause + sec + laver",
-          "Unknown": "Inconnu"
-        }
-      },
-      "recent_cleaning_speed": {
-        "name": "Performance – Vitesse de nettoyage"
-      },
-      "recent_dirt_density": {
-        "name": "Performance – Densité de saleté"
-      },
-      "recent_recharge_fraction": {
-        "name": "Performance – Fraction de recharge"
-      },
-      "cleaning_speed_trend": {
-        "name": "Performance – Tendance vitesse nettoyage",
-        "state": {
-          "improving": "En amélioration",
-          "stable": "Stable",
-          "declining": "En déclin",
-          "unknown": "Inconnu"
-        }
-      },
-      "recent_coverage_pct": {
-        "name": "Performance – Couverture"
-      },
-      "battery_capacity_retention": {
-        "name": "Maintenance – Rétention capacité batterie"
-      },
-      "estimated_battery_eol": {
-        "name": "Maintenance – Fin de vie estimée"
-      },
-      "consecutive_clean_skips": {
-        "name": "Performance – Nettoyages ignorés consécutifs"
       }
     },
     "binary_sensor": {
@@ -668,34 +598,6 @@
           }
         }
       }
-    },
-    "maintenance_baselines_reset": {
-      "title": "Compteur de temps peut-être réinitialisé",
-      "description": "Le compteur bbrun.hr est inférieur aux baselines pour : {parts}. Réinitialisez tous les consommables."
-    },
-    "performance_degradation": {
-      "title": "Performances en baisse",
-      "description": "Baisse soutenue de vitesse détectée (cause : {cause}). Brosses usées, filtre bouché ou changement de sol possible."
-    },
-    "battery_recharge_high": {
-      "title": "Recharges fréquentes avec batterie dégradée",
-      "description": "Capacité batterie sous 75 % avec recharges fréquentes. Envisagez le remplacement."
-    },
-    "mixed_schedule": {
-      "title": "Sources de planification concurrentes",
-      "description": "{schedule_pct} % par HA et {app_pct} % par l'app. Utilisez une seule source."
-    },
-    "accident_detected": {
-      "title": "Accident de sol possible",
-      "description": "Nombre élevé d'événements saleté en peu de temps. Vérifiez la zone."
-    },
-    "consecutive_skips": {
-      "title": "Robot a sauté {count} nettoyages consécutifs",
-      "description": "Capteurs de blocage ou présence ont empêché {count} nettoyages. Vérifiez la configuration."
-    },
-    "map_drift_detected": {
-      "title": "Dérive carte détectée",
-      "description": "Dérive de {magnitude_cm} cm (cap {bearing}°). Vérifiez la base et relancez une cartographie."
     }
   },
   "device_automation": {

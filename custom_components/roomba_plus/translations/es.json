@@ -246,7 +246,7 @@
         "name": "Almohadilla de fregona"
       },
       "mop_behavior": {
-        "name": "Fregado – Intensidad (legacy)"
+        "name": "Comportamiento de fregona"
       },
       "mop_tank_level": {
         "name": "Nivel del depósito de fregona"
@@ -403,76 +403,6 @@
       },
       "recent_error_time": {
         "name": "Error – Última hora (nube)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Mínimo de señal"
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Estabilidad de señal"
-      },
-      "mop_clean_mode": {
-        "name": "Fregado – Modo de limpieza",
-        "state": {
-          "Dry": "Seco",
-          "Wet": "Húmedo",
-          "Unknown": "Desconocido"
-        }
-      },
-      "mop_tank_status": {
-        "name": "Fregado – Estado del depósito",
-        "state": {
-          "Ready": "Listo",
-          "Fill Tank": "Llenar depósito",
-          "Lid Open": "Tapa abierta",
-          "Tank Missing": "Sin depósito"
-        }
-      },
-      "mop_ars_behavior": {
-        "name": "Fregado – Comportamiento ARS",
-        "state": {
-          "No Mop": "Sin fregar",
-          "Extended": "Extendido",
-          "Standard": "Estándar",
-          "Deep": "Profundo",
-          "Dirty Pause": "Pausa suciedad",
-          "Dry": "Seco",
-          "Wash": "Lavar",
-          "Dirty Pause + Dry": "Pausa + seco",
-          "Dirty Pause + Wash": "Pausa + lavar",
-          "Dry + Wash": "Seco + lavar",
-          "Dirty Pause + Dry + Wash": "Pausa + seco + lavar",
-          "Unknown": "Desconocido"
-        }
-      },
-      "recent_cleaning_speed": {
-        "name": "Rendimiento – Velocidad de limpieza"
-      },
-      "recent_dirt_density": {
-        "name": "Rendimiento – Densidad de suciedad"
-      },
-      "recent_recharge_fraction": {
-        "name": "Rendimiento – Fracción de recarga"
-      },
-      "cleaning_speed_trend": {
-        "name": "Rendimiento – Tendencia de velocidad",
-        "state": {
-          "improving": "Mejorando",
-          "stable": "Estable",
-          "declining": "Declinando",
-          "unknown": "Desconocido"
-        }
-      },
-      "recent_coverage_pct": {
-        "name": "Rendimiento – Cobertura"
-      },
-      "battery_capacity_retention": {
-        "name": "Mantenimiento – Retención de capacidad"
-      },
-      "estimated_battery_eol": {
-        "name": "Mantenimiento – Fin de vida estimado"
-      },
-      "consecutive_clean_skips": {
-        "name": "Rendimiento – Limpiezas omitidas consecutivas"
       }
     },
     "binary_sensor": {
@@ -668,34 +598,6 @@
           }
         }
       }
-    },
-    "maintenance_baselines_reset": {
-      "title": "Contador de tiempo posiblemente reiniciado",
-      "description": "El contador bbrun.hr es inferior a las baselines para: {parts}. Las estimaciones no son fiables. Reinicia todos los consumibles."
-    },
-    "performance_degradation": {
-      "title": "Rendimiento de limpieza en declive",
-      "description": "Declive sostenido de velocidad detectado (causa: {cause}). Posibles causas: cepillos desgastados, filtro obstruido o cambios en el suelo."
-    },
-    "battery_recharge_high": {
-      "title": "Recargas frecuentes con batería degradada",
-      "description": "El robot recarga frecuentemente mientras la capacidad ha caído bajo el 75 %. Considera reemplazar la batería."
-    },
-    "mixed_schedule": {
-      "title": "Fuentes de programación concurrentes",
-      "description": "{schedule_pct} % iniciados por HA y {app_pct} % por la app iRobot. Usa solo una fuente."
-    },
-    "accident_detected": {
-      "title": "Posible accidente en el suelo",
-      "description": "Muchos eventos de suciedad en poco tiempo en la última misión. Comprueba el área."
-    },
-    "consecutive_skips": {
-      "title": "Se saltaron {count} limpiezas consecutivas",
-      "description": "Sensores de bloqueo o presencia impidieron {count} limpiezas. Revisa la configuración."
-    },
-    "map_drift_detected": {
-      "title": "Deriva del Smart Map",
-      "description": "El robot se desplazó {magnitude_cm} cm (rumbo {bearing}°). Verifica la base y realiza nuevo mapeo."
     }
   },
   "device_automation": {

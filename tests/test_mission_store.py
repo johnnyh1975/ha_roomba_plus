@@ -22,8 +22,6 @@ def _iso(days_ago: float = 0, hour: int = 10) -> str:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
-_make_record_counter = 0
-
 def _make_record(
     days_ago: float = 0,
     result: str = "completed",
@@ -32,12 +30,10 @@ def _make_record(
     zones: list | None = None,
     error_code: int | None = None,
 ) -> dict:
-    global _make_record_counter
-    _make_record_counter += 1
     started = _iso(days_ago, hour=8)
     ended = _iso(days_ago, hour=9)
     return {
-        "id": f"m_{days_ago}_{_make_record_counter}",
+        "id": f"m_{days_ago}",
         "started_at": started,
         "ended_at": ended,
         "duration_min": duration_min,
@@ -317,95 +313,3 @@ class TestSerialisation:
         records = store.query(30)
         assert len(records) == 1
         assert store.clean_streak() == 1
-
-
-# ── F4c -- duplicate guard ────────────────────────────────────────────────────
-
-class TestDuplicateGuard:
-    """F4c -- async_append silently drops records with duplicate IDs."""
-
-    @pytest.mark.asyncio
-    async def test_duplicate_id_dropped(self):
-        store = MissionStore()
-        r = {"id": "m_1000", "started_at": _iso(1), "ended_at": _iso(0), "result": "completed"}
-        await store.async_append(r)
-        await store.async_append(r)   # exact duplicate
-        assert len(store._records) == 1
-
-    @pytest.mark.asyncio
-    async def test_different_id_not_dropped(self):
-        store = MissionStore()
-        r1 = {"id": "m_1000", "started_at": _iso(2), "ended_at": _iso(1), "result": "completed"}
-        r2 = {"id": "m_2000", "started_at": _iso(1), "ended_at": _iso(0), "result": "completed"}
-        await store.async_append(r1)
-        await store.async_append(r2)
-        assert len(store._records) == 2
-
-    @pytest.mark.asyncio
-    async def test_guard_checks_last_five_only(self):
-        """A duplicate beyond the last-5 window is accepted (edge case)."""
-        store = MissionStore()
-        # Fill 6 unique records then append one with same id as the first
-        for i in range(6):
-            await store.async_append({"id": f"m_{i}", "started_at": _iso(10 - i),
-                                       "ended_at": _iso(9 - i), "result": "completed"})
-        # m_0 is now outside the last-5 window -- re-appending it is accepted
-        await store.async_append({"id": "m_0", "started_at": _iso(10),
-                                   "ended_at": _iso(9), "result": "completed"})
-        assert len(store._records) == 7
-
-    @pytest.mark.asyncio
-    async def test_record_without_id_always_appended(self):
-        store = MissionStore()
-        await store.async_append({"started_at": _iso(1), "result": "completed"})
-        await store.async_append({"started_at": _iso(1), "result": "completed"})
-        assert len(store._records) == 2
-
-
-# ── F5f -- p75_area ───────────────────────────────────────────────────────────
-
-class TestP75Area:
-    """F5f -- p75_area() returns 75th-percentile area_sqft."""
-
-    def _store_with_areas(self, areas: list[float], days_ago_start: int = 1) -> MissionStore:
-        store = MissionStore()
-        for i, area in enumerate(areas):
-            store._records.append({
-                "id": f"m_{i}",
-                "started_at": _iso(days_ago_start + i * 0.1),
-                "ended_at": _iso(days_ago_start + i * 0.1 - 0.05),
-                "area_sqft": area,
-                "result": "completed",
-            })
-        return store
-
-    def test_returns_none_below_10_records(self):
-        store = self._store_with_areas([100.0] * 9)
-        assert store.p75_area(30) is None
-
-    def test_returns_value_at_10_records(self):
-        store = self._store_with_areas([float(i * 10) for i in range(1, 11)])
-        result = store.p75_area(30)
-        assert result is not None
-
-    def test_excludes_zero_area(self):
-        areas = [0.0] * 5 + [200.0] * 10
-        store = self._store_with_areas(areas)
-        result = store.p75_area(30)
-        assert result is not None
-        assert result > 0
-
-    def test_excludes_none_area(self):
-        store = MissionStore()
-        for i in range(5):
-            store._records.append({
-                "id": f"m_{i}", "started_at": _iso(i + 1),
-                "ended_at": _iso(i), "area_sqft": None, "result": "completed",
-            })
-        for i in range(10):
-            store._records.append({
-                "id": f"m_{i + 10}", "started_at": _iso(i + 10),
-                "ended_at": _iso(i + 9), "area_sqft": 300.0, "result": "completed",
-            })
-        result = store.p75_area(30)
-        assert result == 300.0

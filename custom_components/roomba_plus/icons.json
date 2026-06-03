@@ -225,45 +225,6 @@
       },
       "total_missions": {
         "default": "mdi:counter"
-      },
-      "recent_wifi_floor": {
-        "default": "mdi:wifi-arrow-down"
-      },
-      "recent_wifi_stability": {
-        "default": "mdi:wifi-alert"
-      },
-      "mop_clean_mode": {
-        "default": "mdi:water-opacity"
-      },
-      "mop_tank_status": {
-        "default": "mdi:water-pump"
-      },
-      "mop_ars_behavior": {
-        "default": "mdi:shimmer"
-      },
-      "recent_cleaning_speed": {
-        "default": "mdi:speedometer"
-      },
-      "recent_dirt_density": {
-        "default": "mdi:grain"
-      },
-      "recent_recharge_fraction": {
-        "default": "mdi:battery-charging-medium"
-      },
-      "cleaning_speed_trend": {
-        "default": "mdi:trending-up"
-      },
-      "recent_coverage_pct": {
-        "default": "mdi:map-check"
-      },
-      "battery_capacity_retention": {
-        "default": "mdi:battery-heart"
-      },
-      "estimated_battery_eol": {
-        "default": "mdi:battery-clock"
-      },
-      "consecutive_clean_skips": {
-        "default": "mdi:skip-next-circle"
       }
     },
     "button": {

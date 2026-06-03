@@ -196,7 +196,6 @@ class TestCloudLastErrorTime:
     def test_uses_most_recent_error(self):
         import datetime
         from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        # Records newest-first — first error timestamp wins
         records = [
             _rec(done="stuck", pause_id=17, timestamp=1700010000),
             _rec(done="stuck", pause_id=18, timestamp=1700000000),

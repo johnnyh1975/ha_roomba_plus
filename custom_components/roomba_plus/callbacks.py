@@ -19,7 +19,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
-import time as _time_mod
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -75,27 +74,21 @@ async def async_record_mission(
     zones: list[str],
     start_ts: int,
     nstuck_delta: int,
-    recharge_min: int = 0,
-    result_override: str | None = None,
 ) -> None:
     """Build and append a mission record to MissionStore.
 
     Args:
-        hass:            HomeAssistant instance (for storage and dt_util).
-        entry:           Config entry whose runtime_data holds the MissionStore.
-        mission:         cleanMissionStatus dict from the end-of-mission MQTT message.
-        reported:        Full reported state dict from the same MQTT message.
-        zones:           Zone names captured at mission START (not end).
-        start_ts:        mssnStrtTm cached at mission START. The 980/900-series
-                         firmware resets this field to 0 in the end MQTT message,
-                         so it must be captured when the cleaning phase begins.
-        nstuck_delta:    bbrun.nStuck delta since mission start. Using the delta
-                         rather than the lifetime counter prevents marking every
-                         mission as stuck when bbrun arrives in the same packet.
-        recharge_min:    F4e — minutes spent recharging mid-mission, accumulated
-                         from rechrgM fields across hmMidMsn phase entries.
-        result_override: F6c — when set, overrides the computed result string
-                         (e.g. "blocked_timeout" from BlockingManager).
+        hass:         HomeAssistant instance (for storage and dt_util).
+        entry:        Config entry whose runtime_data holds the MissionStore.
+        mission:      cleanMissionStatus dict from the end-of-mission MQTT message.
+        reported:     Full reported state dict from the same MQTT message.
+        zones:        Zone names captured at mission START (not end).
+        start_ts:     mssnStrtTm cached at mission START. The 980/900-series
+                      firmware resets this field to 0 in the end MQTT message,
+                      so it must be captured when the cleaning phase begins.
+        nstuck_delta: bbrun.nStuck delta since mission start. Using the delta
+                      rather than the lifetime counter prevents marking every
+                      mission as stuck when bbrun arrives in the same packet.
     """
     data: RoombaData = entry.runtime_data
     if data.mission_store is None:
@@ -117,17 +110,11 @@ async def async_record_mission(
 
     phase = mission.get("phase", "")
     error_code: int = mission.get("error", 0) or 0
-
-    # F6c — result_override takes precedence (e.g. "blocked_timeout")
-    if result_override:
-        result = result_override
-    elif error_code:
+    if error_code:
         result = "error"
     elif phase == "cancelled":
         result = "cancelled"
     elif nstuck_delta > 0:
-        # F6h — default to stuck_and_abandoned; caller may override to
-        # stuck_and_resumed if the phase returned to "run" after the stuck event.
         result = "stuck"
     else:
         result = "completed"
@@ -152,31 +139,15 @@ async def async_record_mission(
         "zones": zones,
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
-        "recharge_min": recharge_min if recharge_min > 0 else None,  # F4e
     }
 
     await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
 
-    # F6g — reset consecutive skip counter on any successful completion
-    if result == "completed" and data.maintenance_store is not None:
-        if data.maintenance_store.consecutive_skips > 0:
-            data.maintenance_store.consecutive_skips = 0
-            _LOGGER.debug("MissionStore: consecutive_skips reset on completed mission")
-            await data.maintenance_store.async_save(hass, entry.entry_id)
-
-    # F6e — check for mixed schedule patterns after each mission
-    # Guard: only fire when hass is fully initialised (has config attribute)
-    if getattr(hass, "is_running", False):
-        from .repairs import async_check_mixed_schedule
-        asyncio.run_coroutine_threadsafe(
-            async_check_mixed_schedule(hass, entry), hass.loop
-        )
-
     # Update L3 runtime error state.
     # Only update on error/stuck — do NOT clear on completed so the last
     # error remains visible until the next error occurs.
-    if result in ("error", "stuck", "stuck_and_abandoned", "stuck_and_resumed"):
+    if result in ("error", "stuck"):
         data.last_error_code = error_code if error_code else None
         data.last_error_at   = now.isoformat()
         data.last_error_zone = zones[0] if zones else None
@@ -202,17 +173,9 @@ def make_mission_callback(
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
-    # F4e — accumulate recharge minutes across mid-mission recharge phases
-    recharge_min_accumulator: int = 0
-    last_recharge_phase_ts: float = 0.0
-    # F6h — stuck recovery tracking
-    had_stuck_event: bool = False
-    stuck_cleared_ts: float = 0.0
 
     def _on_mission_message(json_data: dict[str, Any]) -> None:
-        nonlocal last_phase, current_mission_zones, mission_start_ts
-        nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
-        nonlocal had_stuck_event, stuck_cleared_ts
+        nonlocal last_phase, current_mission_zones, mission_start_ts, nstuck_at_start
 
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
@@ -229,71 +192,14 @@ def make_mission_callback(
             mission_start_ts = mission.get("mssnStrtTm") or 0
             bbrun = reported.get("bbrun", {})
             nstuck_at_start = bbrun.get("nStuck", 0)
-            recharge_min_accumulator = 0
-            last_recharge_phase_ts = 0.0
-            had_stuck_event = False
-            stuck_cleared_ts = 0.0
             _LOGGER.debug(
                 "MissionStore: mission started ts=%s nstuck_baseline=%d",
                 mission_start_ts, nstuck_at_start,
             )
 
-        # F4e — accumulate recharge time on every hmMidMsn entry
-        if phase == "hmMidMsn":
-            rechrgM = reported.get("cleanMissionStatus", {}).get("rechrgM")
-            if rechrgM is not None:
-                # rechrgM is already cumulative for this charge leg
-                recharge_min_accumulator += int(rechrgM)
-            elif last_recharge_phase_ts == 0.0:
-                # Fallback: record timestamp to compute elapsed on phase exit
-                last_recharge_phase_ts = _time_mod.monotonic()
-
-        # F4e fallback: if rechrgM was unavailable, compute elapsed time
-        if last_phase == "hmMidMsn" and phase != "hmMidMsn" and last_recharge_phase_ts > 0.0:
-            elapsed_min = int((_time_mod.monotonic() - last_recharge_phase_ts) / 60)
-            recharge_min_accumulator += elapsed_min
-            last_recharge_phase_ts = 0.0
-
-        # F6h — detect stuck event and track whether robot resumed cleaning.
-        # A stuck event is when nStuck increases. If the robot then re-enters
-        # a cleaning phase within 30 min, that's stuck_and_resumed.
-        # If it goes directly to end without resuming, that's stuck_and_abandoned.
-        if phase in _CLEANING_PHASES and last_phase in _CLEANING_PHASES:
-            bbrun_now = reported.get("bbrun", {})
-            current_nstuck = bbrun_now.get("nStuck", nstuck_at_start)
-            if current_nstuck > nstuck_at_start and not had_stuck_event:
-                had_stuck_event = True
-                stuck_cleared_ts = _time_mod.monotonic()
-                _LOGGER.debug("MissionStore: stuck event detected during mission")
-
-        # F6h — if robot returned to cleaning after a stuck event, mark resumed
-        if had_stuck_event and phase in _CLEANING_PHASES and last_phase not in _CLEANING_PHASES:
-            # Robot re-entered cleaning after a non-cleaning phase following stuck
-            if stuck_cleared_ts > 0 and (_time_mod.monotonic() - stuck_cleared_ts) < 1800:
-                # Still within 30-min window — mark as resumed
-                stuck_cleared_ts = _time_mod.monotonic()  # reset timer for next end
-
         if phase in _MISSION_END_PHASES and last_phase in _CLEANING_PHASES:
             bbrun_end = reported.get("bbrun", {})
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
-
-            # F6h — classify stuck recovery outcome
-            result_override: str | None = None
-            if had_stuck_event and nstuck_delta > 0:
-                # stuck_and_resumed: robot had stuck event but kept cleaning
-                # (stuck_cleared_ts was reset when it re-entered run phase)
-                # We distinguish by whether total run time is > 5 min post-stuck,
-                # using mission duration as a proxy. If mission was short (<10 min)
-                # and we have nstuck, it abandoned immediately.
-                elapsed_total = (
-                    _time_mod.monotonic() - (stuck_cleared_ts if stuck_cleared_ts else 0)
-                )
-                # A mission that lasted >5 min after the stuck event = resumed
-                if stuck_cleared_ts > 0 and elapsed_total > 300:
-                    result_override = "stuck_and_resumed"
-                else:
-                    result_override = "stuck_and_abandoned"
-
             asyncio.run_coroutine_threadsafe(
                 async_record_mission(
                     hass,
@@ -303,53 +209,16 @@ def make_mission_callback(
                     list(current_mission_zones),
                     start_ts=mission_start_ts,
                     nstuck_delta=nstuck_delta,
-                    recharge_min=recharge_min_accumulator,  # F4e
-                    result_override=result_override,         # F6h
                 ),
                 hass.loop,
             )
             current_mission_zones = []
             mission_start_ts = 0
             nstuck_at_start = 0
-            recharge_min_accumulator = 0
-            last_recharge_phase_ts = 0.0
-            had_stuck_event = False
-            stuck_cleared_ts = 0.0
 
         last_phase = phase
 
     return _on_mission_message
-
-
-def make_mission_complete_callback(
-    hass: Any,
-    cloud_coordinator: IrobotCloudCoordinator,
-) -> Any:
-    """Return an MQTT callback that triggers a cloud refresh at mission end.
-
-    F4b — fires async_request_refresh() when a mission-end phase transition
-    is detected, eliminating the up-to-24h staleness in cloud sensors after
-    a mission completes.  Parallel pattern to make_map_retrain_callback().
-    """
-    last_phase: str = ""
-
-    def _on_roomba_message(json_data: dict[str, Any]) -> None:
-        nonlocal last_phase
-        reported = json_data.get("state", {}).get("reported", {})
-        if "cleanMissionStatus" not in reported:
-            return
-        phase = reported["cleanMissionStatus"].get("phase", "")
-        if phase in _MISSION_END_PHASES and last_phase in _CLEANING_PHASES:
-            _LOGGER.debug(
-                "Roomba+ cloud: mission ended (phase %s → %s) — requesting refresh",
-                last_phase, phase,
-            )
-            asyncio.run_coroutine_threadsafe(
-                cloud_coordinator.async_request_refresh(), hass.loop
-            )
-        last_phase = phase
-
-    return _on_roomba_message
 
 
 def make_map_retrain_callback(

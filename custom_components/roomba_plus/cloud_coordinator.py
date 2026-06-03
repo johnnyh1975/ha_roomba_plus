@@ -80,20 +80,15 @@ def classify_mission_result(record: dict) -> str:
 
     # Known done values confirmed from field logs (June 2026, Roomba 980 v2.4.17):
     if done == "ok":
-        # Cloud normalisation of a successful mission (alternate to "done")
         return "completed"
 
     if done == "full":
-        # Robot stopped because the bin is full
         return "cancelled"
 
     if done == "bat":
-        # Robot stopped due to battery depletion (failed to reach dock)
         return "error_battery"
 
     if done == "schErr":
-        # Schedule error — robot failed to start at scheduled time.
-        # pauseId 215 = schedule conflict, 216 = schedule internal error.
         if pause_id > 0:
             return f"error_{pause_id}"
         return "cancelled"
@@ -309,7 +304,6 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mission_history": {},
             "mission_history_raw": [],   # v2.0: full per-mission record list
             "favorites": [],
-            "automations": {},           # v2.1 F7l: iRobot Genius rules (shape TBD)
         }
         try:
             async with asyncio.timeout(30):
@@ -319,16 +313,6 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     result["pmaps"] = await self.api.get_pmaps(self.blid)
                     result["favorites"] = await self.api.get_favorites()
                 raw_history = await self.api.get_mission_history(self.blid)
-                # F7l — fetch automations endpoint; fails gracefully
-                try:
-                    result["automations"] = await self.api.get_automations()
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug(
-                        "iRobot cloud: automations endpoint unavailable for %s "
-                        "(endpoint may not exist for this account type)",
-                        self.blid,
-                    )
-                    result["automations"] = {}
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
                 f"iRobot cloud authentication failed: {exc}"
@@ -351,31 +335,21 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else {}
             )
             # Collect all unique keys across all records to detect
-            # fields that only appear on certain result types.
-            # Separately surface array-valued keys so sub-arrays like
-            # cleanRooms/events are visible without dumping full records.
+            # fields that only appear on certain result types
             _all_keys: set = set()
-            _array_keys: dict[str, int] = {}   # key → max len seen across records
             for _r in raw_history:
                 if isinstance(_r, dict):
                     _all_keys.update(_r.keys())
-                    for _k, _v in _r.items():
-                        if isinstance(_v, list):
-                            _array_keys[_k] = max(
-                                _array_keys.get(_k, 0), len(_v)
-                            )
             _LOGGER.debug(
                 "iRobot cloud: raw_history len=%d "
                 "all_keys=%s "
-                "array_keys_max_len=%s "
                 "first_record=%s "
                 "second_record=%s "
                 "for %s",
                 len(raw_history),
                 sorted(_all_keys),
-                dict(sorted(_array_keys.items())),
-                _first,
-                _second,
+                _first,    # full first record (all fields)
+                _second,   # full second record (may differ from first)
                 self.blid,
             )
         elif isinstance(raw_history, dict):
