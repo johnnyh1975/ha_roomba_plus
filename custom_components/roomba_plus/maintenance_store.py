@@ -47,6 +47,15 @@ class MaintenanceStore:
     brush_reset_at: str | None = None
     battery_reset_at: str | None = None
 
+    # F5d — baseline estCap (mAh) recorded on first observation.
+    # Used to compute battery_capacity_retention as pct of original capacity.
+    # None until the first MQTT message containing bbchg3.estCap is processed.
+    baseline_estcap: float | None = None
+
+    # F6g — consecutive scheduled clean opportunities missed (blocked or skipped).
+    # Incremented by BlockingManager on timeout; reset to 0 on any completed mission.
+    consecutive_skips: int = 0
+
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
@@ -62,6 +71,11 @@ class MaintenanceStore:
             self.filter_reset_at  = data.get("filter_reset_at")
             self.brush_reset_at   = data.get("brush_reset_at")
             self.battery_reset_at = data.get("battery_reset_at")
+            # F5d — None until first estCap observation (v2.1+)
+            raw_estcap = data.get("baseline_estcap")
+            self.baseline_estcap = float(raw_estcap) if raw_estcap is not None else None
+            # F6g — 0 for pre-v2.1 installs
+            self.consecutive_skips = int(data.get("consecutive_skips", 0))
             _LOGGER.debug(
                 "MaintenanceStore: loaded — filter_reset=%dh brush_reset=%dh",
                 self.filter_reset_hr, self.brush_reset_hr,
@@ -79,6 +93,8 @@ class MaintenanceStore:
             "filter_reset_at":  self.filter_reset_at,
             "brush_reset_at":   self.brush_reset_at,
             "battery_reset_at": self.battery_reset_at,
+            "baseline_estcap":  self.baseline_estcap,   # F5d
+            "consecutive_skips": self.consecutive_skips, # F6g
         })
 
     # ── Reset methods ─────────────────────────────────────────────────────────
@@ -106,6 +122,21 @@ class MaintenanceStore:
         self.brush_reset_hr = current_hr
         self.brush_reset_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
+
+    # ── F5d — Battery capacity baseline ──────────────────────────────────────
+
+    def record_estcap_if_needed(self, estcap: float) -> None:
+        """Record estCap as baseline on first valid observation.
+
+        F5d — called by battery_capacity_retention sensor on every MQTT update.
+        Only sets the baseline once; subsequent calls are no-ops so the baseline
+        never drifts once established.  Persisted via async_save after the call.
+        """
+        if self.baseline_estcap is None and estcap > 0:
+            self.baseline_estcap = float(estcap)
+            _LOGGER.info(
+                "MaintenanceStore: baseline_estcap set to %.0f mAh", estcap
+            )
 
     # ── Remaining-life calculations ───────────────────────────────────────────
 

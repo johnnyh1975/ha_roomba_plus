@@ -305,7 +305,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         live state.pmaps via _resolve_pmapv_id so it is never stale after a
         map retrain. Falls back to the first pmap in state if pmap_id is absent.
         """
-        from . import _resolve_pmapv_id
+        from .services import _resolve_pmapv_id
 
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")

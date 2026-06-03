@@ -246,7 +246,7 @@
         "name": "Panno lavapavimenti"
       },
       "mop_behavior": {
-        "name": "Comportamento lavapavimenti"
+        "name": "Mocio – Intensità (legacy)"
       },
       "mop_tank_level": {
         "name": "Livello serbatoio lavapavimenti"
@@ -403,6 +403,76 @@
       },
       "recent_error_time": {
         "name": "Errore – Ultima ora (cloud)"
+      },
+      "recent_wifi_floor": {
+        "name": "Wi-Fi – Segnale minimo"
+      },
+      "recent_wifi_stability": {
+        "name": "Wi-Fi – Stabilità segnale"
+      },
+      "mop_clean_mode": {
+        "name": "Mocio – Modalità pulizia",
+        "state": {
+          "Dry": "Asciutto",
+          "Wet": "Umido",
+          "Unknown": "Sconosciuto"
+        }
+      },
+      "mop_tank_status": {
+        "name": "Mocio – Stato serbatoio",
+        "state": {
+          "Ready": "Pronto",
+          "Fill Tank": "Riempire serbatoio",
+          "Lid Open": "Coperchio aperto",
+          "Tank Missing": "Serbatoio mancante"
+        }
+      },
+      "mop_ars_behavior": {
+        "name": "Mocio – Comportamento ARS",
+        "state": {
+          "No Mop": "Nessun mocio",
+          "Extended": "Esteso",
+          "Standard": "Standard",
+          "Deep": "Profondo",
+          "Dirty Pause": "Pausa sporco",
+          "Dry": "Asciutto",
+          "Wash": "Lavare",
+          "Dirty Pause + Dry": "Pausa + asciutto",
+          "Dirty Pause + Wash": "Pausa + lavare",
+          "Dry + Wash": "Asciutto + lavare",
+          "Dirty Pause + Dry + Wash": "Pausa + asciutto + lavare",
+          "Unknown": "Sconosciuto"
+        }
+      },
+      "recent_cleaning_speed": {
+        "name": "Prestazioni – Velocità di pulizia"
+      },
+      "recent_dirt_density": {
+        "name": "Prestazioni – Densità sporco"
+      },
+      "recent_recharge_fraction": {
+        "name": "Prestazioni – Frazione di ricarica"
+      },
+      "cleaning_speed_trend": {
+        "name": "Prestazioni – Tendenza velocità pulizia",
+        "state": {
+          "improving": "In miglioramento",
+          "stable": "Stabile",
+          "declining": "In calo",
+          "unknown": "Sconosciuto"
+        }
+      },
+      "recent_coverage_pct": {
+        "name": "Prestazioni – Copertura"
+      },
+      "battery_capacity_retention": {
+        "name": "Manutenzione – Ritenzione capacità batteria"
+      },
+      "estimated_battery_eol": {
+        "name": "Manutenzione – Fine vita stimata"
+      },
+      "consecutive_clean_skips": {
+        "name": "Prestazioni – Pulizie saltate consecutive"
       }
     },
     "binary_sensor": {
@@ -598,6 +668,34 @@
           }
         }
       }
+    },
+    "maintenance_baselines_reset": {
+      "title": "Contatore runtime possibilmente azzerato",
+      "description": "Il contatore è inferiore alle baseline per: {parts}. Reimposta tutti i materiali di consumo."
+    },
+    "performance_degradation": {
+      "title": "Prestazioni in calo",
+      "description": "Calo sostenuto della velocità (causa: {cause}). Possibili cause: spazzole usurate, filtro intasato o pavimento cambiato."
+    },
+    "battery_recharge_high": {
+      "title": "Ricariche frequenti con batteria degradata",
+      "description": "Capacità sotto il 75 % con ricariche frequenti. Valuta la sostituzione."
+    },
+    "mixed_schedule": {
+      "title": "Fonti di pianificazione concorrenti",
+      "description": "{schedule_pct} % da HA e {app_pct} % dall'app. Usa una sola fonte."
+    },
+    "accident_detected": {
+      "title": "Possibile incidente sul pavimento",
+      "description": "Alto numero di eventi sporco in poco tempo. Controlla l'area."
+    },
+    "consecutive_skips": {
+      "title": "Il robot ha saltato {count} pulizie consecutive",
+      "description": "Sensori di blocco o presenza hanno impedito {count} pulizie. Controlla la configurazione."
+    },
+    "map_drift_detected": {
+      "title": "Deriva Smart Map rilevata",
+      "description": "Deriva di {magnitude_cm} cm (rotta {bearing}°). Verifica la base e completa una nuova mappatura."
     }
   },
   "device_automation": {

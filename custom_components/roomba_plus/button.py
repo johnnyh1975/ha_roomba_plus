@@ -395,7 +395,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         # If a pmap_id is present, refresh user_pmapv_id from live state.pmaps
         # to avoid silent failures after a map retrain.
         if params.get("pmap_id"):
-            from . import _resolve_pmapv_id
+            from .services import _resolve_pmapv_id
             fresh = _resolve_pmapv_id(self.vacuum_state, params["pmap_id"])
             if fresh:
                 params["user_pmapv_id"] = fresh
@@ -442,7 +442,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         never from lastCommand, to avoid stale-map silent failures.
         """
         from homeassistant.helpers import entity_platform as ep
-        from . import _resolve_pmapv_id
+        from .services import _resolve_pmapv_id
 
         region_id: str | None = None
         pmap_id: str | None = None

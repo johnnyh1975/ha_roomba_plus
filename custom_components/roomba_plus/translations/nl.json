@@ -246,7 +246,7 @@
         "name": "Dweilpad"
       },
       "mop_behavior": {
-        "name": "Dweilgedrag"
+        "name": "Dweil – Reinigingssterkte (legacy)"
       },
       "mop_tank_level": {
         "name": "Dweiltankniveau"
@@ -403,6 +403,76 @@
       },
       "recent_error_time": {
         "name": "Fout – Laatste tijdstip (cloud)"
+      },
+      "recent_wifi_floor": {
+        "name": "Wi-Fi – Signaalminimum"
+      },
+      "recent_wifi_stability": {
+        "name": "Wi-Fi – Signaalstabiliteit"
+      },
+      "mop_clean_mode": {
+        "name": "Dweil – Reinigingsmodus",
+        "state": {
+          "Dry": "Droog",
+          "Wet": "Nat",
+          "Unknown": "Onbekend"
+        }
+      },
+      "mop_tank_status": {
+        "name": "Dweil – Tankstatus",
+        "state": {
+          "Ready": "Gereed",
+          "Fill Tank": "Tank vullen",
+          "Lid Open": "Deksel open",
+          "Tank Missing": "Tank ontbreekt"
+        }
+      },
+      "mop_ars_behavior": {
+        "name": "Dweil – ARS-gedrag",
+        "state": {
+          "No Mop": "Geen dweil",
+          "Extended": "Uitgebreid",
+          "Standard": "Standaard",
+          "Deep": "Intensief",
+          "Dirty Pause": "Vuile pauze",
+          "Dry": "Droog",
+          "Wash": "Wassen",
+          "Dirty Pause + Dry": "Pauze + droog",
+          "Dirty Pause + Wash": "Pauze + wassen",
+          "Dry + Wash": "Droog + wassen",
+          "Dirty Pause + Dry + Wash": "Pauze + droog + wassen",
+          "Unknown": "Onbekend"
+        }
+      },
+      "recent_cleaning_speed": {
+        "name": "Prestaties – Reinigingssnelheid"
+      },
+      "recent_dirt_density": {
+        "name": "Prestaties – Vuildichtheid"
+      },
+      "recent_recharge_fraction": {
+        "name": "Prestaties – Oplaadfractie"
+      },
+      "cleaning_speed_trend": {
+        "name": "Prestaties – Trend reinigingssnelheid",
+        "state": {
+          "improving": "Verbeterend",
+          "stable": "Stabiel",
+          "declining": "Afnemend",
+          "unknown": "Onbekend"
+        }
+      },
+      "recent_coverage_pct": {
+        "name": "Prestaties – Dekking"
+      },
+      "battery_capacity_retention": {
+        "name": "Onderhoud – Accucapaciteitsbehoud"
+      },
+      "estimated_battery_eol": {
+        "name": "Onderhoud – Gesch. einde acculevensduur"
+      },
+      "consecutive_clean_skips": {
+        "name": "Prestaties – Opeenvolgende reinigingsoversiagen"
       }
     },
     "binary_sensor": {
@@ -598,6 +668,34 @@
           }
         }
       }
+    },
+    "maintenance_baselines_reset": {
+      "title": "Looptijdteller mogelijk gereset",
+      "description": "De teller is lager dan de baselines voor: {parts}. Reset alle verbruiksartikelen."
+    },
+    "performance_degradation": {
+      "title": "Reinigingsprestaties nemen af",
+      "description": "Aanhoudende daling van snelheid (oorzaak: {cause}). Mogelijk versleten borstels, verstopt filter of veranderde vloer."
+    },
+    "battery_recharge_high": {
+      "title": "Frequent tussentijds laden",
+      "description": "Accucapaciteit onder 75 % met frequent tussentijds laden. Overweeg vervanging."
+    },
+    "mixed_schedule": {
+      "title": "Concurrerende planningsbronnen",
+      "description": "{schedule_pct} % door HA en {app_pct} % door de app. Gebruik één bron."
+    },
+    "accident_detected": {
+      "title": "Mogelijk vloerongeluk",
+      "description": "Hoog aantal vuildetecties in korte tijd. Controleer het gebied."
+    },
+    "consecutive_skips": {
+      "title": "Robot sloeg {count} reinigingen over",
+      "description": "Blokkerende sensoren of aanwezigheidsplanning verhinderden {count} reinigingen. Controleer de configuratie."
+    },
+    "map_drift_detected": {
+      "title": "Smart Map-drift gedetecteerd",
+      "description": "Drift van {magnitude_cm} cm (koers {bearing}°). Controleer het dock en karteer opnieuw."
     }
   },
   "device_automation": {
