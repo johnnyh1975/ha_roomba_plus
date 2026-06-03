@@ -248,7 +248,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     threshold_exceeded = data.geometry_store.record_drift(*drift_vector)
                     if threshold_exceeded:
                         asyncio.run_coroutine_threadsafe(
-                            self._trigger_drift_issue(), loop
+                            self._trigger_drift_issue_enriched(*drift_vector), loop
                         )
                 asyncio.run_coroutine_threadsafe(
                     data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
@@ -326,6 +326,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             severity=ir.IssueSeverity.WARNING,
             translation_key="geometry_drifted",
         )
+
+    async def _trigger_drift_issue_enriched(self, dx: float, dy: float) -> None:
+        """F6d -- fire the drift Repair Issue with bearing/magnitude enrichment."""
+        from .repairs import async_enrich_drift_issue
+        await async_enrich_drift_issue(self.hass, self._config_entry, dx=dx, dy=dy)
 
     @staticmethod
     def _blank_image() -> bytes:

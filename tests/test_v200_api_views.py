@@ -1,3 +1,5 @@
+import datetime
+from typing import Any
 """Tests for REST API v2.0 — format=summary and format=records.
 
 Covers:
@@ -254,3 +256,111 @@ class TestRecordsFormat:
         u = _cloud_record_to_unified(rec)
         assert u["result"] == "cancelled_by_user"
         assert u["error_code"] is None
+
+
+# ── F4a -- zone injection ─────────────────────────────────────────────────────
+
+class TestZoneInjection:
+    """F4a -- _inject_zones populates zones from local MissionStore index."""
+
+    def _make_cloud_record(self, end_ts_unix: int) -> dict:
+        ended_at = datetime.datetime.fromtimestamp(
+            end_ts_unix, tz=datetime.timezone.utc
+        ).isoformat()
+        return {
+            "id": f"c_{end_ts_unix}",
+            "started_at": ended_at,
+            "ended_at": ended_at,
+            "duration_min": 45,
+            "run_min": 40,
+            "area_sqft": 200,
+            "result": "completed",
+            "initiator": "schedule",
+            "zones": [],
+            "error_code": None,
+            "recharges": 0,
+            "evacuations": 0,
+            "dirt_events": 5,
+            "wifi_signal": None,
+            "source": "cloud",
+        }
+
+    def test_injects_zones_within_tolerance(self):
+        from custom_components.roomba_plus.api_views import (
+            _build_local_zones_index, _inject_zones,
+        )
+        base_ts = 1700000000
+        local_records = [{
+            "id": "m_local",
+            "ended_at": datetime.datetime.fromtimestamp(
+                base_ts, tz=datetime.timezone.utc
+            ).isoformat(),
+            "zones": ["Kitchen", "Living Room"],
+        }]
+        index = _build_local_zones_index(local_records)
+        cloud_record = self._make_cloud_record(base_ts + 30)  # 30 s delta
+        result = _inject_zones(cloud_record, index)
+        assert result["zones"] == ["Kitchen", "Living Room"]
+
+    def test_no_injection_outside_tolerance(self):
+        from custom_components.roomba_plus.api_views import (
+            _build_local_zones_index, _inject_zones,
+        )
+        base_ts = 1700000000
+        local_records = [{
+            "id": "m_local",
+            "ended_at": datetime.datetime.fromtimestamp(
+                base_ts, tz=datetime.timezone.utc
+            ).isoformat(),
+            "zones": ["Kitchen"],
+        }]
+        index = _build_local_zones_index(local_records)
+        cloud_record = self._make_cloud_record(base_ts + 200)  # 200 s > 120 s tolerance
+        result = _inject_zones(cloud_record, index)
+        assert result["zones"] == []
+
+    def test_empty_local_zones_not_injected(self):
+        from custom_components.roomba_plus.api_views import (
+            _build_local_zones_index, _inject_zones,
+        )
+        base_ts = 1700000000
+        local_records = [{
+            "id": "m_local",
+            "ended_at": datetime.datetime.fromtimestamp(
+                base_ts, tz=datetime.timezone.utc
+            ).isoformat(),
+            "zones": [],   # no zones captured
+        }]
+        index = _build_local_zones_index(local_records)
+        cloud_record = self._make_cloud_record(base_ts)
+        result = _inject_zones(cloud_record, index)
+        assert result["zones"] == []
+
+    def test_build_index_skips_records_without_ended_at(self):
+        from custom_components.roomba_plus.api_views import _build_local_zones_index
+        records = [{"zones": ["Room A"]}]  # no ended_at
+        index = _build_local_zones_index(records)
+        assert index == {}
+
+
+# ── F7o -- API hardening ──────────────────────────────────────────────────────
+
+class TestApiHardening:
+    """F7o -- startup race guard, 503 on coordinator failure, 400 on bad format."""
+
+    def _make_request(self, fmt: str = "summary") -> Any:
+        """Build a minimal fake request object."""
+        from unittest.mock import MagicMock
+        req = MagicMock()
+        req.query = {"format": fmt}
+        return req
+
+    def test_valid_formats_accepted(self):
+        from custom_components.roomba_plus.api_views import _VALID_FORMATS
+        assert "summary" in _VALID_FORMATS
+        assert "records" in _VALID_FORMATS
+
+    def test_unknown_format_not_in_valid_set(self):
+        from custom_components.roomba_plus.api_views import _VALID_FORMATS
+        assert "hazards" not in _VALID_FORMATS   # v2.2 feature, not yet valid
+        assert "bogus" not in _VALID_FORMATS

@@ -86,7 +86,7 @@ rules:
   docs-supported-functions:
     status: done
     comment: >
-      README features section documents all 69 local + 9 cloud sensors,
+      README features section documents all 69 local + 28 cloud sensors,
       binary sensors, controls, maps, zones, and v2.0 cloud diagnostics.
       REST API section documents both format=summary and format=records.
   entity-translations:
@@ -132,7 +132,7 @@ rules:
     status: done
     comment: >
       README introduction updated for v2.0 — describes local-push architecture,
-      Gold Quality Scale, v2.0 cloud diagnostics scope, and version history.
+      Gold Quality Scale, v2.1 performance intelligence and repair issue scope, and version history.
   entity-category:
     status: done
     comment: >

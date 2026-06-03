@@ -389,3 +389,43 @@ def has_clean_base(state: dict) -> bool:
     """Return True if a Clean Base dock is present and communicating."""
     dock = state.get("dock", {})
     return "fwVer" in dock or isinstance(dock.get("state"), int)
+
+# ── F7g — Region type icons ───────────────────────────────────────────────────
+# Single source of truth for MDI icon names per iRobot region_type string.
+# Used by CloudSmartZoneSelect.icon and by the companion Lovelace card
+# (exposed via the region_icons extra_state_attribute).
+
+REGION_TYPE_ICONS: Final[dict[str, str]] = {
+    "bathroom":          "mdi:shower",
+    "bedroom":           "mdi:bed-king",
+    "breakfast_room":    "mdi:silverware-fork-knife",
+    "closet":            "mdi:hanger",
+    "den":               "mdi:sofa-single",
+    "dining_room":       "mdi:silverware-fork-knife",
+    "entryway":          "mdi:door-open",
+    "family_room":       "mdi:sofa-single",
+    "foyer":             "mdi:door-open",
+    "garage":            "mdi:garage",
+    "guest_bathroom":    "mdi:shower",
+    "guest_bedroom":     "mdi:bed-king",
+    "hallway":           "mdi:shoe-print",
+    "kitchen":           "mdi:fridge",
+    "kids_room":         "mdi:teddy-bear",
+    "laundry_room":      "mdi:washing-machine",
+    "living_room":       "mdi:sofa",
+    "lounge":            "mdi:sofa",
+    "media_room":        "mdi:television",
+    "mud_room":          "mdi:landslide",
+    "office":            "mdi:chair-rolling",
+    "pantry":            "mdi:archive",
+    "playroom":          "mdi:teddy-bear",
+    "primary_bathroom":  "mdi:shower",
+    "primary_bedroom":   "mdi:bed-king",
+    "recreation_room":   "mdi:sofa",
+    "storage_room":      "mdi:archive",
+    "study":             "mdi:bookshelf",
+    "sun_room":          "mdi:sun-angle",
+    "workshop":          "mdi:toolbox",
+    "default":           "mdi:map-marker",
+    "custom":            "mdi:map-marker",
+}

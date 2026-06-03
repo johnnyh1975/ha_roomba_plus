@@ -460,6 +460,188 @@ def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
 
 
 
+
+
+# ── F1 — WiFi floor / stability (CloudRawSensor value functions) ──────────────
+
+def _raw_wifi_floor(records: list[dict]) -> StateType:
+    """Return minimum wlBars from the most recent mission with WiFi data.
+
+    F1 -- lowest signal strength seen during the mission; automatable threshold
+    for dead-zone detection (alert when < 50%).
+    """
+    import statistics as _statistics
+    for r in records:
+        bars = r.get("wlBars")
+        if isinstance(bars, list) and bars:
+            return min(bars)
+    return None
+
+
+def _raw_wifi_stability(records: list[dict]) -> StateType:
+    """Return mean stdev of wlBars across the API window.
+
+    F1 -- high variance indicates a dead zone somewhere in the home.
+    Requires at least 2 bars per mission to compute stdev.
+    Returns None when no records have sufficient WiFi data.
+    """
+    import statistics as _statistics
+    stdevs = [
+        _statistics.stdev(r["wlBars"])
+        for r in records
+        if isinstance(r.get("wlBars"), list) and len(r["wlBars"]) >= 2
+    ]
+    return round(sum(stdevs) / len(stdevs), 1) if stdevs else None
+
+
+# ── F2 — Mop clean mode (RoombaSensor value function) ────────────────────────
+
+def _mop_clean_mode(entity: "IRobotEntity") -> StateType:
+    """Return current mop clean mode derived from padWetness.
+
+    F2 -- exposes the readable pad wetness as a named mode enum.
+    Level 1 = Dry; levels 2-3 = Wet.
+    """
+    level = entity.vacuum_state.get("padWetness", {})
+    if isinstance(level, dict):
+        level = level.get("disposable") or level.get("reusable")
+    if level is None:
+        return "Unknown"
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if level == 1:
+        return "Dry"
+    if level in (2, 3):
+        return "Wet"
+    return "Unknown"
+
+
+# ── F3 — Mop tank status (RoombaSensor value function) ───────────────────────
+
+def _mop_tank_status(entity: "IRobotEntity") -> StateType:
+    """Return consolidated mop tank status enum from mopReady sub-fields.
+
+    F3 -- priority: tank missing > lid open > fill needed > ready.
+    Replaces four separate binary sensors with one actionable status.
+    Returns Unknown when mopReady key is absent entirely.
+    """
+    state = entity.vacuum_state
+    if "mopReady" not in state:
+        return "Unknown"
+    ready = state["mopReady"]
+    if not isinstance(ready, dict):
+        return "Unknown"
+    if not ready.get("tankPresent", True):
+        return "Tank Missing"
+    if not ready.get("lidClosed", True):
+        return "Lid Open"
+    if ready.get("fillRequired", False):
+        return "Fill Tank"
+    return "Ready"
+
+
+# ── F3b — Mop behavior / ARS (RoombaSensor value function) ───────────────────
+
+_MOD_RANKS: dict[int, str] = {
+    15: "No Mop",
+    25: "Extended",
+    67: "Standard",
+    85: "Deep",
+}
+
+
+def _mop_behavior(entity: "IRobotEntity") -> StateType:
+    """Return Braava m6 Auto Replenishment System behavior mode.
+
+    F3b -- derives behavior from rankOverlap when present; falls back to
+    padDirtyPause / padDryAllowed / padWashAllowed flag combination.
+    Absent for all vacuum robots.
+    """
+    state = entity.vacuum_state
+    rank = state.get("rankOverlap")
+    if rank is not None:
+        return _MOD_RANKS.get(rank, "Unknown")
+
+    dirty_pause  = state.get("padDirtyPause",  0) == 1
+    dry_allowed  = state.get("padDryAllowed",  0) == 1
+    wash_allowed = state.get("padWashAllowed", 0) == 1
+
+    if not dry_allowed and not wash_allowed:
+        return "Unknown"
+
+    modes = []
+    if dirty_pause:
+        modes.append("Dirty Pause")
+    if dry_allowed:
+        modes.append("Dry")
+    if wash_allowed:
+        modes.append("Wash")
+    return " + ".join(modes) if modes else "Unknown"
+
+
+
+# ── F5d — Battery capacity retention ─────────────────────────────────────────
+
+def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
+    """F5d — battery capacity as % of baseline estCap.
+
+    Calls record_estcap_if_needed on every update so the baseline is
+    established automatically on first MQTT message containing estCap.
+    Below 75% explains rising recharge fraction (F5c) without schedule changes.
+    """
+    store = entity._config_entry.runtime_data.maintenance_store
+    est_cap = entity.battery_stats.get("estCap")
+    if store is None or est_cap is None:
+        return None
+    store.record_estcap_if_needed(float(est_cap))
+    if store.baseline_estcap is None or store.baseline_estcap == 0:
+        return None
+    return round(float(est_cap) / store.baseline_estcap * 100, 1)
+
+
+# ── F5g — Estimated battery end-of-life ──────────────────────────────────────
+
+_EOL_THRESHOLD = 65.0  # % — typical lithium end-of-life
+
+
+def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
+    """F5g — days remaining until battery capacity falls to EOL_THRESHOLD (65%).
+
+    Linear extrapolation from current degradation rate:
+      degradation_rate = (100 - current_pct) / current_cycles  (% per cycle)
+      remaining_cycles = (current_pct - 65) / degradation_rate
+      remaining_days   ≈ remaining_cycles (at 1 charge/day)
+
+    Returns 0 when capacity is already below threshold (replace now).
+    Returns None when insufficient data is available.
+    """
+    store = entity._config_entry.runtime_data.maintenance_store
+    if store is None or store.baseline_estcap is None:
+        return None
+
+    est_cap = entity.battery_stats.get("estCap")
+    cycles = (
+        entity.battery_stats.get("nLithChrg")
+        or entity.battery_stats.get("nNimhChrg")
+        or entity.battery_stats.get("nAvail")
+    )
+    if est_cap is None or not cycles:
+        return None
+
+    current_pct = float(est_cap) / store.baseline_estcap * 100
+    if current_pct <= _EOL_THRESHOLD:
+        return 0
+
+    degradation_rate = (100.0 - current_pct) / max(int(cycles), 1)
+    if degradation_rate <= 0:
+        return None
+
+    remaining_cycles = (current_pct - _EOL_THRESHOLD) / degradation_rate
+    return max(0, round(remaining_cycles))
+
+
 SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
@@ -534,7 +716,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_cycles",
         translation_key="battery_cycles",
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,  # F7h: was MEASUREMENT; lifetime counter
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
             # nLithChrg / nNimhChrg: 900-series and some older firmware.
@@ -621,7 +803,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="scrubs_count",
         translation_key="scrubs_count",
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,  # F7h: was MEASUREMENT; lifetime counter
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda e: e.run_stats.get("nScrubs"),
@@ -816,6 +998,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="mop_behavior",
         translation_key="mop_behavior",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,  # superseded by mop_ars_behavior (F3b)
         filter_fn=lambda s: "rankOverlap" in s,
         value_fn=lambda e: MOP_RANK_LABELS.get(
             e.vacuum_state.get("rankOverlap"), "Unknown"
@@ -830,7 +1013,43 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: e.vacuum_state.get("tankLvl"),
     ),
 
-    # v1.7.0 L2 — Consumable replacement timestamp sensors
+    # F2 -- Mop clean mode (padWetness as named enum)
+    RoombaSensorDescription(
+        key="mop_clean_mode",
+        translation_key="mop_clean_mode",
+        device_class=SensorDeviceClass.ENUM,
+        options=["Dry", "Wet", "Unknown"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "padWetness" in s,
+        value_fn=_mop_clean_mode,
+    ),
+
+    # F3 -- Mop tank status (consolidated from 4 binary mopReady sub-fields)
+    RoombaSensorDescription(
+        key="mop_tank_status",
+        translation_key="mop_tank_status",
+        device_class=SensorDeviceClass.ENUM,
+        options=["Ready", "Fill Tank", "Lid Open", "Tank Missing", "Unknown"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "mopReady" in s,
+        value_fn=_mop_tank_status,
+    ),
+
+    # F3b -- Mop behavior / Auto Replenishment System mode
+    RoombaSensorDescription(
+        key="mop_ars_behavior",
+        translation_key="mop_ars_behavior",
+        device_class=SensorDeviceClass.ENUM,
+        options=[
+            "No Mop", "Extended", "Standard", "Deep",
+            "Dirty Pause", "Dry", "Wash",
+            "Dirty Pause + Dry", "Dirty Pause + Wash", "Dry + Wash",
+            "Dirty Pause + Dry + Wash", "Unknown",
+        ],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "rankOverlap" in s or "padDryAllowed" in s,
+        value_fn=_mop_behavior,
+    ),
     # State is "unknown" on pre-v1.7 installs until the first reset is performed.
 
     RoombaSensorDescription(
@@ -1127,6 +1346,50 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         filter_fn=lambda s: "nCliffsR" in s.get("bbrun", {}),
         value_fn=lambda e: e.run_stats.get("nCliffsR"),
     ),
+
+    # F5d -- battery capacity retention (% of baseline estCap)
+    RoombaSensorDescription(
+        key="battery_capacity_retention",
+        translation_key="battery_capacity_retention",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
+        value_fn=_battery_capacity_retention,
+    ),
+
+    # F5g -- estimated battery end-of-life (days remaining until 65% threshold)
+    RoombaSensorDescription(
+        key="estimated_battery_eol",
+        translation_key="estimated_battery_eol",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
+        value_fn=_estimated_battery_eol,
+    ),
+
+    # F6g -- consecutive clean skips counter (diagnostic).
+    # Reads from MaintenanceStore via _config_entry.runtime_data — the standard
+    # HA pattern for RoombaSensor value_fn accessing integration-level storage.
+    # Guarded defensively: sensor is created before storage is confirmed non-None.
+    RoombaSensorDescription(
+        key="consecutive_clean_skips",
+        translation_key="consecutive_clean_skips",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda e: (
+            e._config_entry.runtime_data.maintenance_store.consecutive_skips
+            if (
+                hasattr(e, "_config_entry")
+                and e._config_entry.runtime_data is not None
+                and e._config_entry.runtime_data.maintenance_store is not None
+            )
+            else None
+        ),
+    ),
 )
 
 
@@ -1161,14 +1424,23 @@ async def async_setup_entry(
             for desc in CLOUD_HISTORY_SENSORS
         ])
         # v2.0: per-mission raw record sensors (recent window + cloud error)
-        # recent_evacuations is only meaningful when a Clean Base is present.
-        # Without one the cloud always records evacs=0 — suppress the entity
-        # so 980/900-series robots without a Clean Base don't show a
-        # permanently-zero sensor.
+        # F5f: recent_coverage_pct needs a MissionStore reference via closure.
+        # We use a list-cell so the store is captured by reference at setup time.
+        mission_store_ref: list = [data.mission_store]
+        coverage_pct_fn = _make_coverage_pct_fn(mission_store_ref)
+
         for desc in CLOUD_RAW_SENSORS:
+            if desc.key == "recent_coverage_pct":
+                # Replace sentinel value_fn with the live closure
+                import dataclasses
+                desc = dataclasses.replace(desc, value_fn=coverage_pct_fn)
+            # recent_evacuations is only meaningful when a Clean Base is present.
+            # Without one the cloud always records evacs=0 — suppress the entity
+            # so 980/900-series robots without a Clean Base don't show a
+            # permanently-zero sensor.
             if desc.key == "recent_evacuations" and not has_clean_base(state):
                 continue
-            entities.append(CloudRawSensor(roomba, blid, cc, desc))
+            entities.append(CloudRawSensor(roomba, blid, cc, desc, config_entry))
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
@@ -1229,7 +1501,6 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         """
         self.schedule_update_ha_state(force_refresh=True)
 
-
     @property
     def native_value(self) -> StateType:
         key = self.entity_description.key
@@ -1253,7 +1524,20 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if key == "next_clean":
             return self._calc_next_clean()
 
-        return self.entity_description.value_fn(self)
+        value = self.entity_description.value_fn(self)
+
+        # F6b — cache battery retention value to RoombaData for repair check
+        if key == "battery_capacity_retention":
+            data = self._config_entry.runtime_data
+            data.battery_retention_value = float(value) if value is not None else None
+            if hasattr(self.hass, "is_running") and self.hass.is_running:
+                from .repairs import async_check_battery_recharge
+                self.hass.async_create_task(
+                    async_check_battery_recharge(self.hass, self._config_entry),
+                    name="roomba_plus_f6b_battery_retention_check",
+                )
+
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1608,6 +1892,203 @@ def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]
     return {}
 
 
+
+# ── F5 — Performance intelligence (CloudRawSensor + RoombaSensor functions) ───
+
+import statistics as _statistics
+
+
+def _raw_cleaning_speed(records: list[dict]) -> StateType:
+    """F5a — median cleaning speed (m²/min) across the API window.
+
+    Cloud API returns sqft — converted to m² (× 0.0929) for consistency
+    with all other area sensors in Roomba+.
+    Uses runM (clean time excl. recharge) preferred over durationM.
+    Skips records missing either field or with zero time.
+    """
+    speeds = []
+    for r in records:
+        sqft = r.get("sqft")
+        run_m = r.get("runM") or r.get("durationM")
+        if sqft is not None and run_m and float(run_m) > 0:
+            m2_per_min = float(sqft) * 0.0929 / float(run_m)
+            speeds.append(m2_per_min)
+    if not speeds:
+        return None
+    return round(_statistics.median(speeds), 2)
+
+
+def _raw_dirt_density(records: list[dict]) -> StateType:
+    """F5b — median dirt events per m² across the API window.
+
+    Cloud API returns sqft — converted to m² (÷ 0.0929) for consistency.
+    Rising values indicate a dirtier floor OR worn brushes (debris not
+    captured, sensor re-fires).  The cause attribute distinguishes them.
+    """
+    densities = []
+    for r in records:
+        dirt = r.get("dirt")
+        sqft = r.get("sqft")
+        if dirt is not None and sqft and float(sqft) > 0:
+            m2 = float(sqft) * 0.0929
+            densities.append(float(dirt) / m2)
+    if not densities:
+        return None
+    return round(_statistics.median(densities), 3)
+
+
+def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
+    """Classify the most probable cause of rising dirt density.
+
+    F5b — 3-signal classification eliminating threshold-based guessing:
+      brush_wear  — debris not captured, sensor re-fires (rising dirt + declining speed)
+      floor_dirty — robot working harder but keeping up (rising dirt + stable/rising speed)
+    """
+    if dirt_trend == "rising" and speed_trend == "declining":
+        return "brush_wear"
+    if dirt_trend == "rising" and speed_trend in ("stable", "rising", "unknown"):
+        return "floor_dirty"
+    return "unknown"
+
+
+def _raw_dirt_density_attrs(records: list[dict]) -> dict:
+    """F5b — cause attribute for recent_dirt_density sensor.
+
+    Computes independent dirt-density and cleaning-speed trends from the
+    raw records, then classifies the cause via _classify_dirt_cause().
+    """
+    # Compute independent trends: dirt density trend vs speed trend
+    dirt_densities = []
+    for r in records:
+        dirt = r.get("dirt")
+        sqft = r.get("sqft")
+        if dirt is not None and sqft and float(sqft) > 0:
+            dirt_densities.append(float(dirt) / (float(sqft) * 0.0929))
+    speeds = []
+    for r in records:
+        sqft = r.get("sqft")
+        run_m = r.get("runM") or r.get("durationM")
+        if sqft is not None and run_m and float(run_m) > 0:
+            speeds.append(float(sqft) / float(run_m))
+
+    def _trend(values: list[float]) -> str:
+        if len(values) < 6:
+            return "unknown"
+        recent = _statistics.median(values[:5])
+        older  = _statistics.median(values[5:])
+        if older == 0:
+            return "unknown"
+        delta = (recent - older) / older
+        if delta > 0.10:
+            return "rising" if values is dirt_densities else "improving"
+        if delta < -0.10:
+            return "declining"
+        return "stable"
+
+    dt = _trend(dirt_densities)
+    st = _trend(speeds)
+    return {"cause": _classify_dirt_cause(dt, st)}
+
+
+def _raw_recharge_fraction(records: list[dict]) -> StateType:
+    """F5c — median recharge fraction (chrgM / durationM) across window.
+
+    Uses the cloud `chrgM` field (minutes recharging mid-mission) divided by
+    `durationM` (total mission minutes), expressed as a percentage.
+
+    Note: The `recharge_min` key from F4e (local MissionStore accumulation) is
+    structurally read as a fallback, but `raw_records` are cloud-only and will
+    never contain it at runtime. The fallback is retained for future use if
+    local records are ever merged into `raw_records` at the coordinator level.
+    Rising values indicate battery degradation or a home too large for one charge.
+    """
+    fractions = []
+    for r in records:
+        chrg_m = r.get("chrgM") or r.get("recharge_min")
+        dur_m  = r.get("durationM") or r.get("duration_min")
+        if chrg_m is not None and dur_m and float(dur_m) > 0:
+            fractions.append(float(chrg_m) / float(dur_m) * 100)
+    if not fractions:
+        return None
+    return round(_statistics.median(fractions), 1)
+
+
+def _raw_cleaning_speed_trend(records: list[dict]) -> StateType:
+    """F5e — cleaning speed trend: improving / stable / declining / unknown.
+
+    Compares median of 5 most-recent vs previous 10 records.
+    Gap filter: excludes the first 3 missions after a >7-day gap — they are
+    catching-up cleans on an abnormally dirty floor and would produce false
+    'declining' signals.
+
+    Records must be newest-first (cloud API order). Local MissionStore records
+    are oldest-first — do not pass them directly to this function.
+    """
+    # Build speed series newest-first (records are already newest-first)
+    filtered = []
+    prev_ts: float | None = None
+    skip_remaining = 0
+
+    for r in records:
+        ts_raw = r.get("startTime") or r.get("timestamp")
+        ts = float(ts_raw) if ts_raw else None
+
+        if prev_ts is not None and ts is not None:
+            gap_days = (prev_ts - ts) / 86400
+            if gap_days > 7:
+                skip_remaining = 3  # skip next 3 after the gap
+
+        if skip_remaining > 0:
+            skip_remaining -= 1
+            if ts is not None:
+                prev_ts = ts
+            continue
+
+        sqft = r.get("sqft")
+        run_m = r.get("runM") or r.get("durationM")
+        if sqft is not None and run_m and float(run_m) > 0:
+            filtered.append(float(sqft) / float(run_m))
+
+        if ts is not None:
+            prev_ts = ts
+
+    if len(filtered) < 6:
+        return "unknown"
+
+    recent = _statistics.median(filtered[:5])
+    older  = _statistics.median(filtered[5:min(15, len(filtered))])
+    if older == 0:
+        return "unknown"
+    delta = (recent - older) / older
+    if delta > 0.10:
+        return "improving"
+    if delta < -0.10:
+        return "declining"
+    return "stable"
+
+
+def _make_coverage_pct_fn(mission_store_ref: list) -> Callable:
+    """F5f — factory returning a value_fn that captures the MissionStore reference.
+
+    Uses a list-cell reference so the closure sees the live store even though
+    it is set after this function is called (during async_setup_entry).
+    """
+    def _coverage_pct(records: list[dict]) -> StateType:
+        store = mission_store_ref[0] if mission_store_ref else None
+        if store is None or not records:
+            return None
+        recent_sqft = records[0].get("sqft")
+        p75 = store.p75_area(60)
+        if recent_sqft is None or p75 is None or p75 == 0:
+            return None
+        return round(float(recent_sqft) / p75 * 100, 1)
+    return _coverage_pct
+
+
+# Sentinel description for F5f — value_fn swapped in async_setup_entry
+_COVERAGE_PCT_SENTINEL = "coverage_pct_sentinel"
+
+
 CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_completion_rate",
@@ -1655,6 +2136,78 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_raw_cloud_last_error_time,
     ),
+
+    # F1 -- WiFi floor and stability from per-mission wlBars arrays
+    CloudRawSensorDescription(
+        key="recent_wifi_floor",
+        translation_key="recent_wifi_floor",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_raw_wifi_floor,
+    ),
+    CloudRawSensorDescription(
+        key="recent_wifi_stability",
+        translation_key="recent_wifi_stability",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_raw_wifi_stability,
+    ),
+
+    # F5a -- cleaning speed (m²/min, converted from cloud sqft)
+    CloudRawSensorDescription(
+        key="recent_cleaning_speed",
+        translation_key="recent_cleaning_speed",
+        native_unit_of_measurement="m²/min",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_raw_cleaning_speed,
+    ),
+
+    # F5b -- dirt density (events/sqft) with cause attribute
+    CloudRawSensorDescription(
+        key="recent_dirt_density",
+        translation_key="recent_dirt_density",
+        native_unit_of_measurement="events/m²",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_raw_dirt_density,
+        attributes_fn=_raw_dirt_density_attrs,
+    ),
+
+    # F5c -- recharge fraction (%)
+    CloudRawSensorDescription(
+        key="recent_recharge_fraction",
+        translation_key="recent_recharge_fraction",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_raw_recharge_fraction,
+    ),
+
+    # F5e -- cleaning speed trend (ENUM)
+    CloudRawSensorDescription(
+        key="cleaning_speed_trend",
+        translation_key="cleaning_speed_trend",
+        device_class=SensorDeviceClass.ENUM,
+        options=["improving", "stable", "declining", "unknown"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_raw_cleaning_speed_trend,
+    ),
+
+    # F5f -- coverage pct — value_fn swapped in async_setup_entry via factory
+    # The sentinel key is detected at setup time and replaced with the closure.
+    CloudRawSensorDescription(
+        key="recent_coverage_pct",
+        translation_key="recent_coverage_pct",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda records: None,  # replaced in async_setup_entry
+    ),
 )
 
 
@@ -1675,15 +2228,53 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
         blid: str,
         coordinator: IrobotCloudCoordinator,
         description: CloudRawSensorDescription,
+        config_entry: RoombaConfigEntry,
     ) -> None:
         super().__init__(roomba, blid)
         self.entity_description = description
         self._coordinator = coordinator
+        self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_{description.key}"
 
     @property
     def native_value(self) -> StateType:
-        return self.entity_description.value_fn(self._coordinator.raw_records)
+        value = self.entity_description.value_fn(self._coordinator.raw_records)
+        # F6a/F6b — cache values to RoombaData for repair check functions
+        key = self.entity_description.key
+        data = self._config_entry.runtime_data
+        if key == "cleaning_speed_trend":
+            data.cleaning_speed_trend_value = str(value) if value else None
+            # F6a — trigger performance degradation check on every trend update
+            if hasattr(self.hass, "is_running") and self.hass.is_running:
+                from .repairs import async_check_performance_degradation
+                self.hass.async_create_task(
+                    async_check_performance_degradation(self.hass, self._config_entry),
+                    name="roomba_plus_f6a_perf_check",
+                )
+        elif key == "recent_recharge_fraction":
+            data.recharge_fraction_value = float(value) if value is not None else None
+            # F6b — check battery/recharge correlation
+            if hasattr(self.hass, "is_running") and self.hass.is_running:
+                from .repairs import async_check_battery_recharge
+                self.hass.async_create_task(
+                    async_check_battery_recharge(self.hass, self._config_entry),
+                    name="roomba_plus_f6b_battery_check",
+                )
+        elif key == "recent_dirt_density":
+            # Update dirt_density_rising flag for F6a cause classification
+            records = self._coordinator.raw_records
+            if records and len(records) >= 6:
+                import statistics as _stat
+                densities = [
+                    float(r["dirt"]) / float(r["sqft"])
+                    for r in records
+                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
+                ]
+                if len(densities) >= 6:
+                    recent = _stat.median(densities[:5])
+                    older  = _stat.median(densities[5:])
+                    data.dirt_density_rising = (recent / older > 1.10) if older > 0 else False
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1707,6 +2298,21 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
         @callback
         def _on_coordinator_update() -> None:
             self.async_write_ha_state()
+            # F6f -- trigger accident detection on each cloud poll,
+            # but only from the dirt density sensor to avoid 6x redundant calls.
+            if (
+                self.entity_description.key == "recent_dirt_density"
+                and self.hass.is_running
+            ):
+                from .repairs import async_check_accident_detection
+                self.hass.async_create_task(
+                    async_check_accident_detection(
+                        self.hass,
+                        self._config_entry,
+                        self._coordinator.raw_records,
+                    ),
+                    name="roomba_plus_f6f_accident_check",
+                )
 
         self.async_on_remove(
             self._coordinator.async_add_listener(_on_coordinator_update)

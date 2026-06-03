@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.0.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.1.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)]
@@ -9,7 +9,7 @@
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
 **Why Roomba+?**
-- **97 sensors** vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, and more
+- **97 sensors** vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
 - **Zero cloud dependency** — all robot control goes through local MQTT; cloud credentials are optional and only used for map sync and history enrichment
 - **Automation-ready** — blocking sensor gate, presence-aware scheduling, device triggers, and named HA actions make Roomba a first-class citizen in your automations
 
@@ -190,7 +190,7 @@ data:
 - **queue** — waits until all sensors clear (up to timeout), then starts; fires `roomba_plus_start_timeout` if expired
 - Unavailable/unknown sensors are treated as non-blocking
 
-Binary sensors: `start_blocked` (ON while queued, with `blocking_entities`, `queued_since`, `timeout_at` attributes).
+Binary sensor: `start_blocked` (ON while queued, with `blocking_entities`, `queued_since`, `timeout_at` attributes).
 
 #### Zone Management UI — 900-series and Smart Map robots
 
@@ -282,6 +282,8 @@ Track consumable life and get ahead of replacements before the robot starts fail
 | Brush remaining hours | With configurable threshold; `threshold_hours` attribute |
 | Cleaning pad remaining hours | Braava only |
 | Charge cycles | From `bbchg3` |
+| Battery capacity retention (%) | Degradation relative to design capacity |
+| Estimated battery end of life (days) | Projected days until battery needs replacement |
 
 #### Replacement tracking
 
@@ -371,6 +373,26 @@ action: "Remove the brush roll and clear hair or debris, then reinsert."
 
 The error state is cleared automatically when the next mission completes successfully.
 
+#### Performance sensors — cloud, opt-in
+
+Derived from the iRobot cloud mission history:
+
+| Sensor | Notes |
+|---|---|
+| Cleaning speed (sqft/min) | Median across recent missions |
+| Cleaning speed trend | `improving` / `stable` / `declining` |
+| Dirt density (events/sqft) | With `cause` attribute: `brush_wear` vs `floor_dirty` |
+| Recharge fraction (%) | Share of mission time spent recharging |
+| Coverage (%) | % of home baseline area cleaned, self-calibrating |
+| Consecutive clean skips | Opt-in |
+
+#### Wi-Fi sensors — cloud, opt-in
+
+| Sensor | Notes |
+|---|---|
+| Wi-Fi signal floor (%) | Minimum signal seen during the mission — useful for dead-zone detection |
+| Wi-Fi signal stability (%) | Variance across the mission — high variance indicates a dead zone |
+
 #### Cloud diagnostics — all robots with credentials
 
 Six sensors derived from the iRobot `/missionhistory` API (~30-day window):
@@ -395,6 +417,18 @@ Six sensors derived from the iRobot `/missionhistory` API (~30-day window):
 | Lifetime cleaning time | Sum of `runM` (actual cleaning time, excluding recharges) |
 
 > Lifetime area and time reflect the API window (~30 recent missions), not a true lifetime accumulator — the iRobot API does not expose one. The `source: recent_mission_window` attribute documents this.
+
+#### HA Long-Term Statistics
+
+Roomba+ automatically backfills up to 365 days of mission history into HA Long-Term Statistics on every startup. To view it:
+
+1. Add a **Statistics graph card** to your dashboard
+2. Search for `roomba_plus:` to find the three series:
+   - **Area cleaned** (m², daily sum — requires cloud credentials)
+   - **Mission duration** (min, daily sum)
+   - **Missions completed** (count, daily sum)
+
+This works without the companion card and survives HA recorder purges indefinitely.
 
 #### REST History API
 
@@ -465,10 +499,14 @@ Binary sensor: `schedule_hold_active` — ON when `schedHold` is true. The `sour
 |---|---|
 | Tank level | Water tank fill level |
 | Mop pad type | Pad material |
-| Mop tank level | Dock tank level |
+| Mop clean mode | `Dry` / `Wet` derived from `padWetness` |
+| Mop tank status | `Ready` / `Fill Tank` / `Lid Open` / `Tank Missing` |
+| Mop ARS behavior | Auto Replenishment System mode |
 | Mop ready / tank present / lid closed | Binary sensors |
 | Lid open | Binary sensor — ON when lid is open |
 | Tank present | Binary sensor — ON when water tank is installed |
+
+**Braava pad wetness control:** select wetness level (Low / Medium / High) independently for disposable and reusable pads.
 
 #### Navigation
 
@@ -611,7 +649,7 @@ automation:
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
-| Sensors | 13 | 69 local + 9 cloud |
+| Sensors | 13 | 69 local + 28 cloud |
 | Cleaning map | ❌ | ✅ |
 | Map persists across restarts | ❌ | ✅ |
 | Zone detection (900-series) | ❌ | ✅ |
@@ -621,13 +659,15 @@ automation:
 | Favorites from cloud | ❌ | ✅ |
 | Maintenance reset | ❌ | ✅ |
 | Wear Intelligence | ❌ | ✅ |
+| Battery capacity retention | ❌ | ✅ |
 | Edge cleaning toggle | ❌ | ✅ |
 | Always finish (binPause) | ❌ | ✅ |
 | Schedule hold | ❌ | ✅ |
 | Bin present sensor | ❌ | ✅ |
-| Mop ready sensor | ❌ | ✅ |
-| Mission recharge / expire sensors | ❌ | ✅ |
+| Mop ready / clean mode / tank status | ❌ | ✅ |
+| Mission recharge / expire sensors (live countdown) | ❌ | ✅ |
 | SNR + signal noise sensors | ❌ | ✅ |
+| Wi-Fi floor + stability sensors | ❌ | ✅ |
 | IP address sensor | ❌ | ✅ |
 | Idle / Stopped phase detection | ❌ | ✅ |
 | Error codes (80+) with description + action | ❌ | ✅ |
@@ -637,8 +677,10 @@ automation:
 | Zone management UI | ❌ | ✅ |
 | Mission log (365 entries, persisted) | ❌ | ✅ |
 | Error intelligence | ❌ | ✅ |
+| Performance sensors (speed, coverage, dirt density) | ❌ | ✅ |
 | Presence-aware scheduling | ❌ | ✅ |
 | REST mission history API | ❌ | ✅ |
+| HA Long-Term Statistics backfill | ❌ | ✅ |
 | Cloud diagnostics (completion rate, recharges, dirt) | ❌ | ✅ |
 | Lifetime stats from cloud | ❌ | ✅ |
 | Spot / quick clean (980, experimental) | ❌ | ✅ |
@@ -696,10 +738,6 @@ The presence scheduling step only appears for robots that report `schedHold` in 
 **Presence manager unfreezes schedule but robot doesn't clean**
 
 Confirm the cleaning schedule is set in the iRobot app and enabled for the correct days. Roomba+ controls the hold — it does not set the schedule itself.
-
-**`clean_room` says "rooms from different maps" after deleting the old map**
-
-The iRobot cloud cache may take up to 24 hours to clear after deleting a map. Force an immediate refresh by re-saving the cloud credentials step in Configure.
 
 **Smart Map zones not appearing (i/s/j-series)**
 

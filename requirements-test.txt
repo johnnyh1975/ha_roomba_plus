@@ -1,0 +1,8 @@
+# Roomba+ — test dependencies
+# Used by all GitHub Actions CI workflows and local pytest runs.
+# pytest-homeassistant-custom-component uses 0.x versioning.
+# Pin to latest available for Python 3.12 (0.13.x series).
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-homeassistant-custom-component==0.13.205
+roombapy==1.9.1

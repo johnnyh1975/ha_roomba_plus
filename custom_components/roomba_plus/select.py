@@ -660,12 +660,50 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     # ── Extra attributes ──────────────────────────────────────────────────────
 
     @property
+    def icon(self) -> str:
+        """F7g -- dynamic icon based on selected zone region_type."""
+        from .const import REGION_TYPE_ICONS
+        current = self._selected
+        for r in self._regions:
+            if r.get("name") == current or str(r.get("id")) == current:
+                region_type = r.get("region_type", "default")
+                return REGION_TYPE_ICONS.get(region_type, REGION_TYPE_ICONS["default"])
+        return REGION_TYPE_ICONS["default"]
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        from .const import REGION_TYPE_ICONS
         items = self._all_items()
         selected = next(
             (i for i in items if i["name"] == self._selected), items[0] if items else {}
         )
-        return {
+
+        # F7g -- region_icons: maps each zone display name to its MDI icon
+        region_icons: dict[str, str] = {}
+        for r in self._regions:
+            region_type = r.get("region_type", "default")
+            icon = REGION_TYPE_ICONS.get(region_type, REGION_TYPE_ICONS["default"])
+            name = next(
+                (i["name"] for i in items if str(i.get("id")) == str(r.get("id"))),
+                r.get("name", ""),
+            )
+            if name:
+                region_icons[name] = icon
+
+        # F7g -- learning_percentage from map_header
+        learning_pct = None
+        try:
+            cc = self._config_entry.runtime_data.cloud_coordinator
+            if cc and cc.data:
+                for pmap in cc.data.get("pmaps", []):
+                    details = pmap.get("active_pmapv_details", {})
+                    if details.get("active_pmapv", {}).get("pmap_id") == self._pmap_id:
+                        learning_pct = details.get("map_header", {}).get("learning_percentage")
+                        break
+        except Exception:
+            pass
+
+        attrs = {
             "map_name": self._map_name,
             "pmap_id": self._pmap_id,
             "region_id": selected.get("id"),
@@ -673,7 +711,11 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
             "zone_count": len(self._zones),
             "source": "cloud",
             "is_active_map": self._is_active_map,
+            "region_icons": region_icons,
         }
+        if learning_pct is not None:
+            attrs["learning_percentage"] = learning_pct
+        return attrs
 
     # ── Push update wiring ────────────────────────────────────────────────────
 

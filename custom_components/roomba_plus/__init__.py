@@ -30,7 +30,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .callbacks import make_map_retrain_callback, make_mission_callback
+from .callbacks import make_map_retrain_callback, make_mission_callback, make_mission_complete_callback
 from .const import (
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
@@ -74,12 +74,16 @@ async def async_migrate_entry(
     """Migrate config entry to the current version.
 
     Version history:
-      1 → 2 (v2.0): Cloud coordinator now stores raw mission records alongside
-                    aggregates. A marker key is added to options so the coordinator
-                    knows to persist raw_records on its next fetch. All existing
-                    user data (zone names, maintenance baselines, blocking/presence
-                    config) is preserved unchanged. MissionStore hass.storage data
-                    is unaffected — it is keyed by entry_id, not entry version.
+      1 → 2 (v2.0):   Cloud coordinator now stores raw mission records alongside
+                      aggregates. A marker key is added to options so the coordinator
+                      knows to persist raw_records on its next fetch. All existing
+                      user data (zone names, maintenance baselines, blocking/presence
+                      config) is preserved unchanged. MissionStore hass.storage data
+                      is unaffected — it is keyed by entry_id, not entry version.
+      2 → 3 (v2.1.0): MaintenanceStore gains baseline_estcap and consecutive_skips.
+      3 → 4 (v2.1.1): Entity unique_ids normalised — 37 entities renamed from
+                      German slugs to English slugs in the entity registry so that
+                      automations, history, and the Lovelace card are unaffected.
     """
     current = config_entry.version
     _LOGGER.info(
@@ -102,6 +106,701 @@ async def async_migrate_entry(
             config_entry.entry_id,
         )
         current = 2
+
+    if current == 2:
+        # v2 → v3 (v2.1.0): add baseline_estcap and consecutive_skips to
+        # MaintenanceStore storage so F5d and F6g have correct defaults on
+        # first load.  MaintenanceStore.async_load() already handles missing
+        # keys gracefully via .get() — this migration adds the keys explicitly
+        # so the storage file reflects the current schema.
+        from homeassistant.helpers.storage import Store as _Store
+        _store = _Store(
+            hass, 1,
+            f"roomba_plus_maintenance_{config_entry.entry_id}"
+        )
+        _data = await _store.async_load() or {}
+        _data.setdefault("baseline_estcap", None)
+        _data.setdefault("consecutive_skips", 0)
+        await _store.async_save(_data)
+        hass.config_entries.async_update_entry(
+            config_entry,
+            version=3,
+        )
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 3 "
+            "(baseline_estcap + consecutive_skips added to MaintenanceStore)",
+            config_entry.entry_id,
+        )
+        current = 3
+
+    if current == 3:
+        # v3 → v4 (v2.1.1): normalise entity unique_ids from German slugs to
+        # English slugs.  A previous release shipped with translation_key set to
+        # translated German strings, causing entity IDs to be generated in German.
+        # This migration renames the affected entity registry entries so that
+        # existing automations, history, and the Lovelace card continue to work.
+        #
+        # Rename map derived from production entity registry (Roomba 980 OG,
+        # HA 2026.5.4). The migration matches any unique_id whose suffix (after
+        # "roomba_plus_{blid}_" or "roomba_plus_{blid}_cloud_") is in the map,
+        # so cloud sensor entries (which use a "cloud_" infix) are handled
+        # automatically without separate entries.
+        from homeassistant.helpers import entity_registry as er
+
+        _SUFFIX_RENAMES: dict[str, str] = {
+            # sensor — local MQTT
+            "missionen_letzte_dauer":                       "last_mission_duration",
+            "missionen_letztes_ergebnis":                   "last_mission_result",
+            "missionen_reinigungsserie":                    "clean_streak",
+            "schmutz_events_letzte_30_tage":                "recent_dirt_events",
+            "wartung_akkukapazitat":                        "battery_cycles",
+            "wartung_bursten_tage_bis_fallig":              "brush_remaining_hours",
+            "wartung_bursten_verschleissrate":              "brush_wear_rate",
+            "wartung_filter_tage_bis_fallig":               "filter_remaining_hours",
+            "wartung_filter_verschleissrate":               "filter_wear_rate",
+            "wartung_gesch_akkuende":                       "estimated_battery_eol",
+            "gesamte_reinigungen":                          "lifetime_missions",
+            "gesamte_reinigungszeit":                       "lifetime_time",
+            "abschlussrate_letzte_30_tage":                 "completion_rate_30d",
+            "missionen_heute_gereinigte_flache":            "area_cleaned_today",
+            "missionen_letzte_30_tage":                     "missions_last_30d",
+            "mission_verbleibende_ladezeit":                "mission_recharge_minutes",
+            "mission_zeit_bis_ablauf":                      "mission_expire_minutes",
+            "anwesenheit_nachstes_reinigungsfenster":       "next_likely_clean_window",
+            "anwesenheit_reinigungsauslastung_7_tage":      "presence_clean_utilisation_7d",
+            "anwesenheit_reinigungsgelegenheiten_7_tage":   "presence_clean_opportunities_7d",
+            "brushes_last_replaced":                        "brush_last_replaced",
+            "fehler_letzte_zone":                           "last_error_zone",
+            "fehler_letzter_code":                          "last_error_code",
+            "fehler_letzter_zeitpunkt":                     "last_error_at",
+            "fehler_problemzone":                           "problem_zone",
+            "fehler_steckenbleiber_30_tage":                "stuck_count_30d",
+            "abgebrochene_missionen":                       "canceled_missions",
+            "auftrag_gestartet_von":                        "job_initiator",
+            "batterie_2":                                   "battery_level",
+            # sensor — cloud (matched via suffix; cloud_ infix handled automatically)
+            "zwischenladungen_letzte_30_tage":              "recent_recharges",
+            "leistung_abdeckung":                           "recent_coverage_pct",
+            "leistung_ladeanteil":                          "battery_capacity_retention",
+            "leistung_reinigungsgeschwindigkeit":            "recent_cleaning_speed",
+            "leistung_reinigungsgeschwindigkeitstrend":      "cleaning_speed_trend",
+            "leistung_schmutzdichte":                       "recent_dirt_density",
+            "letzter_fehlercode_letzte_30_tage":            "recent_error_code",
+            "letzter_fehlerzeitpunkt_letzte_30_tage":       "recent_error_time",
+            "clean_base_leerungen_letzte_30_tage":          "recent_evacuations",
+            # binary_sensor
+            "zeitplansperre_aktiv":                         "schedule_hold_active",
+            "zwischenladung_aktiv":                         "mid_mission_recharge",
+            "behalter_eingesetzt":                          "bin_present",
+            # button
+            "akkuwechsel_bestatigen":                       "reset_battery",
+            "burstenwechsel_bestatigen":                    "reset_brush",
+            "filterwechsel_bestatigen":                     "reset_filter",
+            "letzte_mission_wiederholen":                   "repeat_mission",
+            "roboter_suchen":                               "locate",
+            "zone_reinigen":                                "clean_zone",
+            # select
+            "reinigungsdurchgange":                         "cleaning_passes",
+            # image
+            "reinigungskarte":                              "map",
+        }
+
+        # Stale orphan entities — existed in old naming, have no equivalent in
+        # current code and will never be recreated. Remove to keep registry clean.
+        _ORPHAN_SUFFIXES: set[str] = {
+            "missionen_abschlussrate",   # duplicate of abschlussrate_letzte_30_tage
+        }
+
+        entity_reg = er.async_get(hass)
+        blid = config_entry.data["blid"]
+        bare_prefix = f"roomba_plus_{blid}_"
+        cloud_prefix = f"roomba_plus_{blid}_cloud_"
+        renamed = 0
+        removed = 0
+
+        for entity_entry in list(entity_reg.entities.values()):
+            if entity_entry.platform != DOMAIN:
+                continue
+            uid = entity_entry.unique_id
+
+            # Determine suffix — strip bare or cloud_ prefix
+            if uid.startswith(cloud_prefix):
+                infix = "cloud_"
+                suffix = uid[len(cloud_prefix):]
+            elif uid.startswith(bare_prefix):
+                infix = ""
+                suffix = uid[len(bare_prefix):]
+            else:
+                continue
+
+            # Remove orphans
+            if suffix in _ORPHAN_SUFFIXES:
+                entity_reg.async_remove(entity_entry.entity_id)
+                removed += 1
+                _LOGGER.debug(
+                    "Roomba+: removed orphan entity %s (unique_id %s)",
+                    entity_entry.entity_id, uid,
+                )
+                continue
+
+            # Rename German → English
+            if suffix in _SUFFIX_RENAMES:
+                new_suffix = _SUFFIX_RENAMES[suffix]
+                new_uid = f"{bare_prefix}{infix}{new_suffix}"
+                entity_reg.async_update_entity(
+                    entity_entry.entity_id,
+                    new_unique_id=new_uid,
+                )
+                renamed += 1
+                _LOGGER.debug(
+                    "Roomba+: renamed entity unique_id %s → %s",
+                    uid, new_uid,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=4)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 4 "
+            "(%d entity unique_ids normalised, %d orphans removed)",
+            config_entry.entry_id, renamed, removed,
+        )
+        current = 4
+
+    if current == 4:
+        # v4 → v5 (v2.1.1): rename German entity_ids to English.
+        #
+        # Root cause: unique_ids were always English (set from description.key).
+        # entity_ids were German because they are generated from translation_key
+        # at entity creation time and never automatically updated when
+        # translation_key changes. Previous migrations targeted unique_ids and
+        # found 0 matches because the unique_ids were already correct.
+        #
+        # Fix: rename entity_ids directly via async_update_entity(new_entity_id=).
+        # The rename map is derived from production entity registry screenshots
+        # (Roomba 980 OG, HA 2026.5.4).
+        from homeassistant.helpers import entity_registry as er
+
+        _ENTITY_ID_RENAMES_V5: dict[str, str] = {
+            # sensor — roomba_980_og prefix
+            "sensor.roomba_980_og_missionen_letzte_dauer":                     "sensor.roomba_980_og_last_mission_duration",
+            "sensor.roomba_980_og_missionen_letztes_ergebnis":                 "sensor.roomba_980_og_last_mission_result",
+            "sensor.roomba_980_og_missionen_reinigungsserie":                  "sensor.roomba_980_og_clean_streak",
+            "sensor.roomba_980_og_schmutz_events_letzte_30_tage":              "sensor.roomba_980_og_recent_dirt_events",
+            "sensor.roomba_980_og_wartung_akkukapazitat":                      "sensor.roomba_980_og_battery_cycles",
+            "sensor.roomba_980_og_wartung_bursten_tage_bis_fallig":            "sensor.roomba_980_og_brush_remaining_hours",
+            "sensor.roomba_980_og_wartung_bursten_verschleissrate":            "sensor.roomba_980_og_brush_wear_rate",
+            "sensor.roomba_980_og_wartung_filter_tage_bis_fallig":             "sensor.roomba_980_og_filter_remaining_hours",
+            "sensor.roomba_980_og_wartung_filter_verschleissrate":             "sensor.roomba_980_og_filter_wear_rate",
+            "sensor.roomba_980_og_wartung_gesch_akkuende":                     "sensor.roomba_980_og_estimated_battery_eol",
+            "sensor.roomba_980_og_zwischenladungen_letzte_30_tage":            "sensor.roomba_980_og_recent_recharges",
+            "sensor.roomba_980_og_gesamte_reinigungen":                        "sensor.roomba_980_og_lifetime_missions",
+            "sensor.roomba_980_og_gesamte_reinigungszeit":                     "sensor.roomba_980_og_lifetime_time",
+            "sensor.roomba_980_og_leistung_abdeckung":                         "sensor.roomba_980_og_recent_coverage_pct",
+            "sensor.roomba_980_og_leistung_ladeanteil":                        "sensor.roomba_980_og_battery_capacity_retention",
+            "sensor.roomba_980_og_leistung_reinigungsgeschwindigkeit":          "sensor.roomba_980_og_recent_cleaning_speed",
+            "sensor.roomba_980_og_leistung_reinigungsgeschwindigkeitstrend":    "sensor.roomba_980_og_cleaning_speed_trend",
+            "sensor.roomba_980_og_leistung_schmutzdichte":                     "sensor.roomba_980_og_recent_dirt_density",
+            "sensor.roomba_980_og_letzter_fehlercode_letzte_30_tage":          "sensor.roomba_980_og_recent_error_code",
+            "sensor.roomba_980_og_letzter_fehlerzeitpunkt_letzte_30_tage":     "sensor.roomba_980_og_recent_error_time",
+            "sensor.roomba_980_og_mission_verbleibende_ladezeit":              "sensor.roomba_980_og_mission_recharge_minutes",
+            "sensor.roomba_980_og_mission_zeit_bis_ablauf":                    "sensor.roomba_980_og_mission_expire_minutes",
+            "sensor.roomba_980_og_missionen_heute_gereinigte_flache":          "sensor.roomba_980_og_area_cleaned_today",
+            "sensor.roomba_980_og_missionen_letzte_30_tage":                   "sensor.roomba_980_og_missions_last_30d",
+            "sensor.roomba_980_og_abschlussrate_letzte_30_tage":               "sensor.roomba_980_og_completion_rate_30d",
+            "sensor.roomba_980_og_anwesenheit_nachstes_reinigungsfenster":     "sensor.roomba_980_og_next_likely_clean_window",
+            "sensor.roomba_980_og_anwesenheit_reinigungsauslastung_7_tage":    "sensor.roomba_980_og_presence_clean_utilisation_7d",
+            "sensor.roomba_980_og_anwesenheit_reinigungsgelegenheiten_7_tage": "sensor.roomba_980_og_presence_clean_opportunities_7d",
+            "sensor.roomba_980_og_brushes_last_replaced":                      "sensor.roomba_980_og_brush_last_replaced",
+            "sensor.roomba_980_og_clean_base_leerungen_letzte_30_tage":        "sensor.roomba_980_og_recent_evacuations",
+            "sensor.roomba_980_og_fehler_letzte_zone":                         "sensor.roomba_980_og_last_error_zone",
+            "sensor.roomba_980_og_fehler_letzter_code":                        "sensor.roomba_980_og_last_error_code",
+            "sensor.roomba_980_og_fehler_letzter_zeitpunkt":                   "sensor.roomba_980_og_last_error_at",
+            "sensor.roomba_980_og_fehler_problemzone":                         "sensor.roomba_980_og_problem_zone",
+            "sensor.roomba_980_og_fehler_steckenbleiber_30_tage":              "sensor.roomba_980_og_stuck_count_30d",
+            # sensor — short prefix
+            "sensor.roomba_abgebrochene_missionen":                            "sensor.roomba_canceled_missions",
+            "sensor.roomba_auftrag_gestartet_von":                             "sensor.roomba_job_initiator",
+            "sensor.roomba_batterie_2":                                        "sensor.roomba_battery_level",
+            # binary_sensor
+            "binary_sensor.roomba_980_og_zeitplansperre_aktiv":                "binary_sensor.roomba_980_og_schedule_hold_active",
+            "binary_sensor.roomba_980_og_zwischenladung_aktiv":                "binary_sensor.roomba_980_og_mid_mission_recharge",
+            "binary_sensor.roomba_behalter_eingesetzt":                        "binary_sensor.roomba_bin_present",
+            # button
+            "button.roomba_akkuwechsel_bestatigen":                            "button.roomba_reset_battery",
+            "button.roomba_burstenwechsel_bestatigen":                         "button.roomba_reset_brush",
+            "button.roomba_filterwechsel_bestatigen":                          "button.roomba_reset_filter",
+            "button.roomba_letzte_mission_wiederholen":                        "button.roomba_repeat_mission",
+            "button.roomba_roboter_suchen":                                    "button.roomba_locate",
+            "button.roomba_zone_reinigen":                                     "button.roomba_clean_zone",
+            # select
+            "select.roomba_reinigungsdurchgange":                              "select.roomba_cleaning_passes",
+            # image
+            "image.roomba_reinigungskarte":                                    "image.roomba_map",
+        }
+
+        # Orphan entity_ids — no longer exist in code, remove from registry
+        _ORPHAN_ENTITY_IDS_V5: set[str] = {
+            "sensor.roomba_980_og_missionen_abschlussrate",
+        }
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+        removed = 0
+
+        for old_eid in _ORPHAN_ENTITY_IDS_V5:
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_remove(old_eid)
+                removed += 1
+                _LOGGER.debug("Roomba+: removed orphan entity %s", old_eid)
+
+        for old_eid, new_eid in _ENTITY_ID_RENAMES_V5.items():
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+                renamed += 1
+                _LOGGER.debug("Roomba+: renamed entity_id %s → %s", old_eid, new_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=5)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 5 "
+            "(%d entity_ids renamed to English, %d orphans removed)",
+            config_entry.entry_id, renamed, removed,
+        )
+        current = 5
+
+    if current == 5:
+        # v5 → v6 (v2.1.1): re-execute entity_id rename.
+        # The v4→v5 step ran with the correct logic but the entry was already
+        # at version 5 from a previous failed attempt, so HA skipped it.
+        # This step is identical to v4→v5 — fully idempotent.
+        from homeassistant.helpers import entity_registry as er
+
+        _ENTITY_ID_RENAMES_V6: dict[str, str] = {
+            "sensor.roomba_980_og_missionen_letzte_dauer":                     "sensor.roomba_980_og_last_mission_duration",
+            "sensor.roomba_980_og_missionen_letztes_ergebnis":                 "sensor.roomba_980_og_last_mission_result",
+            "sensor.roomba_980_og_missionen_reinigungsserie":                  "sensor.roomba_980_og_clean_streak",
+            "sensor.roomba_980_og_schmutz_events_letzte_30_tage":              "sensor.roomba_980_og_recent_dirt_events",
+            "sensor.roomba_980_og_wartung_akkukapazitat":                      "sensor.roomba_980_og_battery_cycles",
+            "sensor.roomba_980_og_wartung_bursten_tage_bis_fallig":            "sensor.roomba_980_og_brush_remaining_hours",
+            "sensor.roomba_980_og_wartung_bursten_verschleissrate":            "sensor.roomba_980_og_brush_wear_rate",
+            "sensor.roomba_980_og_wartung_filter_tage_bis_fallig":             "sensor.roomba_980_og_filter_remaining_hours",
+            "sensor.roomba_980_og_wartung_filter_verschleissrate":             "sensor.roomba_980_og_filter_wear_rate",
+            "sensor.roomba_980_og_wartung_gesch_akkuende":                     "sensor.roomba_980_og_estimated_battery_eol",
+            "sensor.roomba_980_og_zwischenladungen_letzte_30_tage":            "sensor.roomba_980_og_recent_recharges",
+            "sensor.roomba_980_og_gesamte_reinigungen":                        "sensor.roomba_980_og_lifetime_missions",
+            "sensor.roomba_980_og_gesamte_reinigungszeit":                     "sensor.roomba_980_og_lifetime_time",
+            "sensor.roomba_980_og_leistung_abdeckung":                         "sensor.roomba_980_og_recent_coverage_pct",
+            "sensor.roomba_980_og_leistung_ladeanteil":                        "sensor.roomba_980_og_battery_capacity_retention",
+            "sensor.roomba_980_og_leistung_reinigungsgeschwindigkeit":          "sensor.roomba_980_og_recent_cleaning_speed",
+            "sensor.roomba_980_og_leistung_reinigungsgeschwindigkeitstrend":    "sensor.roomba_980_og_cleaning_speed_trend",
+            "sensor.roomba_980_og_leistung_schmutzdichte":                     "sensor.roomba_980_og_recent_dirt_density",
+            "sensor.roomba_980_og_letzter_fehlercode_letzte_30_tage":          "sensor.roomba_980_og_recent_error_code",
+            "sensor.roomba_980_og_letzter_fehlerzeitpunkt_letzte_30_tage":     "sensor.roomba_980_og_recent_error_time",
+            "sensor.roomba_980_og_mission_verbleibende_ladezeit":              "sensor.roomba_980_og_mission_recharge_minutes",
+            "sensor.roomba_980_og_mission_zeit_bis_ablauf":                    "sensor.roomba_980_og_mission_expire_minutes",
+            "sensor.roomba_980_og_missionen_heute_gereinigte_flache":          "sensor.roomba_980_og_area_cleaned_today",
+            "sensor.roomba_980_og_missionen_letzte_30_tage":                   "sensor.roomba_980_og_missions_last_30d",
+            "sensor.roomba_980_og_abschlussrate_letzte_30_tage":               "sensor.roomba_980_og_completion_rate_30d",
+            "sensor.roomba_980_og_anwesenheit_nachstes_reinigungsfenster":     "sensor.roomba_980_og_next_likely_clean_window",
+            "sensor.roomba_980_og_anwesenheit_reinigungsauslastung_7_tage":    "sensor.roomba_980_og_presence_clean_utilisation_7d",
+            "sensor.roomba_980_og_anwesenheit_reinigungsgelegenheiten_7_tage": "sensor.roomba_980_og_presence_clean_opportunities_7d",
+            "sensor.roomba_980_og_brushes_last_replaced":                      "sensor.roomba_980_og_brush_last_replaced",
+            "sensor.roomba_980_og_clean_base_leerungen_letzte_30_tage":        "sensor.roomba_980_og_recent_evacuations",
+            "sensor.roomba_980_og_fehler_letzte_zone":                         "sensor.roomba_980_og_last_error_zone",
+            "sensor.roomba_980_og_fehler_letzter_code":                        "sensor.roomba_980_og_last_error_code",
+            "sensor.roomba_980_og_fehler_letzter_zeitpunkt":                   "sensor.roomba_980_og_last_error_at",
+            "sensor.roomba_980_og_fehler_problemzone":                         "sensor.roomba_980_og_problem_zone",
+            "sensor.roomba_980_og_fehler_steckenbleiber_30_tage":              "sensor.roomba_980_og_stuck_count_30d",
+            "sensor.roomba_abgebrochene_missionen":                            "sensor.roomba_canceled_missions",
+            "sensor.roomba_auftrag_gestartet_von":                             "sensor.roomba_job_initiator",
+            "sensor.roomba_batterie_2":                                        "sensor.roomba_battery_level",
+            "binary_sensor.roomba_980_og_zeitplansperre_aktiv":                "binary_sensor.roomba_980_og_schedule_hold_active",
+            "binary_sensor.roomba_980_og_zwischenladung_aktiv":                "binary_sensor.roomba_980_og_mid_mission_recharge",
+            "binary_sensor.roomba_behalter_eingesetzt":                        "binary_sensor.roomba_bin_present",
+            "button.roomba_akkuwechsel_bestatigen":                            "button.roomba_reset_battery",
+            "button.roomba_burstenwechsel_bestatigen":                         "button.roomba_reset_brush",
+            "button.roomba_filterwechsel_bestatigen":                          "button.roomba_reset_filter",
+            "button.roomba_letzte_mission_wiederholen":                        "button.roomba_repeat_mission",
+            "button.roomba_roboter_suchen":                                    "button.roomba_locate",
+            "button.roomba_zone_reinigen":                                     "button.roomba_clean_zone",
+            "select.roomba_reinigungsdurchgange":                              "select.roomba_cleaning_passes",
+            "image.roomba_reinigungskarte":                                    "image.roomba_map",
+        }
+        _ORPHAN_ENTITY_IDS_V6: set[str] = {
+            "sensor.roomba_980_og_missionen_abschlussrate",
+        }
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+        removed = 0
+
+        for old_eid in _ORPHAN_ENTITY_IDS_V6:
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_remove(old_eid)
+                removed += 1
+                _LOGGER.debug("Roomba+: removed orphan entity %s", old_eid)
+
+        for old_eid, new_eid in _ENTITY_ID_RENAMES_V6.items():
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+                renamed += 1
+                _LOGGER.debug("Roomba+: renamed entity_id %s → %s", old_eid, new_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=6)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 6 "
+            "(%d entity_ids renamed to English, %d orphans removed)",
+            config_entry.entry_id, renamed, removed,
+        )
+        current = 6
+
+    if current == 6:
+        # v6 → v7 (v2.1.1): definitive entity_id normalisation.
+        #
+        # Built from the actual entity registry (core.entity_registry) of the
+        # affected installation. Two actions:
+        # 1. RENAME — German/translated entity_id → correct English entity_id
+        # 2. REMOVE — stale German entity_id where the English version already
+        #    exists (left behind by earlier migration attempts that created
+        #    duplicates instead of renaming in-place).
+        #
+        # This migration is idempotent: entities not found are silently skipped.
+        from homeassistant.helpers import entity_registry as er
+
+        _RENAMES_V7: dict[str, str] = {
+            # button
+            "button.roomba_980_og_ausschalten_experimentell":      "button.roomba_980_og_power_off",
+            "button.roomba_980_og_ruhemodus_experimentell":        "button.roomba_980_og_sleep",
+            "button.roomba_980_og_schnellreinigung_experimentell": "button.roomba_980_og_quick",
+            "button.roomba_980_og_spot_reinigung_experimentell":   "button.roomba_980_og_spot",
+            # select
+            "select.roomba":                                       "select.roomba_zone_select",
+            # sensor — roomba_980_og prefix
+            "sensor.roomba_980_og_absturzsensoren_hinten":         "sensor.roomba_980_og_cliff_events_rear",
+            "sensor.roomba_980_og_absturzsensoren_vorne":          "sensor.roomba_980_og_cliff_events_front",
+            "sensor.roomba_980_og_akkukapazitat":                  "sensor.roomba_980_og_battery_capacity_mah",
+            "sensor.roomba_980_og_battery_capacity_retention":     "sensor.roomba_980_og_recent_recharge_fraction",
+            "sensor.roomba_980_og_brush_remaining_hours":          "sensor.roomba_980_og_brush_days_until_due",
+            "sensor.roomba_980_og_filter_remaining_hours":         "sensor.roomba_980_og_filter_days_until_due",
+            "sensor.roomba_980_og_gesamte_gereinigte_flache":      "sensor.roomba_980_og_lifetime_area",
+            "sensor.roomba_980_og_leistung_aufeinanderfolgende_ausfalle": "sensor.roomba_980_og_consecutive_clean_skips",
+            "sensor.roomba_980_og_navigations_panik_ereignisse":   "sensor.roomba_980_og_nav_panics",
+            "sensor.roomba_980_og_rohzustand_debug":               "sensor.roomba_980_og_raw_state",
+            "sensor.roomba_980_og_wlan_signalminimum":             "sensor.roomba_980_og_recent_wifi_floor",
+            "sensor.roomba_980_og_wlan_signalstabilitat":          "sensor.roomba_980_og_recent_wifi_stability",
+            # sensor — roomba prefix
+            "sensor.roomba_betriebsbereitschaft":                  "sensor.roomba_readiness",
+            "sensor.roomba_durchschnittliche_missionsdauer":       "sensor.roomba_average_mission_time",
+            "sensor.roomba_erfolgreiche_missionen":                "sensor.roomba_successful_missions",
+            "sensor.roomba_fehler":                                "sensor.roomba_error",
+            "sensor.roomba_fehlgeschlagene_missionen":             "sensor.roomba_failed_missions",
+            "sensor.roomba_gereinigte_flache_gesamt":              "sensor.roomba_total_cleaned_area",
+            "sensor.roomba_gesamtreinigungszeit":                  "sensor.roomba_total_cleaning_time",
+            "sensor.roomba_ip_adresse":                            "sensor.roomba_ip_address",
+            "sensor.roomba_ladezeit":                              "sensor.roomba_mission_recharge_time",
+            "sensor.roomba_letzte_mission":                        "sensor.roomba_last_mission",
+            "sensor.roomba_missionen_gesamt":                      "sensor.roomba_total_missions",
+            "sensor.roomba_missionsablauf":                        "sensor.roomba_mission_expire_time",
+            "sensor.roomba_missionsdauer":                         "sensor.roomba_mission_elapsed_time",
+            "sensor.roomba_missionsstart":                         "sensor.roomba_mission_start_time",
+            "sensor.roomba_navigationsqualitat":                   "sensor.roomba_nav_quality",
+            "sensor.roomba_reinigungsdurchgange":                  "sensor.roomba_clean_mode",
+            "sensor.roomba_schmutzerkennungs_ereignisse":          "sensor.roomba_scrubs_count",
+            "sensor.roomba_signalrauschen":                        "sensor.roomba_signal_noise",
+            "sensor.roomba_status_nachste_reinigung":              "sensor.roomba_next_clean",
+            "sensor.roomba_teppich_boost_modus":                   "sensor.roomba_carpet_boost_mode",
+            "sensor.roomba_wlan_signal":                           "sensor.roomba_rssi",
+            # switch
+            "switch.roomba_einstellung_mission_immer_beenden":     "switch.roomba_always_finish",
+            "switch.roomba_einstellung_zeitplan_pausieren":        "switch.roomba_schedule_hold",
+            "switch.roomba_randreinigung":                         "switch.roomba_edge_clean",
+        }
+
+        # Stale German entity_ids where the correct English version already exists.
+        # These were created as duplicates by earlier migration attempts.
+        _REMOVES_V7: list[str] = [
+            "sensor.roomba_980_og_battery_cycles",           # battery_capacity_retention exists
+            "sensor.roomba_980_og_missionen_abschlussrate",  # completion_rate_30d exists
+            "sensor.roomba_burstenlebensdauer_verbleibend",  # brush_remaining_hours exists
+            "sensor.roomba_filterlebensdauer_verbleibend",   # filter_remaining_hours exists
+            "sensor.roomba_ladezyklen",                      # battery_cycles exists
+        ]
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+        removed = 0
+
+        for old_eid in _REMOVES_V7:
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_remove(old_eid)
+                removed += 1
+                _LOGGER.debug("Roomba+: removed stale entity %s", old_eid)
+
+        for old_eid, new_eid in _RENAMES_V7.items():
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+                renamed += 1
+                _LOGGER.debug("Roomba+: renamed %s → %s", old_eid, new_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=7)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 7 "
+            "(%d entity_ids renamed, %d stale entities removed)",
+            config_entry.entry_id, renamed, removed,
+        )
+        current = 7
+
+    if current == 7:
+        # v7 → v8 (v2.1.1): complete entity normalisation in one pass.
+        # Combines prefix standardisation (roomba → roomba_980_og for all
+        # entities) with German → English rename. Derived from the actual
+        # core.entity_registry snapshot of the affected installation.
+        # All actions are idempotent — missing entities are silently skipped.
+        from homeassistant.helpers import entity_registry as er
+
+        _RENAMES_V8: dict[str, str] = {
+            # binary_sensor — prefix fix
+            "binary_sensor.roomba_bin_full":                        "binary_sensor.roomba_980_og_bin_full",
+            "binary_sensor.roomba_bin_present":                     "binary_sensor.roomba_980_og_bin_present",
+            "binary_sensor.roomba_connected":                       "binary_sensor.roomba_980_og_connected",
+            # button — German rename
+            "button.roomba_980_og_ausschalten_experimentell":       "button.roomba_980_og_power_off",
+            "button.roomba_980_og_ruhemodus_experimentell":         "button.roomba_980_og_sleep",
+            "button.roomba_980_og_schnellreinigung_experimentell":  "button.roomba_980_og_quick",
+            "button.roomba_980_og_spot_reinigung_experimentell":    "button.roomba_980_og_spot",
+            # button — prefix fix
+            "button.roomba_clean_zone":                             "button.roomba_980_og_clean_zone",
+            "button.roomba_locate":                                 "button.roomba_980_og_locate",
+            "button.roomba_repeat_mission":                         "button.roomba_980_og_repeat_mission",
+            "button.roomba_reset_battery":                          "button.roomba_980_og_reset_battery",
+            "button.roomba_reset_brush":                            "button.roomba_980_og_reset_brush",
+            "button.roomba_reset_filter":                           "button.roomba_980_og_reset_filter",
+            # image — prefix fix
+            "image.roomba_map":                                     "image.roomba_980_og_map",
+            # select — prefix fix
+            "select.roomba":                                        "select.roomba_980_og_zone_select",
+            "select.roomba_cleaning_passes":                        "select.roomba_980_og_cleaning_passes",
+            # sensor — German rename (roomba_980_og prefix, wrong key)
+            "sensor.roomba_980_og_absturzsensoren_hinten":          "sensor.roomba_980_og_cliff_events_rear",
+            "sensor.roomba_980_og_absturzsensoren_vorne":           "sensor.roomba_980_og_cliff_events_front",
+            "sensor.roomba_980_og_akkukapazitat":                   "sensor.roomba_980_og_battery_capacity_mah",
+            "sensor.roomba_980_og_battery_capacity_retention":      "sensor.roomba_980_og_recent_recharge_fraction",
+            "sensor.roomba_980_og_brush_remaining_hours":           "sensor.roomba_980_og_brush_days_until_due",
+            "sensor.roomba_980_og_completion_rate_30d":             "sensor.roomba_980_og_recent_completion_rate",
+            "sensor.roomba_980_og_filter_remaining_hours":          "sensor.roomba_980_og_filter_days_until_due",
+            "sensor.roomba_980_og_gesamte_gereinigte_flache":       "sensor.roomba_980_og_lifetime_area",
+            "sensor.roomba_980_og_leistung_aufeinanderfolgende_ausfalle": "sensor.roomba_980_og_consecutive_clean_skips",
+            "sensor.roomba_980_og_navigations_panik_ereignisse":    "sensor.roomba_980_og_nav_panics",
+            "sensor.roomba_980_og_rohzustand_debug":                "sensor.roomba_980_og_raw_state",
+            "sensor.roomba_980_og_wlan_signalminimum":              "sensor.roomba_980_og_recent_wifi_floor",
+            "sensor.roomba_980_og_wlan_signalstabilitat":           "sensor.roomba_980_og_recent_wifi_stability",
+            # sensor — prefix fix + German rename combined
+            "sensor.roomba_battery_level":                          "sensor.roomba_980_og_battery_level",
+            "sensor.roomba_betriebsbereitschaft":                   "sensor.roomba_980_og_readiness",
+            "sensor.roomba_canceled_missions":                      "sensor.roomba_980_og_canceled_missions",
+            "sensor.roomba_durchschnittliche_missionsdauer":        "sensor.roomba_980_og_average_mission_time",
+            "sensor.roomba_erfolgreiche_missionen":                 "sensor.roomba_980_og_successful_missions",
+            "sensor.roomba_fehler":                                 "sensor.roomba_980_og_error",
+            "sensor.roomba_fehlgeschlagene_missionen":              "sensor.roomba_980_og_failed_missions",
+            "sensor.roomba_gereinigte_flache_gesamt":               "sensor.roomba_980_og_total_cleaned_area",
+            "sensor.roomba_gesamtreinigungszeit":                   "sensor.roomba_980_og_total_cleaning_time",
+            "sensor.roomba_ip_adresse":                             "sensor.roomba_980_og_ip_address",
+            "sensor.roomba_job_initiator":                          "sensor.roomba_980_og_job_initiator",
+            "sensor.roomba_ladezeit":                               "sensor.roomba_980_og_mission_recharge_time",
+            "sensor.roomba_letzte_mission":                         "sensor.roomba_980_og_last_mission",
+            "sensor.roomba_missionen_gesamt":                       "sensor.roomba_980_og_total_missions",
+            "sensor.roomba_missionsablauf":                         "sensor.roomba_980_og_mission_expire_time",
+            "sensor.roomba_missionsdauer":                          "sensor.roomba_980_og_mission_elapsed_time",
+            "sensor.roomba_missionsstart":                          "sensor.roomba_980_og_mission_start_time",
+            "sensor.roomba_navigationsqualitat":                    "sensor.roomba_980_og_nav_quality",
+            "sensor.roomba_phase":                                  "sensor.roomba_980_og_phase",
+            "sensor.roomba_reinigungsdurchgange":                   "sensor.roomba_980_og_clean_mode",
+            "sensor.roomba_schmutzerkennungs_ereignisse":           "sensor.roomba_980_og_scrubs_count",
+            "sensor.roomba_signalrauschen":                         "sensor.roomba_980_og_signal_noise",
+            "sensor.roomba_snr":                                    "sensor.roomba_980_og_snr",
+            "sensor.roomba_status_nachste_reinigung":               "sensor.roomba_980_og_next_clean",
+            "sensor.roomba_teppich_boost_modus":                    "sensor.roomba_980_og_carpet_boost_mode",
+            "sensor.roomba_wlan_signal":                            "sensor.roomba_980_og_rssi",
+            # switch — prefix fix + German rename
+            "switch.roomba_einstellung_mission_immer_beenden":      "switch.roomba_980_og_always_finish",
+            "switch.roomba_einstellung_zeitplan_pausieren":         "switch.roomba_980_og_schedule_hold",
+            "switch.roomba_randreinigung":                          "switch.roomba_980_og_edge_clean",
+            # vacuum
+            "vacuum.roomba":                                        "vacuum.roomba_980_og",
+        }
+
+        _REMOVES_V8: list[str] = [
+            "sensor.roomba_980_og_battery_cycles",           # battery_capacity_retention exists
+            "sensor.roomba_980_og_missionen_abschlussrate",  # completion_rate_30d (local) orphan
+            "sensor.roomba_burstenlebensdauer_verbleibend",  # brush_remaining_hours exists
+            "sensor.roomba_filterlebensdauer_verbleibend",   # filter_remaining_hours exists
+            "sensor.roomba_ladezyklen",                      # battery_cycles exists
+        ]
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+        removed = 0
+
+        for old_eid in _REMOVES_V8:
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_remove(old_eid)
+                removed += 1
+                _LOGGER.debug("Roomba+: removed stale entity %s", old_eid)
+
+        for old_eid, new_eid in _RENAMES_V8.items():
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+                renamed += 1
+                _LOGGER.debug("Roomba+: renamed %s → %s", old_eid, new_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=8)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 8 "
+            "(%d entity_ids renamed, %d stale entities removed)",
+            config_entry.entry_id, renamed, removed,
+        )
+        current = 8
+
+    if current == 8:
+        # v8 → v9 (v2.1.1): final entity_id cleanup.
+        # Previous migrations renamed German→English but left some entities
+        # with the short "roomba" prefix instead of "roomba_980_og".
+        # This step moves all remaining short-prefix entities to roomba_980_og
+        # and fixes the last remaining German entity_ids.
+        from homeassistant.helpers import entity_registry as er
+
+        _RENAMES_V9: dict[str, str] = {
+            "select.roomba_zone_select":                        "select.roomba_980_og_zone_select",
+            "sensor.roomba_average_mission_time":               "sensor.roomba_980_og_average_mission_time",
+            "sensor.roomba_burstenlebensdauer_verbleibend":     "sensor.roomba_980_og_brush_remaining_hours",
+            "sensor.roomba_carpet_boost_mode":                  "sensor.roomba_980_og_carpet_boost_mode",
+            "sensor.roomba_clean_mode":                         "sensor.roomba_980_og_clean_mode",
+            "sensor.roomba_error":                              "sensor.roomba_980_og_error",
+            "sensor.roomba_failed_missions":                    "sensor.roomba_980_og_failed_missions",
+            "sensor.roomba_filterlebensdauer_verbleibend":      "sensor.roomba_980_og_filter_remaining_hours",
+            "sensor.roomba_ip_address":                         "sensor.roomba_980_og_ip_address",
+            "sensor.roomba_ladezyklen":                         "sensor.roomba_980_og_battery_cycles",
+            "sensor.roomba_last_mission":                       "sensor.roomba_980_og_last_mission",
+            "sensor.roomba_mission_elapsed_time":               "sensor.roomba_980_og_mission_elapsed_time",
+            "sensor.roomba_mission_expire_time":                "sensor.roomba_980_og_mission_expire_time",
+            "sensor.roomba_mission_recharge_time":              "sensor.roomba_980_og_mission_recharge_time",
+            "sensor.roomba_mission_start_time":                 "sensor.roomba_980_og_mission_start_time",
+            "sensor.roomba_nav_quality":                        "sensor.roomba_980_og_nav_quality",
+            "sensor.roomba_next_clean":                         "sensor.roomba_980_og_next_clean",
+            "sensor.roomba_readiness":                          "sensor.roomba_980_og_readiness",
+            "sensor.roomba_rssi":                               "sensor.roomba_980_og_rssi",
+            "sensor.roomba_scrubs_count":                       "sensor.roomba_980_og_scrubs_count",
+            "sensor.roomba_signal_noise":                       "sensor.roomba_980_og_signal_noise",
+            "sensor.roomba_snr":                                "sensor.roomba_980_og_snr",
+            "sensor.roomba_successful_missions":                "sensor.roomba_980_og_successful_missions",
+            "sensor.roomba_total_cleaned_area":                 "sensor.roomba_980_og_total_cleaned_area",
+            "sensor.roomba_total_cleaning_time":                "sensor.roomba_980_og_total_cleaning_time",
+            "sensor.roomba_total_missions":                     "sensor.roomba_980_og_total_missions",
+            "switch.roomba_always_finish":                      "switch.roomba_980_og_always_finish",
+            "switch.roomba_edge_clean":                         "switch.roomba_980_og_edge_clean",
+            "switch.roomba_schedule_hold":                      "switch.roomba_980_og_schedule_hold",
+        }
+
+        _REMOVES_V9: list[str] = [
+            "sensor.roomba_980_og_missionen_abschlussrate",  # orphan, completion_rate_30d exists
+        ]
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+
+        for old_eid in _REMOVES_V9:
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                entity_reg.async_remove(old_eid)
+                renamed += 1
+                _LOGGER.debug("Roomba+: removed orphan %s", old_eid)
+
+        for old_eid, new_eid in _RENAMES_V9.items():
+            entry = entity_reg.async_get(old_eid)
+            if entry is not None and entry.platform == DOMAIN:
+                # Skip if target already exists (avoid duplicate)
+                if entity_reg.async_get(new_eid) is None:
+                    entity_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: renamed %s → %s", old_eid, new_eid)
+                else:
+                    entity_reg.async_remove(old_eid)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: removed duplicate %s", old_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=9)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 9 (%d entity_ids finalised)",
+            config_entry.entry_id, renamed,
+        )
+        current = 9
+
+    if current == 9:
+        # v9 → v10 (v2.1.1): fix swapped completion_rate entity_ids.
+        #
+        # Two sensors ended up with swapped entity_ids:
+        #   sensor.roomba_980_og_completion_rate_30d
+        #     uid: cloud_recent_completion_rate  ← should be recent_completion_rate
+        #   sensor.roomba_980_og_missionen_abschlussrate
+        #     uid: completion_rate_30d            ← should be completion_rate_30d
+        #
+        # The local completion_rate_30d sensor is live (code recreates it) so
+        # it cannot be removed. Must rename both in the correct order:
+        # Step 1: cloud sensor → temp name (frees the target slot)
+        # Step 2: local sensor → completion_rate_30d
+        # Step 3: cloud sensor → recent_completion_rate
+        from homeassistant.helpers import entity_registry as er
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+
+        CLOUD_EID   = "sensor.roomba_980_og_completion_rate_30d"
+        LOCAL_EID   = "sensor.roomba_980_og_missionen_abschlussrate"
+        CLOUD_FINAL = "sensor.roomba_980_og_recent_completion_rate"
+        LOCAL_FINAL = "sensor.roomba_980_og_completion_rate_30d"
+        TEMP_EID    = "sensor.roomba_980_og_completion_rate_cloud_tmp"
+
+        cloud_entry = entity_reg.async_get(CLOUD_EID)
+        local_entry = entity_reg.async_get(LOCAL_EID)
+
+        if cloud_entry is not None and cloud_entry.platform == DOMAIN:
+            if local_entry is not None:
+                # Step 1: move cloud to temp
+                entity_reg.async_update_entity(CLOUD_EID, new_entity_id=TEMP_EID)
+                renamed += 1
+                # Step 2: move local to correct name
+                entity_reg.async_update_entity(LOCAL_EID, new_entity_id=LOCAL_FINAL)
+                renamed += 1
+                # Step 3: move cloud from temp to final
+                entity_reg.async_update_entity(TEMP_EID, new_entity_id=CLOUD_FINAL)
+                renamed += 1
+                _LOGGER.debug(
+                    "Roomba+: swapped completion_rate entity_ids: "
+                    "%s → %s, %s → %s",
+                    CLOUD_EID, CLOUD_FINAL, LOCAL_EID, LOCAL_FINAL,
+                )
+            else:
+                # Local already gone, just fix cloud
+                entity_reg.async_update_entity(CLOUD_EID, new_entity_id=CLOUD_FINAL)
+                renamed += 1
+
+        elif local_entry is not None and local_entry.platform == DOMAIN:
+            # Cloud already correct, just fix local
+            entity_reg.async_update_entity(LOCAL_EID, new_entity_id=LOCAL_FINAL)
+            renamed += 1
+
+        hass.config_entries.async_update_entry(config_entry, version=10)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 10 (%d entity_ids fixed)",
+            config_entry.entry_id, renamed,
+        )
+        current = 10
 
     if current == config_entry.version:
         _LOGGER.debug(
@@ -209,9 +908,32 @@ async def async_setup_entry(
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
+    # F4d -- detect bbrun.hr firmware reset (current_hr < stored reset_hr).
+    # This happens silently after a firmware update that resets the runtime
+    # counter.  The stored reset baselines are now wrong; fire a Repair Issue
+    # so the user knows to re-reset consumables.
+    _state_for_bbrun = roomba_reported_state(roomba)
+    _bbrun = _state_for_bbrun.get("bbrun", {})
+    _runtime = _state_for_bbrun.get("runtimeStats", {})
+    _current_hr = _bbrun.get("hr") or _runtime.get("hr") or 0
+    if _current_hr > 0:
+        from .repairs import async_check_bbrun_reset
+        await async_check_bbrun_reset(hass, config_entry, maintenance_store, _current_hr)
+
     # ── v1.8.0 L1 — Mission store ─────────────────────────────────────────
     mission_store = MissionStore()
     await mission_store.async_load(hass, config_entry.entry_id)
+
+    # F7j — backfill HA Long-Term Statistics from stored mission records.
+    # Idempotent — safe to run on every startup. Runs in background so it
+    # does not block setup even on large mission histories.
+    robot_name = config_entry.title or "Roomba"
+    hass.async_create_task(
+        mission_store.async_backfill_statistics(
+            hass, config_entry.entry_id, robot_name
+        ),
+        name="roomba_plus_statistics_backfill",
+    )
 
     # Restore L3 last-error state from mission history.
     last_error_code: int | None = None
@@ -322,6 +1044,10 @@ async def async_setup_entry(
     if cloud_coordinator is not None:
         roomba.register_on_message_callback(
             make_map_retrain_callback(hass, cloud_coordinator)
+        )
+        # F4b -- trigger cloud refresh at mission end to eliminate 24h staleness
+        roomba.register_on_message_callback(
+            make_mission_complete_callback(hass, cloud_coordinator)
         )
 
     roomba.register_on_message_callback(

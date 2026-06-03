@@ -33,18 +33,37 @@ class _FakeConfigEntry:
 class _FakeHass:
     """Minimal hass stub for migration tests."""
 
-    def __init__(self):
-        self._entries: dict = {}
+    class _FakeConfig:
+        config_dir = "/tmp/roomba_plus_test"
+        components: set = set()
+        def path(self, *parts: str) -> str:
+            import os as _os
+            p = _os.path.join(self.config_dir, *parts)
+            _os.makedirs(_os.path.dirname(p), exist_ok=True)
+            return p
 
     class _ConfigEntries:
         def __init__(self, hass: "_FakeHass"):
             self._hass = hass
 
-        def async_update_entry(self, entry, *, options, version):
-            entry._apply_update(options, version)
+        def async_update_entry(self, entry, *, options=None, version=None, **kwargs):
+            if options is not None:
+                entry.options = options
+            if version is not None:
+                entry.version = version
+
+    async def async_add_executor_job(self, fn, *args):
+        import asyncio as _asyncio
+        return await _asyncio.get_event_loop().run_in_executor(None, fn, *args)
 
     def __init__(self):
         self.config_entries = _FakeHass._ConfigEntries(self)
+        import asyncio as _asyncio
+        self.loop = _asyncio.get_event_loop()
+        self.data = {}
+        self.config = self._FakeConfig()
+        from homeassistant.core import CoreState
+        self.state = CoreState.running
 
 
 class TestMigrateEntryV1ToV2:
@@ -66,7 +85,7 @@ class TestMigrateEntryV1ToV2:
 
     def test_returns_true(self):
         entry = self._run_migration({})
-        assert entry.version == 2
+        assert entry.version == 3  # v2.1: v1 migrates through v2 to v3
 
     def test_adds_marker_key(self):
         entry = self._run_migration({})
@@ -90,8 +109,9 @@ class TestMigrateEntryV1ToV2:
         assert entry.options["cloud_raw_records_version"] == 1
 
     def test_version_bumped_to_2(self):
+        """v1 entry migrates through v2 to v3 (current as of v2.1.0)."""
         entry = self._run_migration({})
-        assert entry._updated_version == 2
+        assert entry.version == 3
 
     def test_already_at_v2_noop(self):
         """An entry already at version 2 is returned as-is without modification."""

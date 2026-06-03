@@ -87,7 +87,21 @@ class MissionStore:
     # ── Write ─────────────────────────────────────────────────────────────────
 
     async def async_append(self, record: dict[str, Any]) -> None:
-        """Append a record and trim to MAX_RECORDS FIFO."""
+        """Append a record and trim to MAX_RECORDS FIFO.
+
+        F4c — duplicate guard: silently drops records whose id matches any of
+        the last 5 stored records.  Prevents MQTT reconnect from inflating
+        mission counts when the broker re-delivers the end-of-mission message.
+        """
+        record_id = record.get("id")
+        if record_id:
+            existing_ids = {r.get("id") for r in self._records[-5:]}
+            if record_id in existing_ids:
+                _LOGGER.debug(
+                    "MissionStore: duplicate record %s dropped (MQTT re-delivery)",
+                    record_id,
+                )
+                return
         self._records.append(record)
         if len(self._records) > MAX_RECORDS:
             self._records = self._records[-MAX_RECORDS:]
@@ -134,16 +148,25 @@ class MissionStore:
         summaries: dict[date, DaySummary] = {}
         for day, records in buckets.items():
             total = len(records)
-            completed = sum(1 for r in records if r.get("result") == "completed")
-            stuck = sum(1 for r in records if r.get("result") == "stuck")
+            # F6h: stuck_and_resumed counts as completed (robot finished);
+            # stuck_and_abandoned counts as stuck (mission failed).
+            # F6c: blocked_timeout counts as total but not completed.
+            completed = sum(
+                1 for r in records
+                if r.get("result") in ("completed", "stuck_and_resumed")
+            )
+            stuck = sum(
+                1 for r in records
+                if r.get("result") in ("stuck", "stuck_and_abandoned")
+            )
             areas = [r["area_sqft"] for r in records if r.get("area_sqft") is not None]
             area_sqft: float | None = float(sum(areas)) if areas else None
             # Dominant result: error > stuck > completed > cancelled > none
             results = {r.get("result") for r in records}
             dominant = (
                 "error" if "error" in results else
-                "stuck" if "stuck" in results else
-                "completed" if "completed" in results else
+                "stuck" if results & {"stuck", "stuck_and_abandoned"} else
+                "completed" if results & {"completed", "stuck_and_resumed"} else
                 "cancelled" if "cancelled" in results else
                 "none"
             )
@@ -170,7 +193,8 @@ class MissionStore:
 
         windows: list[MissionWindow] = []
         completed_starts: set[str] = {
-            r["started_at"] for r in records if r.get("result") == "completed"
+            r["started_at"] for r in records
+            if r.get("result") in ("completed", "stuck_and_resumed")
         }
 
         for i in range(len(records) - 1):
@@ -202,7 +226,7 @@ class MissionStore:
         today = dt_util.now().date()
         completed_dates: set[date] = set()
         for r in self._records:
-            if r.get("result") == "completed":
+            if r.get("result") in ("completed", "stuck_and_resumed"):
                 dt = dt_util.parse_datetime(r.get("started_at", ""))
                 if dt:
                     completed_dates.add(dt_util.as_local(dt).date())
@@ -212,6 +236,26 @@ class MissionStore:
             streak += 1
             day -= timedelta(days=1)
         return streak
+
+    def p75_area(self, days: int) -> float | None:
+        """Return the 75th-percentile area_sqft across records in the last `days` days.
+
+        F5f — self-calibrating home coverage baseline.  After 10+ missions this
+        stabilises as a reliable proxy for a full-clean area, filtering out
+        partial cleans (low end) and zero-area failures.
+
+        Returns None when fewer than 10 positive-area records exist (insufficient
+        history to establish a stable baseline).
+        """
+        areas = [
+            r["area_sqft"]
+            for r in self.query(days)
+            if r.get("area_sqft") is not None and r["area_sqft"] > 0
+        ]
+        if len(areas) < 10:
+            return None
+        areas.sort()
+        return areas[int(len(areas) * 0.75)]
 
     def wear_data(self, days: int) -> list[dict[str, Any]]:
         """Return daily bbrun.hr snapshots for the last `days` days.
@@ -388,3 +432,135 @@ class MissionStore:
                 corrected,
             )
         return corrected
+
+    async def async_backfill_statistics(
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        robot_name: str,
+    ) -> None:
+        """Inject historical mission data into HA Long-Term Statistics.
+
+        F7j -- backfills three external statistic series from MissionStore records,
+        making a full year of history immediately available in the HA Statistics
+        graph card.  async_add_external_statistics() is idempotent -- duplicate
+        start timestamps are silently ignored, so this is safe to call on every
+        startup and after every new record.
+
+        Series:
+          roomba_plus:{entry_id}_area_cleaned_m2    -- daily sum (m², has_sum)
+          roomba_plus:{entry_id}_mission_duration_min -- daily sum (min, has_sum)
+          roomba_plus:{entry_id}_missions_completed  -- daily count (missions, has_sum)
+
+        Gate: area series requires cloud records with area_sqft.  Duration and
+        completion count work for all robots from local records.
+        """
+        try:
+            from homeassistant.components.recorder.statistics import (
+                async_add_external_statistics,
+            )
+            from homeassistant.components.recorder.models import (
+                StatisticData,
+                StatisticMetaData,
+            )
+            # mean_type required from HA 2026.11 — pass as integer (0 = NONE)
+            # to avoid import dependency on StatisticsMeanType which may not
+            # exist in older HA versions. StatisticMetaData is a TypedDict so
+            # it accepts any value without type checking.
+            _mean_type_none = 0
+        except ImportError:
+            _LOGGER.debug(
+                "MissionStore: recorder not available -- skipping statistics backfill"
+            )
+            return
+
+        import inspect as _inspect
+
+        async def _import_stats(meta, stats):
+            """Call async_add_external_statistics, handling both sync and async variants."""
+            result = async_add_external_statistics(hass, meta, stats)
+            if _inspect.isawaitable(result):
+                await result
+
+        def _make_meta(name, statistic_id, unit):
+            return StatisticMetaData(
+                has_mean=False,
+                has_sum=True,
+                mean_type=_mean_type_none,  # 0 = NONE (no mean), required from HA 2026.11
+                name=name,
+                source=source,
+                statistic_id=statistic_id,
+                unit_class=None,            # required from HA 2025.11 — None = no unit conversion
+                unit_of_measurement=unit,
+            )
+
+        if not self._records:
+            return
+
+        # 1 sqft = 0.09290304 m² — named constant avoids magic number
+        _SQFT_TO_M2 = 0.0929
+
+        # Group records by hour-truncated start timestamp (LTS granularity)
+        area_stats: list[StatisticData] = []
+        duration_stats: list[StatisticData] = []
+        completion_stats: list[StatisticData] = []
+
+        for r in self._records:
+            started_str = r.get("started_at", "")
+            if not started_str:
+                continue
+            try:
+                started_dt = dt_util.parse_datetime(started_str)
+                if started_dt is None:
+                    continue
+                if started_dt.tzinfo is None:
+                    started_dt = started_dt.replace(tzinfo=timezone.utc)
+                # Truncate to hour for LTS
+                bucket = started_dt.replace(minute=0, second=0, microsecond=0)
+            except (ValueError, TypeError):
+                continue
+
+            area_sqft = r.get("area_sqft")
+            duration_min = r.get("duration_min") or 0
+            is_completed = r.get("result") in ("completed", "stuck_and_resumed")
+
+            if area_sqft is not None:
+                area_m2 = round(float(area_sqft) * _SQFT_TO_M2, 2)
+                area_stats.append(StatisticData(start=bucket, sum=area_m2))
+
+            duration_stats.append(StatisticData(start=bucket, sum=float(duration_min)))
+            completion_stats.append(StatisticData(start=bucket, sum=1.0 if is_completed else 0.0))
+
+        source = "roomba_plus"
+
+        # HA validates statistic_id strictly: domain:object_id where object_id
+        # must be lowercase letters, digits and underscores only.
+        # Entry IDs are ULIDs (uppercase) — convert to lowercase.
+        safe_entry_id = entry_id.lower()
+
+        if area_stats:
+            await _import_stats(
+                _make_meta(f"{robot_name} \u2014 Area cleaned", f"{source}:{safe_entry_id}_area_cleaned_m2", "m\u00b2"),
+                area_stats,
+            )
+
+        if duration_stats:
+            await _import_stats(
+                _make_meta(f"{robot_name} \u2014 Mission duration", f"{source}:{safe_entry_id}_mission_duration_min", "min"),
+                duration_stats,
+            )
+
+        if completion_stats:
+            await _import_stats(
+                _make_meta(f"{robot_name} \u2014 Missions completed", f"{source}:{safe_entry_id}_missions_completed", "missions"),
+                completion_stats,
+            )
+
+        _LOGGER.debug(
+            "MissionStore: statistics backfill complete for %s "
+            "(%d area, %d duration, %d completion points)",
+            entry_id,
+            len(area_stats),
+            len(duration_stats),
+            len(completion_stats),
+        )

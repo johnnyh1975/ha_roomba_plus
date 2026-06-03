@@ -1,0 +1,160 @@
+blueprint:
+  name: "Roomba+ Exception Notifications"
+  description: >
+    Send a notification only on meaningful Roomba+ exceptions — not after every
+    mission. Covers: robot stuck and abandoned, consecutive clean skips, performance
+    degradation, and possible floor accident detection. Maximum one notification
+    per event type per day to prevent spam.
+  domain: automation
+  author: Roomba+ Integration
+  input:
+    notify_service:
+      name: Notification service
+      description: >
+        The notification service to call (e.g. notify.mobile_app_your_phone).
+      selector:
+        text:
+    vacuum_entity:
+      name: Vacuum entity
+      description: Your Roomba+ vacuum entity.
+      selector:
+        entity:
+          integration: roomba_plus
+          domain: vacuum
+    notify_stuck_abandoned:
+      name: Robot stuck and abandoned
+      description: >
+        Notify when the robot got stuck and could not resume — significant area
+        likely missed. Uses the last_mission_result sensor (result = stuck_and_abandoned).
+      default: true
+      selector:
+        boolean:
+    notify_consecutive_skips:
+      name: Consecutive clean skips
+      description: >
+        Notify when blocking sensors or presence schedule prevented 3+ consecutive
+        scheduled cleans.
+      default: true
+      selector:
+        boolean:
+    skips_sensor:
+      name: Consecutive clean skips sensor
+      description: >
+        The "Consecutive clean skips" sensor from the Roomba+ integration.
+        Enable it first in the device page (it is disabled by default).
+      default: ""
+      selector:
+        entity:
+          integration: roomba_plus
+          domain: sensor
+    notify_performance:
+      name: Performance degradation
+      description: >
+        Notify when a performance degradation Repair Issue is raised (declining
+        cleaning speed for 3+ consecutive updates).
+      default: true
+      selector:
+        boolean:
+    notify_accident:
+      name: Possible floor accident
+      description: >
+        Notify when an unusual dirt spike with a short mission is detected —
+        possible liquid spill or accident.
+      default: true
+      selector:
+        boolean:
+
+variables:
+  vacuum_name: "{{ state_attr(vacuum_entity, 'friendly_name') or 'Roomba' }}"
+
+trigger:
+  - platform: state
+    id: stuck_abandoned
+    entity_id: !input vacuum_entity
+    attribute: last_mission_result
+    to: "stuck_and_abandoned"
+
+  - platform: numeric_state
+    id: consecutive_skips
+    entity_id: !input skips_sensor
+    above: 2
+
+  - platform: event
+    id: performance
+    event_type: repairs
+    event_data:
+      domain: roomba_plus
+      issue_id: performance_degradation
+
+  - platform: event
+    id: accident
+    event_type: repairs
+    event_data:
+      domain: roomba_plus
+      issue_id: accident_detected
+
+condition:
+  - condition: template
+    value_template: >
+      {% set trigger_id = trigger.id %}
+      {% set notify_stuck = notify_stuck_abandoned %}
+      {% set notify_skips = notify_consecutive_skips %}
+      {% set notify_perf  = notify_performance %}
+      {% set notify_acc   = notify_accident %}
+      {{ (trigger_id == 'stuck_abandoned' and notify_stuck)
+         or (trigger_id == 'consecutive_skips' and notify_skips)
+         or (trigger_id == 'performance' and notify_perf)
+         or (trigger_id == 'accident' and notify_acc) }}
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: stuck_abandoned
+        sequence:
+          - service: !input notify_service
+            data:
+              title: "{{ vacuum_name }} — Stuck and not recovered"
+              message: >
+                {{ vacuum_name }} got stuck during the last mission and could not
+                resume. Part of your home may not have been cleaned. Check the area
+                and clear any obstacles before the next run.
+
+      - conditions:
+          - condition: trigger
+            id: consecutive_skips
+        sequence:
+          - service: !input notify_service
+            data:
+              title: "{{ vacuum_name }} — Multiple cleans skipped"
+              message: >
+                {{ vacuum_name }} has been unable to clean for 3 or more consecutive
+                scheduled opportunities. Check your blocking sensor settings or
+                presence schedule — they may be too restrictive.
+
+      - conditions:
+          - condition: trigger
+            id: performance
+        sequence:
+          - service: !input notify_service
+            data:
+              title: "{{ vacuum_name }} — Performance decline detected"
+              message: >
+                {{ vacuum_name }}'s cleaning performance has been declining. This
+                may indicate worn brushes, a clogged filter, or changing floor
+                conditions. Check the Roomba+ device page for details.
+
+      - conditions:
+          - condition: trigger
+            id: accident
+        sequence:
+          - service: !input notify_service
+            data:
+              title: "{{ vacuum_name }} — Possible floor accident"
+              message: >
+                {{ vacuum_name }} detected an unusual amount of dirt in a very
+                short mission — a possible liquid spill or accident. Check the
+                area before sending the robot back.
+
+mode: single
+max_exceeded: silent

@@ -29,11 +29,15 @@ sys.modules.setdefault("homeassistant.core", ha_core)
 sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
 
 # homeassistant.helpers.storage stub
+# Only install if homeassistant.helpers is not already a real package —
+# clobbering it with a plain ModuleType breaks subsequent imports that
+# expect it to be a package (e.g. homeassistant.components.repairs).
 _store_cls = MagicMock()
 ha_storage = types.ModuleType("homeassistant.helpers.storage")
 ha_storage.Store = _store_cls
-sys.modules["homeassistant.helpers"] = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers.storage"] = ha_storage
+if not hasattr(sys.modules.get("homeassistant.helpers"), "__path__"):
+    sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
+sys.modules.setdefault("homeassistant.helpers.storage", ha_storage)
 
 # roombapy stub (needed by models.py at TYPE_CHECKING time — safe to stub)
 sys.modules.setdefault("roombapy", types.ModuleType("roombapy"))

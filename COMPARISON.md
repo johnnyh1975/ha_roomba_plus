@@ -18,7 +18,8 @@
 | iRobot cloud dependency | ✅ None | ⚠️ Optional (cloud features only) ★ | ❌ Required for maps/zones — Gigya auth unstable since Oct 2024 |
 | Setup effort | ✅ Low — auto-discovery | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config |
 | Supported models | 690, 890, 960, 980, s9+, Braava m6 | 600–900, i, s, j, Braava m6 ★ | i7+, s9+ focus |
-| Unit tests | ✅ | ✅ 1053 tests ★ (1042 unit + 11 integration) | ❌ |
+| HA Long-Term Statistics backfill | ❌ | ✅ area, duration, completions — 3 LTS series, auto-backfilled from MissionStore on every startup ★ | ❌ |
+| Unit tests | ✅ | ✅ 1196 tests ★ (1042 v2.0 baseline + 154 new v2.1) | ❌ |
 | Quality Scale | Silver | **Gold ★** | Not rated |
 | Translations | ⚠️ EN only | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only |
 
@@ -28,7 +29,7 @@
 
 | Feature | HA Core | Roomba+ | roomba_rest980 |
 |---|---|---|---|
-| **Total sensor count** | 13 | **78 ★** (69 local + 9 cloud) | ~27 |
+| **Total sensor count** | 13 | **97+ ★** (69 local + 28 cloud) | ~27 |
 | Battery | ✅ | ✅ | ✅ + dynamic icon + `batInfo` attributes |
 | Phase / status | ⚠️ via vacuum state only | ✅ dedicated sensor + idle/stopped detection ★ | ✅ idle/stopped detection |
 | Error code (80+ codes) | ❌ | ✅ with label + description + recommended action ★ | ✅ code only |
@@ -47,7 +48,7 @@
 | Clean mode / passes (readable) | ❌ | ✅ | ✅ |
 | Edge cleaning (readable) | ❌ | ✅ | ✅ |
 | Clean Base status | ❌ | ✅ | ✅ 6 detailed states |
-| Mop sensors — Braava m6 | ❌ | ⚠️ combined mop_ready sensor | ✅ 4 sensors: tank, pad, level, mode ★ |
+| Mop sensors — Braava m6 | ❌ | ✅ 5 sensors: clean mode, tank status, ARS behavior, pad type, tank level ★ | ✅ 4 sensors: tank, pad, level, mode ★ |
 | Raw state attribute sensor | ❌ | ❌ diagnostics download only | ✅ ★ |
 | Cloud pmap sensor | ❌ | ❌ | ✅ one sensor per saved map ★ |
 | **Cloud diagnostics (v2.0)** | ❌ | ✅ 6 sensors: completion rate, recharges, evacuations, dirt events, error code + time ★ | ❌ |
@@ -115,10 +116,11 @@
 | `stale-devices` | ✅ | ✅ ★ | ❌ |
 | `strict-typing` | ✅ | ✅ ★ | ❌ |
 | Device triggers | ❌ | ✅ 6 triggers: started, finished, stuck, bin full, docked, error ★ | ❌ |
-| Repair Issues | ❌ | ✅ zone naming + Smart Map zone prompts ★ | ❌ |
+| Repair Issues | ❌ | ✅ 8 issue types: zone naming, performance, battery, scheduling, accident, skips, drift, firmware ★ | ❌ |
 | Diagnostics download | ⚠️ basic | ✅ includes map + zone + cloud state ★ | ❌ |
 | Multi-robot support | ✅ | ✅ BLID-based, separate stores per entry ★ | ⚠️ one container per robot |
 | Integration tests | ✅ | ✅ pytest-homeassistant-custom-component ★ | ❌ |
+| GitHub Actions CI | ❌ | ✅ push + PR + nightly hassfest + HACS validation ★ | ❌ |
 
 ---
 

@@ -326,3 +326,47 @@ class TestIrobotCloudApiEndpoints:
         # No credentials set
         with pytest.raises(AuthenticationError, match="authenticate"):
             await api._aws_get("https://example.com/v1/test")
+
+
+# ── F7l — get_automations (v2.1) ──────────────────────────────────────────────
+
+class TestGetAutomations:
+    """Tests for IrobotCloudApi.get_automations() — F7l."""
+
+    def _authed_api(self) -> IrobotCloudApi:
+        api = IrobotCloudApi("user@example.com", "password", MagicMock())
+        api._deployment = {"httpBaseAuth": "https://auth.example.com"}
+        api._credentials = {
+            "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+            "SecretKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "SessionToken": "token",
+            "CognitoId": "us-east-1:abc123",
+        }
+        return api
+
+    @pytest.mark.asyncio
+    async def test_get_automations_returns_dict(self):
+        """Returns dict response unchanged."""
+        api = self._authed_api()
+        payload = {"automations": [{"id": "a1", "name": "Morning run"}]}
+        with patch.object(api, "_aws_get", new=AsyncMock(return_value=payload)):
+            result = await api.get_automations()
+        assert result == payload
+
+    @pytest.mark.asyncio
+    async def test_get_automations_calls_correct_url(self):
+        """Fetches /v1/user/automations."""
+        api = self._authed_api()
+        with patch.object(api, "_aws_get", new=AsyncMock(return_value={})) as mock_get:
+            await api.get_automations()
+        url = mock_get.call_args[0][0]
+        assert "automations" in url
+        assert "user" in url
+
+    @pytest.mark.asyncio
+    async def test_get_automations_returns_empty_dict_on_non_dict(self):
+        """Returns empty dict when API returns unexpected type (e.g. list)."""
+        api = self._authed_api()
+        with patch.object(api, "_aws_get", new=AsyncMock(return_value=[])):
+            result = await api.get_automations()
+        assert result == {}

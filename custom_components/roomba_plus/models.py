@@ -60,6 +60,19 @@ class RoombaData:
     last_error_at: str | None = None        # ISO datetime string
     last_error_zone: str | None = None      # zone name at last error time
 
+    # F6a/F6b — consecutive-update counters for performance & battery issues.
+    # Stored here (not in MaintenanceStore) because they reset on every HA
+    # restart — they measure run-time sensor trend, not persistent history.
+    consecutive_declining_speed: int = 0
+    consecutive_battery_warn: int = 0
+
+    # F6a/F6b — latest sensor values cached so repair check functions can
+    # read them without importing sensor.py (avoids circular imports).
+    cleaning_speed_trend_value: str | None = None   # "improving"|"stable"|"declining"|"unknown"
+    dirt_density_rising: bool = False
+    recharge_fraction_value: float | None = None
+    battery_retention_value: float | None = None
+
     def roomba_reported_state(self) -> dict[str, Any]:
         """Return the reported state dict from master_state."""
         return self.roomba.master_state.get("state", {}).get("reported", {})

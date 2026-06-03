@@ -242,6 +242,36 @@ class BlockingManager:
             self._hass.bus.async_fire(EVENT_START_TIMEOUT, {})
             self.cancel_queue()
 
+            # F6c — record the timeout as a blocked_timeout mission result
+            from .callbacks import async_record_mission
+            self._hass.async_create_task(
+                async_record_mission(
+                    self._hass,
+                    self._entry,
+                    mission={},
+                    reported={},
+                    zones=[],
+                    start_ts=int(dt_util.utcnow().timestamp()),
+                    nstuck_delta=0,
+                    result_override="blocked_timeout",
+                ),
+                name="roomba_plus_blocked_timeout_record",
+            )
+
+            # F6g — increment consecutive skip counter in MaintenanceStore
+            store = self._entry.runtime_data.maintenance_store
+            if store is not None:
+                store.consecutive_skips += 1
+                _LOGGER.debug(
+                    "BlockingManager: consecutive_skips now %d",
+                    store.consecutive_skips,
+                )
+                from .repairs import async_check_consecutive_skips
+                self._hass.async_create_task(
+                    async_check_consecutive_skips(self._hass, self._entry),
+                    name="roomba_plus_consecutive_skips_check",
+                )
+
     async def _do_start(self, rooms: list[str] | None) -> None:
         """Execute the actual start command on the robot."""
         from homeassistant.helpers import entity_registry as er
