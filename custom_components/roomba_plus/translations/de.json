@@ -197,7 +197,7 @@
         "name": "Missionen fehlgeschlagen"
       },
       "total_cleaned_area": {
-        "name": "Missionen – Gereinigte Fläche"
+        "name": "Gesamte gereinigte Fläche"
       },
       "last_mission": {
         "name": "Missionen – Letzte"
@@ -279,12 +279,6 @@
       },
       "raw_state": {
         "name": "Rohzustand (Debug)"
-      },
-      "lifetime_area": {
-        "name": "Gesamte gereinigte Fläche"
-      },
-      "lifetime_time": {
-        "name": "Gesamte Reinigungszeit"
       },
       "lifetime_missions": {
         "name": "Gesamte Reinigungen"
@@ -469,6 +463,12 @@
       },
       "consecutive_clean_skips": {
         "name": "Leistung – Aufeinanderfolgende Ausfälle"
+      },
+      "recent_area_30d": {
+        "name": "Gereinigte Fläche (30 T)"
+      },
+      "recent_time_30d": {
+        "name": "Reinigungszeit (30 T)"
       }
     },
     "binary_sensor": {

@@ -97,14 +97,8 @@
       "last_mission_result": {
         "default": "mdi:check-circle-outline"
       },
-      "lifetime_area": {
-        "default": "mdi:texture-box"
-      },
       "lifetime_missions": {
         "default": "mdi:counter"
-      },
-      "lifetime_time": {
-        "default": "mdi:clock-time-five-outline"
       },
       "mission_elapsed_time": {
         "default": "mdi:timeline-clock"
@@ -264,6 +258,12 @@
       },
       "consecutive_clean_skips": {
         "default": "mdi:skip-next-circle"
+      },
+      "recent_area_30d": {
+        "default": "mdi:texture-box"
+      },
+      "recent_time_30d": {
+        "default": "mdi:clock-time-five-outline"
       }
     },
     "button": {

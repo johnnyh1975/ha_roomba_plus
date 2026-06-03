@@ -201,7 +201,7 @@
         "name": "Mislukte missies"
       },
       "total_cleaned_area": {
-        "name": "Missies – Schoongemaakt oppervlak"
+        "name": "Totaal schoongemaakt oppervlak"
       },
       "last_mission": {
         "name": "Missies – Laatste"
@@ -283,12 +283,6 @@
       },
       "raw_state": {
         "name": "Ruwe status (foutopsporing)"
-      },
-      "lifetime_area": {
-        "name": "Totaal schoongemaakt oppervlak"
-      },
-      "lifetime_time": {
-        "name": "Totale reinigingstijd"
       },
       "lifetime_missions": {
         "name": "Totale missies (levensduur)"
@@ -473,6 +467,12 @@
       },
       "consecutive_clean_skips": {
         "name": "Prestaties – Opeenvolgende reinigingsoversiagen"
+      },
+      "recent_area_30d": {
+        "name": "Schoongemaakt oppervlak (30 d)"
+      },
+      "recent_time_30d": {
+        "name": "Reinigingstijd (30 d)"
       }
     },
     "binary_sensor": {

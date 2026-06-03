@@ -201,7 +201,7 @@
         "name": "Missions échouées"
       },
       "total_cleaned_area": {
-        "name": "Missions – Surface nettoyée"
+        "name": "Surface nettoyée à vie"
       },
       "last_mission": {
         "name": "Missions – Dernière"
@@ -283,12 +283,6 @@
       },
       "raw_state": {
         "name": "État brut (débogage)"
-      },
-      "lifetime_area": {
-        "name": "Surface nettoyée à vie"
-      },
-      "lifetime_time": {
-        "name": "Temps de nettoyage à vie"
       },
       "lifetime_missions": {
         "name": "Missions à vie"
@@ -473,6 +467,12 @@
       },
       "consecutive_clean_skips": {
         "name": "Performance – Nettoyages ignorés consécutifs"
+      },
+      "recent_area_30d": {
+        "name": "Surface nettoyée (30 j)"
+      },
+      "recent_time_30d": {
+        "name": "Temps de nettoyage (30 j)"
       }
     },
     "binary_sensor": {

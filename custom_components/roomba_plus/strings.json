@@ -213,7 +213,7 @@
         "name": "Missions failed"
       },
       "total_cleaned_area": {
-        "name": "Missions – Cleaned area"
+        "name": "Lifetime cleaned area"
       },
       "last_mission": {
         "name": "Missions – Last"
@@ -295,12 +295,6 @@
       },
       "raw_state": {
         "name": "Raw state (debug)"
-      },
-      "lifetime_area": {
-        "name": "Lifetime cleaned area"
-      },
-      "lifetime_time": {
-        "name": "Lifetime cleaning time"
       },
       "lifetime_missions": {
         "name": "Lifetime missions"
@@ -487,6 +481,12 @@
       },
       "consecutive_clean_skips": {
         "name": "Performance – Consecutive clean skips"
+      },
+      "recent_area_30d": {
+        "name": "Recent cleaned area (30 d)"
+      },
+      "recent_time_30d": {
+        "name": "Recent cleaning time (30 d)"
       }
     },
     "binary_sensor": {

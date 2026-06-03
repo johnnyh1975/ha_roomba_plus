@@ -1576,6 +1576,20 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if key == "last_mission_duration":
             if self.native_value == 0 or self.native_value is None:
                 return {"status": "No mission recorded yet"}
+        # v2.1.2: expose raw counts so the card can render
+        # "3 cleans · 2 opportunities" without back-calculating from %.
+        # The sensor value itself stays uncapped (>100% is valid and useful
+        # for automations that detect over-utilisation).
+        if key == "presence_clean_utilisation_7d":
+            store = self._config_entry.runtime_data.mission_store
+            if store is not None:
+                windows = store.presence_windows(7)
+                opportunities = _presence_opportunities(self, 7) or 0
+                cleans = sum(1 for w in windows if w.resulted_in_clean) if windows else 0
+                return {
+                    "cleans_7d": cleans,
+                    "opportunities_7d": opportunities,
+                }
         return {}
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -1744,7 +1758,12 @@ class CloudHistorySensorDescription(SensorEntityDescription):
 
 
 def _mh_sqft_to_m2(history: dict[str, Any]) -> StateType:
-    """Return lifetime cleaned area in m² (converted from sqft)."""
+    """Return recent cleaned area in m² summed across the API window (~30 missions).
+
+    NOT a lifetime total. The iRobot cloud /missionhistory endpoint returns
+    individual mission records; we sum sqft across the window. The true
+    lifetime area comes from bbrun.sqft over local MQTT (sensor: total_cleaned_area).
+    """
     sqft = (history.get("runtimeStats") or {}).get("sqft")
     if sqft is None:
         return None
@@ -1752,7 +1771,11 @@ def _mh_sqft_to_m2(history: dict[str, Any]) -> StateType:
 
 
 def _mh_total_minutes(history: dict[str, Any]) -> StateType:
-    """Return lifetime cleaning time in minutes."""
+    """Return recent cleaning time in minutes summed across the API window (~30 missions).
+
+    NOT a lifetime total — same API limitation as _mh_sqft_to_m2.
+    The true lifetime time comes from bbrun.hr/min over local MQTT.
+    """
     stats = history.get("runtimeStats") or {}
     hr = stats.get("hr")
     mn = stats.get("min")
@@ -1762,26 +1785,26 @@ def _mh_total_minutes(history: dict[str, Any]) -> StateType:
 
 
 def _mh_total_missions(history: dict[str, Any]) -> StateType:
-    """Return lifetime mission count."""
+    """Return lifetime mission count (true lifetime — nMssn is a robot-side counter)."""
     return (history.get("bbmssn") or {}).get("nMssn")
 
 
 CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     CloudHistorySensorDescription(
-        key="lifetime_area",
-        translation_key="lifetime_area",
+        key="recent_area_30d",
+        translation_key="recent_area_30d",
         native_unit_of_measurement="m²",
         device_class=SensorDeviceClass.AREA,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_mh_sqft_to_m2,
     ),
     CloudHistorySensorDescription(
-        key="lifetime_time",
-        translation_key="lifetime_time",
+        key="recent_time_30d",
+        translation_key="recent_time_30d",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_mh_total_minutes,
     ),
@@ -2358,20 +2381,19 @@ class CloudHistorySensor(IRobotEntity, SensorEntity):
         lifetime_missions reads nMssn from each record — a true lifetime
         counter embedded by the robot in every mission entry.
 
-        lifetime_cleaned_area and lifetime_cleaning_time are aggregated
-        from the API window (the last ~30 days of missions), not true
-        lifetime totals. This is a known API limitation: the /missionhistory
-        endpoint does not expose a lifetime accumulator for these fields.
+        recent_area_30d and recent_time_30d are aggregated from the API
+        window (the last ~30 missions), not true lifetime totals. The true
+        lifetime area and time come from bbrun over local MQTT.
         """
         key = self.entity_description.key
         if key == "lifetime_missions":
             return {"source": "lifetime_counter_from_robot"}
-        if key in ("lifetime_cleaned_area", "lifetime_cleaning_time"):
+        if key in ("recent_area_30d", "recent_time_30d"):
             return {
                 "source": "recent_mission_window",
-                "note": "Aggregated from recent mission history (~30 days). "
-                        "Not a lifetime total — the iRobot cloud API does not "
-                        "expose lifetime area or time directly.",
+                "note": "Aggregated from recent mission history (~30 missions). "
+                        "Not a lifetime total — use the local MQTT sensor "
+                        "'Lifetime cleaned area' for the true value.",
             }
         return {}
 

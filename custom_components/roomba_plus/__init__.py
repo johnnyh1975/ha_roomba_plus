@@ -84,6 +84,12 @@ async def async_migrate_entry(
       3 → 4 (v2.1.1): Entity unique_ids normalised — 37 entities renamed from
                       German slugs to English slugs in the entity registry so that
                       automations, history, and the Lovelace card are unaffected.
+      9 → 10 (v2.1.1): Fix swapped completion_rate entity_ids.
+      10 → 11 (v2.1.2): Rename cloud history sensor entity_ids:
+                        *_lifetime_area → *_recent_area_30d
+                        *_lifetime_time → *_recent_time_30d
+                        These sensors were misnamed — they aggregate the ~30-mission
+                        API window, not true lifetime totals.
     """
     current = config_entry.version
     _LOGGER.info(
@@ -801,6 +807,55 @@ async def async_migrate_entry(
             config_entry.entry_id, renamed,
         )
         current = 10
+
+    if current == 10:
+        # v10 → v11 (v2.1.2): rename cloud history sensor entity_ids.
+        #
+        # The sensors lifetime_area and lifetime_time were misnamed — they
+        # aggregate the ~30-mission API window, not true lifetime totals.
+        # Correct names: recent_area_30d and recent_time_30d.
+        #
+        # Pattern: sensor.<device_name>_lifetime_area  → sensor.<device_name>_recent_area_30d
+        #          sensor.<device_name>_lifetime_time  → sensor.<device_name>_recent_time_30d
+        #
+        # We scan the entity registry for all roomba_plus entities matching
+        # the old suffixes rather than hardcoding device-specific names, so
+        # this works for any installation regardless of device name.
+        from homeassistant.helpers import entity_registry as er
+
+        entity_reg = er.async_get(hass)
+        renamed = 0
+
+        for entry in list(entity_reg.entities.values()):
+            if entry.platform != DOMAIN:
+                continue
+            if entry.entity_id.endswith("_lifetime_area"):
+                new_eid = entry.entity_id[:-len("_lifetime_area")] + "_recent_area_30d"
+                if entity_reg.async_get(new_eid) is None:
+                    entity_reg.async_update_entity(entry.entity_id, new_entity_id=new_eid)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: renamed %s → %s", entry.entity_id, new_eid)
+                else:
+                    entity_reg.async_remove(entry.entity_id)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: removed duplicate %s", entry.entity_id)
+            elif entry.entity_id.endswith("_lifetime_time"):
+                new_eid = entry.entity_id[:-len("_lifetime_time")] + "_recent_time_30d"
+                if entity_reg.async_get(new_eid) is None:
+                    entity_reg.async_update_entity(entry.entity_id, new_entity_id=new_eid)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: renamed %s → %s", entry.entity_id, new_eid)
+                else:
+                    entity_reg.async_remove(entry.entity_id)
+                    renamed += 1
+                    _LOGGER.debug("Roomba+: removed duplicate %s", entry.entity_id)
+
+        hass.config_entries.async_update_entry(config_entry, version=11)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 11 (%d entity_ids renamed/removed)",
+            config_entry.entry_id, renamed,
+        )
+        current = 11
 
     if current == config_entry.version:
         _LOGGER.debug(

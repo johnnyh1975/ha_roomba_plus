@@ -201,7 +201,7 @@
         "name": "Misiones fallidas"
       },
       "total_cleaned_area": {
-        "name": "Misiones – Área limpiada"
+        "name": "Área limpiada total"
       },
       "last_mission": {
         "name": "Misiones – Última"
@@ -283,12 +283,6 @@
       },
       "raw_state": {
         "name": "Estado sin procesar (depuración)"
-      },
-      "lifetime_area": {
-        "name": "Área limpiada total"
-      },
-      "lifetime_time": {
-        "name": "Tiempo de limpieza total"
       },
       "lifetime_missions": {
         "name": "Misiones totales (vida útil)"
@@ -473,6 +467,12 @@
       },
       "consecutive_clean_skips": {
         "name": "Rendimiento – Limpiezas omitidas consecutivas"
+      },
+      "recent_area_30d": {
+        "name": "Área limpiada (30 d)"
+      },
+      "recent_time_30d": {
+        "name": "Tiempo de limpieza (30 d)"
       }
     },
     "binary_sensor": {
