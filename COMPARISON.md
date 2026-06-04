@@ -19,7 +19,7 @@
 | Setup effort | ✅ Low — auto-discovery | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config |
 | Supported models | 690, 890, 960, 980, s9+, Braava m6 | 600–900, i, s, j, Braava m6 ★ | i7+, s9+ focus |
 | HA Long-Term Statistics backfill | ❌ | ✅ area, duration, completions — 3 LTS series, auto-backfilled from MissionStore on every startup ★ | ❌ |
-| Unit tests | ✅ | ✅ 1196 tests ★ (1042 v2.0 baseline + 154 new v2.1) | ❌ |
+| Unit tests | ✅ | ✅ 1404 tests ★ (1042 v2.0 baseline + 154 v2.1 + 208 v2.2) | ❌ |
 | Quality Scale | Silver | **Gold ★** | Not rated |
 | Translations | ⚠️ EN only | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only |
 
@@ -30,7 +30,7 @@
 | Feature | HA Core | Roomba+ | roomba_rest980 |
 |---|---|---|---|
 | **Total sensor count** | 13 | **97+ ★** (69 local + 28 cloud) | ~27 |
-| Battery | ✅ | ✅ | ✅ + dynamic icon + `batInfo` attributes |
+| Battery | ✅ | ✅ | ✅ + dynamic icon + `batInfo` attributes (model-dependent) |
 | Phase / status | ⚠️ via vacuum state only | ✅ dedicated sensor + idle/stopped detection ★ | ✅ idle/stopped detection |
 | Error code (80+ codes) | ❌ | ✅ with label + description + recommended action ★ | ✅ code only |
 | Readiness / not-ready | ❌ | ✅ | ✅ |
@@ -47,9 +47,9 @@
 | Carpet Boost mode (readable) | ❌ | ✅ | ✅ |
 | Clean mode / passes (readable) | ❌ | ✅ | ✅ |
 | Edge cleaning (readable) | ❌ | ✅ | ✅ |
-| Clean Base status | ❌ | ✅ | ✅ 6 detailed states |
-| Mop sensors — Braava m6 | ❌ | ✅ 5 sensors: clean mode, tank status, ARS behavior, pad type, tank level ★ | ✅ 4 sensors: tank, pad, level, mode ★ |
-| Raw state attribute sensor | ❌ | ❌ diagnostics download only | ✅ ★ |
+| Clean Base status | ❌ | ✅ | ✅ 12 dock state codes (10 distinct labels) |
+| Mop sensors — Braava m6 | ❌ | ✅ 5 sensors: clean mode, tank status, ARS behavior, pad type, tank level ★ | ✅ 5 sensors: clean mode, behavior, pad, tank, level ★ |
+| Raw state attribute sensor | ❌ | ❌ diagnostics download only | ✅ 2 sensors: local + cloud raw dumps ★ |
 | Cloud pmap sensor | ❌ | ❌ | ✅ one sensor per saved map ★ |
 | **Cloud diagnostics (v2.0)** | ❌ | ✅ 6 sensors: completion rate, recharges, evacuations, dirt events, error code + time ★ | ❌ |
 | Cloud lifetime stats | ❌ | ✅ area, time, mission count ★ | ❌ |
@@ -78,20 +78,21 @@
 
 | Feature | HA Core | Roomba+ | roomba_rest980 |
 |---|---|---|---|
-| Live cleaning map — data source | ❌ | ✅ local MQTT `pose` stream | ✅ rest980 HTTP + jailbreak for realtime ★ |
-| Live cleaning map — rendering | ❌ | ✅ Python/Pillow in-process, `ImageEntity` | ✅ Camera entity fetching from rest980 container |
+| Floor plan map — data source | ❌ | ✅ local MQTT `pose` stream | ✅ UMF floor plan from iRobot cloud (static) ¹ |
+| Floor plan map — rendering | ❌ | ✅ Python/Pillow in-process, `ImageEntity` | ✅ Python/Pillow in-process, `CameraEntity` ¹ |
+| Live cleaning path during mission | ❌ | ✅ local MQTT `pose` stream ★ | ❌ not available |
 | Map survives HA restart | ❌ | ✅ hass.storage persistence ★ | ❌ |
-| Realtime robot position sensor | ❌ | ⚠️ requires `pose` in MQTT (firmware < 3.20) | ✅ requires jailbreak or firmware < 3.20 ★ |
-| Map data note | — | ⚠️ `pose` removed in firmware 3.20+ | ⚠️ `pose` removed in firmware 3.20+; jailbreak WIP |
+| Realtime robot position sensor | ❌ | ⚠️ requires `pose` in MQTT (firmware < 3.20) | ❌ not available |
+| Map data note | — | ⚠️ `pose` removed in firmware 3.20+ | ⚠️ UMF requires cloud credentials + Smart Map training |
 | Zone / room selection | ❌ | ✅ local via `region_id` | ✅ select per room with real names from cloud ★ |
 | Zone selection — fully local | ❌ | ✅ ★ | ❌ pmap sync requires cloud |
 | Real room names | ❌ | ⚠️ manually named via Repair Issue | ✅ directly from cloud pmaps ★ |
-| Keep-out zone visibility | ❌ | ❌ *(v2.2 planned)* | ✅ rendered on UMF map |
-| Observed zone visibility | ❌ | ❌ *(v2.2 planned)* | ✅ robot-learned obstacles rendered |
-| Per-room cleaning pass count | ❌ | ⚠️ single zone select only | ✅ select entity per room ★ |
+| Keep-out zone visibility | ❌ | ✅ (v2.2) | ✅ rendered on UMF map |
+| Observed zone visibility | ❌ | ✅ (v2.2) | ✅ robot-learned obstacles rendered |
+| Per-room cleaning pass count | ❌ | ⚠️ single zone select only | ⚠️ staging Select per room — must press Start to apply ³ |
 | Automatic room detection (900-series) | ❌ | ✅ gap segmentation + EMA confidence ★ | ❌ |
 | Door-width calibration | ❌ | ✅ ★ | ❌ |
-| Lovelace map card | ❌ | ✅ companion card v1 (HACS, beta) | ⚠️ compatible with xiaomi-vacuum-map-card |
+| Lovelace map card | ❌ | ✅ companion card v1 (HACS, beta) | ✅ calibration + rooms attributes (floor plan only) |
 
 ---
 
@@ -129,11 +130,13 @@
 
 ## Notes
 
-**¹ roomba_rest980 map approach** uses the rest980 Node.js container as a middle layer: coordinates arrive via MQTT locally, rest980 logs them, and the integration fetches the rendered map image over HTTP. This works well when `pose` data is available but requires the container to run 24/7. Since iRobot firmware 3.20+, `pose` is no longer reported locally — the map feature is broken on all updated robots. A jailbreak approach (SSH + internal MQTT broker access) is in active development by the author but not yet publicly released. Notably, roomba_rest980 correctly renders user-configured keep-out zones and robot-learned obstacle zones on the map — a genuine advantage for users who configure no-go zones in the iRobot app. Roomba+ plans to surface these in v2.2.
+**¹ roomba_rest980 map approach** (ia74/roomba_rest980) fetches the iRobot cloud UMF floor plan and renders it as a static `CameraEntity` image using Python/Pillow. The map is not live — it shows the stored floor plan, not the current cleaning path. Keep-out zones and robot-learned obstacle zones are overlaid on the floor plan, which is a genuine advantage for users who configure no-go zones in the iRobot app. Cloud credentials and a trained Smart Map are required; the map does not update during a mission.
+
+**¹ᵃ ha-rest980 integration** (jeremywillans/ha-rest980) is a separate project from roomba_rest980. It uses the rest980 Node.js container as a middleware layer: MQTT pose coordinates are logged by rest980 and fetched over HTTP by the integration. This provides a live path map during cleaning missions, but requires the container to run 24/7 and has been broken since iRobot firmware 3.20+ removed local `pose` reporting.
 
 **² Roomba+ map approach** renders entirely in-process using the same local MQTT `pose` stream, with no external container. It also stopped working on firmware 3.20+ for the same reason. For robots on older firmware both approaches are comparable in accuracy; Roomba+ has the advantage of surviving HA restarts via `hass.storage`.
 
-**³ roomba_rest980 controls** (cleaning passes, edge cleaning, always finish, carpet boost) are available via the rest980 REST API but have no corresponding HA entity — they cannot be used in the HA Automation editor without custom scripts.
+**³ roomba_rest980 controls** (cleaning passes, edge cleaning, always finish, carpet boost) are available via the rest980 REST API but have no corresponding HA entity — they cannot be used in the HA Automation editor without custom scripts. The per-room pass count Select is available in the UI but operates as a staging control: the value is applied only when the user presses Start; changing the Select alone does not trigger a clean.
 
 **⁴ iRobot / Picea Robotics cloud** — iRobot was acquired by Picea Robotics in January 2026. The Gigya authentication stack used by roomba_rest980's cloud features has been unstable since October 2024. Roomba+'s cloud features use the iRobot AWS endpoint directly, which has been stable throughout.
 

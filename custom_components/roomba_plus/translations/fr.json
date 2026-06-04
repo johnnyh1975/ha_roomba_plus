@@ -103,7 +103,8 @@
           "delay": "Délai de reconnexion (secondes)",
           "map_enabled": "Activer la carte en direct",
           "map_size_px": "Taille de la carte (pixels)",
-          "map_scale_mm_per_px": "Échelle (mm/pixel)"
+          "map_scale_mm_per_px": "Échelle (mm/pixel)",
+          "floor_label": "Étage (ex. : Rez-de-chaussée)"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
@@ -165,7 +166,8 @@
           "presence_scheduling_enabled": "Activer la planification selon la présence",
           "presence_entities": "Personnes suivies",
           "presence_mode": "Mode",
-          "away_delay_min": "Délai après le départ (minutes)"
+          "away_delay_min": "Délai après le départ (minutes)",
+          "clean_delay_min": "Délai avant le démarrage du deuxième robot"
         }
       }
     },
@@ -531,6 +533,9 @@
       },
       "mid_mission_recharge": {
         "name": "Recharge en cours de mission"
+      },
+      "mission_active": {
+        "name": "Mission active"
       }
     },
     "button": {
@@ -616,11 +621,22 @@
           "2": "Moyen",
           "3": "Élevé"
         }
+      },
+      "carpet_boost_select": {
+        "name": "Boost tapis",
+        "state": {
+          "Automatic": "Automatique",
+          "Eco": "Éco",
+          "Performance": "Performance"
+        }
       }
     },
     "image": {
       "map": {
         "name": "Carte de nettoyage"
+      },
+      "coverage_map": {
+        "name": "Carte de couverture"
       }
     }
   },
@@ -696,6 +712,10 @@
     "map_drift_detected": {
       "title": "Dérive carte détectée",
       "description": "Dérive de {magnitude_cm} cm (cap {bearing}°). Vérifiez la base et relancez une cartographie."
+    },
+    "observed_zones_detected": {
+      "title": "Obstacles détectés par le robot dans la carte cloud",
+      "description": "Votre carte cloud iRobot contient {zone_count} zone(s) d'obstacles détectés par le robot. Effectuez quelques missions de nettoyage pour que Roomba+ puisse les confirmer localement."
     }
   },
   "device_automation": {

@@ -50,6 +50,11 @@ _CLOUD_MERGE_SCALAR: tuple[str, ...] = (
                  # Contains plan.upcoming (planned room order) and finEvents
                  # (room/travel/traversal/evac/charge events per room).
                  # dict, not a list — lives in _CLOUD_MERGE_SCALAR, not ARRAY.
+    # Amendment 8f — confirmed useful from Thonno's 75-record dataset (June 2026)
+    "dockedAtStart",  # bool  — was robot docked at mission start?
+    "missionId",      # str   — cloud ULID, stable dedup key across reboots
+    "pauseM",         # int   — minutes spent paused (non-charging, non-cleaning)
+    "cmd",            # dict  — full start command incl. per-room twoPass params
 )
 
 # Array fields: copied when local value is absent or empty list.
@@ -165,6 +170,34 @@ class MissionStore:
             out.append(r)
         return sorted(out, key=lambda r: r.get("started_at", ""))
 
+    def query_by_error(
+        self,
+        error_code: int,
+        days: int,
+        zone: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return records for a specific error code in the last `days` days.
+
+        F8b — used by the error-recurrence Repair Issue to detect ≥3 occurrences
+        of the same error code in the same zone within a lookback window.
+
+        Args:
+            error_code: The integer error code to match (cleanMissionStatus.error).
+            days:       Lookback window in days.
+            zone:       When set, additionally filter by the first zone name.
+                        Pass None to return all records regardless of zone.
+        """
+        results = []
+        for r in self.query(days):
+            if r.get("error_code") != error_code:
+                continue
+            if zone is not None:
+                zones = r.get("zones") or []
+                if not zones or zones[0] != zone:
+                    continue
+            results.append(r)
+        return results
+
     def query_by_day(self, days: int) -> dict[date, DaySummary]:
         """Group query(days) results by local calendar date.
 
@@ -211,6 +244,131 @@ class MissionStore:
                 result=dominant,
             )
         return summaries
+
+    # ── v2.2.0 CR4 — timeline room-event extraction ───────────────────────────
+
+    def _resolve_region_ids(
+        self,
+        rid_list: list[str],
+        region_map: dict[str, str],
+    ) -> list[str]:
+        """Resolve region IDs to display names via region_map.
+
+        Unknown IDs are returned as their raw ID string — data is never
+        silently dropped. Name changes in the Smart Map are reflected
+        automatically since region_map is passed at read time, not stored.
+        """
+        return [region_map.get(rid, rid) for rid in rid_list]
+
+    def latest_cleaned_rooms(
+        self,
+        region_map: dict[str, str],
+    ) -> list[str] | None:
+        """Return room names in cleaning-completion order from the most recent mission.
+
+        CR4 — uses timeline.finEvents filtered to type='room' and status=0.
+        status=0 = pass complete (authoritative); status=1 = pass in progress.
+        Each room appears once; the last status=0 event per rid is used.
+
+        Returns None for whole-home missions (no 'room' events) or when
+        the timeline field is absent (non-SMART robot or pre-merge record).
+        """
+        latest = self.latest()
+        if latest is None:
+            return None
+        timeline = latest.get("timeline")
+        if not isinstance(timeline, dict):
+            return None
+        fin_events = timeline.get("finEvents") or []
+        seen: dict[str, int] = {}   # rid → index in ordered list
+        ordered: list[str] = []
+        for ev in fin_events:
+            if ev.get("type") != "room":
+                continue
+            room = ev.get("room", {})
+            if room.get("status") != 0:
+                continue
+            rid = str(room.get("rid", ""))
+            if not rid:
+                continue
+            if rid not in seen:
+                seen[rid] = len(ordered)
+                ordered.append(rid)
+        if not ordered:
+            return None
+        return self._resolve_region_ids(ordered, region_map)
+
+    def latest_planned_order(
+        self,
+        region_map: dict[str, str],
+    ) -> list[str] | None:
+        """Return room names in user-selected submission order.
+
+        CR4 — uses timeline.plan.upcoming. Preserves the exact order the user
+        selected rooms in the iRobot app. Returns None when absent or empty.
+        """
+        latest = self.latest()
+        if latest is None:
+            return None
+        timeline = latest.get("timeline")
+        if not isinstance(timeline, dict):
+            return None
+        upcoming = timeline.get("plan", {}).get("upcoming")
+        if not upcoming:
+            return None
+        return self._resolve_region_ids([str(r) for r in upcoming], region_map)
+
+    def latest_mission_destination(
+        self,
+        region_map: dict[str, str],
+    ) -> str | None:
+        """Return the last room in the planned order (final target of the job).
+
+        Returns None for whole-home missions or when timeline is absent.
+        """
+        planned = self.latest_planned_order(region_map)
+        return planned[-1] if planned else None
+
+    def latest_room_coverage(
+        self,
+        region_map: dict[str, str],
+    ) -> dict[str, float] | None:
+        """Return per-room coverage fractions from the most recent mission.
+
+        CR4 — uses room.totalArea / room.area from status=0 events.
+        totalArea = cumulative cleaned area across all passes (status=0 only).
+        area = full room size (constant across events for the same rid).
+        Values are clamped to [0.0, 1.0].
+
+        Returns None when timeline is absent or no status=0 room events.
+        """
+        latest = self.latest()
+        if latest is None:
+            return None
+        timeline = latest.get("timeline")
+        if not isinstance(timeline, dict):
+            return None
+        fin_events = timeline.get("finEvents") or []
+        coverage: dict[str, float] = {}
+        for ev in fin_events:
+            if ev.get("type") != "room":
+                continue
+            room = ev.get("room", {})
+            if room.get("status") != 0:
+                continue
+            rid = str(room.get("rid", ""))
+            total_area = room.get("totalArea")
+            area = room.get("area")
+            if not rid or total_area is None or not area:
+                continue
+            try:
+                fraction = min(1.0, max(0.0, float(total_area) / float(area)))
+            except (ZeroDivisionError, TypeError, ValueError):
+                continue
+            coverage[rid] = fraction
+        if not coverage:
+            return None
+        return {region_map.get(rid, rid): frac for rid, frac in coverage.items()}
 
     def presence_windows(self, days: int) -> list[MissionWindow]:
         """Return gaps between missions as potential 'all-away' windows.

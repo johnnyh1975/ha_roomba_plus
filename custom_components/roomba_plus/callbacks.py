@@ -141,6 +141,28 @@ async def async_record_mission(
     runtime = reported.get("runtimeStats", {})
     bbrun_hr = bbrun.get("hr") or runtime.get("hr") or 0
 
+    # F8b — capture error context at mission end
+    # pose is None for firmware 3.20+ and 600-series; absent when null.
+    error_position_mm: dict | None = None
+    if error_code:
+        pose_point = reported.get("pose", {}).get("point") if reported.get("pose") else None
+        if pose_point:
+            try:
+                error_position_mm = {
+                    "x": float(pose_point.get("x", 0)),
+                    "y": float(pose_point.get("y", 0)),
+                }
+            except (TypeError, ValueError):
+                pass
+
+    phase_at_error: str | None = phase if error_code else None
+
+    self_recovered: bool | None = (
+        True  if result == "stuck_and_resumed"   else
+        False if result == "stuck_and_abandoned" else
+        None
+    )
+
     record: dict[str, Any] = {
         "id": f"m_{int(started_at.timestamp())}",
         "started_at": started_at.isoformat(),
@@ -153,6 +175,10 @@ async def async_record_mission(
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
         "recharge_min": recharge_min if recharge_min > 0 else None,  # F4e
+        # F8b — error context fields (None when no error or no pose data)
+        "error_position_mm": error_position_mm,
+        "phase_at_error":    phase_at_error,
+        "self_recovered":    self_recovered,
     }
 
     await data.mission_store.async_append(record)

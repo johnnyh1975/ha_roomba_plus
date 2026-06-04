@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
     from .geometry_store import GeometryStore
+    from .grid_store import GridStore                # v2.2.0 F9
     from .maintenance_store import MaintenanceStore
     from .mission_store import MissionStore          # v1.8.0 L1
     from .map_renderer import MapRenderer
@@ -72,6 +73,11 @@ class RoombaData:
     dirt_density_rising: bool = False
     recharge_fraction_value: float | None = None
     battery_retention_value: float | None = None
+
+    # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
+    grid_store: GridStore | None = None
+    # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
+    floor_label: str = ""
 
     def roomba_reported_state(self) -> dict[str, Any]:
         """Return the reported state dict from master_state."""

@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.1.4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.2.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -9,7 +9,7 @@
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
 **Why Roomba+?**
-- **100+ entities** (91 sensors, 13 binary sensors, 18 controls, 1 map image) vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
+- **100+ entities** (91 sensors, 15 binary sensors, 19 controls, 2 map images) vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
 - **Zero cloud dependency** — all robot control goes through local MQTT; cloud credentials are optional and only used for map sync and history enrichment
 - **Automation-ready** — blocking sensor gate, presence-aware scheduling, device triggers, and named HA actions make Roomba a first-class citizen in your automations
 
@@ -18,6 +18,27 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 ---
 
 ## What's new
+
+### v2.2.0 — June 2026
+
+**Grid + Household. Obstacle intelligence, sequential cleaning, and card fixes.**
+
+- **Coverage heatmap** (`image.{name}_coverage_map`) — EMA-weighted occupancy grid renders as a PNG heatmap after each mission. Dark blue = frequently visited, red overlay = stuck hotspots. Requires pose capability (900-series and Smart Map robots). EMA diagnostics (`decay`, `visit_increment`, `cell_count`, `stuck_event_count`, bounding box) exposed as attributes for the v2.2 validation period.
+- **`format=hazards` REST endpoint** — now returns real GridStore stuck hotspots and cloud-detected obstacle centroids (previously always `[]`). Used by the companion card for obstacle pin overlays.
+- **Household REST endpoint** (`GET /api/roomba_plus/household?days=28`) — aggregates all Roomba+ robots in one request. Per-robot breakdown, optional per-floor grouping (configure floor label in Settings → Configure → Settings), combined totals.
+- **Floor label** — assign a floor name to each robot (e.g. "Ground Floor"). Used by the household endpoint and surfaced as a config option.
+- **UMF obstacle seeding** — on first setup, cloud-detected obstacle zones from the iRobot Smart Map are seeded into the GridStore so the hazards endpoint is populated immediately, before local stuck events accumulate.
+- **CR4 timeline attributes** — for SMART robots with cloud credentials: `last_cleaned_rooms`, `planned_room_order`, `mission_destination`, `room_coverage` (per-room fraction) are now populated as vacuum entity attributes from the mission timeline field.
+- **CR3 coordinator fallback** — when the cloud is temporarily unreachable, cloud-enriched MissionStore records are served as raw_records so CloudRawSensor entities stay available across cloud outages.
+- **`clean_sequence` service** — start robot B automatically when robot A finishes its mission. One-shot listener with configurable delay (0–60 min) and optional completion-required guard. Useful for multi-floor setups.
+- **`clean_delay_min` option** — configurable delay (0–30 min) before presence-triggered clean starts, settable per robot in Presence-Aware Scheduling options.
+- **F8b error context** — `error_position_mm`, `phase_at_error`, and `self_recovered` written into MissionStore records at mission end for future hazard-location analytics.
+- **`query_by_error()` API** — new MissionStore method for Repair Issues that need to detect recurring errors in the same zone.
+- **`binary_sensor.{name}_mission_active`** — ON for the full mission arc including mid-mission recharge pauses. Distinct from `mid_mission_recharge`. Fixes card v1.4 mission-completion detection (C1).
+- **`select.{name}_carpet_boost_select`** — interactive carpet boost mode select for 980 and compatible robots. Wraps `vacuum.set_fan_speed`; replaces the read-only `carpet_boost_mode` sensor for card control (P2).
+- **Entity ID fix (DE/FR/ES/IT/NL/PT installs)** — `recent_area_30d` and `recent_time_30d` sensors were registered with language-derived slugs on non-English fresh installs (e.g. `sensor.*_gereinigte_flache_30_t`). The v12 config entry migration renames these to the correct English suffixes automatically on upgrade.
+- **Amendment 8f** — `dockedAtStart`, `missionId`, `pauseM`, `cmd` now merged from cloud records into MissionStore alongside the existing analytics fields.
+- **WiFi histogram fix** — `recent_wifi_floor` and `recent_wifi_stability` sensors were computing incorrect values by treating the `wlBars` histogram as a time-series. Both now use correct weighted bucket statistics.
 
 ### v2.1.4 — June 2026
 Entity names on **all non-English HA installations** now correctly display and
@@ -143,6 +164,7 @@ Each robot is set up as a separate integration entry with its own device, entiti
 | Control | Type | Notes |
 |---|---|---|
 | Cleaning passes | Select | Auto / One pass / Two passes |
+| Carpet boost | Select | Automatic / Eco / Performance (980 and compatible) |
 | Edge cleaning | Switch | |
 | Always finish | Switch | Keep cleaning even when bin is full (i7+/s9+/j7+ with Clean Base) |
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
@@ -159,6 +181,7 @@ Each robot is set up as a separate integration entry with its own device, entiti
 | `roomba_plus.reset_brush` | All robots | Record brush replacement |
 | `roomba_plus.reset_battery` | All robots | Record battery replacement |
 | `roomba_plus.reset_pad` | Braava | Record cleaning pad replacement |
+| `roomba_plus.clean_sequence` | All robots | Start robot B when robot A finishes |
 
 **Device triggers** for automations:
 
@@ -273,6 +296,10 @@ show_name: false
 show_state: false
 ```
 
+#### Coverage map (v2.2+)
+
+`image.{name}_coverage_map` — EMA-weighted occupancy heatmap. Updated at each mission end. Attributes include `cell_count`, `stuck_event_count`, `decay`, `visit_increment`, and bounding box. Gated behind pose capability — registered automatically when `image.{name}_cleaning_map` would also be registered.
+
 **Recommended: xiaomi-vacuum-map-card (HACS)**
 
 ```yaml
@@ -376,6 +403,7 @@ Zone attribution by robot type: 600-series returns result and duration only; 900
 | `mission_recharge_minutes` | Minutes until robot resumes after a mid-mission dock. Decrements live every 60 seconds — no MQTT push required. |
 | `mission_expire_minutes` | Minutes until the mission expires. Same live countdown. |
 | `mission_id` | Stable string across all recharge cycles of one mission (opt-in) |
+| `binary_sensor.mission_active` | ON for the entire mission arc — run, hmMidMsn, mid-mission recharge, hmPostMsn. OFF when cycle returns to `none`. Distinct from `mid_mission_recharge` which is ON only during the charge phase. |
 | `binary_sensor.mid_mission_recharge` | ON when `phase=charge` and `cycle≠none` — distinguishes mid-mission recharge from user-pause and from completed charging |
 
 #### Error Intelligence
@@ -470,7 +498,9 @@ GET /api/roomba_plus/{entry_id}/mission_history
 
 `format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`.
 
-`format=hazards` — obstacle pin array. Returns `[]` until v2.2 (GridStore not yet implemented). Card developers can probe this endpoint now without receiving a 400 error.
+`format=hazards` — obstacle pin array. Returns GridStore stuck hotspots and cloud-detected obstacle centroids as of v2.2. Each entry has `gx`, `gy`, `x_mm`, `y_mm`, `stuck_count`, `bearing_deg`, `distance_mm`, `source` (`stuck_events` or `robot_learned`). `room_name` is populated in v2.3+ (UmfAligner).
+
+`GET /api/roomba_plus/household?days=28` — household aggregate. Returns `period_days`, `total` (missions/completed/completion_pct/area_sqft), `robots[]` (per-entry breakdown with `floor` label), and `floors[]` (grouped by floor label when any robot has a floor label set).
 
 The `entry_id` is found in **Settings → Devices → Roomba+ → ⋮ → System information**.
 
@@ -676,7 +706,7 @@ automation:
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
-| Sensors | 13 | 73 local + 18 cloud |
+| Sensors | 13 | 73 local + 20 cloud |
 | Cleaning map | ❌ | ✅ |
 | Map persists across restarts | ❌ | ✅ |
 | Zone detection (900-series) | ❌ | ✅ |
@@ -714,6 +744,13 @@ automation:
 | Sleep / power off (980, experimental) | ❌ | ✅ |
 | Carpet Boost (980) | ❌ | ✅ |
 | Extended diagnostics download | ❌ | ✅ |
+| Coverage heatmap (GridStore) | ❌ | ✅ |
+| Household REST endpoint | ❌ | ✅ |
+| Obstacle hazards REST endpoint | ❌ | ✅ |
+| Mission-active binary sensor | ❌ | ✅ |
+| Carpet boost select entity | ❌ | ✅ |
+| Sequential cleaning (clean_sequence) | ❌ | ✅ |
+| CR4 room coverage attributes | ❌ | ✅ |
 | German translation | ✅ | ✅ |
 
 ---

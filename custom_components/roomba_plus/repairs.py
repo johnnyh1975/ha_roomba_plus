@@ -569,3 +569,42 @@ async def async_enrich_drift_issue(
             "magnitude_cm": str(magnitude_cm),
         },
     )
+
+
+async def async_check_observed_zones(
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+) -> None:
+    """F22a — fire Repair Issue when cloud has obstacle zones but GridStore is empty.
+
+    Prompts the user to run cleaning missions so GridStore can accumulate local
+    stuck-event data and confirm the cloud-detected obstacles. Issue is dismissed
+    when stuck events exist in GridStore (local data has caught up).
+
+    Does not re-fire if the issue is already present or dismissed.
+    """
+    data = entry.runtime_data
+
+    if data.cloud_coordinator is None:
+        return
+    if not data.cloud_coordinator.observed_zone_centroids:
+        return  # no observed zones in UMF
+    if data.grid_store is None:
+        return
+
+    if data.grid_store.stuck_event_count > 0:
+        # Local data exists — dismiss the issue if present
+        ir.async_delete_issue(hass, DOMAIN, "observed_zones_detected")
+        return
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "observed_zones_detected",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="observed_zones_detected",
+        translation_placeholders={
+            "zone_count": str(len(data.cloud_coordinator.observed_zone_centroids)),
+        },
+    )

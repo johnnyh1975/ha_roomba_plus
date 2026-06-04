@@ -99,7 +99,8 @@
           "delay": "Wiederverbindungsverzögerung (Sekunden)",
           "map_enabled": "Live-Karte aktivieren",
           "map_size_px": "Kartengröße (Pixel)",
-          "map_scale_mm_per_px": "Maßstab (mm/Pixel)"
+          "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
+          "floor_label": "Etage (z. B. Erdgeschoss)"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -161,7 +162,8 @@
           "presence_scheduling_enabled": "Anwesenheitsbasierte Planung aktivieren",
           "presence_entities": "Verfolgte Personen",
           "presence_mode": "Modus",
-          "away_delay_min": "Verzögerung nach dem Verlassen (Minuten)"
+          "away_delay_min": "Verzögerung nach dem Verlassen (Minuten)",
+          "clean_delay_min": "Verzögerung vor Start des zweiten Roboters"
         }
       }
     },
@@ -527,6 +529,9 @@
       },
       "mid_mission_recharge": {
         "name": "Zwischenladung aktiv"
+      },
+      "mission_active": {
+        "name": "Mission aktiv"
       }
     },
     "button": {
@@ -612,11 +617,22 @@
           "2": "Mittel",
           "3": "Hoch"
         }
+      },
+      "carpet_boost_select": {
+        "name": "Teppich-Boost",
+        "state": {
+          "Automatic": "Automatisch",
+          "Eco": "Eco",
+          "Performance": "Leistung"
+        }
       }
     },
     "image": {
       "map": {
         "name": "Reinigungskarte"
+      },
+      "coverage_map": {
+        "name": "Bedeckungskarte"
       }
     }
   },
@@ -692,6 +708,10 @@
           }
         }
       }
+    },
+    "observed_zones_detected": {
+      "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
+      "description": "Ihre iRobot-Cloud-Karte enthält {zone_count} roboter-erkannte Hinderniszone(n). Führen Sie einige Reinigungsmissionen durch, damit Roomba+ diese lokal bestätigen kann."
     }
   },
   "device_automation": {

@@ -96,7 +96,7 @@ async def async_setup_entry(
     else:
         constructor = RoombaVacuum
 
-    async_add_entities([constructor(roomba, blid)])
+    async_add_entities([constructor(roomba, blid, config_entry)])
 
 
 class IRobotVacuum(IRobotEntity, StateVacuumEntity):
@@ -114,9 +114,10 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     _attr_supported_features = SUPPORT_IROBOT
     _attr_available = True  # Always available so setup doesn't fail
 
-    def __init__(self, roomba: Any, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise with roombapy Roomba object and BLID."""
         super().__init__(roomba, blid)
+        self._config_entry = config_entry
         # Vacuum is the primary entity — its unique_id IS the device identifier.
         self._attr_unique_id = self.robot_unique_id
         self._cap_position: bool = (
@@ -203,6 +204,27 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         expire_m = mission.get("expireM", 0)
         attrs["expire_minutes_remaining"] = expire_m if expire_m else None
         attrs["mission_id"] = mission.get("missionId") or None
+
+        # v2.2.0 CR4 — timeline-derived mission attributes (SMART robots only)
+        # Populated when the cloud coordinator has region data and the most
+        # recent MissionStore record contains a merged timeline field.
+        if (
+            self._config_entry is not None
+            and self._config_entry.runtime_data.has_cloud
+            and self._config_entry.runtime_data.mission_store is not None
+            and self._config_entry.runtime_data.cloud_coordinator is not None
+        ):
+            _data = self._config_entry.runtime_data
+            region_map = {
+                r["id"]: r["name"]
+                for r in _data.cloud_coordinator.regions
+                if r.get("id")
+            }
+            if region_map:
+                attrs["last_cleaned_rooms"]  = _data.mission_store.latest_cleaned_rooms(region_map)
+                attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map)
+                attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map)
+                attrs["room_coverage"]       = _data.mission_store.latest_room_coverage(region_map)
 
         return attrs
 
@@ -427,9 +449,9 @@ class BraavaJet(IRobotVacuum):
 
     _attr_supported_features = SUPPORT_BRAAVA
 
-    def __init__(self, roomba: Any, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise and build the fan speed list."""
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._attr_fan_speed_list = [
             f"{behaviour}-{spray}"
             for behaviour in BRAAVA_MOP_BEHAVIORS

@@ -18,9 +18,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
-from .const import CLEAN_MODE_LABELS, DOMAIN
+from .const import (
+    CLEAN_MODE_LABELS,
+    DOMAIN,
+    FAN_SPEED_AUTOMATIC,
+    FAN_SPEED_ECO,
+    FAN_SPEED_PERFORMANCE,
+    FAN_SPEEDS,
+    has_carpet_boost,
+    has_smart_map,
+)
 from .entity import IRobotEntity
-from .const import has_smart_map
 from .models import MapCapability, RoombaConfigEntry
 
 def resolve_zone_name(
@@ -82,6 +90,10 @@ async def async_setup_entry(
     # Cleaning passes: present when noAutoPasses is in state
     if "noAutoPasses" in state:
         entities.append(CleaningPassesSelect(roomba, blid))
+
+    # v2.2.0 — Carpet boost select (card fix P2)
+    if has_carpet_boost(state):
+        entities.append(CarpetBoostSelect(roomba, blid))
 
     # Zone select: only for EPHEMERAL (900-series with detected zones)
     if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
@@ -812,3 +824,63 @@ class ReusablePadWetnessSelect(IRobotEntity, SelectEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "padWetness" in new_state
+
+
+class CarpetBoostSelect(IRobotEntity, SelectEntity):
+    """Carpet boost mode select — wraps vacuum.set_fan_speed for card control.
+
+    Card fix P2 — select.*_carpet_boost_select.
+
+    Reads carpet boost state from carpetBoost/vacHigh flags (same logic as the
+    carpet_boost_mode sensor). Writes by calling vacuum.set_fan_speed via the
+    HA service layer — keeping all delta-command logic in RoombaVacuumCarpetBoost.
+
+    Gate: registered only when has_carpet_boost(state) is True.
+    """
+
+    _attr_translation_key = "carpet_boost_select"
+    _attr_options = FAN_SPEEDS          # ["Automatic", "Eco", "Performance"]
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_carpet_boost_select"
+
+    @property
+    def current_option(self) -> str | None:
+        carpet_boost = self.vacuum_state.get("carpetBoost")
+        vac_high     = self.vacuum_state.get("vacHigh")
+        if carpet_boost is None or vac_high is None:
+            return None
+        if carpet_boost:
+            return FAN_SPEED_AUTOMATIC
+        if vac_high:
+            return FAN_SPEED_PERFORMANCE
+        return FAN_SPEED_ECO
+
+    async def async_select_option(self, option: str) -> None:
+        """Set carpet boost mode via vacuum.set_fan_speed service."""
+        if option not in FAN_SPEEDS:
+            import logging
+            logging.getLogger(__name__).error(
+                "CarpetBoostSelect: unknown option %r", option
+            )
+            return
+        from homeassistant.helpers import entity_registry as er
+        reg = er.async_get(self.hass)
+        # Find the vacuum entity for this device (unique_id == blid)
+        vac_entry = reg.async_get_entity_id("vacuum", "roomba_plus", self._blid)
+        if vac_entry is None:
+            import logging
+            logging.getLogger(__name__).error(
+                "CarpetBoostSelect: no vacuum entity found for blid=%s", self._blid
+            )
+            return
+        await self.hass.services.async_call(
+            "vacuum", "set_fan_speed",
+            {"entity_id": vac_entry, "fan_speed": option},
+            blocking=False,
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "carpetBoost" in new_state or "vacHigh" in new_state

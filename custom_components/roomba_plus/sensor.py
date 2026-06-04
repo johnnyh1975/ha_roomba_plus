@@ -465,33 +465,51 @@ def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
 # ── F1 — WiFi floor / stability (CloudRawSensor value functions) ──────────────
 
 def _raw_wifi_floor(records: list[dict]) -> StateType:
-    """Return minimum wlBars from the most recent mission with WiFi data.
+    """Return the weakest WiFi signal bucket present in the most recent mission.
 
-    F1 -- lowest signal strength seen during the mission; automatable threshold
-    for dead-zone detection (alert when < 50%).
+    F1 -- wlBars is a 5-element histogram, NOT a time-series.
+    Index 0 = weakest signal bucket, index 4 = strongest.
+    Floor = lowest index with a non-zero count (worst signal actually seen).
+
+    Amendment 8d: corrects the previous min(bars) implementation which
+    returned the minimum bucket count, not the weakest signal bucket.
     """
-    import statistics as _statistics
     for r in records:
         bars = r.get("wlBars")
-        if isinstance(bars, list) and bars:
-            return min(bars)
+        if isinstance(bars, list) and len(bars) == 5 and any(bars):
+            for i, count in enumerate(bars):
+                if count > 0:
+                    return i     # 0 = worst present, 4 = best present
     return None
 
 
 def _raw_wifi_stability(records: list[dict]) -> StateType:
-    """Return mean stdev of wlBars across the API window.
+    """Return mean weighted standard deviation of WiFi signal across the API window.
 
-    F1 -- high variance indicates a dead zone somewhere in the home.
-    Requires at least 2 bars per mission to compute stdev.
-    Returns None when no records have sufficient WiFi data.
+    F1 -- wlBars is a 5-element histogram (index = signal bucket, value = count).
+    Computes weighted mean bucket index and its weighted stdev per mission.
+    High stdev = readings spread across multiple signal buckets (unstable).
+    Low stdev = readings concentrated in one bucket (stable).
+    Requires at least 3 records with valid WiFi data.
+
+    Amendment 8d: corrects the previous stdev(bars) which measured variance
+    of bucket counts, not variance of signal strength.
     """
-    import statistics as _statistics
-    stdevs = [
-        _statistics.stdev(r["wlBars"])
-        for r in records
-        if isinstance(r.get("wlBars"), list) and len(r["wlBars"]) >= 2
-    ]
-    return round(sum(stdevs) / len(stdevs), 1) if stdevs else None
+    stdevs = []
+    for r in records:
+        bars = r.get("wlBars")
+        if not isinstance(bars, list) or len(bars) != 5:
+            continue
+        total = sum(bars)
+        if total == 0:
+            continue
+        weights = [b / total for b in bars]
+        mean = sum(i * w for i, w in enumerate(weights))
+        variance = sum(w * (i - mean) ** 2 for i, w in enumerate(weights))
+        stdevs.append(variance ** 0.5)
+    if len(stdevs) < 3:
+        return None
+    return round(sum(stdevs) / len(stdevs), 2)
 
 
 # ── F2 — Mop clean mode (RoombaSensor value function) ────────────────────────
@@ -1866,10 +1884,10 @@ def _mh_total_missions(history: dict[str, Any]) -> StateType:
 CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     CloudHistorySensorDescription(
         key="recent_area_30d",
-        # No translation_key: name= drives entity_id slug, keeping it locale-independent.
-        # With translation_key set, HA uses the translated name for entity_id on first
-        # registration, producing German slugs on DE installs. Using name= alone locks
-        # the entity_id to an English slug permanently.
+        translation_key="recent_area_30d",  # Locks entity_id slug to the key string,
+        # independent of locale. translation_key uses the key value literally as the
+        # slug — NOT the translated name string. This fixes fresh-install divergence
+        # from migrated installs (card audit addendum, June 2026).
         name="Recent cleaned area (30 d)",
         native_unit_of_measurement="m²",
         device_class=SensorDeviceClass.AREA,
@@ -1879,7 +1897,7 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     ),
     CloudHistorySensorDescription(
         key="recent_time_30d",
-        # No translation_key — same reason as recent_area_30d above.
+        translation_key="recent_time_30d",  # Same fix — see recent_area_30d above.
         name="Recent cleaning time (30 d)",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         device_class=SensorDeviceClass.DURATION,

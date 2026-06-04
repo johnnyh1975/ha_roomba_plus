@@ -21,6 +21,7 @@ from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeo
 from .const import (
     CONF_BLID,
     CONF_CONTINUOUS,
+    CONF_FLOOR,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -91,7 +92,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     and full manual fallback with explicit password entry.
     """
 
-    VERSION = 11
+    VERSION = 12
 
     def __init__(self) -> None:
         """Initialise the flow."""
@@ -477,6 +478,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         CONF_MAP_SCALE,
                         default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
                     ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
+                    vol.Optional(
+                        CONF_FLOOR,
+                        default=options.get(CONF_FLOOR, ""),
+                    ): str,
                 }
             ),
         )
@@ -551,10 +556,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         from homeassistant.helpers import selector
         from .const import (
             CONF_AWAY_DELAY_MIN,
+            CONF_CLEAN_DELAY_MIN,
             CONF_PRESENCE_ENTITIES,
             CONF_PRESENCE_MODE,
             CONF_PRESENCE_SCHEDULING_ENABLED,
             DEFAULT_AWAY_DELAY_MIN,
+            DEFAULT_CLEAN_DELAY_MIN,
             DEFAULT_PRESENCE_MODE,
         )
 
@@ -569,6 +576,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             )
             updated[CONF_AWAY_DELAY_MIN] = int(
                 user_input.get(CONF_AWAY_DELAY_MIN, DEFAULT_AWAY_DELAY_MIN)
+            )
+            updated[CONF_CLEAN_DELAY_MIN] = int(
+                user_input.get(CONF_CLEAN_DELAY_MIN, DEFAULT_CLEAN_DELAY_MIN)
             )
             return self.async_create_entry(title="", data=updated)
 
@@ -604,6 +614,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0, max=60, step=1,
+                        unit_of_measurement="min",
+                        mode=selector.NumberSelectorMode.SLIDER,
+                    )
+                ),
+                vol.Optional(
+                    CONF_CLEAN_DELAY_MIN,
+                    default=int(current.get(CONF_CLEAN_DELAY_MIN, DEFAULT_CLEAN_DELAY_MIN)),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=30, step=1,
                         unit_of_measurement="min",
                         mode=selector.NumberSelectorMode.SLIDER,
                     )

@@ -33,6 +33,7 @@ from .const import (
     CONF_SMART_ZONE_DATA,
     DOMAIN,
     SERVICE_CLEAN_ROOM,
+    SERVICE_CLEAN_SEQUENCE,
     SERVICE_RESET_BATTERY,
     SERVICE_RESET_BRUSH,
     SERVICE_RESET_FILTER,
@@ -441,6 +442,102 @@ async def _handle_reset_service(
         _LOGGER.info("reset_%s: executed for %s at %dh", part, eid, current_hr)
 
 
+# ── F10d — clean_sequence ─────────────────────────────────────────────────────
+
+_CLEAN_SEQUENCE_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_id,
+    vol.Required("target_entity_id"): cv.entity_id,
+    vol.Optional("require_completed", default=True): bool,
+    vol.Optional("delay_minutes", default=0): vol.All(int, vol.Range(min=0, max=60)),
+})
+
+
+async def async_handle_clean_sequence(
+    hass: HomeAssistant, call: ServiceCall
+) -> None:
+    """F10d — start robot B when robot A mission ends.
+
+    Subscribes a one-shot state change listener on robot A's vacuum entity.
+    When A transitions to 'docked' (completed mission), optionally waits
+    delay_minutes, then calls vacuum.start on robot B.
+
+    The listener removes itself after firing once regardless of outcome.
+
+    Args:
+        entity_id:         Trigger robot — must finish first.
+        target_entity_id:  Target robot — started after trigger.
+        require_completed: When True (default), robot B starts only if A docked.
+                           When False, B starts even if A is idle/error.
+        delay_minutes:     Wait this many minutes after A docks before starting B.
+    """
+    from homeassistant.core import callback
+    from homeassistant.helpers import entity_registry as er
+
+    trigger_entity = call.data["entity_id"]
+    target_entity  = call.data["target_entity_id"]
+    require_completed = call.data.get("require_completed", True)
+    delay_minutes     = int(call.data.get("delay_minutes", 0))
+
+    # Validate both entities belong to roomba_plus vacuum platform
+    reg = er.async_get(hass)
+    for eid in (trigger_entity, target_entity):
+        entry = reg.async_get(eid)
+        if entry is None or entry.platform != DOMAIN or entry.domain != "vacuum":
+            raise vol.Invalid(
+                f"Entity {eid} is not a roomba_plus vacuum entity"
+            )
+
+    _LOGGER.debug(
+        "clean_sequence: registered — trigger=%s target=%s "
+        "require_completed=%s delay=%dmin",
+        trigger_entity, target_entity, require_completed, delay_minutes,
+    )
+
+    unsub_ref: list = []
+
+    @callback
+    def _on_trigger_state_change(
+        entity_id: str, old_state: Any, new_state: Any
+    ) -> None:
+        if new_state is None:
+            return
+        state_str = new_state.state
+        should_fire = (
+            state_str == "docked"
+            or (state_str in ("idle", "error") and not require_completed)
+        )
+        if should_fire:
+            if delay_minutes > 0:
+                hass.async_create_task(
+                    _delayed_start(delay_minutes),
+                    name=f"roomba_plus_clean_sequence_{target_entity}",
+                )
+            else:
+                hass.async_create_task(
+                    hass.services.async_call(
+                        "vacuum", "start", {"entity_id": target_entity}
+                    ),
+                    name=f"roomba_plus_clean_sequence_imm_{target_entity}",
+                )
+            if unsub_ref:
+                unsub_ref[0]()
+
+    async def _delayed_start(delay_min: int) -> None:
+        import asyncio as _asyncio
+        await _asyncio.sleep(delay_min * 60)
+        await hass.services.async_call(
+            "vacuum", "start", {"entity_id": target_entity}
+        )
+        _LOGGER.info(
+            "clean_sequence: started %s after %dmin delay (trigger: %s)",
+            target_entity, delay_min, trigger_entity,
+        )
+
+    from homeassistant.helpers.event import async_track_state_change
+    unsub = async_track_state_change(hass, trigger_entity, _on_trigger_state_change)
+    unsub_ref.append(unsub)
+
+
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def async_register_services(hass: HomeAssistant) -> None:
@@ -498,12 +595,23 @@ def async_register_services(hass: HomeAssistant) -> None:
                 schema=_RESET_SCHEMA,
             )
 
+    # ── F10d — clean_sequence ─────────────────────────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_SEQUENCE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAN_SEQUENCE,
+            async_handle_clean_sequence,
+            schema=_CLEAN_SEQUENCE_SCHEMA,
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_SEQUENCE)
+
 
 def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
     for svc in (
         SERVICE_CLEAN_ROOM,
         SERVICE_SMART_START,
+        SERVICE_CLEAN_SEQUENCE,
         "reset_filter",
         "reset_brush",
         "reset_battery",

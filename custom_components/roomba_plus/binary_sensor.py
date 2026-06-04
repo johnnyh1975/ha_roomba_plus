@@ -94,6 +94,9 @@ async def async_setup_entry(
     # v1.9.3 — Mid-mission recharge sensor (all robots)
     entities.append(RoombaMidMissionRecharge(roomba, blid))
 
+    # v2.2.0 — Mission active sensor (all robots) — card fix C1
+    entities.append(RoombaMissionActive(roomba, blid))
+
     async_add_entities(entities)
 
 
@@ -593,6 +596,50 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
             status.get("phase") == "charge"
             and status.get("cycle", "none") != "none"
         )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+
+class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
+    """ON whenever a mission is in progress — including mid-mission recharge.
+
+    Card fix C1 — binary_sensor.*_mission_active.
+
+    ON when cycle != "none" AND phase is not in the final completion set.
+    This covers the full mission arc from start through any mid-mission
+    recharge pauses to final dock.
+
+    Distinction from RoombaMidMissionRecharge:
+      - MidMissionRecharge: ON only when phase=="charge" AND cycle!="none"
+      - MissionActive:      ON for the entire mission (run, hmMidMsn, charge,
+                            hmPostMsn, evac...) until cycle returns to "none"
+
+    phase=="charge" with cycle!="none" = mid-mission recharge → still ON.
+    phase=="charge" with cycle=="none" = final dock after mission → OFF.
+    """
+
+    _attr_translation_key = "mission_active"
+    _attr_name = "Mission active"           # G6: locale-independent entity_id slug
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    _FINAL_PHASES: frozenset[str] = frozenset({"stop", "cancelled", ""})
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_mission_active"
+
+    @property
+    def is_on(self) -> bool:
+        status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
+        cycle = status.get("cycle", "none")
+        if cycle == "none":
+            return False
+        phase = status.get("phase", "")
+        # charge phase with cycle!="none" = mid-mission recharge → still ON
+        # charge phase with cycle=="none"  = caught by the guard above → OFF
+        return phase not in self._FINAL_PHASES or phase == "charge"
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state

@@ -103,7 +103,8 @@
           "delay": "Herverbindingsvertraging (seconden)",
           "map_enabled": "Live kaart inschakelen",
           "map_size_px": "Kaartgrootte (pixels)",
-          "map_scale_mm_per_px": "Schaal (mm/pixel)"
+          "map_scale_mm_per_px": "Schaal (mm/pixel)",
+          "floor_label": "Verdieping (bijv. Begane grond)"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -165,7 +166,8 @@
           "presence_scheduling_enabled": "Aanwezigheidsgestuurde planning inschakelen",
           "presence_entities": "Gevolgde personen",
           "presence_mode": "Modus",
-          "away_delay_min": "Vertraging na vertrek (minuten)"
+          "away_delay_min": "Vertraging na vertrek (minuten)",
+          "clean_delay_min": "Vertraging voor start tweede robot"
         }
       }
     },
@@ -531,6 +533,9 @@
       },
       "mid_mission_recharge": {
         "name": "Tussenladen actief"
+      },
+      "mission_active": {
+        "name": "Missie actief"
       }
     },
     "button": {
@@ -616,11 +621,22 @@
           "2": "Gemiddeld",
           "3": "Hoog"
         }
+      },
+      "carpet_boost_select": {
+        "name": "Tapijt boost",
+        "state": {
+          "Automatic": "Automatisch",
+          "Eco": "Eco",
+          "Performance": "Prestaties"
+        }
       }
     },
     "image": {
       "map": {
         "name": "Reinigingskaart"
+      },
+      "coverage_map": {
+        "name": "Dekkingskaart"
       }
     }
   },
@@ -696,6 +712,10 @@
     "map_drift_detected": {
       "title": "Smart Map-drift gedetecteerd",
       "description": "Drift van {magnitude_cm} cm (koers {bearing}°). Controleer het dock en karteer opnieuw."
+    },
+    "observed_zones_detected": {
+      "title": "Door robot gedetecteerde obstakels in cloudkaart",
+      "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
     }
   },
   "device_automation": {

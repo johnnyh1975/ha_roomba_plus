@@ -100,6 +100,15 @@ SERVICE_SMART_START: Final = "smart_start"
 ATTR_ROOMS: Final = "rooms"
 ATTR_OVERRIDE_BLOCKING: Final = "override_blocking"
 
+# ── v2.2.0 — new options keys ─────────────────────────────────────────────────
+CONF_FLOOR: Final = "floor_label"          # str — user-assigned floor name for household view
+CONF_CLEAN_DELAY_MIN: Final = "clean_delay_min"   # int — delay before second robot start (F10c)
+
+DEFAULT_CLEAN_DELAY_MIN: Final = 0         # minutes
+
+# ── v2.2.0 — new service ──────────────────────────────────────────────────────
+SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when robot A finishes
+
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width
 

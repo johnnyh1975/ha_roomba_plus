@@ -35,6 +35,7 @@ from .const import (
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
     CONF_CONTINUOUS,
+    CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
     CONF_MAP_ENABLED,
@@ -53,7 +54,8 @@ from .const import (
     has_pose,
     has_smart_map,
 )
-from .api_views import MissionHistoryView
+from .api_views import MissionHistoryView, HouseholdSummaryView
+from .grid_store import GridStore
 from .mission_store import MissionStore
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
@@ -857,6 +859,153 @@ async def async_migrate_entry(
         )
         current = 11
 
+    if current == 11:
+        # v11 → v12 (v2.2.0): add floor_label to options.
+        #
+        # floor_label (CONF_FLOOR) — user-assigned floor name for the household
+        # REST endpoint (/api/roomba_plus/household). Defaults to empty string
+        # meaning "no floor assigned". Does not create any entity.
+        #
+        # GridStore uses a separate hass.storage key (roomba_plus_grid_{id}),
+        # so no options migration is needed for it.
+        #
+        # Entity rename: recent_area_30d and recent_time_30d were registered
+        # without translation_key in v2.1.x, causing HA to use the translated
+        # name string as the entity_id slug on fresh installs.
+        #
+        # Example on DE installation:
+        #   sensor.*_gereinigte_flache_30_t  → sensor.*_recent_area_30d
+        #   sensor.*_reinigungszeit_30_t     → sensor.*_recent_time_30d
+        #
+        # We find them by unique_id (always "*_cloud_recent_area_30d" / "*_cloud_recent_time_30d")
+        # which is locale-independent — then rename the entity_id if it
+        # doesn't already end with the correct suffix.
+        #
+        # Device prefix derivation: for each wrong entity, find any sibling
+        # Roomba+ sensor entity for the same blid whose entity_id ends with
+        # its unique_id's trailing key. Use that to compute the device prefix.
+        from homeassistant.helpers import entity_registry as er
+
+        entity_reg = er.async_get(hass)
+        slug_renamed = 0
+
+        # Map unique_id suffix → correct entity_id suffix
+        _UID_SUFFIX_TO_EID_SUFFIX: dict[str, str] = {
+            "_cloud_recent_area_30d": "_recent_area_30d",
+            "_cloud_recent_time_30d": "_recent_time_30d",
+        }
+
+        # Build a blid → list[entity] map for all roomba_plus sensors
+        blid_entities: dict[str, list] = {}
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            # unique_id format is "{blid}_cloud_{key}" or "{blid}_{key}"
+            # We can extract blid up to the first "_cloud_" or "_{key}"
+            # For our purposes just group by first 32 chars (blid is typically 32 hex)
+            for uid_suffix in _UID_SUFFIX_TO_EID_SUFFIX:
+                if uid.endswith(uid_suffix):
+                    blid_key = uid[: -len(uid_suffix)]
+                    blid_entities.setdefault(blid_key, []).append(entry_er)
+                    break
+            else:
+                # Add to lookup by blid prefix for cross-reference
+                # Extract blid as longest known-prefix part
+                for uid_suffix in _UID_SUFFIX_TO_EID_SUFFIX:
+                    pass  # just to have blid_entities populated with all entities below
+                # We'll populate a separate full map
+                pass
+
+        # Full map: all roomba_plus entities grouped by whatever precedes "_cloud_" or first "_"
+        all_by_blid: dict[str, list] = {}
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            # Find the blid — try "_cloud_" separator first
+            if "_cloud_" in uid:
+                blid_key = uid.split("_cloud_")[0]
+            else:
+                continue
+            all_by_blid.setdefault(blid_key, []).append(entry_er)
+
+        for blid_key, wrong_entries in blid_entities.items():
+            # Find siblings for device prefix derivation
+            siblings = all_by_blid.get(blid_key, [])
+
+            for wrong_entry in wrong_entries:
+                uid = wrong_entry.unique_id or ""
+                uid_suffix = next(s for s in _UID_SUFFIX_TO_EID_SUFFIX if uid.endswith(s))
+                correct_eid_suffix = _UID_SUFFIX_TO_EID_SUFFIX[uid_suffix]
+
+                if wrong_entry.entity_id.endswith(correct_eid_suffix):
+                    continue  # already correct
+
+                # Derive device prefix from a sibling entity whose entity_id
+                # ends with "_" + the last part of its unique_id's cloud key.
+                device_prefix: str | None = None
+                for sibling in siblings:
+                    s_uid = sibling.unique_id or ""
+                    if "_cloud_" not in s_uid:
+                        continue
+                    cloud_key = s_uid.split("_cloud_", 1)[1]  # e.g. "lifetime_missions"
+                    if sibling.entity_id.endswith("_" + cloud_key):
+                        device_prefix = sibling.entity_id[: -(len(cloud_key) + 1)]
+                        break
+
+                if device_prefix is None:
+                    # Try all roomba_plus entities for this blid
+                    for any_entry in entity_reg.entities.values():
+                        if (any_entry.platform != DOMAIN
+                                or not (any_entry.unique_id or "").startswith(blid_key + "_cloud_")):
+                            continue
+                        cloud_key = (any_entry.unique_id or "").split("_cloud_", 1)[1]
+                        if any_entry.entity_id.endswith("_" + cloud_key):
+                            device_prefix = any_entry.entity_id[: -(len(cloud_key) + 1)]
+                            break
+
+                if device_prefix is None:
+                    _LOGGER.warning(
+                        "Roomba+: could not compute correct entity_id for %s "
+                        "(unique_id=%s) — skipping slug fix",
+                        wrong_entry.entity_id, uid,
+                    )
+                    continue
+
+                correct_eid = f"{device_prefix}{correct_eid_suffix}"
+
+                if entity_reg.async_get(correct_eid) is None:
+                    entity_reg.async_update_entity(
+                        wrong_entry.entity_id, new_entity_id=correct_eid
+                    )
+                    slug_renamed += 1
+                    _LOGGER.info(
+                        "Roomba+: renamed language-slug entity %s → %s",
+                        wrong_entry.entity_id, correct_eid,
+                    )
+                else:
+                    entity_reg.async_remove(wrong_entry.entity_id)
+                    slug_renamed += 1
+                    _LOGGER.info(
+                        "Roomba+: removed duplicate language-slug entity %s",
+                        wrong_entry.entity_id,
+                    )
+
+        new_options = dict(config_entry.options)
+        new_options.setdefault(CONF_FLOOR, "")
+        hass.config_entries.async_update_entry(
+            config_entry,
+            options=new_options,
+            version=12,
+        )
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 12 "
+            "(floor_label added, %d language-slug entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed,
+        )
+        current = 12
+
     if current == config_entry.version:
         _LOGGER.debug(
             "Roomba+: config entry %s already at version %d — no migration needed",
@@ -960,6 +1109,16 @@ async def async_setup_entry(
             state.get("cap", {}).get("pose"), map_enabled,
         )
 
+    # F9 — GridStore for all pose-capable robots (EMA occupancy heatmap + hazard detection)
+    grid_store: GridStore | None = None
+    if map_capability != MapCapability.NONE and map_enabled:
+        grid_store = GridStore()
+        await grid_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "Roomba+ GridStore: loaded %d cell(s) for %s",
+            grid_store.cell_count, config_entry.data[CONF_BLID],
+        )
+
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
@@ -1031,6 +1190,7 @@ async def async_setup_entry(
             username=irobot_username,
             password=irobot_password,
             has_pmaps=has_pmaps,
+            mission_store=mission_store,   # CR3 — fallback source
         )
         try:
             await cloud_coordinator.async_config_entry_first_refresh()
@@ -1050,6 +1210,21 @@ async def async_setup_entry(
                 )
                 if _bf.corrected or _bf.enriched:
                     await mission_store.async_save(hass, config_entry.entry_id)
+
+                # F22a prerequisite — seed GridStore with cloud-detected obstacle
+                # centroids from UMF observed_zones. Only seeds cells not already
+                # present in GridStore (no overwrite of local data).
+                if grid_store is not None:
+                    centroids = cloud_coordinator.observed_zone_centroids
+                    if centroids:
+                        seeded = grid_store.seed_from_observed_zones(centroids)
+                        if seeded:
+                            await grid_store.async_save(hass, config_entry.entry_id)
+                            _LOGGER.debug(
+                                "Roomba+: seeded %d GridStore cell(s) from UMF "
+                                "observed_zones for %s",
+                                seeded, config_entry.data[CONF_BLID],
+                            )
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Roomba+ cloud: initial fetch failed for %s — "
@@ -1071,6 +1246,8 @@ async def async_setup_entry(
         last_error_code=last_error_code,
         last_error_at=last_error_at,
         last_error_zone=last_error_zone,
+        grid_store=grid_store,
+        floor_label=config_entry.options.get(CONF_FLOOR, ""),
     )
 
     if presence_manager is not None:
@@ -1079,8 +1256,10 @@ async def async_setup_entry(
 
     # ── Platform setup ─────────────────────────────────────────────────────
     platforms = list(LOCAL_PLATFORMS)
-    if map_capability == MapCapability.EPHEMERAL:
-        platforms.append(Platform.IMAGE)
+    if map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
+        # IMAGE platform covers both RoombaMapImage and RoombaCoverageImage
+        if Platform.IMAGE not in platforms:
+            platforms.append(Platform.IMAGE)
     if map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
@@ -1090,10 +1269,19 @@ async def async_setup_entry(
     # ── v1.8.0 — REST API view ─────────────────────────────────────────────
     if not hass.data.get("_roomba_plus_view_registered"):
         hass.http.register_view(MissionHistoryView())
+        hass.http.register_view(HouseholdSummaryView())
         hass.data["_roomba_plus_view_registered"] = True
 
     # ── Register services ──────────────────────────────────────────────────
     async_register_services(hass)
+
+    # ── F22a — check for cloud-detected obstacle zones ─────────────────────
+    if cloud_coordinator is not None and grid_store is not None:
+        from .repairs import async_check_observed_zones
+        hass.async_create_task(
+            async_check_observed_zones(hass, config_entry),
+            name=f"roomba_plus_observed_zones_check_{config_entry.entry_id}",
+        )
 
     # ── MQTT callbacks ─────────────────────────────────────────────────────
     if cloud_coordinator is not None:
@@ -1148,8 +1336,9 @@ async def async_unload_entry(
     """Unload a config entry and disconnect from the Roomba."""
     data = config_entry.runtime_data
     platforms = list(LOCAL_PLATFORMS)
-    if data.map_capability == MapCapability.EPHEMERAL:
-        platforms.append(Platform.IMAGE)
+    if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
+        if Platform.IMAGE not in platforms:
+            platforms.append(Platform.IMAGE)
     if data.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)

@@ -134,22 +134,28 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
-    """Convert a local MissionStore record to the unified per-mission shape."""
+    """Convert a local MissionStore record to the unified per-mission shape.
+
+    After v2.1.3 CR1/CR2: dirt_events, wifi_signal, and evacuations are
+    populated when the record has been enriched by backfill_from_cloud() or
+    merge_latest_from_cloud(). recharges stays None (no local accumulator).
+    source remains "local" — reflects origin, not field provenance.
+    """
     return {
         "id":           record.get("id", ""),
         "started_at":   record.get("started_at"),
         "ended_at":     record.get("ended_at"),
         "duration_min": record.get("duration_min"),
-        "run_min":      None,
+        "run_min":      None,                        # local source never has runM
         "area_sqft":    record.get("area_sqft"),
         "result":       record.get("result", "unknown"),
         "initiator":    record.get("initiator", "none"),
         "zones":        record.get("zones", []),
         "error_code":   record.get("error_code"),
-        "recharges":    None,
-        "evacuations":  None,
-        "dirt_events":  None,
-        "wifi_signal":  None,
+        "recharges":    None,                        # no local accumulator
+        "evacuations":  record.get("evacs"),         # from CR1 merge
+        "dirt_events":  record.get("dirt"),          # from CR1 merge
+        "wifi_signal":  record.get("wlBars"),        # from CR1 merge
         "source":       "local",
     }
 
@@ -208,10 +214,30 @@ class MissionHistoryView(HomeAssistantView):
             return self.json(result)
 
         # -- format=hazards ---------------------------------------------------
-        # Stub: GridStore not yet implemented (v2.2.0).
-        # Returns empty list so card developers can probe without 400.
+        # F9 — returns GridStore stuck hotspots and UMF-seeded obstacle zones.
         if fmt == "hazards":
-            return self.json([])
+            from .models import MapCapability
+            if data.map_capability == MapCapability.NONE or data.grid_store is None:
+                return self.json([])
+            hazards = data.grid_store.hotspots()
+            # Append UMF-seeded observed zones (source="robot_learned")
+            if data.has_cloud:
+                import math
+                for centroid in data.cloud_coordinator.observed_zone_centroids:
+                    x = centroid.get("x") or 0.0
+                    y = centroid.get("y") or 0.0
+                    hazards.append({
+                        "gx":          None,
+                        "gy":          None,
+                        "x_mm":        x,
+                        "y_mm":        y,
+                        "stuck_count": None,
+                        "room_name":   None,
+                        "bearing_deg": int(math.degrees(math.atan2(x, y)) % 360),
+                        "distance_mm": int(math.sqrt(x ** 2 + y ** 2)),
+                        "source":      "robot_learned",
+                    })
+            return self.json(hazards)
 
         # -- format=records ---------------------------------------------------
         # F7o -- distinguish coordinator failure from genuinely empty data.
@@ -245,3 +271,93 @@ class MissionHistoryView(HomeAssistantView):
             records = []
 
         return self.json(records)
+
+
+class HouseholdSummaryView(HomeAssistantView):
+    """GET /api/roomba_plus/household?days=28
+
+    F10b — aggregates all roomba_plus config entries. Returns per-robot
+    breakdown with floor label, per-floor breakdown when labels are configured,
+    and combined totals.
+    """
+
+    url = "/api/roomba_plus/household"
+    name = "api:roomba_plus:household"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+
+        try:
+            days = int(request.query.get("days", 28))
+            days = max(1, min(days, 90))
+        except (ValueError, TypeError):
+            days = 28
+
+        entries = hass.config_entries.async_entries(DOMAIN)
+        robots: list[dict] = []
+        total_missions = 0
+        total_completed = 0
+        total_area: float | None = None
+        floors: dict[str, dict] = {}
+
+        for entry in entries:
+            if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+                continue
+            data = entry.runtime_data
+            if data.mission_store is None:
+                continue
+
+            by_day = data.mission_store.query_by_day(days)
+            missions   = sum(s.total     for s in by_day.values())
+            completed  = sum(s.completed for s in by_day.values())
+            area_vals  = [s.area_sqft   for s in by_day.values()
+                          if s.area_sqft is not None]
+            area: float | None = sum(area_vals) if area_vals else None
+            comp_pct   = round(100 * completed / missions, 1) if missions else 0.0
+
+            floor_label = getattr(data, "floor_label", "") or ""
+
+            robots.append({
+                "entry_id":       entry.entry_id,
+                "name":           entry.title or "Roomba",
+                "floor":          floor_label,
+                "missions":       missions,
+                "completed":      completed,
+                "completion_pct": comp_pct,
+                "area_sqft":      area,
+            })
+            total_missions  += missions
+            total_completed += completed
+            if area is not None:
+                total_area = (total_area or 0.0) + area
+
+            if floor_label:
+                f = floors.setdefault(floor_label, {
+                    "label": floor_label, "missions": 0,
+                    "completed": 0, "area_sqft": None,
+                })
+                f["missions"]  += missions
+                f["completed"] += completed
+                if area is not None:
+                    f["area_sqft"] = (f["area_sqft"] or 0.0) + area
+
+        total_comp_pct = (
+            round(100 * total_completed / total_missions, 1)
+            if total_missions else 0.0
+        )
+
+        result: dict[str, Any] = {
+            "period_days": days,
+            "total": {
+                "missions":       total_missions,
+                "completed":      total_completed,
+                "completion_pct": total_comp_pct,
+                "area_sqft":      total_area,
+            },
+            "robots": robots,
+        }
+        if floors:
+            result["floors"] = list(floors.values())
+
+        return self.json(result)

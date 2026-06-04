@@ -102,3 +102,44 @@ smart_start:
       default: false
       selector:
         boolean:
+
+clean_sequence:
+  name: "Start sequence clean"
+  description: >
+    Start robot B when robot A completes its current mission.
+    The listener fires once and removes itself automatically.
+  fields:
+    entity_id:
+      name: "Trigger robot"
+      description: "Vacuum entity for robot A (must finish first)."
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+    target_entity_id:
+      name: "Target robot"
+      description: "Vacuum entity for robot B (started after A finishes)."
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+    require_completed:
+      name: "Require completion"
+      description: >
+        When true (default), robot B starts only if robot A docked normally.
+        When false, robot B starts even if A was stopped or had an error.
+      required: false
+      default: true
+      selector:
+        boolean:
+    delay_minutes:
+      name: "Delay (minutes)"
+      description: "Wait this many minutes after robot A docks before starting robot B."
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          unit_of_measurement: min

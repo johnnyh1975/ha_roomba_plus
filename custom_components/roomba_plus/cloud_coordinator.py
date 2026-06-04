@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -26,6 +26,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
+
+if TYPE_CHECKING:
+    from .mission_store import MissionStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -276,6 +279,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         username: str,
         password: str,
         has_pmaps: bool = False,
+        mission_store: "MissionStore | None" = None,
     ) -> None:
         super().__init__(
             hass,
@@ -286,6 +290,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.blid = blid
         self._has_pmaps = has_pmaps
+        self._mission_store = mission_store   # CR3 — fallback source
         country_code = (hass.config.country or "US").upper()
         self.api = IrobotCloudApi(
             username=username,
@@ -318,6 +323,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mission_history_raw": [],   # v2.0: full per-mission record list
             "favorites": [],
             "automations": {},           # v2.1 F7l: iRobot Genius rules (shape TBD)
+            "umf": {},                   # v2.2 F9: UMF floor plan data (SMART robots)
         }
         try:
             async with asyncio.timeout(30):
@@ -477,6 +483,45 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.blid,
             self._has_pmaps,
         )
+
+        # F9 / F22a — fetch UMF floor plan for SMART robots with active pmaps.
+        # Skips gracefully on any error — map data is non-critical.
+        if self._has_pmaps and result["pmaps"]:
+            try:
+                umf_data = await self._fetch_active_umf(result["pmaps"])
+                if umf_data:
+                    result["umf"] = umf_data
+                    _LOGGER.debug(
+                        "iRobot cloud: UMF fetched — keepoutzones=%d "
+                        "observed_zones=%d points2d=%d for %s",
+                        len(umf_data.get("keepoutzones", [])),
+                        len(umf_data.get("observed_zones", [])),
+                        len(umf_data.get("points2d", [])),
+                        self.blid,
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "iRobot cloud: UMF fetch failed for %s — "
+                    "obstacle data unavailable this cycle",
+                    self.blid,
+                )
+
+        # CR3 — when cloud mission history is empty but MissionStore has enriched
+        # records (from a previous successful cloud fetch + merge), serve them as
+        # raw_records fallback so CloudRawSensor entities remain available.
+        if not result["mission_history_raw"] and self._mission_store is not None:
+            fallback = [
+                r for r in self._mission_store._records
+                if any(r.get(f) is not None for f in ("dirt", "chrgM", "wlBars"))
+            ]
+            if fallback:
+                result["mission_history_raw"] = list(reversed(fallback))
+                _LOGGER.debug(
+                    "iRobot cloud: CR3 fallback — serving %d enriched "
+                    "MissionStore record(s) as raw_records for %s",
+                    len(fallback), self.blid,
+                )
+
         return result
 
     # ── Helpers used by platforms ─────────────────────────────────────────────
@@ -567,3 +612,83 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for zone in details.get("zones", [])
             ]
         return []
+
+    # ── v2.2.0 UMF properties (F9 / F22a) ────────────────────────────────────
+
+    @property
+    def umf_data(self) -> dict[str, Any]:
+        """Return the most recently fetched UMF data, or empty dict."""
+        if not self.data:
+            return {}
+        return self.data.get("umf", {})
+
+    @property
+    def keepout_zones(self) -> list[dict[str, Any]]:
+        """Return keep-out zones from the active UMF floor plan."""
+        return self.umf_data.get("keepoutzones", [])
+
+    @property
+    def observed_zone_centroids(self) -> list[dict[str, Any]]:
+        """Return observed obstacle zone centroids for GridStore seeding.
+
+        Coordinates are in UMF units (space='umf' tag). Not used for pose-space
+        rendering until Q6 coordinate units are confirmed in v2.3.
+        """
+        centroids = []
+        for z in self.umf_data.get("observed_zones", []):
+            cx = z.get("cx") or z.get("centroid_x") or z.get("x")
+            cy = z.get("cy") or z.get("centroid_y") or z.get("y")
+            if cx is not None and cy is not None:
+                centroids.append({"x": cx, "y": cy, "space": "umf"})
+        return centroids
+
+    async def _fetch_active_umf(
+        self, pmaps: list[dict]
+    ) -> dict[str, Any] | None:
+        """Fetch UMF floor plan for the active pmap.
+
+        Returns a dict with keys:
+          keepoutzones:   list of keep-out zone dicts (with centroid coords)
+          observed_zones: list of robot-learned obstacle dicts (with centroids)
+          points2d:       list of wall boundary points (for F8 UmfAligner, v2.3)
+          pmap_id:        the pmap_id this UMF belongs to
+          version_id:     the pmap version fetched
+
+        Coordinate space: UMF units (Q6 open — store with space='umf' tag,
+        do not use for pose-space rendering until Q6 confirmed in v2.3).
+
+        Returns None when no active pmap or UMF fetch fails.
+        """
+        active_id = self.active_pmap_id
+        if not active_id:
+            return None
+
+        for pmap in pmaps:
+            details = pmap.get("active_pmapv_details", {})
+            pmapv = details.get("active_pmapv", {})
+            if pmapv.get("pmap_id") != active_id:
+                continue
+            version_id = pmapv.get("active_pmapv_id")
+            if not version_id:
+                return None
+            try:
+                umf_raw = await self.api.get_pmap_umf(
+                    self.blid, active_id, version_id
+                )
+            except Exception:  # noqa: BLE001
+                return None
+
+            return {
+                "keepoutzones": [
+                    {**z, "space": "umf"}
+                    for z in (umf_raw.get("keepoutzones") or [])
+                ],
+                "observed_zones": [
+                    {**z, "space": "umf"}
+                    for z in (umf_raw.get("observed_zones") or [])
+                ],
+                "points2d":  umf_raw.get("points2d") or [],
+                "pmap_id":   active_id,
+                "version_id": version_id,
+            }
+        return None

@@ -46,6 +46,7 @@ from homeassistant.util import dt as dt_util
 from . import roomba_reported_state
 from .const import DOMAIN
 from .entity import IRobotEntity
+from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
 from .models import MapCapability, RoombaConfigEntry
 from .zone_store import ZoneStore
@@ -67,14 +68,14 @@ async def async_setup_entry(
     config_entry: RoombaConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up map image entity — only if robot reports pose data."""
+    """Set up map image entities — only if robot reports pose data."""
     data = config_entry.runtime_data
 
     if data.map_capability == MapCapability.NONE:
         _LOGGER.debug("Roomba+ image: skipped — no pose capability")
         return
 
-    async_add_entities([
+    entities: list[Any] = [
         RoombaMapImage(
             roomba=data.roomba,
             blid=data.blid,
@@ -83,7 +84,20 @@ async def async_setup_entry(
             map_capability=data.map_capability,
             config_entry=config_entry,
         )
-    ])
+    ]
+
+    # F9 — coverage heatmap entity (all pose-capable robots with GridStore)
+    if data.grid_store is not None:
+        entities.append(
+            RoombaCoverageImage(
+                roomba=data.roomba,
+                blid=data.blid,
+                grid_store=data.grid_store,
+                config_entry=config_entry,
+            )
+        )
+
+    async_add_entities(entities)
 
 
 class RoombaMapImage(IRobotEntity, ImageEntity):
@@ -336,6 +350,145 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     def _blank_image() -> bytes:
         from PIL import Image
         img = Image.new("RGBA", (200, 200), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+
+class RoombaCoverageImage(IRobotEntity, ImageEntity):
+    """GridStore occupancy grid heatmap — updated at mission end.
+
+    F9 — renders the EMA-weighted GridStore as a PNG heatmap.
+    Dark blue = high EMA (frequently visited), light = rarely visited,
+    red overlay = stuck hotspot cells.
+
+    EMA diagnostic attributes are exposed during the v2.2 validation period
+    to allow users and developers to verify constants are appropriate for their
+    cleaning frequency.
+
+    Gate: registered only when data.grid_store is not None (controlled by
+    __init__.py — only for map_capability != NONE with map enabled).
+    """
+
+    _attr_translation_key = "coverage_map"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_content_type = "image/png"
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        grid_store: GridStore,
+        config_entry: RoombaConfigEntry,
+    ) -> None:
+        IRobotEntity.__init__(self, roomba, blid)
+        self._cache: bytes | None = None
+        self.access_tokens: collections.deque = collections.deque([], 2)
+
+        self._grid_store = grid_store
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_coverage_map"
+        self._last_phase: str = ""
+        self._attr_image_last_updated: dt_datetime = dt_util.now(
+            datetime.timezone.utc
+        )
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        self.async_update_token()
+
+    async def async_image(self) -> bytes | None:
+        rendered = await self.hass.async_add_executor_job(
+            self._grid_store.render_heatmap
+        )
+        if rendered is None:
+            return self._blank_image()
+        return rendered
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """EMA diagnostic attributes — exposed during v2.2 validation period."""
+        bbox = self._grid_store.bounding_box_mm()
+        return {
+            "cell_size_mm":      CELL_SIZE_MM,
+            "decay":             DECAY,
+            "visit_increment":   VISIT_INCREMENT,
+            "cell_count":        self._grid_store.cell_count,
+            "stuck_event_count": self._grid_store.stuck_event_count,
+            "x_min_mm":          bbox[0] if bbox else None,
+            "x_max_mm":          bbox[1] if bbox else None,
+            "y_min_mm":          bbox[2] if bbox else None,
+            "y_max_mm":          bbox[3] if bbox else None,
+            "last_mission_end":  self._attr_image_last_updated.isoformat()
+                                 if self._attr_image_last_updated else None,
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+    def on_message(self, json_data: dict[str, Any]) -> None:
+        """Detect mission end and trigger GridStore update."""
+        state = json_data.get("state", {}).get("reported", {})
+        if not self.new_state_filter(state):
+            return
+        self.vacuum_state = roomba_reported_state(self.vacuum)
+        phase = self.vacuum_state.get("cleanMissionStatus", {}).get("phase", "")
+        if (
+            phase in _MISSION_END_PHASES
+            and self._last_phase in _CLEANING_PHASES
+        ):
+            self._trigger_grid_update()
+        self._last_phase = phase
+        self.schedule_update_ha_state()
+
+    def _trigger_grid_update(self) -> None:
+        """Pull mission pose points from the map image entity and update GridStore."""
+        # Access the co-registered RoombaMapImage to get accumulated pose points.
+        # They are on the same device (same blid) and share config_entry.
+        data = self._config_entry.runtime_data
+        if data.renderer is None:
+            return
+
+        pose_points = list(getattr(data.renderer, "_mission_points", []))
+        # Stuck positions: approximate from renderer stuck markers.
+        stuck_points = list(getattr(data.renderer, "_stuck_positions", []))
+
+        if not pose_points:
+            return
+
+        asyncio.run_coroutine_threadsafe(
+            self._async_update_and_save(pose_points, stuck_points),
+            self.hass.loop,
+        )
+
+    async def _async_update_and_save(
+        self,
+        pose_points: list[tuple[float, float]],
+        stuck_points: list[tuple[float, float]],
+    ) -> None:
+        await self.hass.async_add_executor_job(
+            self._grid_store.update_from_mission, pose_points, stuck_points
+        )
+        await self._grid_store.async_save(
+            self.hass, self._config_entry.entry_id
+        )
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._cache = None
+        self.async_write_ha_state()
+
+    @staticmethod
+    def _blank_image() -> bytes:
+        """Return a transparent 400×400 PNG when no grid data exists yet."""
+        try:
+            from PIL import Image
+            img = Image.new("RGBA", (400, 400), (255, 255, 255, 0))
+        except ImportError:
+            # Pillow absent — return minimal valid PNG (1×1 transparent)
+            import base64
+            return base64.b64decode(
+                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
+                b"AABjkB6QAAAABJRU5ErkJggg=="
+            )
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()

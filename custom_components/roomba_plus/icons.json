@@ -328,6 +328,9 @@
       },
       "reusable_pad_wetness": {
         "default": "mdi:water-sync"
+      },
+      "carpet_boost_select": {
+        "default": "mdi:carpet"
       }
     },
     "switch": {
@@ -339,6 +342,16 @@
       },
       "schedule_hold": {
         "default": "mdi:calendar-lock-outline"
+      }
+    },
+    "image": {
+      "coverage_map": {
+        "default": "mdi:map-legend"
+      }
+    },
+    "binary_sensor": {
+      "mission_active": {
+        "default": "mdi:robot-vacuum"
       }
     }
   }

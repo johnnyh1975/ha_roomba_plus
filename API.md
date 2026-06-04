@@ -1,6 +1,6 @@
 # Roomba+ REST API
 
-> Integration version: **2.1.0** · Document version: 2025-05
+> Integration version: **2.2.0** · Document version: 2026-06
 
 The Roomba+ REST API provides programmatic access to mission history and
 diagnostic data for use by the companion Lovelace card and third-party consumers.
@@ -160,13 +160,113 @@ end-timestamp matching (±120 s tolerance) — F4a.
 
 ---
 
-### `format=hazards` — HazardRecord[] *(full data requires integration ≥ v2.2)*
+### `format=hazards` — HazardRecord[]
 
-Returns stuck-event hotspots from the occupancy grid with dock-relative
-coordinates. Used by the companion card to overlay hazard pins on the floor plan.
+Returns obstacle pins from two sources: GridStore stuck hotspots (accumulated
+from local MQTT pose data) and cloud-detected observed zone centroids (seeded
+from the iRobot Smart Map UMF layer on first setup). Used by the companion card
+to overlay hazard pins on the floor plan.
 
-Available from v2.1.3: accepted by the validator and returns `[]` (empty array).
-Full data (GridStore stuck hotspots, observed zone centroids) available from v2.2.0.
+Available when `map_capability ≠ NONE` and GridStore data exists. Returns `[]`
+for 600-series robots or when no data has been accumulated yet.
+
+```json
+[
+  {
+    "gx":          12,
+    "gy":          8,
+    "x_mm":        1800.0,
+    "y_mm":        1200.0,
+    "stuck_count": 5,
+    "room_name":   null,
+    "bearing_deg": 47,
+    "distance_mm": 2160,
+    "source":      "stuck_events"
+  },
+  {
+    "gx":          null,
+    "gy":          null,
+    "x_mm":        2400.0,
+    "y_mm":        -800.0,
+    "stuck_count": null,
+    "room_name":   null,
+    "bearing_deg": 108,
+    "distance_mm": 2530,
+    "source":      "robot_learned"
+  }
+]
+```
+
+| Field          | Type          | Nullable | Notes                                                     |
+|----------------|---------------|----------|-----------------------------------------------------------|
+| `gx`           | integer       | Yes      | Grid cell x (null for `robot_learned` source)             |
+| `gy`           | integer       | Yes      | Grid cell y (null for `robot_learned` source)             |
+| `x_mm`         | float         | No       | Dock-relative mm — pose space for stuck_events            |
+| `y_mm`         | float         | No       | Dock-relative mm                                          |
+| `stuck_count`  | integer       | Yes      | Accumulated stuck events in cell (null for `robot_learned`)|
+| `room_name`    | string        | Yes      | Always null in v2.2; populated by UmfAligner in v2.3      |
+| `bearing_deg`  | integer       | No       | Compass bearing from dock (0 = up)                        |
+| `distance_mm`  | integer       | No       | Euclidean distance from dock in mm                        |
+| `source`       | string        | No       | `stuck_events` or `robot_learned`                         |
+
+**`source` values:**
+- `stuck_events` — GridStore stuck hotspot (≥ 3 events in cell cluster)
+- `robot_learned` — UMF `observed_zones` centroid (cloud-detected obstacle)
+- `keepout` — UMF `keepoutzones` centroid (v2.3+, user-configured no-go zone)
+
+> **Coordinate space note (v2.2):** `x_mm`/`y_mm` for `stuck_events` are in
+> pose space (dock at origin, mm). For `robot_learned` entries, coordinates are
+> in UMF units (Q6 open — coordinate scale not yet confirmed). Card consumers
+> should check `source` until v2.3 ships a resolved coordinate transform.
+
+
+---
+
+### GET `/api/roomba_plus/household`
+
+Aggregates all Roomba+ robots in one request. Useful for multi-robot dashboards.
+
+**Query parameters:**
+
+| Parameter | Type    | Default | Range | Description         |
+|-----------|---------|---------|-------|---------------------|
+| `days`    | integer | 28      | 1–90  | Lookback window      |
+
+```json
+{
+  "period_days": 28,
+  "total": {
+    "missions":       47,
+    "completed":      43,
+    "completion_pct": 91.5,
+    "area_sqft":      8960.0
+  },
+  "robots": [
+    {
+      "entry_id":       "abc123",
+      "name":           "Roomba Downstairs",
+      "floor":          "Ground Floor",
+      "missions":       31,
+      "completed":      29,
+      "completion_pct": 93.5,
+      "area_sqft":      6200.0
+    }
+  ],
+  "floors": [
+    {
+      "label":    "Ground Floor",
+      "missions": 31,
+      "completed":29,
+      "area_sqft":6200.0
+    }
+  ]
+}
+```
+
+`floors` is omitted when no robot has a floor label configured.
+`area_sqft` is null when no robot has cloud records with area data.
+
+**Floor label:** assign via Settings → Devices → Roomba+ → Configure → Settings → Floor label.
 
 ---
 
@@ -175,6 +275,7 @@ Full data (GridStore stuck hotspots, observed zone centroids) available from v2.
 ```
 vacuum.{name}                     — primary vacuum control
 image.{name}_cleaning_map         — live path map (pose data required, firmware < 3.20)
+image.{name}_coverage_map         — EMA occupancy heatmap (v2.2+, pose required)
 image.{name}_coverage_map         — coverage heatmap (≥ v2.2, pose required)
 sensor.{name}_*                   — all sensor entities
 binary_sensor.{name}_*            — all binary sensor entities
@@ -194,6 +295,12 @@ unknown fields gracefully. Breaking changes increment the integration major vers
 New response fields introduced in v2.1.0:
 - `zones` now populated in cloud records (F4a)
 - `result` gains `stuck_and_resumed`, `stuck_and_abandoned`, `blocked_timeout` values (F6c, F6h)
+
+New in v2.2.0:
+- `format=hazards` returns real data (GridStore stuck hotspots + `robot_learned` centroids)
+- `GET /api/roomba_plus/household` endpoint added
+- Local source `format=records` entries now populate `dirt_events`, `wifi_signal`, `evacuations` when cloud-enriched (previously always null)
+- `wifi_signal` field semantics: 5-element histogram (bucket 0 = weakest signal, bucket 4 = strongest) — not a time-series
 
 ---
 
@@ -216,6 +323,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 # Last 7 days summary
 curl -H "Authorization: Bearer $TOKEN" \
   "http://$HOST/api/roomba_plus/$ENTRY_ID/mission_history?days=7"
+
+# Obstacle hazards
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://$HOST/api/roomba_plus/$ENTRY_ID/mission_history?format=hazards"
+
+# Household aggregate (all robots)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://$HOST/api/roomba_plus/household?days=28"
 ```
 
 ---

@@ -103,7 +103,8 @@
           "delay": "Reconnect delay (seconds)",
           "map_enabled": "Enable live map",
           "map_size_px": "Map size (pixels)",
-          "map_scale_mm_per_px": "Scale (mm/pixel)"
+          "map_scale_mm_per_px": "Scale (mm/pixel)",
+          "floor_label": "Floor label (e.g. Ground Floor)"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -165,7 +166,8 @@
           "presence_scheduling_enabled": "Enable presence-aware scheduling",
           "presence_entities": "Tracked persons",
           "presence_mode": "Mode",
-          "away_delay_min": "Delay after leaving (minutes)"
+          "away_delay_min": "Delay after leaving (minutes)",
+          "clean_delay_min": "Delay before second robot start"
         }
       }
     },
@@ -531,6 +533,9 @@
       },
       "mid_mission_recharge": {
         "name": "Mid-mission recharge"
+      },
+      "mission_active": {
+        "name": "Mission active"
       }
     },
     "button": {
@@ -616,11 +621,22 @@
           "2": "Medium",
           "3": "High"
         }
+      },
+      "carpet_boost_select": {
+        "name": "Carpet boost",
+        "state": {
+          "Automatic": "Automatic",
+          "Eco": "Eco",
+          "Performance": "Performance"
+        }
       }
     },
     "image": {
       "map": {
         "name": "Cleaning map"
+      },
+      "coverage_map": {
+        "name": "Coverage map"
       }
     }
   },
@@ -696,6 +712,10 @@
     "map_drift_detected": {
       "title": "Smart Map drift detected",
       "description": "The robot's position drifted {magnitude_cm} cm (bearing {bearing}°) from its expected location. This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run."
+    },
+    "observed_zones_detected": {
+      "title": "Robot-detected obstacles in cloud map",
+      "description": "Your iRobot cloud map contains {zone_count} robot-detected obstacle zone(s). Run a few cleaning missions so Roomba+ can confirm these locally and build a more accurate obstacle map."
     }
   },
   "device_automation": {

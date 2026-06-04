@@ -103,7 +103,8 @@
           "delay": "Atraso de reconexão (segundos)",
           "map_enabled": "Ativar mapa em tempo real",
           "map_size_px": "Tamanho do mapa (píxeis)",
-          "map_scale_mm_per_px": "Escala (mm/píxel)"
+          "map_scale_mm_per_px": "Escala (mm/píxel)",
+          "floor_label": "Andar (ex.: Rés do chão)"
         },
         "data_description": {
           "continuous": "Manter uma ligação MQTT persistente com o robô. Recomendado.",
@@ -165,7 +166,8 @@
           "presence_scheduling_enabled": "Ativar agendamento por presença",
           "presence_entities": "Pessoas rastreadas",
           "presence_mode": "Modo",
-          "away_delay_min": "Atraso após saída (minutos)"
+          "away_delay_min": "Atraso após saída (minutos)",
+          "clean_delay_min": "Atraso antes do início do segundo robô"
         }
       }
     },
@@ -531,6 +533,9 @@
       },
       "mid_mission_recharge": {
         "name": "Recarga intermediária ativa"
+      },
+      "mission_active": {
+        "name": "Missão ativa"
       }
     },
     "button": {
@@ -616,11 +621,22 @@
           "2": "Médio",
           "3": "Alto"
         }
+      },
+      "carpet_boost_select": {
+        "name": "Reforço de tapete",
+        "state": {
+          "Automatic": "Automático",
+          "Eco": "Eco",
+          "Performance": "Desempenho"
+        }
       }
     },
     "image": {
       "map": {
         "name": "Mapa de limpeza"
+      },
+      "coverage_map": {
+        "name": "Mapa de cobertura"
       }
     }
   },
@@ -696,6 +712,10 @@
     "map_drift_detected": {
       "title": "Deriva do Smart Map",
       "description": "Deriva de {magnitude_cm} cm (rumo {bearing}°). Verifica a base e efetua novo mapeamento."
+    },
+    "observed_zones_detected": {
+      "title": "Obstáculos detetados pelo robô no mapa cloud",
+      "description": "O seu mapa cloud iRobot contém {zone_count} zona(s) de obstáculos detetados pelo robô. Execute algumas missões de limpeza para que o Roomba+ possa confirmá-los localmente."
     }
   },
   "device_automation": {
