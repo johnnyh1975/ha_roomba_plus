@@ -108,7 +108,7 @@ class TestServicesRegistration:
 
         return _FakeHass(), registered
 
-    def test_registers_all_six_services(self):
+    def test_registers_all_seven_services(self):
         from custom_components.roomba_plus.services import async_register_services
         from custom_components.roomba_plus.const import DOMAIN
 
@@ -118,6 +118,7 @@ class TestServicesRegistration:
         expected = {
             (DOMAIN, "clean_room"),
             (DOMAIN, "smart_start"),
+            (DOMAIN, "clean_sequence"),
             (DOMAIN, "reset_filter"),
             (DOMAIN, "reset_brush"),
             (DOMAIN, "reset_battery"),
@@ -136,9 +137,9 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 6
+        assert len(registered) == 7
 
-    def test_removes_all_six_services(self):
+    def test_removes_all_seven_services(self):
         from custom_components.roomba_plus.services import (
             async_register_services,
             async_remove_services,
@@ -147,7 +148,7 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 6
+        assert len(registered) == 7
 
         async_remove_services(hass)
         assert len(registered) == 0

@@ -237,12 +237,19 @@ class TestCloudHistorySensorsDescriptions:
         missions = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_missions")
         assert missions.translation_key == "lifetime_missions"
 
-    def test_area_and_time_have_no_translation_key(self):
-        """recent_area_30d and recent_time_30d use name= only (entity_id stability)."""
+    def test_area_and_time_have_translation_key(self):
+        """recent_area_30d and recent_time_30d must have translation_key set.
+
+        Step 23 (v2.2.0 card audit fix): translation_key locks the entity_id
+        slug to the key string, independent of locale. Without it, fresh installs
+        on non-English HA produce language-specific slugs
+        (e.g. sensor.*_gereinigte_flache_30_t on DE). The key, not the translated
+        name string, is used as the slug when translation_key is present.
+        """
         for key in ("recent_area_30d", "recent_time_30d"):
             desc = next(d for d in CLOUD_HISTORY_SENSORS if d.key == key)
-            assert desc.translation_key is None, (
-                f"{key} should have no translation_key (uses name= for entity_id stability)"
+            assert desc.translation_key == key, (
+                f"{key}: translation_key must equal key to lock entity_id slug"
             )
 
     def test_area_unit_m2(self):

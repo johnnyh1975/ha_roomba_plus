@@ -40,54 +40,80 @@ def _entity(state: dict) -> MagicMock:
 # ── F1 — WiFi floor / stability ───────────────────────────────────────────────
 
 class TestWifiFloor:
-    def test_returns_min_bars_from_first_record_with_data(self):
-        records = [{"wlBars": [80, 65, 70, 55, 60]}]
-        assert _raw_wifi_floor(records) == 55
+    """Amendment 8d — wlBars is a 5-element histogram, not a time-series."""
+
+    def test_returns_lowest_nonempty_bucket(self):
+        # [0, 35, 65, 0, 0]: bucket 1 is lowest non-zero → floor = 1
+        records = [{"wlBars": [0, 35, 65, 0, 0]}]
+        assert _raw_wifi_floor(records) == 1
+
+    def test_bucket_zero_populated(self):
+        # [5, 30, 65, 0, 0]: bucket 0 has readings → floor = 0
+        records = [{"wlBars": [5, 30, 65, 0, 0]}]
+        assert _raw_wifi_floor(records) == 0
+
+    def test_all_strong_signal(self):
+        # [0, 0, 0, 40, 60]: only buckets 3/4 → floor = 3
+        records = [{"wlBars": [0, 0, 0, 40, 60]}]
+        assert _raw_wifi_floor(records) == 3
+
+    def test_returns_none_on_empty_list(self):
+        assert _raw_wifi_floor([]) is None
+
+    def test_returns_none_when_wlbars_none(self):
+        assert _raw_wifi_floor([{"wlBars": None}]) is None
+
+    def test_returns_none_when_all_zero_histogram(self):
+        assert _raw_wifi_floor([{"wlBars": [0, 0, 0, 0, 0]}]) is None
 
     def test_skips_records_without_wlbars(self):
-        records = [{"sqft": 100}, {"wlBars": [70, 72, 68]}]
-        assert _raw_wifi_floor(records) == 68
+        records = [{"sqft": 100}, {"wlBars": [0, 0, 70, 30, 0]}]
+        assert _raw_wifi_floor(records) == 2
 
-    def test_skips_empty_wlbars_list(self):
-        records = [{"wlBars": []}, {"wlBars": [60, 65]}]
-        assert _raw_wifi_floor(records) == 60
-
-    def test_returns_none_when_no_records_have_data(self):
-        records = [{"sqft": 100}, {"sqft": 200}]
-        assert _raw_wifi_floor(records) is None
-
-    def test_returns_none_on_empty_record_list(self):
-        assert _raw_wifi_floor([]) is None
+    def test_must_be_exactly_5_elements(self):
+        # Wrong length histogram — skipped
+        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [0, 0, 0, 40, 60]}]
+        assert _raw_wifi_floor(records) == 3
 
 
 class TestWifiStability:
-    def test_returns_mean_stdev(self):
-        # Two records each with variance — result should be a float
-        records = [
-            {"wlBars": [70, 60, 80, 65]},
-            {"wlBars": [75, 70, 80, 72]},
-        ]
-        result = _raw_wifi_stability(records)
-        assert result is not None
-        assert isinstance(result, float)
+    """Amendment 8d — weighted stdev of signal bucket distribution."""
 
-    def test_skips_single_bar_records(self):
-        # stdev requires >= 2 values
-        records = [{"wlBars": [70]}, {"wlBars": [80, 75, 70]}]
-        result = _raw_wifi_stability(records)
-        assert result is not None  # computed from the second record only
+    def test_concentrated_is_low_stdev(self):
+        # All readings in bucket 3 → stdev ≈ 0
+        records = [{"wlBars": [0, 0, 0, 100, 0]}] * 3
+        val = _raw_wifi_stability(records)
+        assert val is not None and val < 0.1
 
-    def test_returns_none_when_no_usable_records(self):
-        records = [{"wlBars": [70]}, {"sqft": 100}]
+    def test_spread_is_high_stdev(self):
+        # Evenly spread across all 5 buckets → high stdev
+        records = [{"wlBars": [20, 20, 20, 20, 20]}] * 3
+        val = _raw_wifi_stability(records)
+        assert val is not None and val > 0.5
+
+    def test_returns_none_when_fewer_than_3_records(self):
+        records = [{"wlBars": [0, 35, 65, 0, 0]}] * 2
         assert _raw_wifi_stability(records) is None
 
     def test_returns_none_on_empty_list(self):
         assert _raw_wifi_stability([]) is None
 
-    def test_result_rounded_to_one_decimal(self):
-        records = [{"wlBars": [60, 80, 70, 65, 75]}]
+    def test_skips_non_5element_histograms(self):
+        # 3-element arrays are invalid — should be skipped
+        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [0, 0, 0, 40, 60]}] * 3
+        val = _raw_wifi_stability(records)
+        # Only the valid 5-element records contribute
+        assert val is not None
+
+    def test_result_is_float(self):
+        records = [{"wlBars": [0, 20, 60, 20, 0]}] * 3
         result = _raw_wifi_stability(records)
-        assert result == round(result, 1)
+        assert isinstance(result, float)
+
+    def test_result_rounded_to_2_decimals(self):
+        records = [{"wlBars": [0, 20, 60, 20, 0]}] * 3
+        result = _raw_wifi_stability(records)
+        assert result == round(result, 2)
 
 
 class TestWifiSensorDescriptions:

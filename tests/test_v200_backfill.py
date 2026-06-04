@@ -247,3 +247,53 @@ class TestBackfillEdgeCases:
         assert rec["result"]     == "error"
         assert rec["error_code"] == 17
         assert rec["bbrun_hr"]   == 250
+
+
+# ── Amendment 8f — dockedAtStart, missionId, pauseM, cmd ─────────────────────
+
+class TestAmendment8fMergeFields:
+    """Amendment 8f — four new scalar fields merged from cloud records."""
+
+    def _local(self):
+        return {
+            "id": "m_1700000000",
+            "started_at": _utc(1700000000),
+            "ended_at":   _utc(1700003300),
+            "duration_min": 55,
+            "result": "completed",
+            "initiator": "schedule",
+            "zones": [],
+            "error_code": None,
+            "bbrun_hr": 0,
+        }
+
+    def _cloud(self, **extra):
+        base = {
+            "startTime": 1700000000,
+            "timestamp": 1700003300,
+            "sqft": 180,
+            "dockedAtStart": True,
+            "missionId": "01KT7BVQ50JD8WF2KM6E9RNYRN",
+            "pauseM": 3,
+            "cmd": {"command": "start", "initiator": "schedule"},
+        }
+        base.update(extra)
+        return base
+
+    def test_amendment_8f_fields_merged(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        ms = MissionStore()
+        local = self._local()
+        ms._merge_cloud_fields(local, self._cloud())
+        assert local["dockedAtStart"] is True
+        assert local["missionId"] == "01KT7BVQ50JD8WF2KM6E9RNYRN"
+        assert local["pauseM"] == 3
+        assert local["cmd"]["command"] == "start"
+
+    def test_amendment_8f_does_not_overwrite_existing(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        local = self._local()
+        local["missionId"] = "EXISTING"
+        ms = MissionStore()
+        ms._merge_cloud_fields(local, self._cloud())
+        assert local["missionId"] == "EXISTING"
