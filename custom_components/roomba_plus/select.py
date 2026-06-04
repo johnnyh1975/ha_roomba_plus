@@ -130,6 +130,7 @@ class CleaningPassesSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "cleaning_passes"
+    _attr_name = "Setting – Cleaning passes"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = [OPT_AUTO, OPT_ONE, OPT_TWO]
 
@@ -189,6 +190,7 @@ class ZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "zone_select"
+    _attr_name = "Select zone"  # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -255,6 +257,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "smart_zone_select"
+    _attr_name = "Select Smart Map zone"  # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -578,6 +581,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
 
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_zone_{pmap_id}"
         self._attr_translation_key = "cloud_smart_zone_select"
+        self._attr_name = "Select zone (cloud)"  # G6: locale-independent entity_id slug
 
         # Inactive maps: disabled by default, name suffixed so users know why.
         # Active map: enabled by default, name unchanged.
@@ -745,6 +749,7 @@ class DisposablePadWetnessSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "disposable_pad_wetness"
+    _attr_name = "Disposable pad wetness"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = _PAD_WET_OPTIONS
 
@@ -783,6 +788,7 @@ class ReusablePadWetnessSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "reusable_pad_wetness"
+    _attr_name = "Reusable pad wetness"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = _PAD_WET_OPTIONS
 

@@ -61,6 +61,7 @@ class EdgeCleanSwitch(IRobotEntity, SwitchEntity):
     """
 
     _attr_translation_key = "edge_clean"
+    _attr_name = "Setting – Edge cleaning"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, roomba, blid: str) -> None:
@@ -104,6 +105,7 @@ class AlwaysFinishSwitch(IRobotEntity, SwitchEntity):
     """
 
     _attr_translation_key = "always_finish"
+    _attr_name = "Setting – Always finish"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, roomba, blid: str) -> None:
@@ -148,6 +150,7 @@ class ScheduleHoldSwitch(IRobotEntity, SwitchEntity):
     """
 
     _attr_translation_key = "schedule_hold"
+    _attr_name = "Setting – Schedule hold"  # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, roomba, blid: str) -> None:

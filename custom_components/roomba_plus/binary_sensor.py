@@ -101,6 +101,7 @@ class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     """Binary sensor that is ON when the Roomba's bin is full."""
 
     _attr_translation_key = "bin_full"
+    _attr_name = "Bin full"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -126,6 +127,7 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "bin_present"
+    _attr_name = "Bin present"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -152,6 +154,7 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "connected"
+    _attr_name = "Connected"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -192,6 +195,7 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mop_ready"
+    _attr_name = "Mop problem"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -235,6 +239,7 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mop_tank_present"
+    _attr_name = "Mop tank present"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -264,6 +269,7 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mop_lid_closed"
+    _attr_name = "Mop lid open"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -312,6 +318,7 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "map_saving"
+    _attr_name = "Smart Map saving"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.UPDATE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -351,6 +358,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "maintenance_due"
+    _attr_name = "Maintenance due"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -426,6 +434,7 @@ class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "start_blocked"
+    _attr_name = "Start blocked"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -477,6 +486,7 @@ class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "schedule_hold_active"
+    _attr_name = "Schedule hold active"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -513,6 +523,7 @@ class RoombaMopLidOpen(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mop_lid_open"
+    _attr_name = "Lid open"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -539,6 +550,7 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mop_tank_present_direct"
+    _attr_name = "Tank present"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -566,6 +578,7 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "mid_mission_recharge"
+    _attr_name = "Mid-mission recharge"  # G6: locale-independent entity_id slug
     _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
