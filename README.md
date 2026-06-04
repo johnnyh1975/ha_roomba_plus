@@ -1,15 +1,15 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.1.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.1.4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
-[![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)]
+[![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
 **Why Roomba+?**
-- **97 sensors** vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
+- **100+ entities** (91 sensors, 13 binary sensors, 18 controls, 1 map image) vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
 - **Zero cloud dependency** — all robot control goes through local MQTT; cloud credentials are optional and only used for map sync and history enrichment
 - **Automation-ready** — blocking sensor gate, presence-aware scheduling, device triggers, and named HA actions make Roomba a first-class citizen in your automations
 
@@ -17,7 +17,30 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 ---
 
-## Supported devices
+## What's new
+
+### v2.1.4 — June 2026
+Entity names on **all non-English HA installations** now correctly display and
+produce English entity_id slugs on first registration. Binary sensors, selects,
+and switches were not covered by the v2.1.3 fix — this completes it.
+Affects new installations only; existing entity_ids are preserved.
+
+### v2.1.3 — June 2026
+- **Cloud analytics persistence** — mission fields (`dirt`, `chrgM`, `wlBars`,
+  full mission event log) are now stored locally after each mission and survive
+  HA restarts. Previously lost on every restart before the next 24h cloud poll.
+- **Cloud merge on mission end** — cloud fields merged into MissionStore within
+  minutes of mission completion, not just at HA startup.
+- **Mission classifier fix** — incomplete missions (`done='inc'`) now correctly
+  classify as `error_{code}` instead of producing repeated unknown-value log
+  entries.
+- **Entity names on non-English installs** — 92 sensor and button descriptions
+  now have explicit English names, preventing locale-derived slugs in entity_ids
+  on DE/FR/ES/IT/NL/PT installations.
+- **Enhanced cloud debug logging** — field coverage fractions, array shapes, and
+  nested key structures logged at DEBUG level for diagnostics.
+
+---
 
 | Series | Examples | Map | Zones | Cloud features | Schedule hold | Bin present | Tested |
 |---|---|---|---|---|---|---|---|
@@ -25,10 +48,10 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 | **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ✅ mission history | ❌ | ❌ | ✅ **Roomba 980** |
 | **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **i7+** |
 | **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
-| **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
+| **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **j-series** |
 | **Braava** | m6 | ✅ | ✅ Smart Map | ✅ optional | ✅ | ❌ (mop ready ✅) | ⚠️ untested |
 
-> **Tested hardware:** Roomba 980 and Roomba i7+. Support for other series is implemented based on protocol documentation, capability flags, and the roombapy library.
+> **Tested hardware:** Roomba 980, Roomba i7+, and j-series (lewis firmware). Support for other series is implemented based on protocol documentation, capability flags, and the roombapy library.
 
 > Cloud features require your iRobot app email and password. They are entirely optional — all local MQTT functionality works identically without them.
 
@@ -408,15 +431,17 @@ Six sensors derived from the iRobot `/missionhistory` API (~30-day window):
 
 **900-series timestamp backfill:** 900-series firmware resets `mssnStrtTm=0` at mission end. Roomba+ automatically corrects these timestamps on startup using authoritative cloud values — no action required.
 
+**Cloud analytics persistence (v2.1.3+):** Cloud fields (`dirt`, `chrgM`, `wlBars`, `timeline`) are now written into the local MissionStore after each mission, both at startup and within minutes of mission completion. These fields are no longer lost when HA restarts before the next cloud poll.
+
 #### Cloud history sensors — all robots with credentials
 
 | Sensor | Notes |
 |---|---|
 | Lifetime missions | True lifetime count from the cloud record |
-| Lifetime cleaned area | Sum across the ~30-mission API window |
-| Lifetime cleaning time | Sum of `runM` (actual cleaning time, excluding recharges) |
+| Recent cleaned area (30 d) | Sum of cleaned area across the ~30-mission API window (m²) |
+| Recent cleaning time (30 d) | Sum of `runM` (actual cleaning time, excluding recharges) |
 
-> Lifetime area and time reflect the API window (~30 recent missions), not a true lifetime accumulator — the iRobot API does not expose one. The `source: recent_mission_window` attribute documents this.
+> Area and time reflect the API window (~30 recent missions), not a true lifetime accumulator — the iRobot API does not expose one. The `source: recent_mission_window` attribute documents this.
 
 #### HA Long-Term Statistics
 
@@ -438,12 +463,14 @@ GET /api/roomba_plus/{entry_id}/mission_history
 
 | Parameter | Default | Values | Description |
 |---|---|---|---|
-| `format` | `summary` | `summary` / `records` | Response shape |
-| `days` | `28` | `1`–`90` | Lookback window (summary only) |
+| `format` | `summary` | `summary` / `records` / `hazards` | Response shape |
+| `days` | `28` (summary) / `90` (records) | `1`–`90` | Lookback window |
 
 `format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`.
 
 `format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`.
+
+`format=hazards` — obstacle pin array. Returns `[]` until v2.2 (GridStore not yet implemented). Card developers can probe this endpoint now without receiving a 400 error.
 
 The `entry_id` is found in **Settings → Devices → Roomba+ → ⋮ → System information**.
 
@@ -649,7 +676,7 @@ automation:
 
 | Feature | Core Roomba | Roomba+ |
 |---|---|---|
-| Sensors | 13 | 69 local + 28 cloud |
+| Sensors | 13 | 73 local + 18 cloud |
 | Cleaning map | ❌ | ✅ |
 | Map persists across restarts | ❌ | ✅ |
 | Zone detection (900-series) | ❌ | ✅ |
@@ -743,7 +770,7 @@ Confirm the cleaning schedule is set in the iRobot app and enabled for the corre
 
 Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. If cloud credentials are configured, the repair flow is suppressed and names come directly from the cloud.
 
-**Lifetime cleaned area / cleaning time show lower values than expected**
+**Recent cleaned area / cleaning time show lower values than expected**
 
 These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time. The `source: recent_mission_window` attribute documents this. The **total missions** sensor is different — it reads the lifetime counter embedded in every cloud record.
 
