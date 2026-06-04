@@ -409,3 +409,132 @@ class TestP75Area:
             })
         result = store.p75_area(30)
         assert result == 300.0
+
+
+# ── helpers for backfill/merge tests ─────────────────────────────────────────
+
+def _ts(unix_ts: int) -> str:
+    """Return ISO UTC string from a Unix timestamp."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+
+
+# ── CR1: backfill_from_cloud() analytics merge ────────────────────────────────
+
+class TestBackfillCloudMerge:
+    """backfill_from_cloud() analytics field merge (CR1)."""
+
+    def _local(self, ended_ts=1700001000, **kwargs):
+        r = {
+            "id": f"m_{ended_ts - 2400}",
+            "started_at": _ts(ended_ts - 2400),
+            "ended_at": _ts(ended_ts),
+            "duration_min": 40,
+            "area_sqft": None,
+            "result": "completed",
+        }
+        r.update(kwargs)
+        return r
+
+    def _cloud(self, ts=1700001000, **kwargs):
+        r = {
+            "startTime": ts - 2400,
+            "timestamp": ts,
+            "sqft": 312,
+            "dirt": 14,
+            "chrgM": 0,
+            "runM": 38,
+            "durationM": 40,
+            "chrgs": 0,
+            "evacs": 1,
+            "wlBars": [3, 3, 4],
+        }
+        r.update(kwargs)
+        return r
+
+    def test_analytics_fields_merged_into_local(self):
+        store = MissionStore()
+        store._records = [self._local()]
+        result = store.backfill_from_cloud([self._cloud()])
+        r = store._records[0]
+        assert r["dirt"] == 14
+        assert r["chrgM"] == 0
+        assert r["wlBars"] == [3, 3, 4]
+        assert result.enriched == 1
+
+    def test_existing_local_value_not_overwritten(self):
+        store = MissionStore()
+        local = self._local(dirt=99)
+        store._records = [local]
+        store.backfill_from_cloud([self._cloud(dirt=14)])
+        assert store._records[0]["dirt"] == 99  # not overwritten
+
+    def test_merge_runs_even_when_timestamps_already_correct(self):
+        """Analytics merge is independent of timestamp correction."""
+        store = MissionStore()
+        ts = 1700001000
+        local = self._local(ended_ts=ts)
+        # Make timestamps close (delta < 300s) — would skip timestamp correction.
+        # Set started_at identical to cloud startTime so delta ≈ 0.
+        local["started_at"] = _ts(ts - 2400)
+        store._records = [local]
+        cloud = self._cloud(ts=ts)
+        cloud["startTime"] = ts - 2400  # same as local — delta == 0
+        result = store.backfill_from_cloud([cloud])
+        assert store._records[0]["dirt"] == 14   # merged despite no ts correction
+        assert result.corrected == 0
+        assert result.enriched == 1
+
+    def test_no_match_leaves_record_unchanged(self):
+        store = MissionStore()
+        store._records = [self._local(ended_ts=1700001000)]
+        result = store.backfill_from_cloud([self._cloud(ts=1700099999)])  # no match
+        assert store._records[0].get("dirt") is None
+        assert result.enriched == 0
+
+    def test_array_field_merged(self):
+        store = MissionStore()
+        store._records = [self._local()]
+        store.backfill_from_cloud([self._cloud()])
+        assert store._records[0]["wlBars"] == [3, 3, 4]
+
+    def test_backfill_result_namedtuple(self):
+        from custom_components.roomba_plus.mission_store import BackfillResult
+        r = BackfillResult(corrected=1, enriched=3)
+        assert r.corrected == 1
+        assert r.enriched == 3
+
+
+# ── CR2: merge_latest_from_cloud() ───────────────────────────────────────────
+
+class TestMergeLatestFromCloud:
+    """merge_latest_from_cloud() post-mission hook (CR2)."""
+
+    def test_merges_into_last_record(self):
+        store = MissionStore()
+        ts = 1700001000
+        store._records = [
+            {"id": "m_old", "ended_at": _ts(ts - 10000), "result": "completed"},
+            {"id": "m_new", "ended_at": _ts(ts), "result": "completed"},
+        ]
+        cloud = [{"timestamp": ts, "dirt": 7, "chrgM": 5, "wlBars": [4, 3]}]
+        wrote = store.merge_latest_from_cloud(cloud)
+        assert wrote is True
+        assert store._records[-1]["dirt"] == 7
+        assert store._records[0].get("dirt") is None  # older record untouched
+
+    def test_no_match_returns_false(self):
+        store = MissionStore()
+        ts = 1700001000
+        store._records = [{"id": "m_new", "ended_at": _ts(ts), "result": "completed"}]
+        cloud = [{"timestamp": ts + 9999, "dirt": 7}]
+        assert store.merge_latest_from_cloud(cloud) is False
+
+    def test_empty_records_returns_false(self):
+        store = MissionStore()
+        assert store.merge_latest_from_cloud([{"timestamp": 1700001000, "dirt": 7}]) is False
+
+    def test_empty_cloud_returns_false(self):
+        store = MissionStore()
+        store._records = [{"id": "m_new", "ended_at": _ts(1700001000)}]
+        assert store.merge_latest_from_cloud([]) is False

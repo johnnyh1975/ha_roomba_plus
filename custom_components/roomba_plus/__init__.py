@@ -27,7 +27,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .callbacks import make_map_retrain_callback, make_mission_callback, make_mission_complete_callback
@@ -1045,10 +1045,10 @@ async def async_setup_entry(
             # MQTT message, leaving local records with duration_min≈0. Correct
             # them now using the authoritative cloud timestamps.
             if cloud_coordinator.raw_records:
-                n = mission_store.backfill_from_cloud(
+                _bf = mission_store.backfill_from_cloud(
                     cloud_coordinator.raw_records
                 )
-                if n:
+                if _bf.corrected or _bf.enriched:
                     await mission_store.async_save(hass, config_entry.entry_id)
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
@@ -1103,6 +1103,26 @@ async def async_setup_entry(
         # F4b -- trigger cloud refresh at mission end to eliminate 24h staleness
         roomba.register_on_message_callback(
             make_mission_complete_callback(hass, cloud_coordinator)
+        )
+
+        # CR2 — after each post-mission cloud refresh, merge latest cloud
+        # analytics into the most recent MissionStore record so fields like
+        # dirt, chrgM, and wlBars are persisted across restarts.
+        @callback
+        def _on_cloud_refresh_complete() -> None:
+            if not cloud_coordinator.last_update_success:
+                return
+            ms = config_entry.runtime_data.mission_store
+            if ms is None:
+                return
+            if ms.merge_latest_from_cloud(cloud_coordinator.raw_records):
+                hass.async_create_task(
+                    ms.async_save(hass, config_entry.entry_id),
+                    name="roomba_plus_cloud_merge_save",
+                )
+
+        config_entry.async_on_unload(
+            cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)
         )
 
     roomba.register_on_message_callback(

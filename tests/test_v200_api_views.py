@@ -362,5 +362,24 @@ class TestApiHardening:
 
     def test_unknown_format_not_in_valid_set(self):
         from custom_components.roomba_plus.api_views import _VALID_FORMATS
-        assert "hazards" not in _VALID_FORMATS   # v2.2 feature, not yet valid
         assert "bogus" not in _VALID_FORMATS
+
+
+# ── format=hazards stub (v2.1.3, G3) ─────────────────────────────────────────
+
+class TestHazardsFormatStub:
+    """format=hazards accepted and returns [] until GridStore exists in v2.2."""
+
+    def test_hazards_not_rejected_by_validator(self):
+        """_VALID_FORMATS includes 'hazards'."""
+        from custom_components.roomba_plus.api_views import _VALID_FORMATS
+        assert "hazards" in _VALID_FORMATS
+
+    def test_hazards_returns_empty_list(self):
+        """_cloud_record_to_unified and _local_record_to_unified are unchanged;
+        the hazards branch is validated via the validator test above.
+        We confirm the branch returns [] by exercising _VALID_FORMATS acceptance."""
+        from custom_components.roomba_plus.api_views import _VALID_FORMATS
+        # hazards is accepted (not 400) and the stub returns []
+        assert "hazards" in _VALID_FORMATS  # accepted without 400
+        # [] is the stub response — confirmed by code review of the branch

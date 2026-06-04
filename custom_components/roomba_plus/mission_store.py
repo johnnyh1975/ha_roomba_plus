@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -26,6 +26,38 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_KEY_PREFIX = "roomba_plus_missions"
 STORAGE_VERSION = 1
 MAX_RECORDS = 365
+
+
+class BackfillResult(NamedTuple):
+    """Result of backfill_from_cloud()."""
+    corrected: int  # records where timestamps were corrected (delta > 300s)
+    enriched: int   # records where analytics fields were merged
+
+
+# Cloud → local field merge lists for backfill_from_cloud().
+# Scalar fields: copied when local value is absent (None or missing).
+_CLOUD_MERGE_SCALAR: tuple[str, ...] = (
+    "chrgM",     # recharge minutes — F5c source
+    "dirt",      # dirt events — F5b source
+    "sqft",      # raw area (area_sqft is the canonical local name)
+    "runM",      # actual cleaning minutes (excl. recharge)
+    "durationM", # total mission minutes
+    "chrgs",     # mid-mission recharge count
+    "evacs",     # bin evacuations
+    "nMssn",     # lifetime mission counter at this mission
+    "timeline",  # full mission event log (dict: plan + finEvents) — CR4 source
+                 # Field confirmed as 'timeline' from CR3 debug (June 2026).
+                 # Contains plan.upcoming (planned room order) and finEvents
+                 # (room/travel/traversal/evac/charge events per room).
+                 # dict, not a list — lives in _CLOUD_MERGE_SCALAR, not ARRAY.
+)
+
+# Array fields: copied when local value is absent or empty list.
+_CLOUD_MERGE_ARRAY: tuple[str, ...] = (
+    "wlBars",    # per-mission WiFi signal histogram (5-element) — F1 source
+                 # startEndWlBars (scalar bar-strength at start/end) is a
+                 # separate top-level field; not merged (redundant with wlBars).
+)
 
 
 @dataclass(frozen=True)
@@ -312,11 +344,29 @@ class MissionStore:
         rate = (current_hr - reset_hr) / days_elapsed
         return round(max(0.0, rate), 2)
 
+    @staticmethod
+    def _merge_cloud_fields(local: dict, cloud: dict) -> bool:
+        """Copy missing analytics fields from a cloud record into a local record.
+
+        Only copies when the local field is absent or None — never overwrites.
+        Returns True if any field was written.
+        """
+        wrote = False
+        for field in _CLOUD_MERGE_SCALAR:
+            if local.get(field) is None and cloud.get(field) is not None:
+                local[field] = cloud[field]
+                wrote = True
+        for field in _CLOUD_MERGE_ARRAY:
+            if not local.get(field) and cloud.get(field):
+                local[field] = cloud[field]
+                wrote = True
+        return wrote
+
     def backfill_from_cloud(
         self,
         cloud_records: list[dict],
         tolerance_sec: int = 120,
-    ) -> int:
+    ) -> BackfillResult:
         """Correct local MissionStore records using cloud /missionhistory timestamps.
 
         The 980/900-series firmware resets mssnStrtTm to 0 in the mission-end
@@ -332,6 +382,9 @@ class MissionStore:
           - id          — regenerated from corrected started_at
           - area_sqft   — from cloud sqft when local value is None
 
+        Analytics fields (dirt, chrgM, wlBars, etc.) are merged into every
+        matched record regardless of whether a timestamp correction is needed.
+
         Matching uses ended_at (local) vs timestamp (cloud) because ended_at
         is always reliably recorded at wall-clock time.
 
@@ -342,10 +395,11 @@ class MissionStore:
                            covers MQTT delivery lag and clock skew.
 
         Returns:
-            Number of records corrected.
+            BackfillResult(corrected, enriched) — counts of timestamp
+            corrections and analytics field merges respectively.
         """
         if not cloud_records or not self._records:
-            return 0
+            return BackfillResult(corrected=0, enriched=0)
 
         # Build index of cloud records keyed by end timestamp for O(1) lookup.
         cloud_by_end: dict[int, dict] = {}
@@ -355,6 +409,7 @@ class MissionStore:
                 cloud_by_end.setdefault(int(ts), cr)
 
         corrected = 0
+        enriched = 0
         for local in self._records:
             ended_str = local.get("ended_at", "")
             if not ended_str:
@@ -401,6 +456,12 @@ class MissionStore:
             except (ValueError, TypeError):
                 delta_start = float("inf")
 
+            # Always merge analytics fields regardless of timestamp delta.
+            merge_wrote = self._merge_cloud_fields(local, best_cr)
+            if merge_wrote:
+                enriched += 1
+
+            # Only correct timestamps when they differ meaningfully (> 5 min).
             if delta_start < 300:
                 continue
 
@@ -414,7 +475,7 @@ class MissionStore:
             local["duration_min"] = new_duration
             local["id"]           = new_id
 
-            # Backfill area_sqft from cloud when local has None
+            # area_sqft is the canonical local name; backfill only when absent.
             if local.get("area_sqft") is None and best_cr.get("sqft") is not None:
                 local["area_sqft"] = best_cr["sqft"]
 
@@ -426,12 +487,59 @@ class MissionStore:
                 new_duration, old_started_str, delta_start,
             )
 
-        if corrected:
+        if corrected or enriched:
             _LOGGER.info(
-                "MissionStore backfill: corrected %d record(s) from cloud timestamps",
-                corrected,
+                "MissionStore backfill: corrected=%d timestamp(s), enriched=%d record(s)",
+                corrected, enriched,
             )
-        return corrected
+        return BackfillResult(corrected=corrected, enriched=enriched)
+
+    def merge_latest_from_cloud(
+        self,
+        cloud_records: list[dict],
+        tolerance_sec: int = 120,
+    ) -> bool:
+        """Merge cloud analytics fields into the most recent local record.
+
+        Called after the post-mission cloud refresh (F4b). Targets only
+        the last record — the mission that just ended is newest in both stores.
+        Uses the same ±tolerance_sec end-timestamp matching as backfill_from_cloud.
+
+        Returns True if any field was written to the record.
+        """
+        if not self._records or not cloud_records:
+            return False
+
+        local = self._records[-1]
+        ended_str = local.get("ended_at", "")
+        if not ended_str:
+            return False
+
+        try:
+            ended_dt = datetime.fromisoformat(ended_str)
+        except (ValueError, TypeError):
+            return False
+
+        if ended_dt.tzinfo is None:
+            ended_dt = ended_dt.replace(tzinfo=timezone.utc)
+
+        local_end_ts = int(ended_dt.timestamp())
+
+        best_cr: dict | None = None
+        best_delta = tolerance_sec + 1
+        for cr in cloud_records:
+            ts = cr.get("timestamp")
+            if ts is None:
+                continue
+            delta = abs(int(ts) - local_end_ts)
+            if delta <= tolerance_sec and delta < best_delta:
+                best_delta = delta
+                best_cr = cr
+
+        if best_cr is None:
+            return False
+
+        return self._merge_cloud_fields(local, best_cr)
 
     async def async_backfill_statistics(
         self,

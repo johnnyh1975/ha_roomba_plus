@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # F7o -- valid format values; unknown values return 400
-_VALID_FORMATS = {"summary", "records"}
+_VALID_FORMATS = {"summary", "records", "hazards"}
 
 
 def _build_local_zones_index(mission_store_records: list[dict]) -> dict[int, list[str]]:
@@ -206,6 +206,12 @@ class MissionHistoryView(HomeAssistantView):
                 for summary in sorted(by_day.values(), key=lambda s: s.date)
             ]
             return self.json(result)
+
+        # -- format=hazards ---------------------------------------------------
+        # Stub: GridStore not yet implemented (v2.2.0).
+        # Returns empty list so card developers can probe without 400.
+        if fmt == "hazards":
+            return self.json([])
 
         # -- format=records ---------------------------------------------------
         # F7o -- distinguish coordinator failure from genuinely empty data.

@@ -75,7 +75,7 @@ class TestBackfillBasicCorrection:
         store = _make_store([local])
 
         n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts)])
-        assert n == 1
+        assert n.corrected == 1
         assert store._records[0]["started_at"] == _utc(start_ts)
 
     def test_corrects_duration_min(self):
@@ -130,7 +130,7 @@ class TestBackfillMatching:
 
         # Cloud timestamp 60s later — within default 120s tolerance
         n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts + 60)])
-        assert n == 1
+        assert n.corrected == 1
 
     def test_no_match_outside_tolerance(self):
         """Cloud end timestamp 200 s off — outside tolerance, no correction."""
@@ -140,7 +140,7 @@ class TestBackfillMatching:
         store = _make_store([local])
 
         n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts + 200)])
-        assert n == 0
+        assert n.corrected == 0
 
     def test_custom_tolerance(self):
         end_ts   = 1700003600
@@ -150,7 +150,7 @@ class TestBackfillMatching:
 
         # 200s off, custom tolerance of 300s
         n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts + 200)], tolerance_sec=300)
-        assert n == 1
+        assert n.corrected == 1
 
     def test_skips_already_accurate_records(self):
         """Records with delta_start < 5 min are not corrected (already accurate)."""
@@ -162,7 +162,7 @@ class TestBackfillMatching:
 
         # Cloud record matches — but local is already accurate
         n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts)])
-        assert n == 0
+        assert n.corrected == 0
 
     def test_multiple_records_partial_match(self):
         """Only records with inaccurate timestamps are corrected."""
@@ -180,7 +180,7 @@ class TestBackfillMatching:
             _cloud_rec(1700003700, end2),
         ]
         n = store.backfill_from_cloud(cloud)
-        assert n == 1
+        assert n.corrected == 1
         # local1 unchanged
         assert store._records[0]["started_at"] == _utc(start_accurate)
         # local2 corrected
@@ -193,11 +193,11 @@ class TestBackfillEdgeCases:
 
     def test_empty_cloud_records(self):
         store = _make_store([_local_rec(1700003600, 1700003600)])
-        assert store.backfill_from_cloud([]) == 0
+        assert store.backfill_from_cloud([]).corrected == 0
 
     def test_empty_local_records(self):
         store = _make_store([])
-        assert store.backfill_from_cloud([_cloud_rec(1700000000, 1700003600)]) == 0
+        assert store.backfill_from_cloud([_cloud_rec(1700000000, 1700003600)]).corrected == 0
 
     def test_cloud_record_missing_start_time(self):
         """Cloud record without startTime is skipped gracefully."""
@@ -205,7 +205,7 @@ class TestBackfillEdgeCases:
         local  = _local_rec(started_ts=end_ts, ended_ts=end_ts)
         store  = _make_store([local])
         cr = {"timestamp": end_ts, "sqft": 100, "classified_result": "completed"}
-        assert store.backfill_from_cloud([cr]) == 0
+        assert store.backfill_from_cloud([cr]).corrected == 0
 
     def test_cloud_record_missing_timestamp(self):
         """Cloud record without timestamp is not indexed."""
@@ -213,12 +213,12 @@ class TestBackfillEdgeCases:
         local  = _local_rec(started_ts=end_ts, ended_ts=end_ts)
         store  = _make_store([local])
         cr = {"startTime": 1700000000, "sqft": 100}
-        assert store.backfill_from_cloud([cr]) == 0
+        assert store.backfill_from_cloud([cr]).corrected == 0
 
     def test_local_record_missing_ended_at(self):
         """Local record without ended_at is skipped."""
         store = _make_store([{"id": "m_bad", "started_at": _utc(1700003600)}])
-        assert store.backfill_from_cloud([_cloud_rec(1700000000, 1700003600)]) == 0
+        assert store.backfill_from_cloud([_cloud_rec(1700000000, 1700003600)]).corrected == 0
 
     def test_returns_count_of_corrected(self):
         recs = [
@@ -230,7 +230,7 @@ class TestBackfillEdgeCases:
             _cloud_rec(1700000000, 1700003600),
             _cloud_rec(1700003700, 1700007200),
         ]
-        assert store.backfill_from_cloud(cloud) == 2
+        assert store.backfill_from_cloud(cloud).corrected == 2
 
     def test_zones_and_other_fields_preserved(self):
         """Backfill only touches timestamp fields — other fields untouched."""

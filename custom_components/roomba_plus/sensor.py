@@ -655,12 +655,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="phase",
         translation_key="phase",
+        name="Status",
         entity_category=None,
         value_fn=_phase_value,
     ),
     RoombaSensorDescription(
         key="error",
         translation_key="error",
+        name="Status – Error",
         entity_category=None,
         value_fn=_error_value,
     ),
@@ -670,12 +672,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="readiness",
         translation_key="readiness",
+        name="Status – Readiness",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_not_ready_value,
     ),
     RoombaSensorDescription(
         key="job_initiator",
         translation_key="job_initiator",
+        name="Status – Started by",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: JOB_INITIATOR_LABELS.get(
             e.clean_mission_status.get("initiator", "none"), "None"
@@ -684,12 +688,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="clean_mode",
         translation_key="clean_mode",
+        name="Setting – Cleaning passes",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_clean_mode,
     ),
     RoombaSensorDescription(
         key="carpet_boost_mode",
         translation_key="carpet_boost_mode",
+        name="Setting – Carpet boost",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_carpet_boost,
         value_fn=_carpet_boost_mode,
@@ -700,6 +706,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="filter_remaining_hours",
         translation_key="filter_remaining_hours",
+        name="Maintenance – Filter",
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
@@ -708,6 +715,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="brush_remaining_hours",
         translation_key="brush_remaining_hours",
+        name="Maintenance – Brushes",
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
@@ -716,6 +724,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_cycles",
         translation_key="battery_cycles",
+        name="Maintenance – Battery cycles",
         state_class=SensorStateClass.TOTAL_INCREASING,  # F7h: was MEASUREMENT; lifetime counter
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
@@ -735,6 +744,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="total_missions",
         translation_key="total_missions",
+        name="Missions total",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("nMssn"),
@@ -742,6 +752,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="successful_missions",
         translation_key="successful_missions",
+        name="Missions successful",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("nMssnOk"),
@@ -749,6 +760,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="canceled_missions",
         translation_key="canceled_missions",
+        name="Missions canceled",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("nMssnC"),
@@ -756,6 +768,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="failed_missions",
         translation_key="failed_missions",
+        name="Missions failed",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("nMssnF"),
@@ -763,6 +776,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="total_cleaning_time",
         translation_key="total_cleaning_time",
+        name="Missions – Total time",
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.run_stats.get("hr"),
@@ -770,6 +784,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="average_mission_time",
         translation_key="average_mission_time",
+        name="Missions – Avg. duration",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("aMssnM"),
@@ -780,6 +795,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="total_cleaned_area",
         translation_key="total_cleaned_area",
+        name="Lifetime cleaned area",
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -792,6 +808,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="last_mission",
         translation_key="last_mission",
+        name="Missions – Last",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         # Read from MissionStore rather than live MQTT cleanMissionStatus.mssnStrtTm.
@@ -803,6 +820,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="scrubs_count",
         translation_key="scrubs_count",
+        name="Dirt detect events",
         state_class=SensorStateClass.TOTAL_INCREASING,  # F7h: was MEASUREMENT; lifetime counter
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -811,6 +829,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="rssi",
         translation_key="rssi",
+        name="Wi-Fi signal",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dBm",
         state_class=SensorStateClass.MEASUREMENT,
@@ -822,6 +841,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="snr",
         translation_key="snr",
+        name="SNR",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dB",
         state_class=SensorStateClass.MEASUREMENT,
@@ -833,6 +853,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="signal_noise",
         translation_key="signal_noise",
+        name="Signal noise",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dB",
         state_class=SensorStateClass.MEASUREMENT,
@@ -844,6 +865,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="ip_address",
         translation_key="ip_address",
+        name="IP address",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda e: e.vacuum_state.get("netinfo", {}).get("addr"),
@@ -856,6 +878,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="nav_quality",
         translation_key="nav_quality",
+        name="Navigation quality",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -867,6 +890,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_start_time",
         translation_key="mission_start_time",
+        name="Mission start",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
@@ -879,6 +903,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_elapsed_time",
         translation_key="mission_elapsed_time",
+        name="Mission elapsed time",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
@@ -889,6 +914,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_recharge_time",
         translation_key="mission_recharge_time",
+        name="Recharge time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -898,6 +924,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_expire_time",
         translation_key="mission_expire_time",
+        name="Mission expire time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -915,6 +942,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_recharge_minutes",
         translation_key="mission_recharge_minutes",
+        name="Mission – Recharge time remaining",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -927,6 +955,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_expire_minutes",
         translation_key="mission_expire_minutes",
+        name="Mission – Time until expiry",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -937,6 +966,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_id",
         translation_key="mission_id",
+        name="Mission – ID",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         # missionId: stable string across all recharge cycles of one mission.
@@ -949,6 +979,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="next_clean",
         translation_key="next_clean",
+        name="Status – Next clean",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: bool(s.get("cleanSchedule2") or s.get("cleanSchedule")),
@@ -960,6 +991,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="clean_base_status",
         translation_key="clean_base_status",
+        name="Clean Base status",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_clean_base,
         value_fn=lambda e: CLEAN_BASE_LABELS.get(
@@ -969,6 +1001,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="dock_tank_level",
         translation_key="dock_tank_level",
+        name="Dock tank level",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "tankLvl" in s.get("dock", {}),
@@ -980,6 +1013,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="tank_level",
         translation_key="tank_level",
+        name="Tank level",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "tankLvl" in s and "detectedPad" in s,
@@ -988,6 +1022,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_pad",
         translation_key="mop_pad",
+        name="Mop pad",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "detectedPad" in s,
         value_fn=lambda e: PAD_LABELS.get(
@@ -997,6 +1032,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_behavior",
         translation_key="mop_behavior",
+        name="Mop – Clean passes (legacy)",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,  # superseded by mop_ars_behavior (F3b)
         filter_fn=lambda s: "rankOverlap" in s,
@@ -1007,6 +1043,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_tank_level",
         translation_key="mop_tank_level",
+        name="Mop tank level",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "tankLvl" in s and "detectedPad" in s,
@@ -1017,6 +1054,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_clean_mode",
         translation_key="mop_clean_mode",
+        name="Mop – Clean mode",
         device_class=SensorDeviceClass.ENUM,
         options=["Dry", "Wet", "Unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1028,6 +1066,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_tank_status",
         translation_key="mop_tank_status",
+        name="Mop – Tank status",
         device_class=SensorDeviceClass.ENUM,
         options=["Ready", "Fill Tank", "Lid Open", "Tank Missing", "Unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1039,6 +1078,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mop_ars_behavior",
         translation_key="mop_ars_behavior",
+        name="Mop – ARS behavior",
         device_class=SensorDeviceClass.ENUM,
         options=[
             "No Mop", "Extended", "Standard", "Deep",
@@ -1055,6 +1095,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="filter_last_replaced",
         translation_key="filter_last_replaced",
+        name="Maintenance – Filter last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
@@ -1071,6 +1112,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="brush_last_replaced",
         translation_key="brush_last_replaced",
+        name="Maintenance – Brushes last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: not is_mop(s),  # Braava uses pad_last_replaced
@@ -1088,6 +1130,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="pad_last_replaced",
         translation_key="pad_last_replaced",
+        name="Maintenance – Pad last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: is_mop(s),  # Braava only — same store slot as brush
@@ -1105,6 +1148,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_last_replaced",
         translation_key="battery_last_replaced",
+        name="Maintenance – Battery last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
@@ -1124,6 +1168,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="clean_streak",
         translation_key="clean_streak",
+        name="Missions – Clean streak",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
@@ -1131,6 +1176,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="missions_last_30d",
         translation_key="missions_last_30d",
+        name="Missions – Last 30 days",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
@@ -1140,6 +1186,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="completion_rate_30d",
         translation_key="completion_rate_30d",
+        name="Missions – Completion rate",
         native_unit_of_measurement=PERCENTAGE,
         suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1149,6 +1196,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="area_cleaned_today",
         translation_key="area_cleaned_today",
+        name="Missions – Area cleaned today",
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=1,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1159,6 +1207,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="last_mission_result",
         translation_key="last_mission_result",
+        name="Missions – Last result",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("result") if s.latest() else None
@@ -1167,6 +1216,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="last_mission_duration",
         translation_key="last_mission_duration",
+        name="Missions – Last duration",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1180,12 +1230,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="last_error_code",
         translation_key="last_error_code",
+        name="Error – Last code",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_code_value,
     ),
     RoombaSensorDescription(
         key="last_error_at",
         translation_key="last_error_at",
+        name="Error – Last time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_at_value,
@@ -1193,6 +1245,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="last_error_zone",
         translation_key="last_error_zone",
+        name="Error – Last zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         # No filter_fn — created for all robots.
         # Returns None for 600-series (no zone data) → correct HA "unknown" state.
@@ -1203,6 +1256,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="stuck_count_30d",
         translation_key="stuck_count_30d",
+        name="Error – Stuck events (30 days)",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
@@ -1212,6 +1266,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="problem_zone",
         translation_key="problem_zone",
+        name="Error – Problem zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: has_pose(s),   # requires zone tracking — excludes 600-series
         value_fn=_problem_zone_value,
@@ -1222,6 +1277,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="presence_clean_opportunities_7d",
         translation_key="presence_clean_opportunities_7d",
+        name="Presence – Clean opportunities (7 days)",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _presence_opportunities(e, 7),
@@ -1229,6 +1285,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="presence_clean_utilisation_7d",
         translation_key="presence_clean_utilisation_7d",
+        name="Presence – Clean utilisation (7 days)",
         native_unit_of_measurement=PERCENTAGE,
         suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1238,6 +1295,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="next_likely_clean_window",
         translation_key="next_likely_clean_window",
+        name="Presence – Next clean window",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_next_likely_clean_window,
@@ -1250,6 +1308,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="filter_wear_rate",
         translation_key="filter_wear_rate",
+        name="Maintenance – Filter wear rate",
         native_unit_of_measurement="h/day",
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1260,6 +1319,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="brush_wear_rate",
         translation_key="brush_wear_rate",
+        name="Maintenance – Brush wear rate",
         native_unit_of_measurement="h/day",
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1270,6 +1330,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="pad_wear_rate",
         translation_key="pad_wear_rate",
+        name="Maintenance – Pad wear rate",
         native_unit_of_measurement="h/day",
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1280,6 +1341,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="filter_days_until_due",
         translation_key="filter_days_until_due",
+        name="Maintenance – Filter days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1289,6 +1351,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="brush_days_until_due",
         translation_key="brush_days_until_due",
+        name="Maintenance – Brush days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1298,6 +1361,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="pad_days_until_due",
         translation_key="pad_days_until_due",
+        name="Maintenance – Pad days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1312,6 +1376,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_capacity_mah",
         translation_key="battery_capacity_mah",
+        name="Battery capacity",
         native_unit_of_measurement="mAh",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1322,6 +1387,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="nav_panics",
         translation_key="nav_panics",
+        name="Navigation panic events",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1331,6 +1397,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="cliff_events_front",
         translation_key="cliff_events_front",
+        name="Cliff events – Front",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1340,6 +1407,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="cliff_events_rear",
         translation_key="cliff_events_rear",
+        name="Cliff events – Rear",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1351,6 +1419,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_capacity_retention",
         translation_key="battery_capacity_retention",
+        name="Maintenance – Battery capacity retention",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1362,6 +1431,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="estimated_battery_eol",
         translation_key="estimated_battery_eol",
+        name="Maintenance – Est. battery end of life",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1377,6 +1447,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="consecutive_clean_skips",
         translation_key="consecutive_clean_skips",
+        name="Performance – Consecutive clean skips",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1463,6 +1534,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
+        # Lock entity_id to the description key so it is locale-independent.
+        # Without this, HA derives entity_id from the translated name, causing
+        # German slugs on DE installs (the root cause of all v5–v9 migrations).
         self._unsub_tick: Callable[[], None] | None = None
 
     # ── Countdown tick for recharge/expire minute sensors ────────────────────
@@ -1792,7 +1866,11 @@ def _mh_total_missions(history: dict[str, Any]) -> StateType:
 CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     CloudHistorySensorDescription(
         key="recent_area_30d",
-        translation_key="recent_area_30d",
+        # No translation_key: name= drives entity_id slug, keeping it locale-independent.
+        # With translation_key set, HA uses the translated name for entity_id on first
+        # registration, producing German slugs on DE installs. Using name= alone locks
+        # the entity_id to an English slug permanently.
+        name="Recent cleaned area (30 d)",
         native_unit_of_measurement="m²",
         device_class=SensorDeviceClass.AREA,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1801,7 +1879,8 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     ),
     CloudHistorySensorDescription(
         key="recent_time_30d",
-        translation_key="recent_time_30d",
+        # No translation_key — same reason as recent_area_30d above.
+        name="Recent cleaning time (30 d)",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1811,6 +1890,7 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
     CloudHistorySensorDescription(
         key="lifetime_missions",
         translation_key="lifetime_missions",
+        name="Lifetime missions",
         native_unit_of_measurement="missions",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2116,6 +2196,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_completion_rate",
         translation_key="recent_completion_rate",
+        name="Recent completion rate",
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2124,6 +2205,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_recharges",
         translation_key="recent_recharges",
+        name="Recent mid-mission recharges",
         native_unit_of_measurement="recharges",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2132,6 +2214,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_evacuations",
         translation_key="recent_evacuations",
+        name="Recent Clean Base evacuations",
         native_unit_of_measurement="evacuations",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2140,6 +2223,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_dirt_events",
         translation_key="recent_dirt_events",
+        name="Recent dirt events",
         native_unit_of_measurement="events",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2148,6 +2232,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_error_code",
         translation_key="recent_error_code",
+        name="Recent error code (cloud)",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_raw_cloud_last_error_code,
         attributes_fn=_raw_cloud_last_error_attrs,
@@ -2155,6 +2240,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_error_time",
         translation_key="recent_error_time",
+        name="Recent error time (cloud)",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_raw_cloud_last_error_time,
@@ -2164,6 +2250,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_wifi_floor",
         translation_key="recent_wifi_floor",
+        name="Wi-Fi – Signal floor",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2173,6 +2260,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_wifi_stability",
         translation_key="recent_wifi_stability",
+        name="Wi-Fi – Signal stability",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2184,6 +2272,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_cleaning_speed",
         translation_key="recent_cleaning_speed",
+        name="Performance – Cleaning speed",
         native_unit_of_measurement="m²/min",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2194,6 +2283,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_dirt_density",
         translation_key="recent_dirt_density",
+        name="Performance – Dirt density",
         native_unit_of_measurement="events/m²",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2205,6 +2295,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_recharge_fraction",
         translation_key="recent_recharge_fraction",
+        name="Performance – Recharge fraction",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2215,6 +2306,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="cleaning_speed_trend",
         translation_key="cleaning_speed_trend",
+        name="Performance – Cleaning speed trend",
         device_class=SensorDeviceClass.ENUM,
         options=["improving", "stable", "declining", "unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2226,6 +2318,7 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
     CloudRawSensorDescription(
         key="recent_coverage_pct",
         translation_key="recent_coverage_pct",
+        name="Performance – Coverage",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -2258,6 +2351,7 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
         self._coordinator = coordinator
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_{description.key}"
+        # Lock entity_id to the description key so it is locale-independent.
 
     @property
     def native_value(self) -> StateType:
@@ -2366,6 +2460,9 @@ class CloudHistorySensor(IRobotEntity, SensorEntity):
         self.entity_description = description
         self._coordinator = coordinator
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_{description.key}"
+        # Lock entity_id to the description key so it is locale-independent.
+        # Without this, HA derives entity_id from the translated name, which
+        # produces German slugs (e.g. gereinigte_flache_30_t) on DE installs.
 
     @property
     def native_value(self) -> StateType:

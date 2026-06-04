@@ -20,6 +20,7 @@ class _FakeConfigEntry:
         self.version = version
         self.options = dict(options)
         self.entry_id = entry_id
+        self.data = {"blid": "TEST_BLID_000000000000000000000000"}
         self._updated_options: dict | None = None
         self._updated_version: int | None = None
 
@@ -42,6 +43,11 @@ class _FakeHass:
             _os.makedirs(_os.path.dirname(p), exist_ok=True)
             return p
 
+    class _FakeBus:
+        """Minimal event bus stub — EntityRegistry.__init__ calls async_listen."""
+        def async_listen(self, event_type, callback, *args, **kwargs):
+            return lambda: None  # returns an unsubscribe callable
+
     class _ConfigEntries:
         def __init__(self, hass: "_FakeHass"):
             self._hass = hass
@@ -58,6 +64,7 @@ class _FakeHass:
 
     def __init__(self):
         self.config_entries = _FakeHass._ConfigEntries(self)
+        self.bus = _FakeHass._FakeBus()
         import asyncio as _asyncio
         self.loop = _asyncio.get_event_loop()
         self.data = {}
@@ -71,13 +78,30 @@ class TestMigrateEntryV1ToV2:
 
     def _run_migration(self, entry_options: dict, entry_version: int = 1) -> _FakeConfigEntry:
         import asyncio
+        from unittest.mock import MagicMock, patch
         from custom_components.roomba_plus import async_migrate_entry
 
         entry = _FakeConfigEntry(version=entry_version, options=entry_options)
         hass = _FakeHass()
+
+        # Patch er.async_get to return a minimal entity registry mock so
+        # migration steps that rename/remove entities don't need a real
+        # EntityRegistry (which requires hass.bus + storage I/O).
+        fake_reg = MagicMock()
+        fake_reg.entities = {}  # empty: no entities to rename or remove
+
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(async_migrate_entry(hass, entry))
+            with patch(
+                "custom_components.roomba_plus.helpers_entity_registry_async_get",
+                return_value=fake_reg,
+                create=True,
+            ):
+                with patch(
+                    "homeassistant.helpers.entity_registry.async_get",
+                    return_value=fake_reg,
+                ):
+                    result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
             loop.close()
         assert result is True
@@ -85,7 +109,7 @@ class TestMigrateEntryV1ToV2:
 
     def test_returns_true(self):
         entry = self._run_migration({})
-        assert entry.version == 3  # v2.1: v1 migrates through v2 to v3
+        assert entry.version == 11  # current config entry version as of v2.1.x
 
     def test_adds_marker_key(self):
         entry = self._run_migration({})
@@ -108,21 +132,29 @@ class TestMigrateEntryV1ToV2:
         entry = self._run_migration({"cloud_raw_records_version": 1}, entry_version=1)
         assert entry.options["cloud_raw_records_version"] == 1
 
-    def test_version_bumped_to_2(self):
-        """v1 entry migrates through v2 to v3 (current as of v2.1.0)."""
+    def test_version_bumped_to_11(self):
+        """v1 entry migrates through all steps to current version (11)."""
         entry = self._run_migration({})
-        assert entry.version == 3
+        assert entry.version == 11
 
-    def test_already_at_v2_noop(self):
-        """An entry already at version 2 is returned as-is without modification."""
+    def test_already_at_v11_noop(self):
+        """An entry already at the current version is returned as-is."""
         import asyncio
+        from unittest.mock import MagicMock, patch
         from custom_components.roomba_plus import async_migrate_entry
 
-        entry = _FakeConfigEntry(version=2, options={"continuous": True})
+        entry = _FakeConfigEntry(version=11, options={"continuous": True})
         hass = _FakeHass()
+        fake_reg = MagicMock()
+        fake_reg.entities = {}
+
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(async_migrate_entry(hass, entry))
+            with patch(
+                "homeassistant.helpers.entity_registry.async_get",
+                return_value=fake_reg,
+            ):
+                result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
             loop.close()
         assert result is True

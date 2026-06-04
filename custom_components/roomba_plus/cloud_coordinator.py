@@ -98,6 +98,14 @@ def classify_mission_result(record: dict) -> str:
             return f"error_{pause_id}"
         return "cancelled"
 
+    if done == "inc":
+        # Mission incomplete — robot aborted before finishing.
+        # pauseId carries the error code when present (confirmed: pauseId=48
+        # from CR3 debug, June 2026 — error during room navigation start).
+        if pause_id > 0:
+            return f"error_{pause_id}"
+        return "cancelled"
+
     if done:
         import logging
         logging.getLogger(__name__).debug(
@@ -350,32 +358,50 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raw_history[1] if len(raw_history) > 1 and isinstance(raw_history[1], dict)
                 else {}
             )
-            # Collect all unique keys across all records to detect
-            # fields that only appear on certain result types.
-            # _array_fields captures keys whose value is a non-empty list,
-            # storing the first element as a shape sample — this lets us
-            # empirically confirm the field name for cleanRooms/events/
-            # zoneEvents sub-arrays without assuming anything about naming.
-            _all_keys: set = set()
-            _array_fields: dict[str, Any] = {}
+
+            # field_coverage: count of records containing each key.
+            # array_stats: min/max element count + first-element shape per array key.
+            # nested_keys: sub-keys one level deep for dict-valued fields.
+            _all_keys: set[str] = set()
+            _field_coverage: dict[str, int] = {}
+            _array_stats: dict[str, dict] = {}
+            _nested_keys: dict[str, set] = {}
+
             for _r in raw_history:
-                if isinstance(_r, dict):
-                    _all_keys.update(_r.keys())
-                    for _k, _v in _r.items():
-                        if isinstance(_v, list) and _v and _k not in _array_fields:
-                            _array_fields[_k] = _v[0]  # first element as shape sample
+                if not isinstance(_r, dict):
+                    continue
+                _all_keys.update(_r.keys())
+                for _k, _v in _r.items():
+                    _field_coverage[_k] = _field_coverage.get(_k, 0) + 1
+                    if isinstance(_v, list) and _v:
+                        _s = _array_stats.setdefault(_k, {"min": len(_v), "max": 0})
+                        _s["min"] = min(_s["min"], len(_v))
+                        _s["max"] = max(_s["max"], len(_v))
+                        if "first_element" not in _s:
+                            _s["first_element"] = _v[0]
+                    elif isinstance(_v, dict) and _v:
+                        _nested_keys.setdefault(_k, set()).update(_v.keys())
+
+            _n = len([_r for _r in raw_history if isinstance(_r, dict)])
+            _coverage_summary = {
+                _k: f"{_field_coverage[_k]}/{_n}"
+                for _k in sorted(_all_keys)
+            }
+
             _LOGGER.debug(
-                "iRobot cloud: raw_history len=%d "
-                "all_keys=%s "
-                "array_fields=%s "
-                "first_record=%s "
-                "second_record=%s "
-                "for %s",
+                "iRobot cloud: raw_history len=%d\n"
+                "  field_coverage: %s\n"
+                "  array_stats: %s\n"
+                "  nested_keys: %s\n"
+                "  first_record: %s\n"
+                "  second_record: %s\n"
+                "  for %s",
                 len(raw_history),
-                sorted(_all_keys),
-                _array_fields,  # field name + first-element shape for any list-valued keys
-                _first,    # full first record (all fields)
-                _second,   # full second record (may differ from first)
+                _coverage_summary,
+                _array_stats,
+                {_k: sorted(_v) for _k, _v in _nested_keys.items()},
+                _first,
+                _second,
                 self.blid,
             )
         elif isinstance(raw_history, dict):
@@ -425,6 +451,23 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning(
                 "iRobot cloud: unexpected mission_history type %s for %s",
                 type(raw_history).__name__, self.blid,
+            )
+
+        # Log pmap structure to answer: does activeDetails=2 embed polygon
+        # geometry, or does that require the separate /umf endpoint?
+        for _p in result["pmaps"]:
+            _det = _p.get("active_pmapv_details", {})
+            _pmapv = _det.get("active_pmapv", {})
+            _LOGGER.debug(
+                "iRobot cloud: pmap_id=%s  pmapv_keys=%s  "
+                "region_count=%d  zone_count=%d  "
+                "first_region_keys=%s  map_header_keys=%s",
+                _pmapv.get("pmap_id"),
+                sorted(_pmapv.keys()),
+                len(_det.get("regions", [])),
+                len(_det.get("zones", [])),
+                sorted(_det["regions"][0].keys()) if _det.get("regions") else [],
+                sorted(_det.get("map_header", {}).keys()),
             )
 
         _LOGGER.debug(

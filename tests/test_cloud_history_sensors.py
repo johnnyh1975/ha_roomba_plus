@@ -1,4 +1,4 @@
-"""Unit tests for cloud history sensors (lifetime_area, lifetime_time, lifetime_missions).
+"""Unit tests for cloud history sensors (recent_area_30d, recent_time_30d, lifetime_missions).
 
 Tests cover:
   - Value extraction from mission_history API response
@@ -10,6 +10,11 @@ Tests cover:
   - Sensors not created when has_cloud is False
   - CloudHistorySensor does not update from MQTT (new_state_filter)
   - Sensor unavailable when coordinator.last_update_success is False
+
+Keys as of v2.1.x:
+  - recent_area_30d   (no translation_key — name= locks entity_id slug locale-independently)
+  - recent_time_30d   (no translation_key — same reason)
+  - lifetime_missions (has translation_key)
 
 No HA or roombapy installation required — uses stubs from conftest.py.
 """
@@ -213,24 +218,40 @@ class TestMhTotalMissions:
 # ── CLOUD_HISTORY_SENSORS descriptions ────────────────────────────────────────
 
 class TestCloudHistorySensorsDescriptions:
+    """Verify the three CLOUD_HISTORY_SENSORS descriptions match current code.
+
+    Keys as of v2.1.x: recent_area_30d, recent_time_30d, lifetime_missions.
+    recent_area_30d and recent_time_30d deliberately have no translation_key —
+    name= alone locks the entity_id slug to English regardless of HA locale.
+    """
+
     def test_three_sensors_defined(self):
         assert len(CLOUD_HISTORY_SENSORS) == 3
 
     def test_keys(self):
         keys = {d.key for d in CLOUD_HISTORY_SENSORS}
-        assert keys == {"lifetime_area", "lifetime_time", "lifetime_missions"}
+        assert keys == {"recent_area_30d", "recent_time_30d", "lifetime_missions"}
 
-    def test_all_have_translation_keys(self):
-        for d in CLOUD_HISTORY_SENSORS:
-            assert d.translation_key is not None
+    def test_lifetime_missions_has_translation_key(self):
+        """lifetime_missions uses translation_key for localised friendly name."""
+        missions = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_missions")
+        assert missions.translation_key == "lifetime_missions"
+
+    def test_area_and_time_have_no_translation_key(self):
+        """recent_area_30d and recent_time_30d use name= only (entity_id stability)."""
+        for key in ("recent_area_30d", "recent_time_30d"):
+            desc = next(d for d in CLOUD_HISTORY_SENSORS if d.key == key)
+            assert desc.translation_key is None, (
+                f"{key} should have no translation_key (uses name= for entity_id stability)"
+            )
 
     def test_area_unit_m2(self):
-        area = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_area")
+        area = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "recent_area_30d")
         assert area.native_unit_of_measurement == "m²"
 
     def test_time_unit_minutes(self):
         from homeassistant.const import UnitOfTime
-        time = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_time")
+        time = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "recent_time_30d")
         assert time.native_unit_of_measurement == UnitOfTime.MINUTES
 
     def test_missions_unit(self):
@@ -246,12 +267,12 @@ class TestCloudHistorySensorsDescriptions:
 # ── CloudHistorySensor entity ─────────────────────────────────────────────────
 
 class TestCloudHistorySensorNativeValue:
-    def test_lifetime_area_value(self):
-        sensor = _make_sensor("lifetime_area", _make_history(sqft=10764))
+    def test_recent_area_value(self):
+        sensor = _make_sensor("recent_area_30d", _make_history(sqft=10764))
         assert sensor.native_value == pytest.approx(1000.0, abs=1)
 
-    def test_lifetime_time_value(self):
-        sensor = _make_sensor("lifetime_time", _make_history(hr=1, mn=30))
+    def test_recent_time_value(self):
+        sensor = _make_sensor("recent_time_30d", _make_history(hr=1, mn=30))
         assert sensor.native_value == 90
 
     def test_lifetime_missions_value(self):
@@ -259,25 +280,25 @@ class TestCloudHistorySensorNativeValue:
         assert sensor.native_value == 42
 
     def test_none_when_no_history_data(self):
-        sensor = _make_sensor("lifetime_area", {})
+        sensor = _make_sensor("recent_area_30d", {})
         assert sensor.native_value is None
 
     def test_none_when_coordinator_has_no_data(self):
-        sensor = _make_sensor("lifetime_area", success=False)
+        sensor = _make_sensor("recent_area_30d", success=False)
         assert sensor.native_value is None
 
 
 class TestCloudHistorySensorAvailability:
     def test_available_when_coordinator_ok(self):
-        sensor = _make_sensor("lifetime_area", _make_history(sqft=100))
+        sensor = _make_sensor("recent_area_30d", _make_history(sqft=100))
         assert sensor.available is True
 
     def test_unavailable_when_last_update_failed(self):
-        sensor = _make_sensor("lifetime_area", success=False)
+        sensor = _make_sensor("recent_area_30d", success=False)
         assert sensor.available is False
 
     def test_unavailable_when_data_none(self):
-        sensor = _make_sensor("lifetime_area")
+        sensor = _make_sensor("recent_area_30d")
         sensor._coordinator.data = None
         assert sensor.available is False
 
@@ -292,16 +313,16 @@ class TestCloudHistorySensorNoMqttUpdate:
 
 class TestCloudHistorySensorUniqueId:
     def test_unique_id_contains_key(self):
-        sensor = _make_sensor("lifetime_area", _make_history(sqft=100))
-        assert "lifetime_area" in sensor._attr_unique_id
+        sensor = _make_sensor("recent_area_30d", _make_history(sqft=100))
+        assert "recent_area_30d" in sensor._attr_unique_id
 
     def test_unique_id_contains_blid(self):
         sensor = _make_sensor("lifetime_missions", _make_history(n_mssn=5))
         assert "test_blid" in sensor._attr_unique_id
 
     def test_unique_ids_distinct(self):
-        s1 = _make_sensor("lifetime_area", _make_history(sqft=100))
-        s2 = _make_sensor("lifetime_time", _make_history(hr=1, mn=0))
+        s1 = _make_sensor("recent_area_30d", _make_history(sqft=100))
+        s2 = _make_sensor("recent_time_30d", _make_history(hr=1, mn=0))
         assert s1._attr_unique_id != s2._attr_unique_id
 
 
@@ -368,4 +389,4 @@ class TestSensorSetupEntryCloud:
 
         cloud_sensors = [e for e in created if isinstance(e, CloudHistorySensor)]
         keys = {e.entity_description.key for e in cloud_sensors}
-        assert keys == {"lifetime_area", "lifetime_time", "lifetime_missions"}
+        assert keys == {"recent_area_30d", "recent_time_30d", "lifetime_missions"}

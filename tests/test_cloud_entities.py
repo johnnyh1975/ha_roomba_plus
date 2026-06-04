@@ -535,3 +535,68 @@ class TestSelectSetupEntryRouting:
             ir.async_create_issue = original_create
 
         assert calls == [], "async_create_issue should not be called when cloud is active"
+
+
+# ── 600-series cloud sensor creation (Q1 verification) ───────────────────────
+
+class TestCloudRawSensors600Series:
+    """Verify CloudRawSensor entities are created for 600-series robots.
+
+    600-series robots have MapCapability.NONE and no pmaps.
+    They can still have cloud credentials and receive missionhistory data.
+    CloudRawSensor entities should be created when has_cloud is True,
+    regardless of map capability.
+    """
+
+    def _make_600_entry(self, raw_records=None):
+        """Config entry simulating a 600-series robot with cloud creds."""
+        entry = _make_config_entry(has_cloud=True)
+        cc = entry.runtime_data.cloud_coordinator
+        cc.raw_records = raw_records or []
+        cc.last_update_success = True
+        cc.data = {"pmaps": [], "favorites": [], "mission_history": {}}
+        return entry
+
+    def test_cloud_raw_sensors_list_defined(self):
+        """CLOUD_RAW_SENSORS tuple is non-empty."""
+        from custom_components.roomba_plus.sensor import CLOUD_RAW_SENSORS
+        assert len(CLOUD_RAW_SENSORS) > 0
+
+    def test_cloud_raw_sensor_available_with_records(self):
+        """CloudRawSensor.available is True when coordinator has data."""
+        from custom_components.roomba_plus.sensor import (
+            CLOUD_RAW_SENSORS, CloudRawSensor,
+        )
+        entry = self._make_600_entry()
+        cc = entry.runtime_data.cloud_coordinator
+        roomba = _make_roomba()
+        desc = CLOUD_RAW_SENSORS[0]
+        sensor = CloudRawSensor(roomba, "test_blid", cc, desc, entry)
+        assert sensor.available is True
+
+    def test_cloud_raw_sensor_unavailable_without_coordinator(self):
+        """CloudRawSensor.available is False when coordinator has no data."""
+        from custom_components.roomba_plus.sensor import (
+            CLOUD_RAW_SENSORS, CloudRawSensor,
+        )
+        entry = _make_config_entry(has_cloud=False)
+        cc = MagicMock()
+        cc.last_update_success = False
+        cc.data = None
+        roomba = _make_roomba()
+        desc = CLOUD_RAW_SENSORS[0]
+        sensor = CloudRawSensor(roomba, "test_blid", cc, desc, entry)
+        assert sensor.available is False
+
+    def test_cloud_raw_sensor_value_from_records(self):
+        """CloudRawSensor returns None when records empty (not raises)."""
+        from custom_components.roomba_plus.sensor import (
+            CLOUD_RAW_SENSORS, CloudRawSensor,
+        )
+        entry = self._make_600_entry(raw_records=[])
+        cc = entry.runtime_data.cloud_coordinator
+        roomba = _make_roomba()
+        # Use recent_wifi_floor — returns None on empty records
+        desc = next(d for d in CLOUD_RAW_SENSORS if d.key == "recent_wifi_floor")
+        sensor = CloudRawSensor(roomba, "test_blid", cc, desc, entry)
+        assert sensor.native_value is None

@@ -58,7 +58,7 @@ Returns mission history in one of two formats.
 
 | Parameter | Type    | Default | Range  | Description                          |
 |-----------|---------|---------|--------|--------------------------------------|
-| `format`  | string  | summary | —      | `summary` or `records`               |
+| `format`  | string  | summary | —      | `summary`, `records`, or `hazards`   |
 | `days`    | integer | 28      | 1–90   | Lookback window (summary format only)|
 
 **Error responses:**
@@ -160,12 +160,13 @@ end-timestamp matching (±120 s tolerance) — F4a.
 
 ---
 
-### `format=hazards` — HazardRecord[] *(requires integration ≥ v2.2)*
+### `format=hazards` — HazardRecord[] *(full data requires integration ≥ v2.2)*
 
 Returns stuck-event hotspots from the occupancy grid with dock-relative
 coordinates. Used by the companion card to overlay hazard pins on the floor plan.
 
-Available in v2.2.0. Returns 400 in v2.1.x (unknown format value).
+Available from v2.1.3: accepted by the validator and returns `[]` (empty array).
+Full data (GridStore stuck hotspots, observed zone centroids) available from v2.2.0.
 
 ---
 

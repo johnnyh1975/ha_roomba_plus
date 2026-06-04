@@ -61,6 +61,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="evac",
         translation_key="evac",
+        name="Action – Empty bin",
         entity_category=EntityCategory.CONFIG,
         command="evac",
         filter_fn=lambda s: s.get("cap", {}).get("dockComm") == 1,
@@ -68,6 +69,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="locate",
         translation_key="locate",
+        name="Action – Find robot",
         entity_category=EntityCategory.CONFIG,
         command="find",
         filter_fn=None,
@@ -80,6 +82,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="map_training",
         translation_key="map_training",
+        name="Action – Start map training",
         entity_category=EntityCategory.CONFIG,
         command="train",
         filter_fn=lambda s: bool(s.get("pmaps")),
@@ -92,6 +95,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="spot",
         translation_key="spot",
+        name="Spot clean (experimental)",
         entity_category=EntityCategory.CONFIG,
         command="spot",
         filter_fn=lambda s: not s.get("pmaps"),  # EPHEMERAL: no persistent pmaps
@@ -100,6 +104,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="quick",
         translation_key="quick",
+        name="Quick clean (experimental)",
         entity_category=EntityCategory.CONFIG,
         command="quick",
         filter_fn=lambda s: not s.get("pmaps"),
@@ -108,6 +113,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="sleep",
         translation_key="sleep",
+        name="Sleep (experimental)",
         entity_category=EntityCategory.CONFIG,
         command="sleep",
         filter_fn=lambda s: not s.get("pmaps"),
@@ -116,6 +122,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
     RoombaButtonDescription(
         key="power_off",
         translation_key="power_off",
+        name="Power off (experimental)",
         entity_category=EntityCategory.CONFIG,
         command="off",
         filter_fn=lambda s: not s.get("pmaps"),

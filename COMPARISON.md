@@ -86,6 +86,9 @@
 | Zone / room selection | ❌ | ✅ local via `region_id` | ✅ select per room with real names from cloud ★ |
 | Zone selection — fully local | ❌ | ✅ ★ | ❌ pmap sync requires cloud |
 | Real room names | ❌ | ⚠️ manually named via Repair Issue | ✅ directly from cloud pmaps ★ |
+| Keep-out zone visibility | ❌ | ❌ *(v2.2 planned)* | ✅ rendered on UMF map |
+| Observed zone visibility | ❌ | ❌ *(v2.2 planned)* | ✅ robot-learned obstacles rendered |
+| Per-room cleaning pass count | ❌ | ⚠️ single zone select only | ✅ select entity per room ★ |
 | Automatic room detection (900-series) | ❌ | ✅ gap segmentation + EMA confidence ★ | ❌ |
 | Door-width calibration | ❌ | ✅ ★ | ❌ |
 | Lovelace map card | ❌ | ✅ companion card v1 (HACS, beta) | ⚠️ compatible with xiaomi-vacuum-map-card |
@@ -126,7 +129,7 @@
 
 ## Notes
 
-**¹ roomba_rest980 map approach** uses the rest980 Node.js container as a middle layer: coordinates arrive via MQTT locally, rest980 logs them, and the integration fetches the rendered map image over HTTP. This works well when `pose` data is available but requires the container to run 24/7. Since iRobot firmware 3.20+, `pose` is no longer reported locally — the map feature is broken on all updated robots. A jailbreak approach (SSH + internal MQTT broker access) is in active development by the author but not yet publicly released.
+**¹ roomba_rest980 map approach** uses the rest980 Node.js container as a middle layer: coordinates arrive via MQTT locally, rest980 logs them, and the integration fetches the rendered map image over HTTP. This works well when `pose` data is available but requires the container to run 24/7. Since iRobot firmware 3.20+, `pose` is no longer reported locally — the map feature is broken on all updated robots. A jailbreak approach (SSH + internal MQTT broker access) is in active development by the author but not yet publicly released. Notably, roomba_rest980 correctly renders user-configured keep-out zones and robot-learned obstacle zones on the map — a genuine advantage for users who configure no-go zones in the iRobot app. Roomba+ plans to surface these in v2.2.
 
 **² Roomba+ map approach** renders entirely in-process using the same local MQTT `pose` stream, with no external container. It also stopped working on firmware 3.20+ for the same reason. For robots on older firmware both approaches are comparable in accuracy; Roomba+ has the advantage of surviving HA restarts via `hass.storage`.
 

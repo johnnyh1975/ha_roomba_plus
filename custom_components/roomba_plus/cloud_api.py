@@ -187,6 +187,11 @@ class IrobotCloudApi:
         uid, sig, ts = await self._login_gigya(endpoints["gigya"], gigya_key)
         await self._login_irobot(uid, sig, ts)
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
+        _LOGGER.debug(
+            "iRobot cloud: robots dict — keys=%s  first_robot=%s",
+            sorted(self.robots.keys()),
+            next(iter(self.robots.values()), {}),
+        )
 
     async def _discover(self) -> dict[str, Any]:
         async with self._session.get(_discovery_url(self._country_code)) as resp:

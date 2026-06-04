@@ -426,6 +426,14 @@ REGION_TYPE_ICONS: Final[dict[str, str]] = {
     "study":             "mdi:bookshelf",
     "sun_room":          "mdi:sun-angle",
     "workshop":          "mdi:toolbox",
-    "default":           "mdi:map-marker",
-    "custom":            "mdi:map-marker",
+    "outside":             "mdi:asterisk",
+    "basement":            "mdi:home-floor-b",
+    "unfinished_basement": "mdi:home-floor-b",
+    "default":             "mdi:map-marker",
+    "custom":              "mdi:map-marker",
+}
+
+ZONE_TYPE_ICONS: Final[dict[str, str]] = {
+    "default":   "mdi:map-marker",
+    "furniture": "mdi:sofa-single",
 }
