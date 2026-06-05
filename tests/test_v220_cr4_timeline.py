@@ -96,6 +96,35 @@ class TestLatestCleanedRooms:
         result = ms.latest_cleaned_rooms(REGION_MAP)
         assert len(result) == 3  # only 3 status=0 events
 
+    def test_status_6_treated_as_complete(self):
+        # status=6 = completed after error recovery (lewis 22.52.10+ confirmed,
+        # Mission 798 in Thonno's debug: error(5) + resume + done=ok)
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": [{"type": "rid", "rid": "23"}]},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "23", "passCount": 1, "status": 6,
+                    "area": 37, "passArea": 16,
+                    # totalArea absent on status=6 — expected; coverage will be skipped
+                }},
+            ],
+        })
+        result = ms.latest_cleaned_rooms({"23": "Bathroom"})
+        assert result == ["Bathroom"]
+
+    def test_status_5_excluded(self):
+        # status=5 = interrupted by user/app (Mission 799: pause+dock by rmtApp)
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": []},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "26", "passCount": 1, "status": 5,
+                    "area": 251, "passArea": 40,
+                }},
+            ],
+        })
+        assert ms.latest_cleaned_rooms(REGION_MAP) is None
+
     def test_returns_none_for_whole_home_no_room_events(self):
         ms = _ms_with_timeline({
             "plan": {"upcoming": [], "ordered": 0},
@@ -153,11 +182,71 @@ class TestLatestCleanedRooms:
 
 # ── latest_planned_order ──────────────────────────────────────────────────────
 
+class TestExtractRid:
+    """_extract_rid handles two confirmed plan.upcoming formats."""
+
+    def test_string_format(self):
+        ms = MissionStore()
+        assert ms._extract_rid("23") == "23"
+
+    def test_object_format_rid_key(self):
+        # lewis 22.52.10+: {"type": "rid", "rid": "23"}
+        ms = MissionStore()
+        assert ms._extract_rid({"type": "rid", "rid": "23"}) == "23"
+
+    def test_object_format_region_id_key(self):
+        # fallback key name
+        ms = MissionStore()
+        assert ms._extract_rid({"region_id": "19"}) == "19"
+
+    def test_none_returns_empty(self):
+        ms = MissionStore()
+        assert ms._extract_rid(None) == ""
+
+    def test_empty_dict_returns_empty(self):
+        ms = MissionStore()
+        assert ms._extract_rid({}) == ""
+
+
 class TestLatestPlannedOrder:
     def test_returns_planned_order(self):
         ms = _ms_with_timeline(TYPICAL_TIMELINE)
         result = ms.latest_planned_order(REGION_MAP)
         assert result == ["Bathroom", "Kitchen", "Hallway"]
+
+    def test_object_format_upcoming(self):
+        # lewis 22.52.10+: plan.upcoming as list of dicts (Mission 800 confirmed)
+        ms = _ms_with_timeline({
+            "plan": {
+                "pmapId": "8VfoJEhaQ12ZGZaGlJp3wQ",
+                "ordered": 1, "type": "drc",
+                "upcoming": [
+                    {"type": "rid", "rid": "19"},
+                    {"type": "rid", "rid": "21"},
+                ],
+            },
+            "finEvents": [],
+        })
+        result = ms.latest_planned_order(REGION_MAP)
+        assert result == ["Bathroom", "Kitchen"]
+
+    def test_string_format_upcoming(self):
+        # Older format: plan.upcoming as list of plain strings
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": ["19", "21", "1"], "ordered": 1, "type": "drc"},
+            "finEvents": [],
+        })
+        result = ms.latest_planned_order(REGION_MAP)
+        assert result == ["Bathroom", "Kitchen", "Hallway"]
+
+    def test_mixed_format_skips_unrecognised(self):
+        # Defensive: mixed format drops empty-rid entries
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": [{"type": "rid", "rid": "19"}, {}]},
+            "finEvents": [],
+        })
+        result = ms.latest_planned_order(REGION_MAP)
+        assert result == ["Bathroom"]  # empty dict dropped
 
     def test_returns_none_when_upcoming_empty(self):
         ms = _ms_with_timeline({"plan": {"upcoming": []}, "finEvents": []})
@@ -206,6 +295,48 @@ class TestLatestRoomCoverage:
         assert pytest.approx(result["Bathroom"], abs=0.01) == 42 / 72
         assert pytest.approx(result["Kitchen"],  abs=0.01) == 95 / 120
         assert pytest.approx(result["Hallway"],  abs=0.01) == 44 / 55
+
+    def test_status_6_included_when_totalArea_present(self):
+        # status=6 with totalArea — should be included
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": ["19"]},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "19", "status": 6,
+                    "area": 76, "passArea": 41, "totalArea": 50,
+                }},
+            ],
+        })
+        result = ms.latest_room_coverage({"19": "Bathroom"})
+        assert result is not None
+        assert pytest.approx(result["Bathroom"], abs=0.01) == 50 / 76
+
+    def test_status_6_without_totalArea_skipped(self):
+        # status=6 without totalArea — gracefully skipped (coverage shows None for room)
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": ["23"]},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "23", "status": 6,
+                    "area": 37, "passArea": 16,
+                    # totalArea absent — confirmed on Thonno's lewis 22.52.10 robot
+                }},
+            ],
+        })
+        # No qualifying events with totalArea → returns None
+        assert ms.latest_room_coverage({"23": "Bathroom"}) is None
+
+    def test_status_5_excluded_from_coverage(self):
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": []},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "26", "status": 5, "area": 251,
+                    "passArea": 40,
+                }},
+            ],
+        })
+        assert ms.latest_room_coverage(REGION_MAP) is None
 
     def test_coverage_clamped_to_1(self):
         ms = _ms_with_timeline({
