@@ -1006,6 +1006,155 @@ async def async_migrate_entry(
         )
         current = 12
 
+    if current == 12:
+        # v12 → v13 (v2.3.0): fix language-slug entity_ids for entities that
+        # were registered without _attr_name in v2.2.x and earlier.
+        #
+        # Affected entities (unique_id suffix → correct entity_id suffix):
+        #   _map                  → _cleaning_map         (image)
+        #   _coverage_map         → _coverage_map         (image)
+        #   _carpet_boost_select  → _carpet_boost_select  (select)
+        #   _raw_state            → _raw_state            (sensor)
+        #   _reset_filter         → _reset_filter         (button)
+        #   _reset_brush          → _reset_brush          (button)
+        #   _reset_battery        → _reset_battery        (button)
+        #   _clean_zone           → _clean_zone           (button)
+        #   _repeat_mission       → _repeat_mission       (button)
+        #   _clean_smart_zone     → _clean_smart_zone     (button)
+        #
+        # On non-English installs, HA derived the entity_id slug from the
+        # translated display name (no _attr_name → HA used translation string
+        # as slug). Example on a German install:
+        #   image.*_reinigungskarte       → image.*_cleaning_map
+        #   button.*_zone_reinigen        → button.*_clean_zone
+        #
+        # On English installs the slug already matches — the rename is a no-op.
+        #
+        # The _map suffix is special: the unique_id is "{blid}_map" but the
+        # intended entity_id suffix is "_cleaning_map" (not "_map"), so we
+        # always rename regardless of locale.
+        #
+        # Migration strategy: same pattern as v12 (unique_id based, derive
+        # device prefix from sibling, idempotent).
+
+        from homeassistant.helpers import entity_registry as er
+        entity_reg = er.async_get(hass)
+        slug_renamed_13 = 0
+
+        # uid_suffix → (correct eid suffix, platform)
+        # Sorted longest-first so "_coverage_map" matches before "_map", etc.
+        _V13_RENAMES: dict[str, tuple[str, str]] = {
+            "_map":                 ("_cleaning_map",        "image"),
+            "_coverage_map":        ("_coverage_map",        "image"),
+            "_carpet_boost_select": ("_carpet_boost_select", "select"),
+            "_raw_state":           ("_raw_state",           "sensor"),
+            "_reset_filter":        ("_reset_filter",        "button"),
+            "_reset_brush":         ("_reset_brush",         "button"),
+            "_reset_battery":       ("_reset_battery",       "button"),
+            "_clean_zone":          ("_clean_zone",          "button"),
+            "_repeat_mission":      ("_repeat_mission",      "button"),
+            "_clean_smart_zone":    ("_clean_smart_zone",    "button"),
+        }
+        _V13_RENAMES_SORTED = sorted(
+            _V13_RENAMES.items(), key=lambda kv: len(kv[0]), reverse=True
+        )
+
+        # Build: uid_suffix → list[(entity_reg_entry, correct_eid_suffix)]
+        targets: list[tuple[Any, str, str]] = []
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            for uid_suffix, (correct_eid_suffix, _platform) in _V13_RENAMES_SORTED:
+                if uid.endswith(uid_suffix) and not uid.endswith("_cloud" + uid_suffix):
+                    targets.append((entry_er, uid_suffix, correct_eid_suffix))
+                    break
+
+        # Build full blid → sibling map for prefix derivation
+        all_blid_entities: dict[str, list] = {}
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            # Derive blid: everything before the first known suffix match
+            for uid_suffix, _ in _V13_RENAMES_SORTED:
+                if uid.endswith(uid_suffix):
+                    blid_key = uid[: -len(uid_suffix)]
+                    all_blid_entities.setdefault(blid_key, []).append(entry_er)
+                    break
+
+        for entry_er, uid_suffix, correct_eid_suffix in targets:
+            uid = entry_er.unique_id or ""
+            blid_key = uid[: -len(uid_suffix)]
+
+            if entry_er.entity_id.endswith(correct_eid_suffix):
+                continue  # already correct (English install or already migrated)
+
+            # Derive device prefix from any sibling whose entity_id name (without
+            # domain) ends with the correct suffix for its own unique_id.
+            # device_prefix = name portion only (no domain), e.g. "roomba"
+            device_prefix: str | None = None
+            for sibling in all_blid_entities.get(blid_key, []):
+                s_uid = sibling.unique_id or ""
+                s_name = sibling.entity_id.split(".", 1)[-1]   # strip domain
+                for s_suffix, (s_correct, _) in _V13_RENAMES_SORTED:
+                    if s_uid.endswith(s_suffix) and not s_uid.endswith("_cloud" + s_suffix):
+                        if s_name.endswith(s_correct):
+                            device_prefix = s_name[: -len(s_correct)]
+                            break
+                if device_prefix is not None:
+                    break
+
+            # Fallback: any sibling entity whose entity_id name ends with the
+            # non-blid tail of its own unique_id gives us the prefix
+            if device_prefix is None:
+                for any_e in list(entity_reg.entities.values()):
+                    if any_e.platform != DOMAIN:
+                        continue
+                    s_uid = any_e.unique_id or ""
+                    if not s_uid.startswith(blid_key):
+                        continue
+                    tail = s_uid[len(blid_key):]   # e.g. "_lifetime_missions"
+                    s_name = any_e.entity_id.split(".", 1)[-1]
+                    if tail and s_name.endswith(tail):
+                        device_prefix = s_name[: -len(tail)]
+                        break
+
+            if not device_prefix:
+                _LOGGER.warning(
+                    "Roomba+: v13 migration — could not compute prefix for %s "
+                    "(uid=%s) — skipping",
+                    entry_er.entity_id, uid,
+                )
+                continue
+
+            correct_eid = f"{entry_er.domain}.{device_prefix}{correct_eid_suffix}"
+
+            if entity_reg.async_get(correct_eid) is None:
+                entity_reg.async_update_entity(
+                    entry_er.entity_id, new_entity_id=correct_eid
+                )
+                slug_renamed_13 += 1
+                _LOGGER.info(
+                    "Roomba+: v13 renamed language-slug entity %s → %s",
+                    entry_er.entity_id, correct_eid,
+                )
+            else:
+                entity_reg.async_remove(entry_er.entity_id)
+                slug_renamed_13 += 1
+                _LOGGER.info(
+                    "Roomba+: v13 removed duplicate language-slug entity %s",
+                    entry_er.entity_id,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=13)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 13 "
+            "(%d language-slug entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed_13,
+        )
+        current = 13
+
     if current == config_entry.version:
         _LOGGER.debug(
             "Roomba+: config entry %s already at version %d — no migration needed",
@@ -1013,6 +1162,48 @@ async def async_migrate_entry(
         )
 
     return True
+
+
+# v2.3.0 F8 — UmfAligner re-alignment helpers ─────────────────────────────────
+
+def _umf_version_changed(
+    coordinator: Any,
+    entry: RoombaConfigEntry,
+) -> bool:
+    """Return True when the active UMF version differs from the last aligned version."""
+    current_version = coordinator.umf_data.get("version_id")
+    if not current_version:
+        return False
+    aligner = entry.runtime_data.umf_aligner
+    if aligner is None:
+        return True
+    return aligner.pmap_version_id != current_version
+
+
+async def _async_realign(
+    hass: HomeAssistant,
+    entry: RoombaConfigEntry,
+    coordinator: Any,
+) -> None:
+    """Re-instantiate and run UmfAligner after a pmap version change."""
+    from .umf_aligner import UmfAligner
+    data = entry.runtime_data
+    if not coordinator.umf_data.get("points2d") or not coordinator.regions:
+        return
+    if data.geometry_store is None:
+        return
+    aligner = UmfAligner(
+        points2d=coordinator.umf_data["points2d"],
+        regions=coordinator.regions,
+        geometry_store=data.geometry_store,
+        pmap_version_id=coordinator.umf_data.get("version_id", ""),
+    )
+    conf = await hass.async_add_executor_job(aligner.align)
+    data.umf_aligner = aligner
+    _LOGGER.info(
+        "Roomba+ UmfAligner: re-aligned confidence=%.2f aligned=%s for %s",
+        conf, aligner.aligned, entry.data[CONF_BLID],
+    )
 
 
 async def async_setup_entry(
@@ -1232,6 +1423,28 @@ async def async_setup_entry(
                 config_entry.data[CONF_BLID],
             )
 
+    # v2.3.0 F8 — UMF spatial fusion aligner
+    umf_aligner: Any | None = None
+    if (
+        cloud_coordinator is not None
+        and cloud_coordinator.umf_data.get("points2d")
+        and cloud_coordinator.regions
+        and geometry_store is not None
+    ):
+        from .umf_aligner import UmfAligner
+        _aligner = UmfAligner(
+            points2d=cloud_coordinator.umf_data["points2d"],
+            regions=cloud_coordinator.regions,
+            geometry_store=geometry_store,
+            pmap_version_id=cloud_coordinator.umf_data.get("version_id", ""),
+        )
+        _conf = await hass.async_add_executor_job(_aligner.align)
+        umf_aligner = _aligner
+        _LOGGER.info(
+            "Roomba+ UmfAligner: confidence=%.2f aligned=%s for %s",
+            _conf, _aligner.aligned, config_entry.data[CONF_BLID],
+        )
+
     config_entry.runtime_data = RoombaData(
         roomba=roomba,
         blid=config_entry.data[CONF_BLID],
@@ -1248,6 +1461,7 @@ async def async_setup_entry(
         last_error_zone=last_error_zone,
         grid_store=grid_store,
         floor_label=config_entry.options.get(CONF_FLOOR, ""),
+        umf_aligner=umf_aligner,
     )
 
     if presence_manager is not None:
@@ -1308,6 +1522,18 @@ async def async_setup_entry(
                     ms.async_save(hass, config_entry.entry_id),
                     name="roomba_plus_cloud_merge_save",
                 )
+            # v2.3.0 — re-align UmfAligner when UMF version changes
+            if _umf_version_changed(cloud_coordinator, config_entry):
+                hass.async_create_task(
+                    _async_realign(hass, config_entry, cloud_coordinator),
+                    name="roomba_plus_umf_realign",
+                )
+            # v2.3.0 Step 6c — F8b error recurrence Repair Issue
+            from .repairs import async_check_error_recurrence
+            hass.async_create_task(
+                async_check_error_recurrence(hass, config_entry),
+                name="roomba_plus_error_recurrence_check",
+            )
 
         config_entry.async_on_unload(
             cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)

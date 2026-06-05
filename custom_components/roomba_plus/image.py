@@ -44,7 +44,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
-from .const import DOMAIN
+from .const import CLEANING_PHASES, DOMAIN, MISSION_END_PHASES
 from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
@@ -53,8 +53,7 @@ from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 
-_CLEANING_PHASES    = {"run", "hmMidMsn"}
-_MISSION_END_PHASES = {"charge", "hmPostMsn", "stop", "evac"}
+# CLEANING_PHASES and MISSION_END_PHASES moved to const.py (v2.3.0 Step 1)
 
 _MAP_STORAGE_VERSION = 1
 
@@ -97,6 +96,16 @@ async def async_setup_entry(
             )
         )
 
+    # v2.3.0 Step 5b — room layout entity for xiaomi-vacuum-map-card (SMART only)
+    if data.map_capability == MapCapability.SMART:
+        entities.append(
+            RoombaRoomsImage(
+                roomba=data.roomba,
+                blid=data.blid,
+                config_entry=config_entry,
+            )
+        )
+
     async_add_entities(entities)
 
 
@@ -115,6 +124,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     """
 
     _attr_translation_key = "map"
+    _attr_name            = "Cleaning Map"   # G6: locale-independent entity_id slug
     _attr_entity_category = None
     _attr_content_type = "image/png"
 
@@ -163,7 +173,73 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """Return current map as PNG bytes. Always returns a valid image."""
         if self._renderer is None:
             return self._blank_image()
-        return await self.hass.async_add_executor_job(self._renderer.render)
+        png = await self.hass.async_add_executor_job(self._renderer.render)
+
+        # v2.3.0 Step 6 — keepout zone overlay (Amendment 4)
+        if self._config_entry is not None:
+            _data = self._config_entry.runtime_data
+            aligner = _data.umf_aligner
+            if (
+                aligner and aligner.aligned
+                and _data.cloud_coordinator is not None
+            ):
+                keepout_raw = _data.cloud_coordinator.keepout_zones
+                if keepout_raw:
+                    polys_px: list[list[tuple[int, int]]] = []
+                    for zone in keepout_raw:
+                        poly_umf = aligner.keepout_polygon_umf(zone)
+                        if not poly_umf:
+                            continue
+                        poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                        if not all(p is not None for p in poly_pose):
+                            continue
+                        polys_px.append(
+                            [self._renderer._mm_to_px(x, y) for x, y in poly_pose]
+                        )
+                    if polys_px:
+                        overlay_png = await self.hass.async_add_executor_job(
+                            self._renderer.render_keepout_zones, polys_px
+                        )
+                        if overlay_png is not None:
+                            png = overlay_png
+        return png
+
+    # v2.3.0 Step 5 — calibration + rooms for xiaomi-vacuum-map-card
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose calibration and room polygon data for xiaomi-vacuum-map-card.
+
+        Both attributes require UmfAligner confidence >= 0.70 and a renderer
+        that has completed at least one render() call (so _mm_to_px() is valid).
+        Returns empty dict when no aligner, not aligned, or no renderer.
+        """
+        attrs: dict[str, Any] = {}
+        if self._config_entry is None or self._renderer is None:
+            return attrs
+        data    = self._config_entry.runtime_data
+        aligner = data.umf_aligner
+        if aligner is None or not aligner.aligned:
+            return attrs
+
+        # calibration — three anchor point pairs for xiaomi-vacuum-map-card
+        cal = aligner.calibration_points(self._renderer._mm_to_px)
+        if cal:
+            attrs["calibration"] = cal
+
+        # rooms — per-room polygon outlines in image pixel space
+        rid_to_name = aligner.rid_to_name()
+        rooms: dict[str, Any] = {}
+        for rid, poly_umf in aligner.room_polygons_umf.items():
+            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+            if not all(p is not None for p in poly_pose):
+                continue
+            poly_px   = [self._renderer._mm_to_px(x, y) for x, y in poly_pose]
+            room_name = rid_to_name.get(rid, rid)
+            rooms[room_name] = {"outline": [{"x": px, "y": py} for px, py in poly_px]}
+        if rooms:
+            attrs["rooms"] = rooms
+
+        return attrs
 
     # ── Push-update wiring ────────────────────────────────────────────────────
 
@@ -187,21 +263,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Phase transitions
         if current_phase != self._last_phase:
-            if (current_phase in _CLEANING_PHASES
-                    and self._last_phase not in _CLEANING_PHASES):
+            if (current_phase in CLEANING_PHASES
+                    and self._last_phase not in CLEANING_PHASES):
                 if self._renderer:
                     self._renderer.reset()
                     self._mission_points = []
                     _LOGGER.debug("Map: mission started, renderer reset")
 
-            if (current_phase in _MISSION_END_PHASES
-                    and self._last_phase in _CLEANING_PHASES):
+            if (current_phase in MISSION_END_PHASES
+                    and self._last_phase in CLEANING_PHASES):
                 self._handle_mission_end()
 
             self._last_phase = current_phase
 
         # Pose update
-        if "pose" in state and self._renderer and current_phase in _CLEANING_PHASES:
+        if "pose" in state and self._renderer and current_phase in CLEANING_PHASES:
             self._handle_pose(state["pose"])
 
         # Stuck detection
@@ -371,6 +447,7 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
     """
 
     _attr_translation_key = "coverage_map"
+    _attr_name            = "Coverage Map"   # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_content_type = "image/png"
 
@@ -434,8 +511,8 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         self.vacuum_state = roomba_reported_state(self.vacuum)
         phase = self.vacuum_state.get("cleanMissionStatus", {}).get("phase", "")
         if (
-            phase in _MISSION_END_PHASES
-            and self._last_phase in _CLEANING_PHASES
+            phase in MISSION_END_PHASES
+            and self._last_phase in CLEANING_PHASES
         ):
             self._trigger_grid_update()
         self._last_phase = phase
@@ -492,3 +569,189 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
+
+
+# v2.3.0 Step 5b — Issue #14 ──────────────────────────────────────────────────
+
+class RoombaRoomsImage(IRobotEntity, ImageEntity):
+    """Static room-layout image for xiaomi-vacuum-map-card room selection.
+
+    Renders UmfAligner room polygons onto a dark canvas using Pillow directly —
+    no MapRenderer dependency. calibration and rooms attributes use the same
+    local to_px() transform as the render so pixel coordinates are consistent.
+
+    Distinct from RoombaMapImage (cleaning history + keepout overlay).
+    Preferred source for xiaomi-vacuum-map-card configuration.
+    """
+
+    _attr_content_type    = "image/png"
+    _attr_translation_key = "rooms_map"
+    _attr_name            = "Rooms Map"
+    _attr_entity_category = None
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+    ) -> None:
+        IRobotEntity.__init__(self, roomba, blid)
+        self._cache = None
+        self.access_tokens: collections.deque = collections.deque([], 2)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
+
+        # Persisted transform parameters for calibration_points consistency
+        self._last_x_min: float = 0.0
+        self._last_x_max: float = 1.0
+        self._last_y_min: float = 0.0
+        self._last_y_max: float = 1.0
+        self._last_size:  int   = 600
+        # Guard: do not expose calibration/rooms until at least one render has
+        # set the transform parameters correctly (avoids wrong coords at startup).
+        self._rendered_once: bool = False
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        self.async_update_token()
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # Cloud entity — no MQTT updates
+
+    async def async_image(self) -> bytes | None:
+        """Render room polygons from UmfAligner onto a dark canvas."""
+        return await self.hass.async_add_executor_job(self._render_rooms_png)
+
+    def _render_rooms_png(self) -> bytes:
+        """CPU-bound render — called via async_add_executor_job."""
+        if self._config_entry is None:
+            return self._blank_png()
+        data    = self._config_entry.runtime_data
+        aligner = data.umf_aligner
+        if not aligner or not aligner.aligned:
+            return self._blank_png()
+
+        # Collect all polygon vertices in pose space
+        all_pose: list[tuple[float, float]] = []
+        for poly_umf in aligner.room_polygons_umf.values():
+            for pt in poly_umf:
+                p = aligner.umf_to_pose(*pt)
+                if p:
+                    all_pose.append(p)
+        if not all_pose:
+            return self._blank_png()
+
+        margin_mm = 50.0
+        xs = [p[0] for p in all_pose]
+        ys = [p[1] for p in all_pose]
+        x_min = min(xs) - margin_mm
+        x_max = max(xs) + margin_mm
+        y_min = min(ys) - margin_mm
+        y_max = max(ys) + margin_mm
+        size  = 600
+        scale = size / max(x_max - x_min, y_max - y_min, 1.0)
+
+        # Store for calibration_points consistency
+        self._last_x_min = x_min
+        self._last_x_max = x_max
+        self._last_y_min = y_min
+        self._last_y_max = y_max
+        self._last_size  = size
+        self._rendered_once = True
+
+        def to_px(x_mm: float, y_mm: float) -> tuple[int, int]:
+            return (
+                int((x_mm - x_min) * scale),
+                int(size - (y_mm - y_min) * scale),  # y-flip: HA map convention
+            )
+
+        from PIL import Image, ImageDraw
+        img  = Image.new("RGB", (size, size), (30, 30, 30))
+        draw = ImageDraw.Draw(img)
+        rid_to_name = aligner.rid_to_name()
+
+        for rid, poly_umf in aligner.room_polygons_umf.items():
+            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+            if not all(p is not None for p in poly_pose):
+                continue
+            poly_px   = [to_px(x, y) for x, y in poly_pose]
+            draw.polygon(poly_px, outline=(100, 149, 237), fill=(45, 55, 72))
+            # Room label at polygon centroid
+            cx = int(sum(p[0] for p in poly_px) / len(poly_px))
+            cy = int(sum(p[1] for p in poly_px) / len(poly_px))
+            draw.text((cx, cy), rid_to_name.get(rid, rid), fill=(200, 200, 200))
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _to_px_last(self, x_mm: float, y_mm: float) -> tuple[int, int]:
+        """Reproduce to_px() using persisted transform for attribute consistency."""
+        scale = self._last_size / max(
+            self._last_x_max - self._last_x_min,
+            self._last_y_max - self._last_y_min,
+            1.0,
+        )
+        return (
+            int((x_mm - self._last_x_min) * scale),
+            int(self._last_size - (y_mm - self._last_y_min) * scale),
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose calibration and room polygon data for xiaomi-vacuum-map-card.
+
+        Uses the same local to_px() as _render_rooms_png() so pixel coordinates
+        in attributes match the rendered image exactly.
+
+        Returns empty dict until at least one successful render has set the
+        transform parameters — prevents wrong calibration coords at startup.
+        """
+        attrs: dict[str, Any] = {}
+        if self._config_entry is None:
+            return attrs
+        data    = self._config_entry.runtime_data
+        aligner = data.umf_aligner
+        if not aligner or not aligner.aligned:
+            return attrs
+        if not getattr(self, "_rendered_once", False):
+            return attrs
+
+        # calibration — uses persisted transform from last render
+        cal = aligner.calibration_points(self._to_px_last)
+        if cal:
+            attrs["calibration"] = cal
+
+        # rooms — polygon outlines in image pixel space
+        rid_to_name = aligner.rid_to_name()
+        rooms: dict[str, Any] = {}
+        for rid, poly_umf in aligner.room_polygons_umf.items():
+            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+            if not all(p is not None for p in poly_pose):
+                continue
+            poly_px   = [self._to_px_last(x, y) for x, y in poly_pose]
+            room_name = rid_to_name.get(rid, rid)
+            rooms[room_name] = {
+                "outline": [{"x": px, "y": py} for px, py in poly_px]
+            }
+        if rooms:
+            attrs["rooms"] = rooms
+
+        return attrs
+
+    @staticmethod
+    def _blank_png() -> bytes:
+        """Return a dark 600×600 PNG placeholder."""
+        try:
+            from PIL import Image
+            img = Image.new("RGB", (600, 600), (30, 30, 30))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        except ImportError:
+            import base64
+            return base64.b64decode(
+                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
+                b"AABjkB6QAAAABJRU5ErkJggg=="
+            )

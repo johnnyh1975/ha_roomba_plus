@@ -637,6 +637,9 @@
       },
       "coverage_map": {
         "name": "Coverage map"
+      },
+      "rooms_map": {
+        "name": "Rooms Map"
       }
     }
   },
@@ -716,6 +719,10 @@
     "observed_zones_detected": {
       "title": "Robot-detected obstacles in cloud map",
       "description": "Your iRobot cloud map contains {zone_count} robot-detected obstacle zone(s). Run a few cleaning missions so Roomba+ can confirm these locally and build a more accurate obstacle map."
+    },
+    "error_recurrence": {
+      "title": "Recurring error: {label}",
+      "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase '{phase}', location '{room}'. Recommended action: {action}"
     }
   },
   "device_automation": {

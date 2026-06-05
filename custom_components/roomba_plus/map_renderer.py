@@ -363,6 +363,35 @@ class MapRenderer:
         """Return number of recorded pose points."""
         return len(self._points)
 
+    def render_keepout_zones(
+        self,
+        keepout_polygons_px: list[list[tuple[int, int]]],
+    ) -> bytes | None:
+        """v2.3.0 Step 6 — Overlay keep-out zone polygons as semi-transparent red fills.
+
+        Must be called AFTER render() so _last_png is populated.
+        Composites the overlay onto _last_png in-memory and updates _last_png
+        so the caller can use the returned bytes directly without another render().
+
+        Returns updated PNG bytes, or None when _last_png is absent or list empty.
+        Called from image.py async_image(); caller uses the return value directly.
+        """
+        if not keepout_polygons_px or self._last_png is None:
+            return None
+        import io as _io
+        from PIL import Image as PILImage, ImageDraw
+        base    = PILImage.open(_io.BytesIO(self._last_png)).convert("RGBA")
+        overlay = PILImage.new("RGBA", base.size, (0, 0, 0, 0))
+        draw    = ImageDraw.Draw(overlay)
+        for poly in keepout_polygons_px:
+            if len(poly) >= 3:
+                draw.polygon(poly, fill=(255, 0, 0, 80))
+        composite     = PILImage.alpha_composite(base, overlay).convert("RGB")
+        buf           = _io.BytesIO()
+        composite.save(buf, format="PNG")
+        self._last_png = buf.getvalue()
+        return self._last_png
+
     @property
     def points_mm(self) -> list[tuple[float, float]]:
         """Return pose points in mm (for ZoneStore gap segmentation)."""

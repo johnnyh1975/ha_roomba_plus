@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .geometry_store import GeometryStore
     from .grid_store import GridStore                # v2.2.0 F9
+    from .umf_aligner import UmfAligner              # v2.3.0 F8
     from .maintenance_store import MaintenanceStore
     from .mission_store import MissionStore          # v1.8.0 L1
     from .map_renderer import MapRenderer
@@ -76,6 +77,8 @@ class RoombaData:
 
     # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
     grid_store: GridStore | None = None
+    # v2.3.0 — UMF spatial fusion aligner (SMART + EPHEMERAL when Q7 confirmed)
+    umf_aligner: UmfAligner | None = None
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

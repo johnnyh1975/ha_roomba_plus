@@ -42,6 +42,7 @@ from .const import (
     ATTR_TANK_PRESENT,
     BRAAVA_MOP_BEHAVIORS,
     BRAAVA_SPRAY_AMOUNT,
+    CLEANING_PHASES,           # v2.3.0 Step 11 — moved from image.py
     FAN_SPEED_AUTOMATIC,
     FAN_SPEED_ECO,
     FAN_SPEED_PERFORMANCE,
@@ -205,26 +206,71 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         attrs["expire_minutes_remaining"] = expire_m if expire_m else None
         attrs["mission_id"] = mission.get("missionId") or None
 
-        # v2.2.0 CR4 — timeline-derived mission attributes (SMART robots only)
-        # Populated when the cloud coordinator has region data and the most
-        # recent MissionStore record contains a merged timeline field.
+        # v2.3.0 Step 11 — Live source: cmd.regions from MQTT during active mission.
+        # Fills planned_room_order and mission_destination immediately at mission
+        # start on lewis firmware (cmd.regions confirmed in debug data June 2026).
+        # The Cloud-Record block below overwrites these values once the timeline
+        # is merged post-mission (typically within 30 minutes of mission end).
+        # last_cleaned_rooms and room_coverage are definitionally post-mission.
         if (
-            self._config_entry is not None
+            phase in CLEANING_PHASES
+            and self._config_entry is not None
             and self._config_entry.runtime_data.has_cloud
-            and self._config_entry.runtime_data.mission_store is not None
             and self._config_entry.runtime_data.cloud_coordinator is not None
         ):
-            _data = self._config_entry.runtime_data
-            region_map = {
+            _live = self._config_entry.runtime_data
+            _live_region_map = {
                 r["id"]: r["name"]
-                for r in _data.cloud_coordinator.regions
+                for r in _live.cloud_coordinator.regions
                 if r.get("id")
             }
-            if region_map:
-                attrs["last_cleaned_rooms"]  = _data.mission_store.latest_cleaned_rooms(region_map)
-                attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map)
-                attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map)
-                attrs["room_coverage"]       = _data.mission_store.latest_room_coverage(region_map)
+            _cmd_regions = (
+                self.vacuum_state
+                .get("cleanMissionStatus", {})
+                .get("cmd", {})
+                .get("regions", [])
+            )
+            if _cmd_regions and _live_region_map:
+                from .mission_store import MissionStore as _MS
+                _rids = [_MS._extract_rid(r) for r in _cmd_regions]
+                _rids = [r for r in _rids if r]
+                if _rids:
+                    _names = [_live_region_map.get(rid, rid) for rid in _rids]
+                    attrs["planned_room_order"]  = _names
+                    attrs["mission_destination"] = _names[-1]
+
+        # v2.2.0 CR4 — timeline-derived mission attributes (SMART + EPHEMERAL).
+        # Populated when a merged timeline field exists in the most recent
+        # MissionStore record. Overwrites live source values when available.
+        if (
+            self._config_entry is not None
+            and self._config_entry.runtime_data.mission_store is not None
+        ):
+            _data = self._config_entry.runtime_data
+
+            # Build region_map from coordinator (SMART path)
+            region_map: dict[str, str] = {}
+            if (
+                _data.has_cloud
+                and _data.cloud_coordinator is not None
+            ):
+                region_map = {
+                    r["id"]: r["name"]
+                    for r in _data.cloud_coordinator.regions
+                    if r.get("id")
+                }
+
+            # EPHEMERAL fallback (v2.3.0 Step 10 — Q7 gate)
+            # When region_map is empty and UmfAligner is aligned, use its rid→name map.
+            umf_regions: dict[str, str] | None = None
+            if not region_map and _data.umf_aligner and _data.umf_aligner.aligned:
+                umf_regions = _data.umf_aligner.rid_to_name()
+
+            if region_map or umf_regions:
+                attrs["last_cleaned_rooms"]  = _data.mission_store.latest_cleaned_rooms(region_map, umf_regions)
+                attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
+                attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
+                attrs["room_coverage"]       = _data.mission_store.latest_room_coverage(region_map, umf_regions)
 
         return attrs
 

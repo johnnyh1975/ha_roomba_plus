@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.2.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.3.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -18,6 +18,76 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 ---
 
 ## What's new
+
+### v2.3.0 — June 2026
+
+**Spatial Fusion (UmfAligner) + xiaomi-vacuum-map-card compatibility.**
+
+#### UmfAligner — UMF floor plan alignment
+
+New `umf_aligner.py` aligns the iRobot cloud UMF floor plan with pose-space
+(dock-relative mm) using door-gap detection and Hungarian matching against
+GeometryStore door markers. Requires SMART robots with cloud credentials and
+≥ 3 confirmed door crossings in GeometryStore.
+
+- Confidence ≥ 0.70: room coverage in REST API, keepout overlay on map,
+  `calibration` + `rooms` attributes on map entities
+- Confidence ≥ 0.85: auto-confirm zone names, suppress matched-zone Repair Issues
+- Re-aligns automatically when the active pmap version changes
+
+#### `image.{name}_rooms_map` — new room layout entity (Issue #14)
+
+New `ImageEntity` for Smart Map robots — renders room polygons on a dark canvas
+without any cleaning history overlay. Preferred source for
+`lovelace-xiaomi-vacuum-map-card` room selection. Registered for SMART robots;
+returns a blank image until UmfAligner confidence reaches 0.70.
+
+#### xiaomi-vacuum-map-card compatibility
+
+Both `image.{name}_cleaning_map` and `image.{name}_rooms_map` now expose
+`calibration` and `rooms` attributes when UmfAligner confidence ≥ 0.70.
+Use `rooms_map` as the map source for card configuration (no cleaning data
+overlay). See the xiaomi-vacuum-map-card section below for YAML examples.
+
+#### Keep-out zone overlay
+
+Keep-out zones from the UMF floor plan are rendered as semi-transparent red
+polygons on `image.{name}_cleaning_map` when UmfAligner confidence ≥ 0.70
+(requires pose data).
+
+Keep-out zone count and names are now exposed as attributes on the
+`select.{name}_cloud_zone_select` entity (`keepout_zone_count`,
+`keepout_zone_names`).
+
+#### REST API additions
+
+- **`format=records`**: two new fields — `room_coverage` (per-room fraction from
+  timeline, no UmfAligner required) and `alignment_confidence` (0.0–1.0, null
+  until aligned)
+- **`format=hazards`**: `room_name` now populated when UmfAligner confidence
+  ≥ 0.70; `source: "keepout"` entries added for user-configured no-go zones
+
+#### CR4 live attributes
+
+`planned_room_order` and `mission_destination` are now populated immediately
+at mission start from MQTT `cleanMissionStatus.cmd.regions` (lewis firmware
+22.52.10+). Previously these were null until the cloud record merged
+(≤ 30 min post-mission). `last_cleaned_rooms` and `room_coverage` remain
+post-mission — they are definitionally unavailable during a running mission.
+
+#### Error recurrence Repair Issue (F8b)
+
+New Repair Issue fires when the same error code recurs ≥ 3 times in 30 days.
+Issue body includes the error label, occurrence count, cleaning phase, room name
+(from UmfAligner when aligned), and recommended action.
+
+#### EPHEMERAL robot support (Q7-conditional)
+
+When Q7 is confirmed (980 `get_pmaps()` gate fix), the four CR4 vacuum entity
+attributes resolve room names via UmfAligner for EPHEMERAL robots that lack
+cloud `coordinator.regions`.
+
+---
 
 ### v2.2.2 — June 2026
 
@@ -59,7 +129,7 @@ so this kind of API key divergence is immediately visible in future reports.
 - **Household REST endpoint** (`GET /api/roomba_plus/household?days=28`) — aggregates all Roomba+ robots in one request. Per-robot breakdown, optional per-floor grouping (configure floor label in Settings → Configure → Settings), combined totals.
 - **Floor label** — assign a floor name to each robot (e.g. "Ground Floor"). Used by the household endpoint and surfaced as a config option.
 - **UMF obstacle seeding** — on first setup, cloud-detected obstacle zones from the iRobot Smart Map are seeded into the GridStore so the hazards endpoint is populated immediately, before local stuck events accumulate.
-- **CR4 timeline attributes** — for SMART robots with cloud credentials: `last_cleaned_rooms`, `planned_room_order`, `mission_destination`, `room_coverage` (per-room fraction) are now populated as vacuum entity attributes from the mission timeline field.
+- **CR4 timeline attributes** — for SMART robots with cloud credentials: `last_cleaned_rooms`, `planned_room_order`, `mission_destination`, `room_coverage` (per-room fraction) are populated as vacuum entity attributes from the mission timeline field. From v2.3.0: `planned_room_order` and `mission_destination` are available immediately at mission start via MQTT `cmd.regions` (lewis firmware); `last_cleaned_rooms` and `room_coverage` remain post-mission only.
 - **CR3 coordinator fallback** — when the cloud is temporarily unreachable, cloud-enriched MissionStore records are served as raw_records so CloudRawSensor entities stay available across cloud outages.
 - **`clean_sequence` service** — start robot B automatically when robot A finishes its mission. One-shot listener with configurable delay (0–60 min) and optional completion-required guard. Useful for multi-floor setups.
 - **`clean_delay_min` option** — configurable delay (0–30 min) before presence-triggered clean starts, settable per robot in Presence-Aware Scheduling options.
@@ -68,6 +138,7 @@ so this kind of API key divergence is immediately visible in future reports.
 - **`binary_sensor.{name}_mission_active`** — ON for the full mission arc including mid-mission recharge pauses. Distinct from `mid_mission_recharge`. Fixes card v1.4 mission-completion detection (C1).
 - **`select.{name}_carpet_boost_select`** — interactive carpet boost mode select for 980 and compatible robots. Wraps `vacuum.set_fan_speed`; replaces the read-only `carpet_boost_mode` sensor for card control (P2).
 - **Entity ID fix (DE/FR/ES/IT/NL/PT installs)** — `recent_area_30d` and `recent_time_30d` sensors were registered with language-derived slugs on non-English fresh installs (e.g. `sensor.*_gereinigte_flache_30_t`). The v12 config entry migration renames these to the correct English suffixes automatically on upgrade.
+- **Entity ID fix (v2.3.0, all non-English installs)** — 9 further entities (`image.*_cleaning_map`, `image.*_coverage_map`, `select.*_carpet_boost_select`, `sensor.*_raw_state`, and 5 button entities) were missing `_attr_name` in v2.2.x and registered with translated slugs on non-English installs (e.g. `image.*_reinigungskarte` on DE). The v13 config entry migration renames these automatically.
 - **Amendment 8f** — `dockedAtStart`, `missionId`, `pauseM`, `cmd` now merged from cloud records into MissionStore alongside the existing analytics fields.
 - **WiFi histogram fix** — `recent_wifi_floor` and `recent_wifi_stability` sensors were computing incorrect values by treating the `wlBars` histogram as a time-series. Both now use correct weighted bucket statistics.
 
@@ -331,7 +402,32 @@ show_state: false
 
 `image.{name}_coverage_map` — EMA-weighted occupancy heatmap. Updated at each mission end. Attributes include `cell_count`, `stuck_event_count`, `decay`, `visit_increment`, and bounding box. Gated behind pose capability — registered automatically when `image.{name}_cleaning_map` would also be registered.
 
-**Recommended: xiaomi-vacuum-map-card (HACS)**
+#### Rooms map (v2.3+, SMART robots)
+
+`image.{name}_rooms_map` — static room layout from the UMF floor plan. Shows
+room polygons on a dark canvas with no cleaning history overlay. Only visible
+once UmfAligner confidence ≥ 0.70. This is the preferred source for
+`lovelace-xiaomi-vacuum-map-card` configuration.
+
+Both `image.{name}_cleaning_map` and `image.{name}_rooms_map` expose:
+- `calibration` — three anchor point pairs for coordinate mapping
+- `rooms` — per-room polygon outlines in image pixel space
+
+**xiaomi-vacuum-map-card (HACS) — v2.3+ setup:**
+
+```yaml
+type: custom:xiaomi-vacuum-map-card
+entity: vacuum.roomba
+map_camera: image.roomba_rooms_map      # use rooms_map for clean display
+calibration_source:
+  camera: true                          # uses calibration attribute
+map_modes:
+  - template: vacuum_clean_zone
+    predefined_selections:
+      rooms: true                       # room outlines from rooms attribute
+```
+
+For the cleaning history map instead:
 
 ```yaml
 type: custom:xiaomi-vacuum-map-card
@@ -339,6 +435,19 @@ entity: vacuum.roomba
 map_camera: image.roomba_cleaning_map
 calibration_source:
   camera: true
+```
+
+> Both entities require a SMART robot with cloud credentials and UmfAligner
+> confidence ≥ 0.70. The `rooms_map` entity returns a blank dark image until
+> that threshold is reached (typically after 3+ missions with door crossings).
+
+**Recommended for non-SMART robots:**
+
+```yaml
+type: picture-entity
+entity: image.roomba_cleaning_map
+show_name: false
+show_state: false
 ```
 
 #### Smart Map saving binary sensor — Smart Map robots
@@ -527,9 +636,9 @@ GET /api/roomba_plus/{entry_id}/mission_history
 
 `format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`.
 
-`format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`.
+`format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`. From v2.3.0: `room_coverage` (per-room fraction from timeline, no cloud required) and `alignment_confidence` (null until UmfAligner aligned).
 
-`format=hazards` — obstacle pin array. Returns GridStore stuck hotspots and cloud-detected obstacle centroids as of v2.2. Each entry has `gx`, `gy`, `x_mm`, `y_mm`, `stuck_count`, `bearing_deg`, `distance_mm`, `source` (`stuck_events` or `robot_learned`). `room_name` is populated in v2.3+ (UmfAligner).
+`format=hazards` — obstacle pin array. Returns GridStore stuck hotspots (`stuck_events`), cloud-detected obstacle centroids (`robot_learned`), and user-configured no-go zones (`keepout`, v2.3+). Each entry has `gx`, `gy`, `x_mm`, `y_mm`, `stuck_count`, `bearing_deg`, `distance_mm`, `source`, `room_name` (populated from UmfAligner in v2.3+ when confidence ≥ 0.70).
 
 `GET /api/roomba_plus/household?days=28` — household aggregate. Returns `period_days`, `total` (missions/completed/completion_pct/area_sqft), `robots[]` (per-entry breakdown with `floor` label), and `floors[]` (grouped by floor label when any robot has a floor label set).
 

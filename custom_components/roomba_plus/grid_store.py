@@ -229,6 +229,48 @@ class GridStore:
             })
         return sorted(result, key=lambda h: h["stuck_count"], reverse=True)
 
+    def coverage_by_polygon(
+        self,
+        polygons_pose: dict[str, list[tuple[float, float]]],
+    ) -> dict[str, float]:
+        """v2.3.0 Step 9 — Return per-room coverage fraction from polygon intersection.
+
+        For each room polygon, counts grid cells with EMA score > PRUNE_THRESHOLD
+        whose centre falls inside the polygon. Fraction = visited / total_in_polygon.
+
+        Uses ray-casting point-in-polygon — no external geometry library.
+
+        polygons_pose: {rid: [(x_mm, y_mm), ...]} — vertices in pose space (mm).
+        Returns {rid: fraction} where fraction ∈ [0.0, 1.0].
+        Empty dict when no cells or all polygons are empty.
+        """
+        result: dict[str, float] = {}
+        if not self._cells:
+            return result
+
+        for rid, polygon in polygons_pose.items():
+            if len(polygon) < 3:
+                result[rid] = 0.0
+                continue
+            # Bounding box for fast pre-filter (include half-cell margin)
+            half = CELL_SIZE_MM / 2
+            min_x = min(p[0] for p in polygon) - half
+            max_x = max(p[0] for p in polygon) + half
+            min_y = min(p[1] for p in polygon) - half
+            max_y = max(p[1] for p in polygon) + half
+            total   = 0
+            visited = 0
+            for (gx, gy), score in self._cells.items():
+                cx, cy = _cell_to_mm(gx, gy)
+                if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
+                    continue
+                if _point_in_polygon_grid(cx, cy, polygon):
+                    total += 1
+                    if score > PRUNE_THRESHOLD:
+                        visited += 1
+            result[rid] = visited / total if total > 0 else 0.0
+        return result
+
     def render_heatmap(self, size_px: int = 400) -> bytes | None:
         """Render the occupancy grid as a PNG heatmap.
 
@@ -285,3 +327,23 @@ class GridStore:
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
+
+
+def _point_in_polygon_grid(
+    x: float, y: float, polygon: list[tuple[float, float]]
+) -> bool:
+    """Ray-casting point-in-polygon test for grid cell centres.
+
+    Module-level (not on GridStore) so umf_aligner.py can import the same
+    algorithm independently without cross-import. Returns True when inside.
+    """
+    n      = len(polygon)
+    inside = False
+    px, py = polygon[-1]
+    for qx, qy in polygon:
+        if ((qy > y) != (py > y)) and (
+            x < (px - qx) * (y - qy) / (py - qy) + qx
+        ):
+            inside = not inside
+        px, py = qx, qy
+    return inside

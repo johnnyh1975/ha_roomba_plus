@@ -128,6 +128,11 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
     "stuck": VacuumActivity.ERROR,
 }
 
+# v2.3.0 — Phases used by image.py (pose handling) and vacuum.py (live CR4 source).
+# Moved from image.py module-locals so vacuum.py can import without circular deps.
+CLEANING_PHASES: Final[frozenset[str]] = frozenset({"run", "hmMidMsn"})
+MISSION_END_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn", "stop", "evac"})
+
 # Human-readable phase labels (from rest980 — extended)
 
 # ── v1.8.0 — Error catalogue with descriptions and suggested actions ──────────

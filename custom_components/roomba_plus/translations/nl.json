@@ -637,6 +637,9 @@
       },
       "coverage_map": {
         "name": "Dekkingskaart"
+      },
+      "rooms_map": {
+        "name": "Kamerkaart"
       }
     }
   },
@@ -716,6 +719,10 @@
     "observed_zones_detected": {
       "title": "Door robot gedetecteerde obstakels in cloudkaart",
       "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
+    },
+    "error_recurrence": {
+      "title": "Terugkerende fout: {label}",
+      "description": "Fout {error_code} ({label}) is de afgelopen 30 dagen {count} keer opgetreden. Meest recent: fase '{phase}', locatie '{room}'. Aanbevolen actie: {action}"
     }
   },
   "device_automation": {

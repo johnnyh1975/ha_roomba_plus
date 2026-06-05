@@ -2547,6 +2547,7 @@ class RawStateSensor(IRobotEntity, SensorEntity):
     """
 
     _attr_translation_key = "raw_state"
+    _attr_name            = "Raw MQTT state"   # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
 

@@ -608,3 +608,79 @@ async def async_check_observed_zones(
             "zone_count": str(len(data.cloud_coordinator.observed_zone_centroids)),
         },
     )
+
+
+# v2.3.0 Step 6c — F8b error recurrence Repair Issue ─────────────────────────
+
+async def async_check_error_recurrence(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """F8b — fire Repair Issue when the same error code recurs ≥3 times in 30 days.
+
+    Issue body includes the error label, occurrence count, cleaning phase at the
+    most recent occurrence, room name from UmfAligner (when confidence ≥ 0.70),
+    and the recommended action from ERROR_CATALOGUE.
+
+    Auto-resolves: the issue is deleted when the recurrence count drops below 3
+    (e.g. after records age out of the 30-day window on the next check).
+    """
+    data = entry.runtime_data
+    ms   = data.mission_store
+    if ms is None:
+        return
+
+    # Count error occurrences in the last 30 days
+    records = ms.query(days=30)
+    error_counts: dict[int, int] = {}
+    for r in records:
+        code = r.get("error_code")
+        if code:
+            error_counts[code] = error_counts.get(code, 0) + 1
+
+    worst_code = max(error_counts, key=lambda c: error_counts[c], default=None)
+    if worst_code is None or error_counts[worst_code] < 3:
+        ir.async_delete_issue(hass, DOMAIN, "error_recurrence")
+        return
+
+    from .const import ERROR_CATALOGUE
+    catalogue_entry = ERROR_CATALOGUE.get(worst_code, {})
+    label  = catalogue_entry.get("label",  f"Error {worst_code}")
+    action = catalogue_entry.get("action", "")
+
+    # Most recent record with this error code
+    recent = next(
+        (r for r in reversed(records) if r.get("error_code") == worst_code), {}
+    )
+    phase_at_error = recent.get("phase_at_error") or "unknown"
+
+    # Room name from UmfAligner when aligned
+    room_name: str = "unknown location"
+    aligner = data.umf_aligner
+    pos     = recent.get("error_position_mm")
+    if aligner and aligner.aligned and isinstance(pos, dict):
+        pt_umf = aligner.pose_to_umf(
+            float(pos.get("x", 0)), float(pos.get("y", 0))
+        )
+        if pt_umf:
+            rn = aligner.room_name_at(*pt_umf)
+            if rn:
+                room_name = rn
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "error_recurrence",
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="error_recurrence",
+        translation_placeholders={
+            "error_code": str(worst_code),
+            "label":      label,
+            "count":      str(error_counts[worst_code]),
+            "phase":      phase_at_error,
+            "room":       room_name,
+            "action":     action,
+        },
+    )

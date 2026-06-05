@@ -731,6 +731,19 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         }
         if learning_pct is not None:
             attrs["learning_percentage"] = learning_pct
+
+        # v2.3.0 Gap A (Amendment 4 v2.2 backfill) — keepout zone visibility
+        try:
+            cc = self._config_entry.runtime_data.cloud_coordinator
+            if cc:
+                keepout = cc.keepout_zones
+                attrs["keepout_zone_count"] = len(keepout)
+                names = [z.get("name") for z in keepout if z.get("name")]
+                if names:
+                    attrs["keepout_zone_names"] = names
+        except Exception:  # noqa: BLE001
+            pass
+
         return attrs
 
     # ── Push update wiring ────────────────────────────────────────────────────
@@ -839,6 +852,7 @@ class CarpetBoostSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "carpet_boost_select"
+    _attr_name            = "Carpet boost"   # G6: locale-independent entity_id slug
     _attr_options = FAN_SPEEDS          # ["Automatic", "Eco", "Performance"]
     _attr_entity_category = EntityCategory.CONFIG
 

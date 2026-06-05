@@ -92,7 +92,7 @@
 | Per-room cleaning pass count | ❌ | ⚠️ single zone select only | ⚠️ staging Select per room — must press Start to apply ³ |
 | Automatic room detection (900-series) | ❌ | ✅ gap segmentation + EMA confidence ★ | ❌ |
 | Door-width calibration | ❌ | ✅ ★ | ❌ |
-| Lovelace map card | ❌ | ✅ companion card v1 (HACS, beta) | ✅ calibration + rooms attributes (floor plan only) |
+| Lovelace map card | ❌ | ✅ companion card v1 (HACS, beta) + `calibration`+`rooms` on `cleaning_map` and `rooms_map` (v2.3+) ★ | ✅ calibration + rooms attributes (floor plan only) |
 
 ---
 
@@ -120,7 +120,7 @@
 | `stale-devices` | ✅ | ✅ ★ | ❌ |
 | `strict-typing` | ✅ | ✅ ★ | ❌ |
 | Device triggers | ❌ | ✅ 6 triggers: started, finished, stuck, bin full, docked, error ★ | ❌ |
-| Repair Issues | ❌ | ✅ 8 issue types: zone naming, performance, battery, scheduling, accident, skips, drift, firmware ★ | ❌ |
+| Repair Issues | ❌ | ✅ 9 issue types: zone naming, performance, battery, scheduling, accident, skips, drift, observed zones, error recurrence ★ | ❌ |
 | Diagnostics download | ⚠️ basic | ✅ includes map + zone + cloud state ★ | ❌ |
 | Multi-robot support | ✅ | ✅ BLID-based, separate stores per entry ★ | ⚠️ one container per robot |
 | Integration tests | ✅ | ✅ pytest-homeassistant-custom-component ★ | ❌ |

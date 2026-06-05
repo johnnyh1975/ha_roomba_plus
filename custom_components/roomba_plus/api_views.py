@@ -130,6 +130,9 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "dirt_events":  record.get("dirt"),
         "wifi_signal":  record.get("wlBars"),
         "source":       "cloud",
+        # v2.3.0 — from CR4 timeline merge; alignment_confidence injected in get()
+        "room_coverage":        record.get("room_coverage"),
+        "alignment_confidence": None,
     }
 
 
@@ -157,6 +160,9 @@ def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "dirt_events":  record.get("dirt"),          # from CR1 merge
         "wifi_signal":  record.get("wlBars"),        # from CR1 merge
         "source":       "local",
+        # v2.3.0 — from CR4 timeline merge; alignment_confidence always null for local
+        "room_coverage":        record.get("room_coverage"),
+        "alignment_confidence": None,
     }
 
 
@@ -237,6 +243,38 @@ class MissionHistoryView(HomeAssistantView):
                         "distance_mm": int(math.sqrt(x ** 2 + y ** 2)),
                         "source":      "robot_learned",
                     })
+                # v2.3.0 Step 8 / Gap B — keepout zone centroids
+                for zone in data.cloud_coordinator.keepout_zones:
+                    cx = zone.get("cx") or zone.get("centroid_x") or zone.get("x")
+                    cy = zone.get("cy") or zone.get("centroid_y") or zone.get("y")
+                    if cx is not None and cy is not None:
+                        cx, cy = float(cx), float(cy)
+                        hazards.append({
+                            "gx":          None,
+                            "gy":          None,
+                            "x_mm":        cx,
+                            "y_mm":        cy,
+                            "stuck_count": None,
+                            "room_name":   None,
+                            "bearing_deg": int(math.degrees(math.atan2(cx, cy)) % 360),
+                            "distance_mm": int(math.sqrt(cx ** 2 + cy ** 2)),
+                            "source":      "keepout",
+                        })
+
+            # v2.3.0 Step 8 — populate room_name via UmfAligner
+            aligner = getattr(data, "umf_aligner", None)
+            if aligner and aligner.aligned:
+                for hazard in hazards:
+                    source   = hazard.get("source")
+                    x_mm     = hazard["x_mm"]
+                    y_mm     = hazard["y_mm"]
+                    if source == "stuck_events":
+                        pt_umf = aligner.pose_to_umf(x_mm, y_mm)
+                        if pt_umf:
+                            hazard["room_name"] = aligner.room_name_at(*pt_umf)
+                    elif source in ("robot_learned", "keepout"):
+                        hazard["room_name"] = aligner.room_name_at(x_mm, y_mm)
+
             return self.json(hazards)
 
         # -- format=records ---------------------------------------------------
@@ -269,6 +307,14 @@ class MissionHistoryView(HomeAssistantView):
             records = [_local_record_to_unified(r) for r in local]
         else:
             records = []
+
+        # v2.3.0 — inject alignment_confidence for cloud-source records
+        aligner = getattr(data, "umf_aligner", None)
+        if aligner and aligner.aligned:
+            conf = round(aligner.confidence, 2)
+            for r in records:
+                if r.get("source") == "cloud":
+                    r["alignment_confidence"] = conf
 
         return self.json(records)
 

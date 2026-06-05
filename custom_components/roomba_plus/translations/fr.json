@@ -637,6 +637,9 @@
       },
       "coverage_map": {
         "name": "Carte de couverture"
+      },
+      "rooms_map": {
+        "name": "Carte des pièces"
       }
     }
   },
@@ -716,6 +719,10 @@
     "observed_zones_detected": {
       "title": "Obstacles détectés par le robot dans la carte cloud",
       "description": "Votre carte cloud iRobot contient {zone_count} zone(s) d'obstacles détectés par le robot. Effectuez quelques missions de nettoyage pour que Roomba+ puisse les confirmer localement."
+    },
+    "error_recurrence": {
+      "title": "Erreur récurrente : {label}",
+      "description": "L'erreur {error_code} ({label}) s'est produite {count} fois au cours des 30 derniers jours. Dernier : phase '{phase}', emplacement '{room}'. Action recommandée : {action}"
     }
   },
   "device_automation": {

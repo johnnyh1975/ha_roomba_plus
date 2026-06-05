@@ -633,6 +633,9 @@
       },
       "coverage_map": {
         "name": "Bedeckungskarte"
+      },
+      "rooms_map": {
+        "name": "Raumkarte"
       }
     }
   },
@@ -712,6 +715,10 @@
     "observed_zones_detected": {
       "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
       "description": "Ihre iRobot-Cloud-Karte enthält {zone_count} roboter-erkannte Hinderniszone(n). Führen Sie einige Reinigungsmissionen durch, damit Roomba+ diese lokal bestätigen kann."
+    },
+    "error_recurrence": {
+      "title": "Wiederkehrender Fehler: {label}",
+      "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase '{phase}', Ort '{room}'. Empfohlene Maßnahme: {action}"
     }
   },
   "device_automation": {

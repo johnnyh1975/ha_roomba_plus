@@ -279,6 +279,7 @@ class MissionStore:
     def latest_cleaned_rooms(
         self,
         region_map: dict[str, str],
+        umf_regions: dict[str, str] | None = None,
     ) -> list[str] | None:
         """Return room names in cleaning-completion order from the most recent mission.
 
@@ -289,9 +290,13 @@ class MissionStore:
         status=5 = interrupted by user/app — excluded.
         Each room appears once; the last qualifying event per rid is used.
 
+        umf_regions: optional fallback for EPHEMERAL robots without coordinator.regions.
+        When region_map is empty and umf_regions is provided, umf_regions is used.
+
         Returns None for whole-home missions (no 'room' events) or when
         the timeline field is absent (non-SMART robot or pre-merge record).
         """
+        effective_map = region_map if region_map else (umf_regions or {})
         latest = self.latest()
         if latest is None:
             return None
@@ -315,17 +320,21 @@ class MissionStore:
                 ordered.append(rid)
         if not ordered:
             return None
-        return self._resolve_region_ids(ordered, region_map)
+        return self._resolve_region_ids(ordered, effective_map)
 
     def latest_planned_order(
         self,
         region_map: dict[str, str],
+        umf_regions: dict[str, str] | None = None,
     ) -> list[str] | None:
         """Return room names in user-selected submission order.
 
         CR4 — uses timeline.plan.upcoming. Preserves the exact order the user
         selected rooms in the iRobot app. Returns None when absent or empty.
+
+        umf_regions: optional fallback for EPHEMERAL robots (see latest_cleaned_rooms).
         """
+        effective_map = region_map if region_map else (umf_regions or {})
         latest = self.latest()
         if latest is None:
             return None
@@ -339,22 +348,26 @@ class MissionStore:
         rids = [r for r in rids if r]   # drop empty strings from unrecognised formats
         if not rids:
             return None
-        return self._resolve_region_ids(rids, region_map)
+        return self._resolve_region_ids(rids, effective_map)
 
     def latest_mission_destination(
         self,
         region_map: dict[str, str],
+        umf_regions: dict[str, str] | None = None,
     ) -> str | None:
         """Return the last room in the planned order (final target of the job).
 
         Returns None for whole-home missions or when timeline is absent.
+
+        umf_regions: optional fallback for EPHEMERAL robots (see latest_cleaned_rooms).
         """
-        planned = self.latest_planned_order(region_map)
+        planned = self.latest_planned_order(region_map, umf_regions)
         return planned[-1] if planned else None
 
     def latest_room_coverage(
         self,
         region_map: dict[str, str],
+        umf_regions: dict[str, str] | None = None,
     ) -> dict[str, float] | None:
         """Return per-room coverage fractions from the most recent mission.
 
@@ -367,8 +380,11 @@ class MissionStore:
         totalArea — such rooms are skipped from coverage but still appear in
         latest_cleaned_rooms(). This is expected behaviour for v2.2.
 
+        umf_regions: optional fallback for EPHEMERAL robots (see latest_cleaned_rooms).
+
         Returns None when timeline is absent or no qualifying room events.
         """
+        effective_map = region_map if region_map else (umf_regions or {})
         latest = self.latest()
         if latest is None:
             return None
@@ -395,7 +411,7 @@ class MissionStore:
             coverage[rid] = fraction
         if not coverage:
             return None
-        return {region_map.get(rid, rid): frac for rid, frac in coverage.items()}
+        return {effective_map.get(rid, rid): frac for rid, frac in coverage.items()}
 
     def presence_windows(self, days: int) -> list[MissionWindow]:
         """Return gaps between missions as potential 'all-away' windows.

@@ -347,6 +347,9 @@
     "image": {
       "coverage_map": {
         "default": "mdi:map-legend"
+      },
+      "rooms_map": {
+        "default": "mdi:floor-plan"
       }
     },
     "binary_sensor": {

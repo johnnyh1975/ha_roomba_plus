@@ -274,9 +274,9 @@ Aggregates all Roomba+ robots in one request. Useful for multi-robot dashboards.
 
 ```
 vacuum.{name}                     — primary vacuum control
-image.{name}_cleaning_map         — live path map (pose data required, firmware < 3.20)
+image.{name}_cleaning_map         — live path map + keepout overlay (pose required, firmware < 3.20)
 image.{name}_coverage_map         — EMA occupancy heatmap (v2.2+, pose required)
-image.{name}_coverage_map         — coverage heatmap (≥ v2.2, pose required)
+image.{name}_rooms_map            — room layout map for xiaomi-vacuum-map-card (v2.3+, SMART only)
 sensor.{name}_*                   — all sensor entities
 binary_sensor.{name}_*            — all binary sensor entities
 select.{name}_zone_*              — zone selector(s)
@@ -284,6 +284,10 @@ select.{name}_zone_*              — zone selector(s)
 
 Where `{name}` = vacuum entity name without domain prefix.
 Example: `vacuum.roomba_downstairs` → `{name}` = `roomba_downstairs`
+
+`image.{name}_rooms_map` exposes `calibration` and `rooms` attributes when
+UmfAligner confidence ≥ 0.70. Use as the map source in xiaomi-vacuum-map-card
+for room selection (no cleaning history overlay).
 
 ---
 
@@ -301,6 +305,12 @@ New in v2.2.0:
 - `GET /api/roomba_plus/household` endpoint added
 - Local source `format=records` entries now populate `dirt_events`, `wifi_signal`, `evacuations` when cloud-enriched (previously always null)
 - `wifi_signal` field semantics: 5-element histogram (bucket 0 = weakest signal, bucket 4 = strongest) — not a time-series
+
+New in v2.3.0:
+- `format=records` adds `room_coverage` (`dict[str, float] | null`) and `alignment_confidence` (`float | null`) fields
+- `format=hazards` adds `source: "keepout"` entries for user-configured no-go zones; `room_name` now populated when UmfAligner confidence ≥ 0.70
+- `image.{name}_rooms_map` entity added (SMART robots); exposes `calibration` and `rooms` attributes
+- `image.{name}_cleaning_map` also gains `calibration` and `rooms` attributes (v2.3.0+)
 
 ---
 
@@ -337,6 +347,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ## xiaomi-vacuum-map-card integration
 
-`image.{name}_cleaning_map` exposes `calibration` and `rooms` attributes from
-integration ≥ v2.2.0. See the xiaomi-vacuum-map-card documentation and the
-Roomba+ README for dashboard YAML examples.
+From integration ≥ v2.3.0 (SMART robots, UmfAligner confidence ≥ 0.70):
+
+- `image.{name}_rooms_map` — preferred map source; room polygons only, no
+  cleaning history. Exposes `calibration` and `rooms` attributes.
+- `image.{name}_cleaning_map` — live path map with keepout overlay. Also exposes
+  `calibration` and `rooms` attributes from v2.3.0.
+
+Both attributes are null until UmfAligner reaches confidence 0.70 (typically
+after 3+ missions with door crossings registered in GeometryStore).
+
+See the Roomba+ README for dashboard YAML examples.
