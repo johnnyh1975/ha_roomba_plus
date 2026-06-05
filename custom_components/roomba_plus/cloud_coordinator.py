@@ -464,15 +464,20 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for _p in result["pmaps"]:
             _det = _p.get("active_pmapv_details", {})
             _pmapv = _det.get("active_pmapv", {})
+            _regions = _det.get("regions", [])
+            # Determine which key holds the region ID — critical for CR4 attributes.
+            # The API uses "region_id" in some account types, "id" in others.
+            _rid_key = "region_id" if _regions and "region_id" in _regions[0] else "id"
             _LOGGER.debug(
                 "iRobot cloud: pmap_id=%s  pmapv_keys=%s  "
                 "region_count=%d  zone_count=%d  "
-                "first_region_keys=%s  map_header_keys=%s",
+                "region_id_key=%s  first_region_keys=%s  map_header_keys=%s",
                 _pmapv.get("pmap_id"),
                 sorted(_pmapv.keys()),
-                len(_det.get("regions", [])),
+                len(_regions),
                 len(_det.get("zones", [])),
-                sorted(_det["regions"][0].keys()) if _det.get("regions") else [],
+                _rid_key,
+                sorted(_regions[0].keys()) if _regions else [],
                 sorted(_det.get("map_header", {}).keys()),
             )
 
@@ -574,14 +579,26 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pmapv = details.get("active_pmapv", {})
             if pmapv.get("pmap_id") != active_id:
                 continue  # skip disabled / inactive maps
+            regions_raw = details.get("regions", [])
+            if not regions_raw:
+                return []
+            # The iRobot pmaps API uses "region_id" as the identifier key
+            # in some account/firmware variants, and "id" in others.
+            # Try both to be robust — confirmed as a real divergence from
+            # live debug data (June 2026): first_region_keys determines which
+            # is present. An empty id silently breaks CR4 attribute generation.
+            def _rid(r: dict) -> str:
+                return str(r.get("region_id") or r.get("id") or "")
+
             return [
                 {
-                    "id": region.get("id", ""),
-                    "name": region.get("name", ""),
+                    "id":          _rid(region),
+                    "name":        region.get("name", ""),
                     "region_type": region.get("region_type", "default"),
-                    "pmap_id": active_id,
+                    "pmap_id":     active_id,
                 }
-                for region in details.get("regions", [])
+                for region in regions_raw
+                if _rid(region)   # skip entries with no resolvable ID
             ]
         return []
 
@@ -602,14 +619,22 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pmapv = details.get("active_pmapv", {})
             if pmapv.get("pmap_id") != active_id:
                 continue
+            zones_raw = details.get("zones", [])
+            if not zones_raw:
+                return []
+
+            def _zid(z: dict) -> str:
+                return str(z.get("zone_id") or z.get("id") or "")
+
             return [
                 {
-                    "id": zone.get("id", ""),
-                    "name": zone.get("name", ""),
+                    "id":        _zid(zone),
+                    "name":      zone.get("name", ""),
                     "zone_type": zone.get("zone_type", "default"),
-                    "pmap_id": active_id,
+                    "pmap_id":   active_id,
                 }
-                for zone in details.get("zones", [])
+                for zone in zones_raw
+                if _zid(zone)
             ]
         return []
 

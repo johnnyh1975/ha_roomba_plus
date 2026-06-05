@@ -260,15 +260,34 @@ class MissionStore:
         """
         return [region_map.get(rid, rid) for rid in rid_list]
 
+    @staticmethod
+    def _extract_rid(item: Any) -> str:
+        """Extract a region ID from a plan.upcoming entry.
+
+        Handles two confirmed formats:
+        - String (some firmware/app versions): "23"
+        - Object (lewis 22.52.10+): {"type": "rid", "rid": "23"}
+          Also accepts {"region_id": "23"} as a fallback.
+
+        Returns an empty string when neither format is recognisable so the
+        caller can filter it out.
+        """
+        if isinstance(item, dict):
+            return str(item.get("rid") or item.get("region_id") or "")
+        return str(item) if item is not None else ""
+
     def latest_cleaned_rooms(
         self,
         region_map: dict[str, str],
     ) -> list[str] | None:
         """Return room names in cleaning-completion order from the most recent mission.
 
-        CR4 — uses timeline.finEvents filtered to type='room' and status=0.
-        status=0 = pass complete (authoritative); status=1 = pass in progress.
-        Each room appears once; the last status=0 event per rid is used.
+        CR4 — uses timeline.finEvents filtered to type='room' and status in (0, 6).
+        status=0 = pass complete (normal).
+        status=6 = pass complete after error recovery (lewis 22.52.10+ confirmed).
+        status=1 = pass in progress — excluded.
+        status=5 = interrupted by user/app — excluded.
+        Each room appears once; the last qualifying event per rid is used.
 
         Returns None for whole-home missions (no 'room' events) or when
         the timeline field is absent (non-SMART robot or pre-merge record).
@@ -286,7 +305,7 @@ class MissionStore:
             if ev.get("type") != "room":
                 continue
             room = ev.get("room", {})
-            if room.get("status") != 0:
+            if room.get("status") not in (0, 6):   # 0=complete, 6=complete-after-recovery
                 continue
             rid = str(room.get("rid", ""))
             if not rid:
@@ -316,7 +335,11 @@ class MissionStore:
         upcoming = timeline.get("plan", {}).get("upcoming")
         if not upcoming:
             return None
-        return self._resolve_region_ids([str(r) for r in upcoming], region_map)
+        rids = [self._extract_rid(r) for r in upcoming]
+        rids = [r for r in rids if r]   # drop empty strings from unrecognised formats
+        if not rids:
+            return None
+        return self._resolve_region_ids(rids, region_map)
 
     def latest_mission_destination(
         self,
@@ -335,12 +358,16 @@ class MissionStore:
     ) -> dict[str, float] | None:
         """Return per-room coverage fractions from the most recent mission.
 
-        CR4 — uses room.totalArea / room.area from status=0 events.
-        totalArea = cumulative cleaned area across all passes (status=0 only).
+        CR4 — uses room.totalArea / room.area from status=0 and status=6 events.
+        totalArea = cumulative cleaned area across all passes (status=0/6 only).
         area = full room size (constant across events for the same rid).
         Values are clamped to [0.0, 1.0].
 
-        Returns None when timeline is absent or no status=0 room events.
+        Note: status=6 (completed after error recovery) events may not carry
+        totalArea — such rooms are skipped from coverage but still appear in
+        latest_cleaned_rooms(). This is expected behaviour for v2.2.
+
+        Returns None when timeline is absent or no qualifying room events.
         """
         latest = self.latest()
         if latest is None:
@@ -354,7 +381,7 @@ class MissionStore:
             if ev.get("type") != "room":
                 continue
             room = ev.get("room", {})
-            if room.get("status") != 0:
+            if room.get("status") not in (0, 6):   # 0=complete, 6=complete-after-recovery
                 continue
             rid = str(room.get("rid", ""))
             total_area = room.get("totalArea")

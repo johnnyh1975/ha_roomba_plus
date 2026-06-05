@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.2.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.2.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -18,6 +18,37 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 ---
 
 ## What's new
+
+### v2.2.2 — June 2026
+
+**CR4 room attributes fix — `region_id` key divergence.**
+
+The four vacuum entity attributes introduced in v2.2.0 (`last_cleaned_rooms`,
+`planned_room_order`, `mission_destination`, `room_coverage`) were silently
+`null` on all robots. The iRobot pmaps API returns region identifiers under
+the key `"region_id"`, but the coordinator was reading `"id"` — so every
+region came back with an empty string and the entire region map was discarded
+before the attributes could be populated.
+
+Only `cloud_coordinator.py` changed. After installing v2.2.2 and restarting,
+the CR4 attributes will populate after the next cloud coordinator refresh
+(≤ 30 minutes after restart).
+
+The debug log now emits `region_id_key=region_id` or `region_id_key=id`
+so this kind of API key divergence is immediately visible in future reports.
+
+### v2.2.1 — June 2026
+
+**CR4 timeline fixes for lewis firmware (22.52.10).**
+
+- `planned_room_order` / `mission_destination` / `last_cleaned_rooms` were
+  broken on i7+, s9+, j-series robots. These firmware versions send
+  `plan.upcoming` as object arrays (`[{"type": "rid", "rid": "19"}]`) instead
+  of plain strings (`["19"]`). The old code serialised the entire dict as the
+  room name.
+- Rooms completed after an error-recovery sequence (`status=6`) were
+  incorrectly excluded from `last_cleaned_rooms`.
+- Manifest version was not bumped in the initial v2.2.1 package — corrected.
 
 ### v2.2.0 — June 2026
 
