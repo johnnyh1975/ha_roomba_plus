@@ -115,7 +115,7 @@ class TestMigrateEntryV1ToV2:
 
     def test_returns_true(self):
         entry = self._run_migration({})
-        assert entry.version == 12  # current config entry version as of v2.2.0
+        assert entry.version == 13  # current config entry version as of v2.3.0
 
     def test_adds_marker_key(self):
         entry = self._run_migration({})
@@ -138,10 +138,10 @@ class TestMigrateEntryV1ToV2:
         entry = self._run_migration({"cloud_raw_records_version": 1}, entry_version=1)
         assert entry.options["cloud_raw_records_version"] == 1
 
-    def test_version_bumped_to_12(self):
+    def test_version_bumped_to_13(self):
         """v1 entry migrates through all steps to current version (12)."""
         entry = self._run_migration({})
-        assert entry.version == 12
+        assert entry.version == 13
 
     def test_already_at_v12_noop(self):
         """An entry already at the current version (12) is returned as-is."""
@@ -290,9 +290,9 @@ class TestMigrationV11ToV12:
         entry = self._run_from_v11({"continuous": True, "floor_label": "Ground Floor"})
         assert entry.options["floor_label"] == "Ground Floor"
 
-    def test_version_bumped_to_12(self):
+    def test_version_bumped_to_13(self):
         entry = self._run_from_v11({"continuous": True})
-        assert entry.version == 12
+        assert entry.version == 13
 
     def test_existing_options_preserved(self):
         opts = {"continuous": False, "delay": 60, "presence_scheduling_enabled": True}
@@ -374,7 +374,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 12
+        assert entry.version == 13
         assert any("recent_area_30d" in new for _, new in renamed), \
             f"Expected area slug renamed, got: {renamed}"
 
@@ -392,7 +392,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 12
+        assert entry.version == 13
         assert any("recent_time_30d" in new for _, new in renamed), \
             f"Expected time slug renamed, got: {renamed}"
 
@@ -413,4 +413,194 @@ class TestMigrationV11ToV12SlugFix:
         """Slug fix does not interfere with floor_label being added."""
         entry, _, _ = self._run_from_v11_with_entities([])
         assert entry.options.get("floor_label") == ""
-        assert entry.version == 12
+        assert entry.version == 13
+
+
+class TestMigrationV12ToV13:
+    """v12 → v13: language-slug entity_ids fixed for entities added without _attr_name."""
+
+    def _run_from_v12_with_entities(self, fake_entities: list) -> tuple:
+        """Run v12→v13 migration with a fake entity registry."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=12, options={"continuous": True, "floor_label": ""})
+        hass = _FakeHass()
+
+        entities_by_id = {
+            e["entity_id"]: MagicMock(
+                platform="roomba_plus",
+                domain=e.get("domain", e["entity_id"].split(".")[0]),
+                entity_id=e["entity_id"],
+                unique_id=e["unique_id"],
+            )
+            for e in fake_entities
+        }
+        fake_reg = MagicMock()
+        fake_reg.entities = MagicMock()
+        fake_reg.entities.values = lambda: list(entities_by_id.values())
+
+        renamed = []
+        removed = []
+
+        def _async_get(eid):
+            return entities_by_id.get(eid)
+
+        def _async_update_entity(old_eid, *, new_entity_id=None, **kwargs):
+            if new_entity_id:
+                old_obj = entities_by_id.pop(old_eid, None)
+                if old_obj:
+                    old_obj.entity_id = new_entity_id
+                    entities_by_id[new_entity_id] = old_obj
+                renamed.append((old_eid, new_entity_id))
+
+        def _async_remove(eid):
+            entities_by_id.pop(eid, None)
+            removed.append(eid)
+
+        fake_reg.async_get = _async_get
+        fake_reg.async_update_entity = _async_update_entity
+        fake_reg.async_remove = _async_remove
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch(
+                "homeassistant.helpers.entity_registry.async_get",
+                return_value=fake_reg,
+            ):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, renamed, removed
+
+    def test_version_bumped_to_13(self):
+        """Entry at v12 is bumped to v13."""
+        entry, _, _ = self._run_from_v12_with_entities([])
+        assert entry.version == 13
+
+    def test_german_cleaning_map_renamed(self):
+        """image.*_reinigungskarte → image.*_cleaning_map (DE install)."""
+        blid = "TEST_BLID_000000000000000000000000"
+        entities = [
+            # Wrong German slug for RoombaMapImage
+            {
+                "entity_id": "image.roomba_980_reinigungskarte",
+                "unique_id": f"{blid}_map",
+                "domain": "image",
+            },
+            # Reference entity so migration can derive the device prefix.
+            # Uses a unique_id not in _V13_RENAMES so prefix derivation uses
+            # the fallback path: uid tail = "_connected", eid ends with "_connected"
+            {
+                "entity_id": "binary_sensor.roomba_980_connected",
+                "unique_id": f"{blid}_connected",
+                "domain": "binary_sensor",
+            },
+        ]
+        _, renamed, removed = self._run_from_v12_with_entities(entities)
+        renamed_eids = [new for _, new in renamed]
+        assert any("cleaning_map" in eid for eid in renamed_eids), (
+            f"Expected cleaning_map rename, got: {renamed_eids}"
+        )
+        assert removed == []
+
+    def test_german_coverage_map_renamed(self):
+        """image.*_bedeckungskarte → image.*_coverage_map (DE install)."""
+        blid = "TEST_BLID_000000000000000000000000"
+        entities = [
+            {
+                "entity_id": "image.roomba_980_bedeckungskarte",
+                "unique_id": f"{blid}_coverage_map",
+                "domain": "image",
+            },
+            {
+                "entity_id": "binary_sensor.roomba_980_connected",
+                "unique_id": f"{blid}_connected",
+                "domain": "binary_sensor",
+            },
+        ]
+        _, renamed, _ = self._run_from_v12_with_entities(entities)
+        renamed_eids = [new for _, new in renamed]
+        assert any("coverage_map" in eid for eid in renamed_eids), (
+            f"Expected coverage_map rename, got: {renamed_eids}"
+        )
+
+    def test_already_correct_not_renamed(self):
+        """English install: entity_ids already correct — no renames."""
+        blid = "TEST_BLID_000000000000000000000000"
+        entities = [
+            {
+                "entity_id": "image.roomba_980_cleaning_map",
+                "unique_id": f"{blid}_map",
+                "domain": "image",
+            },
+            {
+                "entity_id": "image.roomba_980_coverage_map",
+                "unique_id": f"{blid}_coverage_map",
+                "domain": "image",
+            },
+        ]
+        _, renamed, removed = self._run_from_v12_with_entities(entities)
+        assert renamed == []
+        assert removed == []
+
+    def test_german_carpet_boost_select_renamed(self):
+        """select.*_teppich_boost → select.*_carpet_boost_select (DE)."""
+        blid = "TEST_BLID_000000000000000000000000"
+        entities = [
+            {
+                "entity_id": "select.roomba_980_teppich_boost",
+                "unique_id": f"{blid}_carpet_boost_select",
+                "domain": "select",
+            },
+            {
+                "entity_id": "binary_sensor.roomba_980_connected",
+                "unique_id": f"{blid}_connected",
+                "domain": "binary_sensor",
+            },
+        ]
+        _, renamed, _ = self._run_from_v12_with_entities(entities)
+        renamed_eids = [new for _, new in renamed]
+        assert any("carpet_boost_select" in eid for eid in renamed_eids), (
+            f"Expected carpet_boost_select rename, got: {renamed_eids}"
+        )
+
+    def test_prefix_from_sibling_in_v13_rename_list(self):
+        """Prefix derived from a sibling that is itself in the rename list."""
+        blid = "TEST_BLID_000000000000000000000000"
+        # Both entities are in _V13_RENAMES; use each other for prefix derivation.
+        # coverage_map has correct eid → prefix derivable from it.
+        entities = [
+            {
+                "entity_id": "image.roomba_980_reinigungskarte",
+                "unique_id": f"{blid}_map",
+                "domain": "image",
+            },
+            {
+                "entity_id": "image.roomba_980_coverage_map",   # already correct
+                "unique_id": f"{blid}_coverage_map",
+                "domain": "image",
+            },
+        ]
+        _, renamed, _ = self._run_from_v12_with_entities(entities)
+        renamed_eids = [new for _, new in renamed]
+        assert any("cleaning_map" in eid for eid in renamed_eids), (
+            f"Expected cleaning_map from sibling prefix, got: {renamed_eids}"
+        )
+
+    def test_no_prefix_match_is_skipped(self):
+        """Entity with no derivable prefix is silently skipped (no crash)."""
+        blid = "TEST_BLID_000000000000000000000000"
+        entities = [
+            {
+                "entity_id": "image.roomba_980_reinigungskarte",
+                "unique_id": f"{blid}_map",
+                "domain": "image",
+            },
+            # No reference sibling → prefix undeducible
+        ]
+        _, renamed, removed = self._run_from_v12_with_entities(entities)
+        # Should not crash; entity is skipped
+        assert removed == []

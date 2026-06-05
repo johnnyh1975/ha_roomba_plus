@@ -204,6 +204,8 @@ class TestRecordsFormat:
             "id", "started_at", "ended_at", "duration_min", "run_min",
             "area_sqft", "result", "initiator", "zones", "error_code",
             "recharges", "evacuations", "dirt_events", "wifi_signal", "source",
+            # v2.3.0 additions
+            "room_coverage", "alignment_confidence",
         }
         assert required == set(u.keys())
 
@@ -214,6 +216,8 @@ class TestRecordsFormat:
             "id", "started_at", "ended_at", "duration_min", "run_min",
             "area_sqft", "result", "initiator", "zones", "error_code",
             "recharges", "evacuations", "dirt_events", "wifi_signal", "source",
+            # v2.3.0 additions
+            "room_coverage", "alignment_confidence",
         }
         assert required == set(u.keys())
 
