@@ -689,12 +689,32 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
         for pmap in pmaps:
+            # Two firmware variants for version_id resolution:
+            # Variant A (older): active_pmapv_details.active_pmapv.active_pmapv_id
+            # Variant B (lewis 22.52.10): last_user_pmapv_id at pmap root level
+            # pmap_id match: either via active_pmapv.pmap_id or directly pmap["pmap_id"]
             details = pmap.get("active_pmapv_details", {})
-            pmapv = details.get("active_pmapv", {})
-            if pmapv.get("pmap_id") != active_id:
+            pmapv   = details.get("active_pmapv", {})
+
+            # Determine if this pmap matches the active pmap_id
+            pmap_id_match = (
+                pmapv.get("pmap_id") == active_id      # Variant A
+                or pmap.get("pmap_id") == active_id    # Variant B
+            )
+            if not pmap_id_match:
                 continue
-            version_id = pmapv.get("active_pmapv_id")
+
+            # Resolve version_id — try Variant A first, fall back to Variant B
+            version_id = (
+                pmapv.get("active_pmapv_id")           # Variant A
+                or pmap.get("last_user_pmapv_id")      # Variant B (lewis)
+            )
             if not version_id:
+                _LOGGER.debug(
+                    "iRobot cloud: UMF fetch skipped for %s — "
+                    "could not resolve version_id from pmap (keys: %s)",
+                    self.blid, list(pmap.keys()),
+                )
                 return None
             try:
                 umf_raw = await self.api.get_pmap_umf(
