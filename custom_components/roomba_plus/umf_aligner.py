@@ -263,14 +263,24 @@ class UmfAligner:
         update _DOOR_GAP_MIN/_DOOR_GAP_MAX only — not this method.
         """
         self._door_candidates = []
+        gaps: list[float] = []
         for i in range(len(self._points2d) - 1):
             c1 = self._coord_lookup.get(self._points2d[i].get("id", ""))
             c2 = self._coord_lookup.get(self._points2d[i + 1].get("id", ""))
             if c1 and c2:
                 gap = math.dist(c1, c2)
+                gaps.append(gap)
                 if _DOOR_GAP_MIN <= gap <= _DOOR_GAP_MAX:
                     mid = ((c1[0] + c2[0]) / 2.0, (c1[1] + c2[1]) / 2.0)
                     self._door_candidates.append(mid)
+        if gaps:
+            _LOGGER.debug(
+                "UmfAligner: gap stats — min=%.3f max=%.3f mean=%.3f "
+                "candidates=%d (thresholds: %.0f–%.0f)",
+                min(gaps), max(gaps), sum(gaps) / len(gaps),
+                len(self._door_candidates),
+                _DOOR_GAP_MIN, _DOOR_GAP_MAX,
+            )
 
     def _resolve_room_polygons(self) -> None:
         """Resolve per-room polygon vertices using region geometry.ids.
