@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.3.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.3.5-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -14,174 +14,6 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Automation-ready** — blocking sensor gate, presence-aware scheduling, device triggers, and named HA actions make Roomba a first-class citizen in your automations
 
 > 📊 **[Full feature comparison with HA Core Roomba and roomba_rest980 →](COMPARISON.md)**
-
----
-
-## What's new
-
-### v2.3.1 — June 2026
-
-**xiaomi-vacuum-map-card compatibility fix (Issue #14).**
-
-- **`rooms` attribute format corrected** — both `image.{name}_rooms_map` and
-  `image.{name}_cleaning_map` previously exposed `rooms` as a `dict` keyed by
-  room name. `lovelace-xiaomi-vacuum-map-card` expects a `list` of objects with
-  `id`, `label`, and `outline` keys and calls `.filter()` on the list — the dict
-  caused the card to throw "e.predefinedSelections.filter is not a function".
-  Both entities now return the correct list format.
-- **Attributes populated before first image fetch** — `calibration` and `rooms`
-  attributes on `image.{name}_rooms_map` were empty until the frontend had
-  fetched the image at least once. The entity now runs an initial render in
-  `async_added_to_hass` when UmfAligner is already aligned, so attributes are
-  present from the first card load.
-- **README YAML examples corrected** — the documented xiaomi-vacuum-map-card
-  configuration used the legacy `map_camera:` key (replaced by `map_source:
-  camera:` in card v2.x) and the wrong map mode template (`vacuum_clean_zone`
-  instead of `vacuum_clean_segment`). Both examples are now correct.
-
-### v2.3.0 — June 2026
-
-**Spatial Fusion (UmfAligner) + xiaomi-vacuum-map-card compatibility.**
-
-#### UmfAligner — UMF floor plan alignment
-
-New `umf_aligner.py` aligns the iRobot cloud UMF floor plan with pose-space
-(dock-relative mm) using door-gap detection and Hungarian matching against
-GeometryStore door markers. Requires SMART robots with cloud credentials and
-≥ 3 confirmed door crossings in GeometryStore.
-
-- Confidence ≥ 0.70: room coverage in REST API, keepout overlay on map,
-  `calibration` + `rooms` attributes on map entities
-- Confidence ≥ 0.85: auto-confirm zone names, suppress matched-zone Repair Issues
-- Re-aligns automatically when the active pmap version changes
-
-#### `image.{name}_rooms_map` — new room layout entity (Issue #14)
-
-New `ImageEntity` for Smart Map robots — renders room polygons on a dark canvas
-without any cleaning history overlay. Preferred source for
-`lovelace-xiaomi-vacuum-map-card` room selection. Registered for SMART robots;
-returns a blank image until UmfAligner confidence reaches 0.70.
-
-#### xiaomi-vacuum-map-card compatibility
-
-Both `image.{name}_cleaning_map` and `image.{name}_rooms_map` now expose
-`calibration` and `rooms` attributes when UmfAligner confidence ≥ 0.70.
-Use `rooms_map` as the map source for card configuration (no cleaning data
-overlay). See the xiaomi-vacuum-map-card section below for YAML examples.
-
-#### Keep-out zone overlay
-
-Keep-out zones from the UMF floor plan are rendered as semi-transparent red
-polygons on `image.{name}_cleaning_map` when UmfAligner confidence ≥ 0.70
-(requires pose data).
-
-Keep-out zone count and names are now exposed as attributes on the
-`select.{name}_cloud_zone_select` entity (`keepout_zone_count`,
-`keepout_zone_names`).
-
-#### REST API additions
-
-- **`format=records`**: two new fields — `room_coverage` (per-room fraction from
-  timeline, no UmfAligner required) and `alignment_confidence` (0.0–1.0, null
-  until aligned)
-- **`format=hazards`**: `room_name` now populated when UmfAligner confidence
-  ≥ 0.70; `source: "keepout"` entries added for user-configured no-go zones
-
-#### CR4 live attributes
-
-`planned_room_order` and `mission_destination` are now populated immediately
-at mission start from MQTT `cleanMissionStatus.cmd.regions` (lewis firmware
-22.52.10+). Previously these were null until the cloud record merged
-(≤ 30 min post-mission). `last_cleaned_rooms` and `room_coverage` remain
-post-mission — they are definitionally unavailable during a running mission.
-
-#### Error recurrence Repair Issue (F8b)
-
-New Repair Issue fires when the same error code recurs ≥ 3 times in 30 days.
-Issue body includes the error label, occurrence count, cleaning phase, room name
-(from UmfAligner when aligned), and recommended action.
-
-#### EPHEMERAL robot support (Q7-conditional)
-
-When Q7 is confirmed (980 `get_pmaps()` gate fix), the four CR4 vacuum entity
-attributes resolve room names via UmfAligner for EPHEMERAL robots that lack
-cloud `coordinator.regions`.
-
----
-
-### v2.2.2 — June 2026
-
-**CR4 room attributes fix — `region_id` key divergence.**
-
-The four vacuum entity attributes introduced in v2.2.0 (`last_cleaned_rooms`,
-`planned_room_order`, `mission_destination`, `room_coverage`) were silently
-`null` on all robots. The iRobot pmaps API returns region identifiers under
-the key `"region_id"`, but the coordinator was reading `"id"` — so every
-region came back with an empty string and the entire region map was discarded
-before the attributes could be populated.
-
-Only `cloud_coordinator.py` changed. After installing v2.2.2 and restarting,
-the CR4 attributes will populate after the next cloud coordinator refresh
-(≤ 30 minutes after restart).
-
-The debug log now emits `region_id_key=region_id` or `region_id_key=id`
-so this kind of API key divergence is immediately visible in future reports.
-
-### v2.2.1 — June 2026
-
-**CR4 timeline fixes for lewis firmware (22.52.10).**
-
-- `planned_room_order` / `mission_destination` / `last_cleaned_rooms` were
-  broken on i7+, s9+, j-series robots. These firmware versions send
-  `plan.upcoming` as object arrays (`[{"type": "rid", "rid": "19"}]`) instead
-  of plain strings (`["19"]`). The old code serialised the entire dict as the
-  room name.
-- Rooms completed after an error-recovery sequence (`status=6`) were
-  incorrectly excluded from `last_cleaned_rooms`.
-- Manifest version was not bumped in the initial v2.2.1 package — corrected.
-
-### v2.2.0 — June 2026
-
-**Grid + Household. Obstacle intelligence, sequential cleaning, and card fixes.**
-
-- **Coverage heatmap** (`image.{name}_coverage_map`) — EMA-weighted occupancy grid renders as a PNG heatmap after each mission. Dark blue = frequently visited, red overlay = stuck hotspots. Requires pose capability (900-series and Smart Map robots). EMA diagnostics (`decay`, `visit_increment`, `cell_count`, `stuck_event_count`, bounding box) exposed as attributes for the v2.2 validation period.
-- **`format=hazards` REST endpoint** — now returns real GridStore stuck hotspots and cloud-detected obstacle centroids (previously always `[]`). Used by the companion card for obstacle pin overlays.
-- **Household REST endpoint** (`GET /api/roomba_plus/household?days=28`) — aggregates all Roomba+ robots in one request. Per-robot breakdown, optional per-floor grouping (configure floor label in Settings → Configure → Settings), combined totals.
-- **Floor label** — assign a floor name to each robot (e.g. "Ground Floor"). Used by the household endpoint and surfaced as a config option.
-- **UMF obstacle seeding** — on first setup, cloud-detected obstacle zones from the iRobot Smart Map are seeded into the GridStore so the hazards endpoint is populated immediately, before local stuck events accumulate.
-- **CR4 timeline attributes** — for SMART robots with cloud credentials: `last_cleaned_rooms`, `planned_room_order`, `mission_destination`, `room_coverage` (per-room fraction) are populated as vacuum entity attributes from the mission timeline field. From v2.3.0: `planned_room_order` and `mission_destination` are available immediately at mission start via MQTT `cmd.regions` (lewis firmware); `last_cleaned_rooms` and `room_coverage` remain post-mission only.
-- **CR3 coordinator fallback** — when the cloud is temporarily unreachable, cloud-enriched MissionStore records are served as raw_records so CloudRawSensor entities stay available across cloud outages.
-- **`clean_sequence` service** — start robot B automatically when robot A finishes its mission. One-shot listener with configurable delay (0–60 min) and optional completion-required guard. Useful for multi-floor setups.
-- **`clean_delay_min` option** — configurable delay (0–30 min) before presence-triggered clean starts, settable per robot in Presence-Aware Scheduling options.
-- **F8b error context** — `error_position_mm`, `phase_at_error`, and `self_recovered` written into MissionStore records at mission end for future hazard-location analytics.
-- **`query_by_error()` API** — new MissionStore method for Repair Issues that need to detect recurring errors in the same zone.
-- **`binary_sensor.{name}_mission_active`** — ON for the full mission arc including mid-mission recharge pauses. Distinct from `mid_mission_recharge`. Fixes card v1.4 mission-completion detection (C1).
-- **`select.{name}_carpet_boost_select`** — interactive carpet boost mode select for 980 and compatible robots. Wraps `vacuum.set_fan_speed`; replaces the read-only `carpet_boost_mode` sensor for card control (P2).
-- **Entity ID fix (DE/FR/ES/IT/NL/PT installs)** — `recent_area_30d` and `recent_time_30d` sensors were registered with language-derived slugs on non-English fresh installs (e.g. `sensor.*_gereinigte_flache_30_t`). The v12 config entry migration renames these to the correct English suffixes automatically on upgrade.
-- **Entity ID fix (v2.3.0, all non-English installs)** — 9 further entities (`image.*_cleaning_map`, `image.*_coverage_map`, `select.*_carpet_boost_select`, `sensor.*_raw_state`, and 5 button entities) were missing `_attr_name` in v2.2.x and registered with translated slugs on non-English installs (e.g. `image.*_reinigungskarte` on DE). The v13 config entry migration renames these automatically.
-- **Amendment 8f** — `dockedAtStart`, `missionId`, `pauseM`, `cmd` now merged from cloud records into MissionStore alongside the existing analytics fields.
-- **WiFi histogram fix** — `recent_wifi_floor` and `recent_wifi_stability` sensors were computing incorrect values by treating the `wlBars` histogram as a time-series. Both now use correct weighted bucket statistics.
-
-### v2.1.4 — June 2026
-Entity names on **all non-English HA installations** now correctly display and
-produce English entity_id slugs on first registration. Binary sensors, selects,
-and switches were not covered by the v2.1.3 fix — this completes it.
-Affects new installations only; existing entity_ids are preserved.
-
-### v2.1.3 — June 2026
-- **Cloud analytics persistence** — mission fields (`dirt`, `chrgM`, `wlBars`,
-  full mission event log) are now stored locally after each mission and survive
-  HA restarts. Previously lost on every restart before the next 24h cloud poll.
-- **Cloud merge on mission end** — cloud fields merged into MissionStore within
-  minutes of mission completion, not just at HA startup.
-- **Mission classifier fix** — incomplete missions (`done='inc'`) now correctly
-  classify as `error_{code}` instead of producing repeated unknown-value log
-  entries.
-- **Entity names on non-English installs** — 92 sensor and button descriptions
-  now have explicit English names, preventing locale-derived slugs in entity_ids
-  on DE/FR/ES/IT/NL/PT installations.
-- **Enhanced cloud debug logging** — field coverage fractions, array shapes, and
-  nested key structures logged at DEBUG level for diagnostics.
 
 ---
 
@@ -574,11 +406,29 @@ Zone attribution by robot type: 600-series returns result and duration only; 900
 
 | Sensor / Binary sensor | Notes |
 |---|---|
+| `mission_elapsed_min` | Minutes elapsed in the current mission. Uses `mssnM` from MQTT when available; falls back to wall-clock elapsed from `mssnStrtTm` (lewis firmware does not report `mssnM` mid-mission). |
 | `mission_recharge_minutes` | Minutes until robot resumes after a mid-mission dock. Decrements live every 60 seconds — no MQTT push required. |
 | `mission_expire_minutes` | Minutes until the mission expires. Same live countdown. |
 | `mission_id` | Stable string across all recharge cycles of one mission (opt-in) |
 | `binary_sensor.mission_active` | ON for the entire mission arc — run, hmMidMsn, mid-mission recharge, hmPostMsn. OFF when cycle returns to `none`. Distinct from `mid_mission_recharge` which is ON only during the charge phase. |
 | `binary_sensor.mid_mission_recharge` | ON when `phase=charge` and `cycle≠none` — distinguishes mid-mission recharge from user-pause and from completed charging |
+
+#### Room Intelligence — Smart Map robots, cloud required
+
+Vacuum entity attributes populated from the active mission and post-mission timeline:
+
+| Attribute | When available | Notes |
+|---|---|---|
+| `planned_room_order` | **During mission** (live) | Rooms in the order requested, resolved from `lastCommand.regions` against the active Smart Map. Populated immediately at mission start — no cloud poll required. |
+| `mission_destination` | **During mission** (live) | Last room in `planned_room_order` — the final destination of the current mission. |
+| `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned (status=0 or status=6 `room` events from timeline). Available within ~30 minutes of mission end once cloud timeline is merged. |
+| `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) from timeline `totalArea`. Dict keyed by room name. |
+
+**Source priority:**
+- During an active mission (`phase: run` or `hmMidMsn`): `planned_room_order` and `mission_destination` come from `lastCommand.regions` (lewis firmware) or `cleanMissionStatus.cmd.regions` (other variants), resolved against the active Smart Map region names.
+- Post-mission: all four attributes are populated from the merged MissionStore timeline. `planned_room_order` and `mission_destination` switch to the timeline source at mission end.
+
+**Prerequisites:** Cloud credentials configured, `region_count_active > 0` in diagnostics. All four attributes are `null` on robots without a Smart Map or without cloud credentials.
 
 #### Error Intelligence
 
