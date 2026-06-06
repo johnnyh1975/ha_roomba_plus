@@ -706,19 +706,22 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
         for pmap in pmaps:
-            # Three known API structure variants for pmap_id / version_id:
+            # pmap structure variants for version_id resolution.
+            # Only Variant B is confirmed from live debug logs (June 2026).
+            # Variant A and C are unconfirmed but not disproven — kept as
+            # defensive fallbacks to avoid breaking unknown robot/firmware types.
             #
-            # Variant A (older firmware):
-            #   pmap_id:    active_pmapv_details.active_pmapv.pmap_id
+            # Variant A (unconfirmed — original v2.3.0 assumption):
             #   version_id: active_pmapv_details.active_pmapv.active_pmapv_id
             #
-            # Variant B (lewis 22.52.10, confirmed from debug logs June 2026):
-            #   pmap_id:    active_pmapv_details.active_pmapv.pmap_id  (same)
+            # Variant B (confirmed — veronoicc + Thonno, lewis 22.52.10, June 2026):
             #   version_id: active_pmapv_details.active_pmapv.last_user_pmapv_id
             #
-            # Variant C (ia74/roomba_rest980 source, June 2026):
-            #   pmap_id:    pmap["pmap_id"]  (root level)
-            #   version_id: pmap["active_pmapv_id"]  (root level)
+            # Variant C (unconfirmed — inferred from ia74/roomba_rest980 CloudApi.py):
+            #   version_id: pmap["active_pmapv_id"] (root level)
+            #
+            # All variants use active_pmapv_details.active_pmapv.pmap_id for pmap_id
+            # match, except Variant C which falls back to pmap["pmap_id"] at root.
             #
             details = pmap.get("active_pmapv_details", {})
             pmapv   = details.get("active_pmapv", {})
@@ -764,17 +767,40 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.blid,
             )
 
+            # UMF response structure confirmed from veronoicc debug log and
+            # ia74/roomba_rest980 camera.py source (June 2026):
+            # Container format with keys ['format_version', 'debug_file_header', 'maps']
+            # where geometry (points2d, keepoutzones, observed_zones) is in maps[].
+            maps = umf_raw.get("maps") or []
+            geo: dict[str, list] = {"points2d": [], "keepoutzones": [], "observed_zones": []}
+            for m in maps:
+                if not isinstance(m, dict):
+                    continue
+                geo["points2d"].extend(m.get("points2d") or [])
+                geo["keepoutzones"].extend(m.get("keepoutzones") or [])
+                geo["observed_zones"].extend(m.get("observed_zones") or [])
+
+            _LOGGER.debug(
+                "iRobot cloud: UMF parsed — "
+                "%d map(s) -> points2d=%d keepoutzones=%d observed_zones=%d for %s",
+                len(maps),
+                len(geo["points2d"]),
+                len(geo["keepoutzones"]),
+                len(geo["observed_zones"]),
+                self.blid,
+            )
+
             return {
                 "keepoutzones": [
                     {**z, "space": "umf"}
-                    for z in (umf_raw.get("keepoutzones") or [])
+                    for z in geo["keepoutzones"]
                 ],
                 "observed_zones": [
                     {**z, "space": "umf"}
-                    for z in (umf_raw.get("observed_zones") or [])
+                    for z in geo["observed_zones"]
                 ],
-                "points2d":  umf_raw.get("points2d") or [],
-                "pmap_id":   active_id,
+                "points2d":   geo["points2d"],
+                "pmap_id":    active_id,
                 "version_id": version_id,
             }
         return None
