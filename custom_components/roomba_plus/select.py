@@ -58,6 +58,7 @@ def resolve_zone_name(
 
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 # Option labels — must match CLEAN_MODE_LABELS values
 OPT_AUTO = CLEAN_MODE_LABELS["auto"]    # "Auto"

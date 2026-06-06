@@ -35,6 +35,8 @@ from .const import (
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
+PARALLEL_UPDATES = 0
+
 _NOT_READY_MAP_SAVING: int = 64  # notReady bitmask bit 6
 
 

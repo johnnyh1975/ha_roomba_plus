@@ -45,6 +45,7 @@ from .entity import IRobotEntity
 from .models import MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 
 # ── Command buttons ───────────────────────────────────────────────────────────

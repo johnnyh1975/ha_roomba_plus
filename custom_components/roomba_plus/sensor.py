@@ -75,6 +75,8 @@ from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 from .cloud_coordinator import IrobotCloudCoordinator
 
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class RoombaSensorDescription(SensorEntityDescription):
@@ -2017,6 +2019,7 @@ def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]
 # ── F5 — Performance intelligence (CloudRawSensor + RoombaSensor functions) ───
 
 import statistics as _statistics
+nPARALLEL_UPDATES = 0
 
 
 def _raw_cleaning_speed(records: list[dict]) -> StateType:

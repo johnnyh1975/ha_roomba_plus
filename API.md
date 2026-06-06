@@ -214,10 +214,13 @@ for 600-series robots or when no data has been accumulated yet.
 - `robot_learned` — UMF `observed_zones` centroid (cloud-detected obstacle)
 - `keepout` — UMF `keepoutzones` centroid (v2.3+, user-configured no-go zone)
 
-> **Coordinate space note (v2.2):** `x_mm`/`y_mm` for `stuck_events` are in
-> pose space (dock at origin, mm). For `robot_learned` entries, coordinates are
-> in UMF units (Q6 open — coordinate scale not yet confirmed). Card consumers
-> should check `source` until v2.3 ships a resolved coordinate transform.
+> **Coordinate space note:** `x_mm`/`y_mm` for `stuck_events` are in pose
+> space (dock at origin, mm). For `robot_learned` and `keepout` entries,
+> coordinates are transformed to pose space by the UmfAligner (v2.3+) when
+> confidence ≥ 0.70. Check `alignment_confidence` on the `rooms_map` or
+> `cleaning_map` entity attribute to determine whether the transform is active.
+> Below threshold, UMF-space coordinates are returned as-is (Q6 open:
+> coordinate unit scale mm vs. metres not yet confirmed from hardware).
 
 
 ---

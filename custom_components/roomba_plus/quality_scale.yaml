@@ -106,17 +106,20 @@ rules:
   parallel-updates:
     status: done
     comment: >
-      MQTT push integration — no coordinator polling for local data.
-      Entities update independently via new_state_filter callbacks.
+      PARALLEL_UPDATES = 0 set in all 7 platform files (vacuum, sensor,
+      binary_sensor, select, button, image, switch). MQTT push integration
+      — entities update independently via callbacks, no coordinator polling.
   reauthentication-flow:
     status: done
     comment: Cloud coordinator raises ConfigEntryAuthFailed on auth failure.
   test-coverage:
     status: done
     comment: >
-      1022 unit tests across 32 test files. Stub-based — no HA install
+      1548 unit tests across 33 test files. Stub-based — no HA install
       required. Covers all stores, sensors, cloud coordinator, services,
-      callbacks, migration, classification, REST API, and backfill logic.
+      callbacks, migration (v1→v13), classification, REST API, backfill,
+      UmfAligner, and wiring. Integration tests (11) in tests_integration/
+      with pytest-homeassistant-custom-component.
 
   # ── Gold ──────────────────────────────────────────────────────────────────
   devices:
@@ -144,8 +147,12 @@ rules:
       Opt-in diagnostic sensors (nav_panics, cliff counters, battery_capacity,
       rssi, snr, ip_address) set entity_registry_enabled_default=False.
   exception-translations:
-    status: done
-    comment: All ServiceValidationError and ConfigEntryAuthFailed use translation keys.
+    status: todo
+    comment: >
+      Most ServiceValidationError raises use translation keys. Three raw
+      f-string raises remain in services.py (lines ~244, ~250, ~373):
+      "Entity {id} not found" and "No config entry for {id}". These will
+      be converted to translation_key pattern in v2.4.0 (F-RB-7).
   icon-translations:
     status: done
     comment: >
@@ -181,8 +188,11 @@ rules:
   migration:
     status: done
     comment: >
-      async_migrate_entry implemented. Config entry bumped to version 2.
-      v1 → v2 adds cloud_raw_records_version marker. All existing user data preserved.
+      async_migrate_entry implemented. Config entry at version 13 (v2.3.0).
+      Migrations: v1→v2 (cloud_raw_records_version marker), v2→v3 through
+      v12 (entity renames, options additions, floor_label), v12→v13
+      (language-slug entity_id fix for 9 entities missing _attr_name in
+      v2.2.x and earlier).
   test-before-configure:
     status: done
     comment: MQTT credentials verified during config flow before entry is created.

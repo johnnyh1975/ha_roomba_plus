@@ -59,6 +59,7 @@ from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 SUPPORT_IROBOT = (
     VacuumEntityFeature.PAUSE

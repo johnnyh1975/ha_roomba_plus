@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.3.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.3.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -18,6 +18,26 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 ---
 
 ## What's new
+
+### v2.3.1 — June 2026
+
+**xiaomi-vacuum-map-card compatibility fix (Issue #14).**
+
+- **`rooms` attribute format corrected** — both `image.{name}_rooms_map` and
+  `image.{name}_cleaning_map` previously exposed `rooms` as a `dict` keyed by
+  room name. `lovelace-xiaomi-vacuum-map-card` expects a `list` of objects with
+  `id`, `label`, and `outline` keys and calls `.filter()` on the list — the dict
+  caused the card to throw "e.predefinedSelections.filter is not a function".
+  Both entities now return the correct list format.
+- **Attributes populated before first image fetch** — `calibration` and `rooms`
+  attributes on `image.{name}_rooms_map` were empty until the frontend had
+  fetched the image at least once. The entity now runs an initial render in
+  `async_added_to_hass` when UmfAligner is already aligned, so attributes are
+  present from the first card load.
+- **README YAML examples corrected** — the documented xiaomi-vacuum-map-card
+  configuration used the legacy `map_camera:` key (replaced by `map_source:
+  camera:` in card v2.x) and the wrong map mode template (`vacuum_clean_zone`
+  instead of `vacuum_clean_segment`). Both examples are now correct.
 
 ### v2.3.0 — June 2026
 
@@ -418,21 +438,35 @@ Both `image.{name}_cleaning_map` and `image.{name}_rooms_map` expose:
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
-map_camera: image.roomba_rooms_map      # use rooms_map for clean display
+map_source:
+  camera: image.roomba_rooms_map        # use rooms_map for clean display
 calibration_source:
-  camera: true                          # uses calibration attribute
+  camera: true                          # reads calibration attribute
 map_modes:
-  - template: vacuum_clean_zone
+  - template: vacuum_clean_segment
     predefined_selections:
-      rooms: true                       # room outlines from rooms attribute
+      - id: Kitchen
+        label: Kitchen
+        rooms:
+          - Kitchen
+      # add one entry per room; id and label must match the room names
+      # returned by Roomba+ in the rooms attribute
 ```
+
+> **Prerequisites for attributes to appear:**
+> 1. SMART robot with cloud credentials configured.
+> 2. UmfAligner confidence ≥ 0.70 (typically after 3+ missions with door crossings).
+> 3. At least one mission completed since integration setup (so cloud UMF geometry is available).
+>
+> Until these conditions are met, `image.roomba_rooms_map` serves a blank dark image and exposes no `calibration` or `rooms` attributes — the card will show "Invalid calibration". This is expected.
 
 For the cleaning history map instead:
 
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
-map_camera: image.roomba_cleaning_map
+map_source:
+  camera: image.roomba_cleaning_map
 calibration_source:
   camera: true
 ```

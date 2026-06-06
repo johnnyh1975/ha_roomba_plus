@@ -52,6 +52,7 @@ from .models import MapCapability, RoombaConfigEntry
 from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 # CLEANING_PHASES and MISSION_END_PHASES moved to const.py (v2.3.0 Step 1)
 
@@ -226,16 +227,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if cal:
             attrs["calibration"] = cal
 
-        # rooms — per-room polygon outlines in image pixel space
+        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card
+        # predefined_selections. Must be a list — the card calls .filter() on it.
         rid_to_name = aligner.rid_to_name()
-        rooms: dict[str, Any] = {}
+        rooms: list[dict[str, Any]] = []
         for rid, poly_umf in aligner.room_polygons_umf.items():
             poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
             if not all(p is not None for p in poly_pose):
                 continue
             poly_px   = [self._renderer._mm_to_px(x, y) for x, y in poly_pose]
             room_name = rid_to_name.get(rid, rid)
-            rooms[room_name] = {"outline": [{"x": px, "y": py} for px, py in poly_px]}
+            rooms.append({
+                "id":      room_name,
+                "label":   room_name,
+                "outline": [{"x": px, "y": py} for px, py in poly_px],
+            })
         if rooms:
             attrs["rooms"] = rooms
 
@@ -615,6 +621,12 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
+        # Prime the transform parameters immediately if UmfAligner is already
+        # aligned so calibration/rooms attributes are populated on first card
+        # load — before the frontend has ever fetched async_image().
+        data = self._config_entry.runtime_data
+        if data.umf_aligner and data.umf_aligner.aligned:
+            await self.hass.async_add_executor_job(self._render_rooms_png)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return False  # Cloud entity — no MQTT updates
@@ -723,18 +735,22 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         if cal:
             attrs["calibration"] = cal
 
-        # rooms — polygon outlines in image pixel space
+        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card
+        # predefined_selections. The card calls .filter() on this list, so it
+        # must be a list, not a dict keyed by name.
         rid_to_name = aligner.rid_to_name()
-        rooms: dict[str, Any] = {}
+        rooms: list[dict[str, Any]] = []
         for rid, poly_umf in aligner.room_polygons_umf.items():
             poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
             if not all(p is not None for p in poly_pose):
                 continue
             poly_px   = [self._to_px_last(x, y) for x, y in poly_pose]
             room_name = rid_to_name.get(rid, rid)
-            rooms[room_name] = {
-                "outline": [{"x": px, "y": py} for px, py in poly_px]
-            }
+            rooms.append({
+                "id":      room_name,
+                "label":   room_name,
+                "outline": [{"x": px, "y": py} for px, py in poly_px],
+            })
         if rooms:
             attrs["rooms"] = rooms
 
