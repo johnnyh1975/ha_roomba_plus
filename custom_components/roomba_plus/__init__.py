@@ -1283,6 +1283,10 @@ async def async_setup_entry(
         if map_capability == MapCapability.EPHEMERAL:
             zone_store = ZoneStore()
             await zone_store.async_load(hass, config_entry.entry_id)
+
+        # GeometryStore is needed for both EPHEMERAL (door markers from ZoneStore)
+        # and SMART (UmfAligner door marker accumulation for alignment confidence).
+        if map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             geometry_store = GeometryStore()
             await geometry_store.async_load(hass, config_entry.entry_id)
 
