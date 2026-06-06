@@ -147,8 +147,13 @@ class TestRoombaMapImageAttrs:
         entity = self._entity(aligner=aligner, renderer=renderer)
         attrs = entity.extra_state_attributes
         assert "rooms" in attrs
-        assert "Kitchen" in attrs["rooms"]
-        assert "outline" in attrs["rooms"]["Kitchen"]
+        rooms = attrs["rooms"]
+        # rooms is now a list of {id, label, outline} for xiaomi-vacuum-map-card
+        assert isinstance(rooms, list)
+        assert len(rooms) == 1
+        assert rooms[0]["id"] == "Kitchen"
+        assert rooms[0]["label"] == "Kitchen"
+        assert "outline" in rooms[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
