@@ -684,25 +684,55 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Returns None when no active pmap or UMF fetch fails.
         """
-        active_id = self.active_pmap_id
+        # Resolve active_pmap_id directly from the pmaps list passed in.
+        # Do NOT use self.active_pmap_id here — that reads self.data which is
+        # None during the first _async_update_data call (HA only sets self.data
+        # after a successful return). Using self.data would always return None
+        # on the first update, silently skipping the UMF fetch every startup.
+        active_id: str | None = None
+        for _p in pmaps:
+            _pmapv = _p.get("active_pmapv_details", {}).get("active_pmapv", {})
+            _pid = _pmapv.get("pmap_id") or _p.get("pmap_id")
+            if _pid:
+                active_id = _pid
+                break
+
         if not active_id:
+            _LOGGER.debug(
+                "iRobot cloud: UMF fetch skipped for %s — "
+                "could not determine active_pmap_id from pmaps list",
+                self.blid,
+            )
             return None
 
         for pmap in pmaps:
-            # active_pmapv_details.active_pmapv is present on both firmware variants.
-            # Variant A (older):        pmapv["active_pmapv_id"] holds the version_id.
-            # Variant B (lewis 22.52.10): pmapv["last_user_pmapv_id"] holds the version_id.
-            # Both variants have pmapv["pmap_id"] for the pmap_id match.
+            # Three known API structure variants for pmap_id / version_id:
+            #
+            # Variant A (older firmware):
+            #   pmap_id:    active_pmapv_details.active_pmapv.pmap_id
+            #   version_id: active_pmapv_details.active_pmapv.active_pmapv_id
+            #
+            # Variant B (lewis 22.52.10, confirmed from debug logs June 2026):
+            #   pmap_id:    active_pmapv_details.active_pmapv.pmap_id  (same)
+            #   version_id: active_pmapv_details.active_pmapv.last_user_pmapv_id
+            #
+            # Variant C (ia74/roomba_rest980 source, June 2026):
+            #   pmap_id:    pmap["pmap_id"]  (root level)
+            #   version_id: pmap["active_pmapv_id"]  (root level)
+            #
             details = pmap.get("active_pmapv_details", {})
             pmapv   = details.get("active_pmapv", {})
 
-            if pmapv.get("pmap_id") != active_id:
+            # pmap_id match — try Variant A/B first, then Variant C
+            pmap_id_candidate = pmapv.get("pmap_id") or pmap.get("pmap_id")
+            if pmap_id_candidate != active_id:
                 continue
 
-            # Resolve version_id — Variant A first, Variant B (lewis) as fallback
+            # version_id — try all three variants in order
             version_id = (
                 pmapv.get("active_pmapv_id")       # Variant A
                 or pmapv.get("last_user_pmapv_id") # Variant B (lewis 22.52.10)
+                or pmap.get("active_pmapv_id")     # Variant C (ia74 source)
             )
             if not version_id:
                 _LOGGER.debug(
@@ -715,8 +745,24 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 umf_raw = await self.api.get_pmap_umf(
                     self.blid, active_id, version_id
                 )
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug(
+                    "iRobot cloud: UMF fetch failed for %s "
+                    "(pmap_id=%s version_id=%s) — %s: %s",
+                    self.blid, active_id, version_id,
+                    type(exc).__name__, exc,
+                )
                 return None
+
+            _LOGGER.debug(
+                "iRobot cloud: UMF raw response keys=%s points2d=%d "
+                "keepoutzones=%d observed_zones=%d for %s",
+                list(umf_raw.keys()) if isinstance(umf_raw, dict) else type(umf_raw).__name__,
+                len(umf_raw.get("points2d") or []) if isinstance(umf_raw, dict) else 0,
+                len(umf_raw.get("keepoutzones") or []) if isinstance(umf_raw, dict) else 0,
+                len(umf_raw.get("observed_zones") or []) if isinstance(umf_raw, dict) else 0,
+                self.blid,
+            )
 
             return {
                 "keepoutzones": [
