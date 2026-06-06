@@ -3,9 +3,9 @@
 Aligns iRobot UMF floor plan coordinate space with pose-space (dock-relative mm)
 using door-gap detection and Hungarian assignment against GeometryStore markers.
 
-Coordinate assumption (Q6): UMF points2d values assumed to be in mm.
-If Q6 resolves to metres, multiply all incoming coordinates by 1000 in __init__
-before storing — adjustment is localised here, not scattered across callers.
+Coordinate system (Q6 resolved June 2026): UMF points2d values are in METRES.
+All coordinates are multiplied by UMF_TO_MM = 1000.0 in _build_coord_lookup()
+so that internal calculations and thresholds remain in mm throughout.
 """
 
 from __future__ import annotations
@@ -20,13 +20,19 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# ── Confidence thresholds ─────────────────────────────────────────────────────
+# ── Coordinate scale ──────────────────────────────────────────────────────────
+# UMF points2d are in metres (Q6 resolved June 2026 from gap stats:
+# max gap ~11.5 in raw UMF = ~11.5m, consistent with house dimensions).
+# Applied once in _build_coord_lookup(); all thresholds below are in mm.
+UMF_TO_MM: float = 1000.0
+
+# ── Confidence thresholds (all in mm after UMF_TO_MM scaling) ─────────────────
 _MIN_CONFIDENCE:          float = 0.70   # below: no room coverage, no auto-naming
 _AUTO_CONFIRM_CONFIDENCE: float = 0.85   # at or above: auto-confirm zone names
 _RESIDUAL_SCALE:          float = 500.0  # mm — residual > this → confidence ~0
 _DOOR_MATCH_TOLERANCE:    float = 400.0  # mm — max UMF↔GS marker distance for pair
-_DOOR_GAP_MIN:            float = 600.0  # mm (Q6 assumed mm — update here only if metres)
-_DOOR_GAP_MAX:            float = 1200.0 # mm
+_DOOR_GAP_MIN:            float = 600.0  # mm — minimum door width
+_DOOR_GAP_MAX:            float = 1200.0 # mm — maximum door width
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -237,10 +243,10 @@ class UmfAligner:
     # ── Private: build lookups ────────────────────────────────────────────────
 
     def _build_coord_lookup(self) -> None:
-        """Build point_id → (x, y) lookup from points2d.
+        """Build point_id → (x_mm, y_mm) lookup from points2d.
 
-        Called first in align(). Entries without 'id' or malformed
-        'coordinates' are silently skipped.
+        UMF coordinates are in metres — multiply by UMF_TO_MM so all internal
+        calculations and thresholds operate in mm throughout.
         """
         self._coord_lookup = {}
         for p in self._points2d:
@@ -248,7 +254,10 @@ class UmfAligner:
             coords = p.get("coordinates", [])
             if pid and len(coords) >= 2:
                 try:
-                    self._coord_lookup[pid] = (float(coords[0]), float(coords[1]))
+                    self._coord_lookup[pid] = (
+                        float(coords[0]) * UMF_TO_MM,
+                        float(coords[1]) * UMF_TO_MM,
+                    )
                 except (TypeError, ValueError):
                     continue
 

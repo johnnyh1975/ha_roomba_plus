@@ -771,22 +771,34 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # ia74/roomba_rest980 camera.py source (June 2026):
             # Container format with keys ['format_version', 'debug_file_header', 'maps']
             # where geometry (points2d, keepoutzones, observed_zones) is in maps[].
+            # UMF response structure confirmed from veronoicc debug log and
+            # ia74/roomba_rest980 camera.py source (June 2026):
+            # Container format — geometry and region polygons are in maps[].
+            # regions in maps[] contain geometry.ids referencing points2d,
+            # unlike regions from get_pmaps() which only have metadata.
             maps = umf_raw.get("maps") or []
-            geo: dict[str, list] = {"points2d": [], "keepoutzones": [], "observed_zones": []}
+            geo: dict[str, Any] = {
+                "points2d": [], "keepoutzones": [],
+                "observed_zones": [], "regions": [],
+            }
             for m in maps:
                 if not isinstance(m, dict):
                     continue
                 geo["points2d"].extend(m.get("points2d") or [])
                 geo["keepoutzones"].extend(m.get("keepoutzones") or [])
                 geo["observed_zones"].extend(m.get("observed_zones") or [])
+                # Regions from UMF maps contain geometry.ids — needed by UmfAligner
+                # to resolve room polygons. Regions from get_pmaps() only have metadata.
+                geo["regions"].extend(m.get("regions") or [])
 
             _LOGGER.debug(
                 "iRobot cloud: UMF parsed — "
-                "%d map(s) -> points2d=%d keepoutzones=%d observed_zones=%d for %s",
+                "%d map(s) -> points2d=%d keepoutzones=%d observed_zones=%d regions=%d for %s",
                 len(maps),
                 len(geo["points2d"]),
                 len(geo["keepoutzones"]),
                 len(geo["observed_zones"]),
+                len(geo["regions"]),
                 self.blid,
             )
 
@@ -800,6 +812,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for z in geo["observed_zones"]
                 ],
                 "points2d":   geo["points2d"],
+                "regions":    geo["regions"],
                 "pmap_id":    active_id,
                 "version_id": version_id,
             }

@@ -1430,8 +1430,13 @@ async def async_setup_entry(
     # v2.3.0 F8 — UMF spatial fusion aligner
     umf_aligner: Any | None = None
     if cloud_coordinator is not None and geometry_store is not None:
-        _points2d = cloud_coordinator.umf_data.get("points2d")
-        _regions  = cloud_coordinator.regions
+        _points2d   = cloud_coordinator.umf_data.get("points2d")
+        # Use regions from UMF maps[] — these contain geometry.ids for polygon
+        # resolution. Regions from get_pmaps() only have metadata (name, policies
+        # etc.) without geometry. Fall back to get_pmaps() regions if UMF regions
+        # are absent (e.g. older API versions).
+        _umf_regions = cloud_coordinator.umf_data.get("regions") or []
+        _regions     = _umf_regions or cloud_coordinator.regions
         if not _points2d:
             _LOGGER.debug(
                 "Roomba+ UmfAligner: skipped for %s — no points2d in UMF data "
