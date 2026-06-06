@@ -1,0 +1,777 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Roomba+",
+        "description": "Select a discovered Roomba or add one manually.",
+        "data": {
+          "host": "Select robot"
+        }
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter the IP address of your Roomba. You can find credentials at [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "host": "IP address"
+        },
+        "data_description": {
+          "host": "Local IP address of your Roomba"
+        }
+      },
+      "link": {
+        "title": "Link robot",
+        "description": "Press and hold the **HOME** button on your {name} until it plays a series of tones (about 2 seconds), then release. The Wi-Fi LED will flash."
+      },
+      "link_manual": {
+        "title": "Enter password",
+        "description": "Automatic password retrieval failed. Enter your Roomba password manually. Instructions: [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "cloud_credentials": {
+        "title": "iRobot cloud credentials (optional)",
+        "description": "Enter your iRobot app email and password to enable cloud features (authoritative room names, favorites). Leave both fields empty to skip and use local MQTT only.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        },
+        "data_description": {
+          "irobot_username": "The email address used to log into the iRobot app.",
+          "irobot_password": "Your iRobot app password."
+        }
+      },
+      "reconfigure": {
+        "description": "Update the connection settings for {name}.",
+        "data": {
+          "host": "IP address",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "The local IP address of the Roomba.",
+          "password": "The robot password (hold HOME button to retrieve)."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the robot. Verify it is powered on and reachable.",
+      "invalid_auth": "Invalid credentials. Check your BLID and password.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details.",
+      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
+      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again."
+    },
+    "abort": {
+      "already_configured": "This robot is already configured.",
+      "not_irobot_device": "The discovered device is not an iRobot device.",
+      "short_blid": "A configuration flow for this robot is already in progress.",
+      "cannot_connect": "Cannot reach the robot at the specified address.",
+      "reconfigure_successful": "Connection settings updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Roomba+",
+        "menu_options": {
+          "settings": "Connection settings",
+          "smart_zones_manual": "Manually enter Smart Map zones",
+          "cloud_credentials": "iRobot cloud credentials",
+          "blocking_sensors": "Blocking sensors",
+          "map_management": "Zone management",
+          "presence_scheduling": "Presence-aware scheduling"
+        }
+      },
+      "zones": {
+        "title": "Name detected rooms",
+        "description": "{zone_count} new area(s) detected. Assign names so you can clean them individually:"
+      },
+      "calibration": {
+        "title": "Map calibration",
+        "description": "Door crossings measured an average width of {measured_cm} cm. Select the actual width of your interior doors:",
+        "data": {
+          "door_width_mm": "Door width"
+        }
+      },
+      "smart_zones": {
+        "title": "Name Smart Map zones",
+        "description": "{zone_count} zone(s) have no name yet (IDs: {zone_ids}). Assign names so you can clean them individually:"
+      },
+      "settings": {
+        "title": "Connection settings",
+        "data": {
+          "continuous": "Continuous connection",
+          "delay": "Reconnect delay (seconds)",
+          "map_enabled": "Enable live map",
+          "map_size_px": "Map size (pixels)",
+          "map_scale_mm_per_px": "Scale (mm/pixel)",
+          "floor_label": "Floor label (e.g. Ground Floor)"
+        },
+        "data_description": {
+          "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
+          "delay": "Seconds to wait between reconnection attempts.",
+          "map_enabled": "Enable the live cleaning map for robots with position sensing (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Map canvas size in pixels (400–1200). Default: 600.",
+          "map_scale_mm_per_px": "Millimetres per pixel (5–30). Default 10 = 6 m × 6 m at 600 px."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Manually enter Smart Map zones",
+        "description": "Enter your room region IDs as a comma-separated list (e.g. 5, 12, 7). Find them in the HA diagnostics download under options → discovered_zone_ids, or start a room-specific clean from the iRobot app while HA is connected and check the diagnostics afterwards.",
+        "data": {
+          "region_ids": "Region IDs (comma-separated)",
+          "zone_names": "Zone name assignments"
+        },
+        "data_description": {
+          "region_ids": "Example: 5, 12, 7",
+          "zone_names": "One entry per line: 21=Corridor, 22=Kitchen, etc."
+        },
+        "error": {
+          "no_valid_ids": "No valid entries found. Use the format id=Name, one per line.",
+          "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
+        }
+      },
+      "cloud_credentials": {
+        "title": "iRobot cloud credentials",
+        "description": "Currently signed in as: {current_user}\n\nUpdate your iRobot credentials or clear both fields to disable cloud features.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        }
+      },
+      "blocking_sensors": {
+        "title": "Blocking sensors",
+        "data": {
+          "blocking_sensors": "Blocking sensors",
+          "blocking_behavior": "Behavior when blocked",
+          "blocking_timeout_min": "Queue timeout (minutes)"
+        }
+      },
+      "map_management": {
+        "title": "Zone management",
+        "data": {
+          "selected_zone": "Zone to edit"
+        }
+      },
+      "map_management_edit": {
+        "title": "Edit zone",
+        "data": {
+          "display_name": "Display name",
+          "hidden": "Hide this zone"
+        }
+      },
+      "presence_scheduling": {
+        "title": "Presence-aware scheduling",
+        "description": "Automatically unfreeze the cleaning schedule when everyone leaves home.",
+        "data": {
+          "presence_scheduling_enabled": "Enable presence-aware scheduling",
+          "presence_entities": "Tracked persons",
+          "presence_mode": "Mode",
+          "away_delay_min": "Delay after leaving (minutes)",
+          "clean_delay_min": "Delay before second robot start"
+        }
+      }
+    },
+    "errors": {
+      "no_valid_ids": "No valid IDs found. Please enter comma-separated numbers."
+    },
+    "error": {
+      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
+      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_cycles": {
+        "name": "Maintenance – Battery cycles"
+      },
+      "total_cleaning_time": {
+        "name": "Missions – Total time"
+      },
+      "average_mission_time": {
+        "name": "Missions – Avg. duration"
+      },
+      "total_missions": {
+        "name": "Missions total"
+      },
+      "successful_missions": {
+        "name": "Missions successful"
+      },
+      "canceled_missions": {
+        "name": "Missions canceled"
+      },
+      "failed_missions": {
+        "name": "Missions failed"
+      },
+      "total_cleaned_area": {
+        "name": "Lifetime cleaned area"
+      },
+      "last_mission": {
+        "name": "Missions – Last"
+      },
+      "phase": {
+        "name": "Status"
+      },
+      "error": {
+        "name": "Status – Error"
+      },
+      "job_initiator": {
+        "name": "Status – Started by"
+      },
+      "clean_mode": {
+        "name": "Setting – Cleaning passes"
+      },
+      "scrubs_count": {
+        "name": "Dirt detect events"
+      },
+      "rssi": {
+        "name": "Wi-Fi signal"
+      },
+      "filter_remaining_hours": {
+        "name": "Maintenance – Filter"
+      },
+      "brush_remaining_hours": {
+        "name": "Maintenance – Brushes"
+      },
+      "carpet_boost_mode": {
+        "name": "Setting – Carpet boost"
+      },
+      "clean_base_status": {
+        "name": "Clean Base status"
+      },
+      "dock_tank_level": {
+        "name": "Dock tank level"
+      },
+      "tank_level": {
+        "name": "Tank level"
+      },
+      "mop_pad": {
+        "name": "Mop pad"
+      },
+      "mop_behavior": {
+        "name": "Mop – Clean passes (legacy)"
+      },
+      "mop_tank_level": {
+        "name": "Mop tank level"
+      },
+      "readiness": {
+        "name": "Status – Readiness"
+      },
+      "next_clean": {
+        "name": "Status – Next clean"
+      },
+      "nav_quality": {
+        "name": "Navigation quality"
+      },
+      "snr": {
+        "name": "SNR"
+      },
+      "signal_noise": {
+        "name": "Signal noise"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "mission_start_time": {
+        "name": "Mission start"
+      },
+      "mission_elapsed_time": {
+        "name": "Mission elapsed time"
+      },
+      "mission_recharge_time": {
+        "name": "Recharge time"
+      },
+      "mission_expire_time": {
+        "name": "Mission expire time"
+      },
+      "raw_state": {
+        "name": "Raw state (debug)"
+      },
+      "lifetime_missions": {
+        "name": "Lifetime missions"
+      },
+      "filter_last_replaced": {
+        "name": "Maintenance – Filter last replaced"
+      },
+      "brush_last_replaced": {
+        "name": "Maintenance – Brushes last replaced"
+      },
+      "pad_last_replaced": {
+        "name": "Maintenance – Pad last replaced"
+      },
+      "battery_last_replaced": {
+        "name": "Maintenance – Battery last replaced"
+      },
+      "clean_streak": {
+        "name": "Missions – Clean streak"
+      },
+      "missions_last_30d": {
+        "name": "Missions – Last 30 days"
+      },
+      "completion_rate_30d": {
+        "name": "Missions – Completion rate"
+      },
+      "area_cleaned_today": {
+        "name": "Missions – Area cleaned today"
+      },
+      "last_mission_result": {
+        "name": "Missions – Last result"
+      },
+      "last_mission_duration": {
+        "name": "Missions – Last duration"
+      },
+      "last_error_code": {
+        "name": "Error – Last code"
+      },
+      "last_error_at": {
+        "name": "Error – Last time"
+      },
+      "last_error_zone": {
+        "name": "Error – Last zone"
+      },
+      "stuck_count_30d": {
+        "name": "Error – Stuck events (30 days)"
+      },
+      "problem_zone": {
+        "name": "Error – Problem zone"
+      },
+      "presence_clean_opportunities_7d": {
+        "name": "Presence – Clean opportunities (7 days)"
+      },
+      "presence_clean_utilisation_7d": {
+        "name": "Presence – Clean utilisation (7 days)"
+      },
+      "next_likely_clean_window": {
+        "name": "Presence – Next clean window"
+      },
+      "filter_wear_rate": {
+        "name": "Maintenance – Filter wear rate"
+      },
+      "brush_wear_rate": {
+        "name": "Maintenance – Brush wear rate"
+      },
+      "pad_wear_rate": {
+        "name": "Maintenance – Pad wear rate"
+      },
+      "filter_days_until_due": {
+        "name": "Maintenance – Filter days until due"
+      },
+      "brush_days_until_due": {
+        "name": "Maintenance – Brush days until due"
+      },
+      "pad_days_until_due": {
+        "name": "Maintenance – Pad days until due"
+      },
+      "battery_capacity_mah": {
+        "name": "Battery capacity"
+      },
+      "nav_panics": {
+        "name": "Navigation panic events"
+      },
+      "cliff_events_front": {
+        "name": "Cliff events – Front"
+      },
+      "cliff_events_rear": {
+        "name": "Cliff events – Rear"
+      },
+      "mission_recharge_minutes": {
+        "name": "Mission – Recharge time remaining"
+      },
+      "mission_expire_minutes": {
+        "name": "Mission – Time until expiry"
+      },
+      "mission_id": {
+        "name": "Mission – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Recent completion rate"
+      },
+      "recent_recharges": {
+        "name": "Recent mid-mission recharges"
+      },
+      "recent_evacuations": {
+        "name": "Recent Clean Base evacuations"
+      },
+      "recent_dirt_events": {
+        "name": "Recent dirt events"
+      },
+      "recent_error_code": {
+        "name": "Recent error code (cloud)"
+      },
+      "recent_error_time": {
+        "name": "Recent error time (cloud)"
+      },
+      "recent_wifi_floor": {
+        "name": "Wi-Fi – Signal floor"
+      },
+      "recent_wifi_stability": {
+        "name": "Wi-Fi – Signal stability"
+      },
+      "mop_clean_mode": {
+        "name": "Mop – Clean mode",
+        "state": {
+          "Dry": "Dry",
+          "Wet": "Wet",
+          "Unknown": "Unknown"
+        }
+      },
+      "mop_tank_status": {
+        "name": "Mop – Tank status",
+        "state": {
+          "Ready": "Ready",
+          "Fill Tank": "Fill tank",
+          "Lid Open": "Lid open",
+          "Tank Missing": "Tank missing"
+        }
+      },
+      "mop_ars_behavior": {
+        "name": "Mop – ARS behavior",
+        "state": {
+          "No Mop": "No mop",
+          "Extended": "Extended",
+          "Standard": "Standard",
+          "Deep": "Deep",
+          "Dirty Pause": "Dirty pause",
+          "Dry": "Dry",
+          "Wash": "Wash",
+          "Dirty Pause + Dry": "Dirty pause + dry",
+          "Dirty Pause + Wash": "Dirty pause + wash",
+          "Dry + Wash": "Dry + wash",
+          "Dirty Pause + Dry + Wash": "Dirty pause + dry + wash",
+          "Unknown": "Unknown"
+        }
+      },
+      "recent_cleaning_speed": {
+        "name": "Performance – Cleaning speed"
+      },
+      "recent_dirt_density": {
+        "name": "Performance – Dirt density"
+      },
+      "recent_recharge_fraction": {
+        "name": "Performance – Recharge fraction"
+      },
+      "cleaning_speed_trend": {
+        "name": "Performance – Cleaning speed trend",
+        "state": {
+          "improving": "Improving",
+          "stable": "Stable",
+          "declining": "Declining",
+          "unknown": "Unknown"
+        }
+      },
+      "recent_coverage_pct": {
+        "name": "Performance – Coverage"
+      },
+      "battery_capacity_retention": {
+        "name": "Maintenance – Battery capacity retention"
+      },
+      "estimated_battery_eol": {
+        "name": "Maintenance – Est. battery end of life"
+      },
+      "consecutive_clean_skips": {
+        "name": "Performance – Consecutive clean skips"
+      },
+      "recent_area_30d": {
+        "name": "Recent cleaned area (30 d)"
+      },
+      "recent_time_30d": {
+        "name": "Recent cleaning time (30 d)"
+      }
+    },
+    "binary_sensor": {
+      "bin_full": {
+        "name": "Bin full"
+      },
+      "connected": {
+        "name": "Connected"
+      },
+      "bin_present": {
+        "name": "Bin present"
+      },
+      "mop_ready": {
+        "name": "Mop problem"
+      },
+      "mop_tank_present": {
+        "name": "Mop tank present"
+      },
+      "mop_lid_closed": {
+        "name": "Mop lid open"
+      },
+      "map_saving": {
+        "name": "Smart Map saving"
+      },
+      "maintenance_due": {
+        "name": "Maintenance due",
+        "state": {
+          "on": "Due",
+          "off": "OK"
+        }
+      },
+      "start_blocked": {
+        "name": "Start blocked",
+        "state": {
+          "on": "Blocked",
+          "off": "Clear"
+        }
+      },
+      "schedule_hold_active": {
+        "name": "Schedule hold active",
+        "state_attributes": {
+          "source": {
+            "name": "Source",
+            "state": {
+              "presence_manager": "Presence manager",
+              "manual": "Manual"
+            }
+          }
+        }
+      },
+      "mop_lid_open": {
+        "name": "Lid open"
+      },
+      "mop_tank_present_direct": {
+        "name": "Tank present"
+      },
+      "mid_mission_recharge": {
+        "name": "Mid-mission recharge"
+      },
+      "mission_active": {
+        "name": "Mission active"
+      }
+    },
+    "button": {
+      "evac": {
+        "name": "Action – Empty bin"
+      },
+      "locate": {
+        "name": "Action – Find robot"
+      },
+      "reset_filter": {
+        "name": "Maintenance – Confirm filter replacement"
+      },
+      "reset_brush": {
+        "name": "Maintenance – Confirm brush replacement"
+      },
+      "reset_battery": {
+        "name": "Maintenance – Confirm battery replacement"
+      },
+      "clean_zone": {
+        "name": "Clean zone"
+      },
+      "repeat_mission": {
+        "name": "Repeat last mission"
+      },
+      "clean_smart_zone": {
+        "name": "Clean zone (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
+      },
+      "spot": {
+        "name": "Spot clean (experimental)"
+      },
+      "quick": {
+        "name": "Quick clean (experimental)"
+      },
+      "sleep": {
+        "name": "Sleep (experimental)"
+      },
+      "power_off": {
+        "name": "Power off (experimental)"
+      },
+      "map_training": {
+        "name": "Action – Start map training"
+      }
+    },
+    "switch": {
+      "edge_clean": {
+        "name": "Setting – Edge cleaning"
+      },
+      "always_finish": {
+        "name": "Setting – Always finish"
+      },
+      "schedule_hold": {
+        "name": "Setting – Schedule hold"
+      }
+    },
+    "select": {
+      "cleaning_passes": {
+        "name": "Setting – Cleaning passes"
+      },
+      "zone_select": {
+        "name": "Select zone"
+      },
+      "smart_zone_select": {
+        "name": "Select Smart Map zone"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Select zone (cloud)"
+      },
+      "disposable_pad_wetness": {
+        "name": "Disposable pad wetness",
+        "state": {
+          "1": "Low",
+          "2": "Medium",
+          "3": "High"
+        }
+      },
+      "reusable_pad_wetness": {
+        "name": "Reusable pad wetness",
+        "state": {
+          "1": "Low",
+          "2": "Medium",
+          "3": "High"
+        }
+      },
+      "carpet_boost_select": {
+        "name": "Carpet boost",
+        "state": {
+          "Automatic": "Automatic",
+          "Eco": "Eco",
+          "Performance": "Performance"
+        }
+      }
+    },
+    "image": {
+      "map": {
+        "name": "Cleaning map"
+      },
+      "coverage_map": {
+        "name": "Coverage map"
+      },
+      "rooms_map": {
+        "name": "Rooms Map"
+      }
+    }
+  },
+  "issues": {
+    "zones_need_naming": {
+      "title": "New rooms detected",
+      "description": "Roomba+ has detected new areas. Open the settings to name them.",
+      "fix_flow": {
+        "step": {
+          "zones": {
+            "title": "Name detected rooms"
+          }
+        }
+      }
+    },
+    "smart_zones_need_naming": {
+      "title": "New Smart Map zones discovered",
+      "description": "Roomba+ discovered {zone_count} new zone(s) ({zone_ids}) with no name yet. Open the settings to name them.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Name Smart Map zones",
+            "description": "Enter one zone per line in the format `id=Name`. Zone IDs to name: {zone_ids}",
+            "data": {
+              "zones": "Zone assignments"
+            },
+            "data_description": {
+              "zones": "One entry per line: `21=Corridor`, `22=Kitchen`, etc."
+            }
+          }
+        },
+        "error": {
+          "no_valid_entries": "No valid entries found. Use the format `id=Name`, one per line.",
+          "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
+        }
+      }
+    },
+    "geometry_drifted": {
+      "title": "Map drift detected",
+      "description": "The Roomba’s position map has drifted significantly. Re-confirm your room layout to keep the map accurate.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Re-confirm room layout"
+          }
+        }
+      }
+    },
+    "maintenance_baselines_reset": {
+      "title": "Robot runtime counter may have reset",
+      "description": "The robot's bbrun.hr runtime counter is lower than the stored reset baselines for: {parts}. This usually means a firmware update silently reset the counter. Remaining-hours estimates for consumables are now unreliable. Reset all consumables using the Reset buttons."
+    },
+    "performance_degradation": {
+      "title": "Cleaning performance declining",
+      "description": "Roomba+ has detected a sustained decline in cleaning speed over the last several missions (cause: {cause}). This may indicate worn brushes, a clogged filter, or significant changes in floor conditions. Check the device page for consumable status."
+    },
+    "battery_recharge_high": {
+      "title": "High mid-mission recharging with degraded battery",
+      "description": "Your robot is spending a significant proportion of cleaning time recharging mid-mission while battery capacity has dropped below 75% of its original value. Consider replacing the battery."
+    },
+    "mixed_schedule": {
+      "title": "Competing schedule sources detected",
+      "description": "In the last 30 days, {schedule_pct}% of cleans were started by HA schedules and {app_pct}% by the iRobot app. Competing schedules can cause double-cleans and missed rooms. Manage scheduling from one place only."
+    },
+    "accident_detected": {
+      "title": "Possible floor accident detected",
+      "description": "The last mission recorded an unusually high dirt event count in a very short runtime — a possible liquid spill or accident. Check the area before sending the robot back."
+    },
+    "consecutive_skips": {
+      "title": "Robot skipped {count} consecutive cleans",
+      "description": "Blocking sensors or presence scheduling prevented {count} consecutive scheduled cleaning opportunities. Check your blocking sensor configuration or presence schedule — they may be too restrictive."
+    },
+    "map_drift_detected": {
+      "title": "Smart Map drift detected",
+      "description": "The robot's position drifted {magnitude_cm} cm (bearing {bearing}°) from its expected location. This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run."
+    },
+    "observed_zones_detected": {
+      "title": "Robot-detected obstacles in cloud map",
+      "description": "Your iRobot cloud map contains {zone_count} robot-detected obstacle zone(s). Run a few cleaning missions so Roomba+ can confirm these locally and build a more accurate obstacle map."
+    },
+    "error_recurrence": {
+      "title": "Recurring error: {label}",
+      "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase '{phase}', location '{room}'. Recommended action: {action}"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "cleaning_started": "Cleaning started",
+      "cleaning_finished": "Cleaning finished",
+      "stuck": "Robot stuck",
+      "bin_full": "Bin full",
+      "docked": "Docked",
+      "error": "Error reported"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Clean room",
+      "description": "Start a targeted clean of one or more named rooms on smart-map robots.",
+      "fields": {
+        "room_name": {
+          "name": "Room name",
+          "description": "Room name or list of room names to clean. Must match the labels you assigned in Roomba+ options. Run a room-targeted clean via the iRobot app first if no rooms appear yet."
+        },
+        "ordered": {
+          "name": "Ordered sequence",
+          "description": "Clean rooms in the order supplied rather than letting the robot choose."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Unknown room(s): {names}. Check the names match those assigned in Roomba+ options."
+    },
+    "rooms_different_floors": {
+      "message": "All rooms must be on the same floor. Got rooms from different maps: {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "Room cleaning requires a Smart Map robot (i7, s9, j-series). This robot does not support Smart Maps."
+    },
+    "no_rooms_configured": {
+      "message": "No rooms configured yet. To use this action: (1) Open the iRobot app, (2) Start a room-targeted clean for each room, (3) Return to Home Assistant — the rooms will appear automatically in the Roomba+ options where you can assign names."
+    },
+    "pmap_not_found": {
+      "message": "Map not found in robot state. The map may have been retrained — run a room mission via the iRobot app to refresh."
+    },
+    "pmap_not_resolved": {
+      "message": "Could not resolve map ID for one or more rooms. Ensure the robot has reported its map state via MQTT."
+    },
+    "map_updating": {
+      "message": "The robot is currently updating its Smart Map. Wait for the readiness sensor to show 'Ready', then try again."
+    }
+  }
+}
