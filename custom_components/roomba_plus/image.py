@@ -97,8 +97,14 @@ async def async_setup_entry(
             )
         )
 
-    # v2.3.0 Step 5b — room layout entity for xiaomi-vacuum-map-card (SMART only)
-    if data.map_capability == MapCapability.SMART:
+    # v2.3.2 — room layout entity for xiaomi-vacuum-map-card.
+    # Extended from SMART-only to include EPHEMERAL when UmfAligner is present:
+    # 900-series robots (e.g. 980) have cloud UMF geometry and a functioning
+    # aligner but were excluded by the SMART gate despite having all required data.
+    if data.map_capability == MapCapability.SMART or (
+        data.map_capability == MapCapability.EPHEMERAL
+        and data.umf_aligner is not None
+    ):
         entities.append(
             RoombaRoomsImage(
                 roomba=data.roomba,
@@ -621,11 +627,12 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
-        # Prime the transform parameters immediately if UmfAligner is already
-        # aligned so calibration/rooms attributes are populated on first card
-        # load — before the frontend has ever fetched async_image().
+        # Prime the render immediately on startup so the image and attributes
+        # are ready before the frontend first requests them.
+        # Aligned path: calibration + rooms attributes populated.
+        # Fallback path: UMF-space render visible even before alignment.
         data = self._config_entry.runtime_data
-        if data.umf_aligner and data.umf_aligner.aligned:
+        if data.umf_aligner and data.umf_aligner.room_polygons_umf:
             await self.hass.async_add_executor_job(self._render_rooms_png)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -636,46 +643,87 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         return await self.hass.async_add_executor_job(self._render_rooms_png)
 
     def _render_rooms_png(self) -> bytes:
-        """CPU-bound render — called via async_add_executor_job."""
+        """CPU-bound render — called via async_add_executor_job.
+
+        Two rendering modes:
+        - Aligned (aligner.aligned=True): polygons in pose-space coordinates.
+          calibration/rooms attributes are populated. Full xiaomi-card support.
+        - Fallback (room_polygons_umf present but not aligned): polygons rendered
+          directly in UMF-space coordinates. Image is visible immediately after
+          install without requiring missions. calibration/rooms attributes are
+          NOT set in this mode — xiaomi-card alignment pending. The image shows
+          correct room shapes but may be rotated/mirrored vs. robot orientation.
+          Once alignment succeeds (after 2+ missions), the aligned path takes over.
+        """
         if self._config_entry is None:
             return self._blank_png()
         data    = self._config_entry.runtime_data
         aligner = data.umf_aligner
-        if not aligner or not aligner.aligned:
+        if not aligner:
             return self._blank_png()
 
-        # Collect all polygon vertices in pose space
-        all_pose: list[tuple[float, float]] = []
-        for poly_umf in aligner.room_polygons_umf.values():
-            for pt in poly_umf:
-                p = aligner.umf_to_pose(*pt)
-                if p:
-                    all_pose.append(p)
-        if not all_pose:
+        polygons_umf = aligner.room_polygons_umf
+        if not polygons_umf:
             return self._blank_png()
 
-        margin_mm = 50.0
-        xs = [p[0] for p in all_pose]
-        ys = [p[1] for p in all_pose]
-        x_min = min(xs) - margin_mm
-        x_max = max(xs) + margin_mm
-        y_min = min(ys) - margin_mm
-        y_max = max(ys) + margin_mm
+        aligned = aligner.aligned
+
+        if aligned:
+            # Pose-space path: transform UMF → pose coordinates
+            all_coords: list[tuple[float, float]] = []
+            for poly_umf in polygons_umf.values():
+                for pt in poly_umf:
+                    p = aligner.umf_to_pose(*pt)
+                    if p:
+                        all_coords.append(p)
+
+            def resolve_poly(poly_umf: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+                pts = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                return pts if all(p is not None for p in pts) else None  # type: ignore[return-value]
+        else:
+            # Fallback: render directly in UMF-space coordinates
+            _LOGGER.debug(
+                "RoombaRoomsImage: aligner not yet aligned — rendering in UMF space "
+                "(alignment pending, calibration/rooms attributes withheld)"
+            )
+            all_coords = [
+                pt for poly in polygons_umf.values() for pt in poly
+            ]
+
+            def resolve_poly(poly_umf: list[tuple[float, float]]) -> list[tuple[float, float]] | None:
+                return poly_umf if len(poly_umf) >= 3 else None
+
+        if not all_coords:
+            return self._blank_png()
+
+        margin = 50.0
+        xs = [c[0] for c in all_coords]
+        ys = [c[1] for c in all_coords]
+        x_min = min(xs) - margin
+        x_max = max(xs) + margin
+        y_min = min(ys) - margin
+        y_max = max(ys) + margin
         size  = 600
         scale = size / max(x_max - x_min, y_max - y_min, 1.0)
 
-        # Store for calibration_points consistency
+        # Store transform for _to_px_last consistency — both aligned and fallback.
+        # In fallback mode these are UMF-space values; in aligned mode pose-space.
+        # _to_px_last uses whichever was set last, which always matches the
+        # coordinate space of the most recent render.
         self._last_x_min = x_min
         self._last_x_max = x_max
         self._last_y_min = y_min
         self._last_y_max = y_max
         self._last_size  = size
-        self._rendered_once = True
+        if aligned:
+            self._rendered_once = True
+        else:
+            self._rendered_fallback = True
 
-        def to_px(x_mm: float, y_mm: float) -> tuple[int, int]:
+        def to_px(x: float, y: float) -> tuple[int, int]:
             return (
-                int((x_mm - x_min) * scale),
-                int(size - (y_mm - y_min) * scale),  # y-flip: HA map convention
+                int((x - x_min) * scale),
+                int(size - (y - y_min) * scale),  # y-flip: HA map convention
             )
 
         from PIL import Image, ImageDraw
@@ -683,16 +731,18 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         draw = ImageDraw.Draw(img)
         rid_to_name = aligner.rid_to_name()
 
-        for rid, poly_umf in aligner.room_polygons_umf.items():
-            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-            if not all(p is not None for p in poly_pose):
+        for rid, poly_umf in polygons_umf.items():
+            resolved = resolve_poly(poly_umf)
+            if not resolved:
                 continue
-            poly_px   = [to_px(x, y) for x, y in poly_pose]
+            poly_px = [to_px(x, y) for x, y in resolved]
             draw.polygon(poly_px, outline=(100, 149, 237), fill=(45, 55, 72))
-            # Room label at polygon centroid
             cx = int(sum(p[0] for p in poly_px) / len(poly_px))
             cy = int(sum(p[1] for p in poly_px) / len(poly_px))
-            draw.text((cx, cy), rid_to_name.get(rid, rid), fill=(200, 200, 200))
+            label = rid_to_name.get(rid, rid)
+            if not aligned:
+                label = f"{label} *"  # asterisk signals fallback mode to user
+            draw.text((cx, cy), label, fill=(200, 200, 200))
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -717,34 +767,81 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         Uses the same local to_px() as _render_rooms_png() so pixel coordinates
         in attributes match the rendered image exactly.
 
-        Returns empty dict until at least one successful render has set the
-        transform parameters — prevents wrong calibration coords at startup.
+        Aligned mode: calibration + rooms attributes populated for xiaomi-card.
+        Fallback mode (not yet aligned): only alignment_pending=True exposed.
+          The image is visible but calibration/rooms are withheld because the
+          UMF→pose transform is unknown — pixel coords would be meaningless.
         """
         attrs: dict[str, Any] = {}
         if self._config_entry is None:
             return attrs
         data    = self._config_entry.runtime_data
         aligner = data.umf_aligner
-        if not aligner or not aligner.aligned:
-            return attrs
-        if not getattr(self, "_rendered_once", False):
+        if not aligner:
             return attrs
 
-        # calibration — uses persisted transform from last render
-        cal = aligner.calibration_points(self._to_px_last)
-        if cal:
-            attrs["calibration"] = cal
+        polygons_umf = aligner.room_polygons_umf
+        if not polygons_umf:
+            return attrs
 
-        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card
-        # predefined_selections. The card calls .filter() on this list, so it
-        # must be a list, not a dict keyed by name.
+        aligned  = aligner.aligned
+        rendered = (
+            getattr(self, "_rendered_once", False)      # aligned render done
+            or getattr(self, "_rendered_fallback", False)  # fallback render done
+        )
+        if not rendered:
+            return attrs
+
+        if aligned:
+            attrs["alignment_pending"] = False
+        else:
+            # Fallback mode: image is in UMF-space, calibration uses UMF coords.
+            # Works with calibration_source: camera: true — the card reads our
+            # calibration attribute directly and does not use robot pose coords.
+            attrs["alignment_pending"] = True
+
+        # calibration — 3 anchor points mapping vacuum coords → image pixels.
+        # Aligned: vacuum coords are pose-space mm (dock-relative).
+        # Fallback: vacuum coords are UMF-space units — consistent with the
+        #           rendered image so calibration_source: camera: true works.
+        all_coords = [pt for poly in polygons_umf.values() for pt in poly]
+        if all_coords:
+            xs = [c[0] for c in all_coords]
+            ys = [c[1] for c in all_coords]
+            if aligned:
+                # Pose-space anchors via aligner transform
+                cal = aligner.calibration_points(self._to_px_last)
+                if cal:
+                    attrs["calibration"] = cal
+            else:
+                # UMF-space anchors — three corners of bounding box
+                anchors = [
+                    (0.0,     0.0),
+                    (min(xs), min(ys)),
+                    (max(xs), max(ys)),
+                ]
+                attrs["calibration"] = [
+                    {
+                        "vacuum": {"x": x, "y": y},
+                        "map":    {"x": px, "y": py},
+                    }
+                    for x, y in anchors
+                    for px, py in [self._to_px_last(x, y)]
+                ]
+
+        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card.
+        # In fallback mode polygon vertices are in UMF-space — consistent with
+        # the fallback calibration so the card overlays them correctly.
         rid_to_name = aligner.rid_to_name()
         rooms: list[dict[str, Any]] = []
-        for rid, poly_umf in aligner.room_polygons_umf.items():
-            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-            if not all(p is not None for p in poly_pose):
-                continue
-            poly_px   = [self._to_px_last(x, y) for x, y in poly_pose]
+        for rid, poly_umf in polygons_umf.items():
+            if aligned:
+                poly_coords = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                if not all(p is not None for p in poly_coords):
+                    continue
+            else:
+                poly_coords = poly_umf  # type: ignore[assignment]
+            poly_px   = [self._to_px_last(x, y) for x, y in poly_coords]
             room_name = rid_to_name.get(rid, rid)
             rooms.append({
                 "id":      room_name,

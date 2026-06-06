@@ -1,7 +1,7 @@
 {
   "domain": "roomba_plus",
   "name": "Roomba+",
-  "version": "2.3.1",
+  "version": "2.3.5",
   "codeowners": [
     "@johnnyh1975"
   ],

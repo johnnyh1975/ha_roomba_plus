@@ -190,7 +190,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # v1.7.0 — mid-mission attributes consumed by Lovelace card (v1.8).
         # Available on all robots; None for 600-series (no sqft) and when docked.
         mission = state.get("cleanMissionStatus", {})
-        attrs["mission_elapsed_min"] = mission.get("mssnM")     # int | None
+        # mission_elapsed_min: use mssnM when available; fall back to wall-clock
+        # elapsed same as cleaning_time (lewis firmware reports mssnM=0 mid-mission).
+        _mssn_m = mission.get("mssnM")
+        if not _mssn_m:
+            _start_ts = mission.get("mssnStrtTm")
+            if _start_ts and mission.get("phase", "") in CLEANING_PHASES:
+                import datetime as _dt
+                _now = dt_util.now(_dt.timezone.utc).timestamp()
+                if _now > _start_ts:
+                    _mssn_m = int((_now - _start_ts) // 60)
+        attrs["mission_elapsed_min"] = _mssn_m if _mssn_m else None
         attrs["mission_area_sqft"]   = mission.get("sqft")      # int | None, 600=None
 
         # v1.9.3 — mission phase intelligence attributes
@@ -207,11 +217,15 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         attrs["expire_minutes_remaining"] = expire_m if expire_m else None
         attrs["mission_id"] = mission.get("missionId") or None
 
-        # v2.3.0 Step 11 — Live source: cmd.regions from MQTT during active mission.
-        # Fills planned_room_order and mission_destination immediately at mission
-        # start on lewis firmware (cmd.regions confirmed in debug data June 2026).
-        # The Cloud-Record block below overwrites these values once the timeline
-        # is merged post-mission (typically within 30 minutes of mission end).
+        # v2.3.0 Step 11 — Live source for planned_room_order / mission_destination
+        # during active mission. Two sources tried in order:
+        #   1. cleanMissionStatus.cmd.regions — present on some firmware variants
+        #      when mission is started via the robot API directly.
+        #   2. lastCommand.regions — confirmed present on lewis 22.52.10 when
+        #      mission is started via roomba_plus.clean_room (localApp initiator).
+        #      cleanMissionStatus.cmd is absent on lewis during active mission.
+        # The MissionStore CR4 block below must NOT overwrite these values during
+        # an active mission — it only has post-mission timeline data.
         # last_cleaned_rooms and room_coverage are definitionally post-mission.
         if (
             phase in CLEANING_PHASES
@@ -225,10 +239,15 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 for r in _live.cloud_coordinator.regions
                 if r.get("id")
             }
+            # Try cleanMissionStatus.cmd.regions first, fall back to lastCommand.regions
             _cmd_regions = (
                 self.vacuum_state
                 .get("cleanMissionStatus", {})
                 .get("cmd", {})
+                .get("regions", [])
+            ) or (
+                self.vacuum_state
+                .get("lastCommand", {})
                 .get("regions", [])
             )
             if _cmd_regions and _live_region_map:
@@ -268,10 +287,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 umf_regions = _data.umf_aligner.rid_to_name()
 
             if region_map or umf_regions:
-                attrs["last_cleaned_rooms"]  = _data.mission_store.latest_cleaned_rooms(region_map, umf_regions)
-                attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
-                attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
-                attrs["room_coverage"]       = _data.mission_store.latest_room_coverage(region_map, umf_regions)
+                attrs["last_cleaned_rooms"] = _data.mission_store.latest_cleaned_rooms(region_map, umf_regions)
+                attrs["room_coverage"]      = _data.mission_store.latest_room_coverage(region_map, umf_regions)
+                # planned_room_order and mission_destination: only update from
+                # MissionStore when not in an active cleaning phase. During a
+                # mission the live source (lastCommand/cmd.regions) is authoritative;
+                # MissionStore only has the previous mission's timeline at this point
+                # and would overwrite the live values with stale data.
+                if phase not in CLEANING_PHASES:
+                    attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
+                    attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
 
         return attrs
 

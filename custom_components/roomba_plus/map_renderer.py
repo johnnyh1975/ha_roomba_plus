@@ -143,15 +143,40 @@ class MapRenderer:
             self._last_png = None
         _LOGGER.debug("MapRenderer: mission reset")
 
+    # Maximum plausible displacement between two pose updates in mm.
+    # Roomba top speed is ~300 mm/s; pose updates arrive every 1-5 s.
+    # 500 mm covers normal movement. Anything larger is a bogus jump
+    # (stuck-recovery relocalisation, manual lift, firmware artifact)
+    # and would draw a line across the entire map if not rejected.
+    # Derived from NickWaterton/Roomba980-Python max_distance = 500.
+    _MAX_POSE_JUMP_MM: float = 500.0
+
     def add_pose(self, x_mm: float, y_mm: float, theta_deg: float) -> None:
         """Record a new pose point from the MQTT state update.
 
         roombapy convention: co_ords["x"] = pose_point_y (swapped axes).
         Callers pass already-corrected x_mm / y_mm relative to dock origin.
         Ignores (0, 0, any_theta) at mission start to avoid bogus dock point.
+        Rejects jumps > _MAX_POSE_JUMP_MM from the previous point — these
+        indicate stuck-recovery relocalisation or firmware bogus updates and
+        would otherwise draw a line across the entire map.
         """
         if x_mm == 0.0 and y_mm == 0.0 and not self._points:
             return  # First point at dock — skip
+
+        # Reject implausibly large jumps from the previous pose point.
+        if self._points:
+            prev_px, prev_py = self._points[-1]
+            prev_x_mm = (prev_px - self._fit_cx) * self._fit_scale
+            prev_y_mm = (self._fit_cy - prev_py) * self._fit_scale
+            jump_mm = math.hypot(x_mm - prev_x_mm, y_mm - prev_y_mm)
+            if jump_mm > self._MAX_POSE_JUMP_MM:
+                _LOGGER.debug(
+                    "MapRenderer: rejecting bogus pose jump %.0f mm "
+                    "(%.0f, %.0f) -> (%.0f, %.0f)",
+                    jump_mm, prev_x_mm, prev_y_mm, x_mm, y_mm,
+                )
+                return
 
         px, py = self._mm_to_px(x_mm, y_mm)
         self._points.append((px, py))

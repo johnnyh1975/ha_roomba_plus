@@ -1425,25 +1425,36 @@ async def async_setup_entry(
 
     # v2.3.0 F8 — UMF spatial fusion aligner
     umf_aligner: Any | None = None
-    if (
-        cloud_coordinator is not None
-        and cloud_coordinator.umf_data.get("points2d")
-        and cloud_coordinator.regions
-        and geometry_store is not None
-    ):
-        from .umf_aligner import UmfAligner
-        _aligner = UmfAligner(
-            points2d=cloud_coordinator.umf_data["points2d"],
-            regions=cloud_coordinator.regions,
-            geometry_store=geometry_store,
-            pmap_version_id=cloud_coordinator.umf_data.get("version_id", ""),
-        )
-        _conf = await hass.async_add_executor_job(_aligner.align)
-        umf_aligner = _aligner
-        _LOGGER.info(
-            "Roomba+ UmfAligner: confidence=%.2f aligned=%s for %s",
-            _conf, _aligner.aligned, config_entry.data[CONF_BLID],
-        )
+    if cloud_coordinator is not None and geometry_store is not None:
+        _points2d = cloud_coordinator.umf_data.get("points2d")
+        _regions  = cloud_coordinator.regions
+        if not _points2d:
+            _LOGGER.debug(
+                "Roomba+ UmfAligner: skipped for %s — no points2d in UMF data "
+                "(umf_data keys: %s). rooms_map will show fallback until UMF "
+                "geometry is available from the cloud.",
+                config_entry.data[CONF_BLID],
+                list(cloud_coordinator.umf_data.keys()),
+            )
+        elif not _regions:
+            _LOGGER.debug(
+                "Roomba+ UmfAligner: skipped for %s — no regions from cloud coordinator.",
+                config_entry.data[CONF_BLID],
+            )
+        else:
+            from .umf_aligner import UmfAligner
+            _aligner = UmfAligner(
+                points2d=_points2d,
+                regions=_regions,
+                geometry_store=geometry_store,
+                pmap_version_id=cloud_coordinator.umf_data.get("version_id", ""),
+            )
+            _conf = await hass.async_add_executor_job(_aligner.align)
+            umf_aligner = _aligner
+            _LOGGER.info(
+                "Roomba+ UmfAligner: confidence=%.2f aligned=%s for %s",
+                _conf, _aligner.aligned, config_entry.data[CONF_BLID],
+            )
 
     config_entry.runtime_data = RoombaData(
         roomba=roomba,
