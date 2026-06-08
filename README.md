@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.3.12-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.4.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -131,6 +131,7 @@ Each robot is set up as a separate integration entry with its own device, entiti
 |---|---|---|
 | `roomba_plus.smart_start` | All robots | Start with blocking-sensor check |
 | `roomba_plus.clean_room` | SMART robots (i/s/j) | Clean one or more named rooms |
+| HA area mapping (`vacuum.clean_area`) | SMART robots + cloud, **HA 2026.3+** | Map HA areas to rooms; clean any area directly from the vacuum card. Silently absent on older HA. |
 | `roomba_plus.reset_filter` | All robots | Record filter replacement |
 | `roomba_plus.reset_brush` | All robots | Record brush replacement |
 | `roomba_plus.reset_battery` | All robots | Record battery replacement |
@@ -253,6 +254,10 @@ show_state: false
 #### Coverage map (v2.2+)
 
 `image.{name}_coverage_map` — EMA-weighted occupancy heatmap. Updated at each mission end. Attributes include `cell_count`, `stuck_event_count`, `decay`, `visit_increment`, and bounding box. Gated behind pose capability — registered automatically when `image.{name}_cleaning_map` would also be registered.
+
+#### Room outline — 900-series (v2.4+)
+
+`image.{name}_cleaning_map` gains a progressive grey room outline overlay for EPHEMERAL robots (980, 985) after ≥ 2 missions. Extracted from each mission's cleaned-area image using PIL edge detection (no Cloud, no OpenCV) and EMA-merged across missions — the outline sharpens progressively. Persisted to `hass.storage` so it survives HA restarts. SMART robots use UmfAligner polygons instead.
 
 #### Rooms map (v2.3+, SMART robots)
 
@@ -460,6 +465,8 @@ Derived from the iRobot cloud mission history:
 | Recharge fraction (%) | Share of mission time spent recharging |
 | Coverage (%) | % of home baseline area cleaned, self-calibrating |
 | Consecutive clean skips | Opt-in |
+| Edge coverage ratio | Fraction of occupancy cells near room walls vs interior — low ratio with high coverage indicates under-edging (v2.4+, opt-in) |
+| Total energy consumed (kWh) | Cumulative energy from charge cycle count × battery capacity × 14.8 V. State class `TOTAL_INCREASING` — eligible for HA Energy dashboard (v2.4+, LiIon only) |
 
 #### Wi-Fi sensors — cloud, opt-in
 
@@ -518,7 +525,7 @@ GET /api/roomba_plus/{entry_id}/mission_history
 | `format` | `summary` | `summary` / `records` / `hazards` | Response shape |
 | `days` | `28` (summary) / `90` (records) | `1`–`90` | Lookback window |
 
-`format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`.
+`format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`. From v2.4.0: `dirt_density` (median dirt events/m² for the day) and `relative_to_baseline` (ratio to the 30-day median — values > 1.5 indicate an unusually dirty day). Both are `null` without cloud credentials or fewer than 5 cloud records.
 
 `format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`. From v2.3.0: `room_coverage` (per-room fraction from timeline, no cloud required) and `alignment_confidence` (null until UmfAligner aligned).
 
@@ -562,6 +569,21 @@ Events fired:
 
 Binary sensor: `schedule_hold_active` — ON when `schedHold` is true. The `source` attribute distinguishes `presence_manager` from `manual`.
 
+#### Demand Cleaning — SMART robots with cloud (v2.4+)
+
+Automatically trigger an unscheduled clean when the floor is significantly dirtier than usual. Requires cloud credentials (dirt density derived from cloud mission records).
+
+Configure via **Settings → Devices & Services → Roomba+ → Configure → Demand cleaning**.
+
+| Option | Default | Description |
+|---|---|---|
+| Enable demand cleaning | Off | Master toggle |
+| Trigger multiplier | 1.5 | Fire when density > baseline × multiplier (1.1–5.0) |
+
+How it works: after each mission, the latest dirt density is compared to the 30-day median baseline (requires ≥ 5 cloud records to establish). When the threshold is exceeded and all gates pass (robot idle, no blocking sensor active, min 6 h since last demand trigger), a start command is sent automatically. The `demand_clean_blocked` sensor shows which gate is currently preventing a trigger.
+
+Binary sensor: `binary_sensor.demand_clean_blocked` — ON when a demand clean would currently be blocked (robot busy, blocking sensor active, or presence gate). OFF = demand clean could fire if threshold is exceeded.
+
 #### Presence analytics sensors
 
 | Sensor | Notes |
@@ -569,6 +591,7 @@ Binary sensor: `schedule_hold_active` — ON when `schedHold` is true. The `sour
 | Clean opportunities (7 days) | Away windows long enough for a full clean |
 | Clean utilisation (7 days) | % of those windows that resulted in a clean |
 | Next likely clean window | Heuristic forecast of the next likely away window |
+| Optimal clean window | Timestamp sensor — best hour to clean today derived from historical mission start times. Requires ≥ 5 recorded cleans since integration setup; shows `Unknown` until then. Updates after every mission. (v2.4+) |
 
 ---
 
@@ -775,6 +798,12 @@ automation:
 | Carpet boost select entity | ❌ | ✅ |
 | Sequential cleaning (clean_sequence) | ❌ | ✅ |
 | CR4 room coverage attributes | ❌ | ✅ |
+| HA area mapping (`vacuum.clean_area`) | ❌ | ✅ (v2.4, SMART + cloud) |
+| Demand-based cleaning (dirt threshold) | ❌ | ✅ (v2.4, SMART + cloud) |
+| Optimal clean window sensor | ❌ | ✅ (v2.4) |
+| Edge coverage ratio sensor | ❌ | ✅ (v2.4) |
+| Total energy consumed (kWh, Energy dashboard) | ❌ | ✅ (v2.4, LiIon) |
+| Room outline — 900-series (ephemeral, progressive) | ❌ | ✅ (v2.4) |
 | German translation | ✅ | ✅ |
 
 ---
@@ -822,6 +851,14 @@ The error state clears automatically when the next mission completes successfull
 **Presence-aware scheduling step not visible in options menu**
 
 The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
+
+**`optimal_clean_window` shows Unknown**
+
+The sensor needs at least 5 completed missions since the integration was set up before it calculates a window. It will populate automatically — no action required. Once 5 missions have recorded, the sensor updates within minutes of the next mission end.
+
+**Demand cleaning never triggers despite being enabled**
+
+Check the `binary_sensor.demand_clean_blocked` sensor — it shows whether the robot is busy, a blocking sensor is active, or the minimum 6-hour gap since the last trigger has not elapsed. Also ensure cloud credentials are configured and at least 5 cloud mission records exist (check Settings → Devices → Roomba+ → ⋮ → Download diagnostics for `region_count_active`).
 
 **Presence manager unfreezes schedule but robot doesn't clean**
 
