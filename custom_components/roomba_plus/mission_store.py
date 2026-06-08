@@ -75,6 +75,7 @@ class DaySummary:
     stuck: int
     area_sqft: float | None   # sum for day; None if 600-series
     result: str               # dominant: "error" > "stuck" > "completed" > "cancelled" > "none"
+    dirt_density: float | None = None  # F12b — median dirt events/m² for day; None without cloud
 
 
 @dataclass(frozen=True)

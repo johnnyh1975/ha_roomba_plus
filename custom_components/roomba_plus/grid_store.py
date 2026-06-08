@@ -203,6 +203,35 @@ class GridStore:
         ys = [_cell_to_mm(gx, gy)[1] for gx, gy in self._cells]
         return min(xs), max(xs), min(ys), max(ys)
 
+    def edge_coverage_ratio(
+        self, edge_depth_mm: float = 300.0
+    ) -> float | None:
+        """F12d — Return ratio of edge cells to total cells.
+
+        Edge cells are those within `edge_depth_mm` of any side of the
+        bounding box. A low ratio with high total coverage indicates
+        the robot is over-cleaning the centre and under-covering edges.
+
+        Returns None when fewer than 10 cells exist (insufficient data).
+        """
+        if len(self._cells) < 10:
+            return None
+        bbox = self.bounding_box_mm()
+        if bbox is None:
+            return None
+        x_min, x_max, y_min, y_max = bbox
+        edge_count = 0
+        for (gx, gy) in self._cells:
+            x_mm, y_mm = _cell_to_mm(gx, gy)
+            if (
+                x_mm - x_min <= edge_depth_mm
+                or x_max - x_mm <= edge_depth_mm
+                or y_mm - y_min <= edge_depth_mm
+                or y_max - y_mm <= edge_depth_mm
+            ):
+                edge_count += 1
+        return round(edge_count / len(self._cells), 4)
+
     def hotspots(
         self, threshold: int = STUCK_HOTSPOT_THRESHOLD
     ) -> list[dict[str, Any]]:

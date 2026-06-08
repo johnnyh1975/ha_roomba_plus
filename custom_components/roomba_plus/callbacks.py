@@ -264,6 +264,22 @@ def make_mission_callback(
                 mission_start_ts, nstuck_at_start,
             )
 
+            # F12a — record clean event in PresenceManager for window analytics.
+            # record_clean_event() is idempotent and never raises.
+            _pm = getattr(entry.runtime_data, "presence_manager", None)
+            if _pm is not None:
+                try:
+                    _started_at = (
+                        datetime.datetime.fromtimestamp(
+                            mission_start_ts, tz=datetime.timezone.utc
+                        )
+                        if mission_start_ts
+                        else datetime.datetime.now(datetime.timezone.utc)
+                    )
+                    _pm.record_clean_event(_started_at)
+                except Exception:  # noqa: BLE001
+                    pass
+
         # F4e — accumulate recharge time on every hmMidMsn entry
         if phase == "hmMidMsn":
             rechrgM = reported.get("cleanMissionStatus", {}).get("rechrgM")

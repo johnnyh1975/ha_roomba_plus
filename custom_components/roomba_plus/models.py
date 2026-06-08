@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from .map_renderer import MapRenderer
     from .presence_manager import PresenceManager    # v1.8.0 L6
     from .zone_store import ZoneStore
+    from .dirt_threshold_manager import DirtThresholdManager  # v2.4 F11
+    from .outline_store import OutlineStore                    # v2.4 F-EPHEMERAL
 
 
 class MapCapability(Enum):
@@ -79,6 +81,10 @@ class RoombaData:
     grid_store: GridStore | None = None
     # v2.3.0 — UMF spatial fusion aligner (SMART + EPHEMERAL when Q7 confirmed)
     umf_aligner: UmfAligner | None = None
+    # v2.4.0 — Demand-based cleaning trigger (F11, SMART + cloud only)
+    dirt_threshold_manager: "DirtThresholdManager | None" = None
+    # v2.4.0 — Room outline accumulator (F-EPHEMERAL, 900-series only)
+    outline_store: "OutlineStore | None" = None
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

@@ -684,3 +684,91 @@ async def async_check_error_recurrence(
             "action":     action,
         },
     )
+
+
+async def async_check_schedule_optimisation(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """F12c — raise a Repair Issue when high-dirt days lack a scheduled clean.
+
+    Fires when ≥ 2 consecutive weekdays have relative_to_baseline > 1.8
+    and no clean was recorded on those days by the schedule.
+
+    Gate: PresenceManager active + cloud records + baseline established.
+    """
+    data = config_entry.runtime_data
+    if data.presence_manager is None:
+        return
+    if not data.has_cloud or data.cloud_coordinator is None:
+        return
+    if data.mission_store is None:
+        return
+
+    records = data.cloud_coordinator.raw_records
+    if not records or len(records) < 5:
+        return
+
+    import statistics as _stat
+    from datetime import date, timedelta
+
+    # Compute 30-day baseline median dirt density
+    densities_all = [
+        float(r["dirt"]) / (float(r["sqft"]) * 0.0929)
+        for r in records[:30]
+        if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
+    ]
+    if len(densities_all) < 5:
+        return
+    baseline = _stat.median(densities_all)
+    if not baseline:
+        return
+
+    THRESHOLD = 1.8   # relative_to_baseline trigger level
+    MIN_CONSECUTIVE = 2
+
+    # Build set of days with a completed clean in last 30 days
+    by_day = data.mission_store.query_by_day(30)
+    clean_days: set[date] = {
+        day for day, summary in by_day.items()
+        if summary.completed > 0
+    }
+
+    # Check last 30 days for consecutive high-dirt days without a clean
+    today = date.today()
+    consecutive_high_no_clean = 0
+    trigger_days: list[str] = []
+
+    for offset in range(1, 31):
+        day = today - timedelta(days=offset)
+        summary = by_day.get(day)
+        if summary is None or summary.dirt_density is None:
+            consecutive_high_no_clean = 0
+            trigger_days = []
+            continue
+        relative = summary.dirt_density / baseline
+        if relative > THRESHOLD and day not in clean_days:
+            consecutive_high_no_clean += 1
+            trigger_days.append(day.isoformat())
+        else:
+            consecutive_high_no_clean = 0
+            trigger_days = []
+
+        if consecutive_high_no_clean >= MIN_CONSECUTIVE:
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                "schedule_suboptimal",
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="schedule_suboptimal",
+                translation_placeholders={
+                    "days": ", ".join(reversed(trigger_days[:MIN_CONSECUTIVE])),
+                    "threshold": str(THRESHOLD),
+                },
+            )
+            return
+
+    # No issue — clear any stale one
+    ir.async_delete_issue(hass, DOMAIN, "schedule_suboptimal")

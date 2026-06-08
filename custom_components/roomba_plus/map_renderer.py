@@ -417,6 +417,34 @@ class MapRenderer:
         self._last_png = buf.getvalue()
         return self._last_png
 
+    def render_room_outline(
+        self,
+        contour_points: list[tuple[int, int]],
+    ) -> bytes | None:
+        """F-EPHEMERAL — Overlay accumulated room outline on _last_png.
+
+        Mirrors render_keepout_zones() compositing pattern.
+        Colour: grey (180, 180, 180, 140) — visible but not distracting.
+        Width: 2px.
+        Returns new PNG bytes, or None when _last_png is None or no points.
+        """
+        if not contour_points or self._last_png is None:
+            return None
+        import io as _io
+        from PIL import Image as PILImage, ImageDraw
+        base    = PILImage.open(_io.BytesIO(self._last_png)).convert("RGBA")
+        overlay = PILImage.new("RGBA", base.size, (0, 0, 0, 0))
+        draw    = ImageDraw.Draw(overlay)
+        for (x, y) in contour_points:
+            # Draw a 2×2 pixel dot per contour point
+            if 0 <= x < base.width and 0 <= y < base.height:
+                draw.rectangle([x, y, x + 1, y + 1], fill=(180, 180, 180, 140))
+        composite     = PILImage.alpha_composite(base, overlay).convert("RGB")
+        buf           = _io.BytesIO()
+        composite.save(buf, format="PNG")
+        self._last_png = buf.getvalue()
+        return self._last_png
+
     @property
     def points_mm(self) -> list[tuple[float, float]]:
         """Return pose points in mm (for ZoneStore gap segmentation)."""

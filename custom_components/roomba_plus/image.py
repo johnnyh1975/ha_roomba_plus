@@ -209,6 +209,24 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         )
                         if overlay_png is not None:
                             png = overlay_png
+
+        # F-EPHEMERAL — Room outline overlay (EPHEMERAL, mission_count >= 2)
+        if self._config_entry is not None:
+            _edata = self._config_entry.runtime_data
+            _outline_store = getattr(_edata, "outline_store", None)
+            if (
+                _outline_store is not None
+                and _outline_store.ready
+                and self._renderer is not None
+            ):
+                from .models import MapCapability
+                if _edata.map_capability == MapCapability.EPHEMERAL:
+                    outline_png = await self.hass.async_add_executor_job(
+                        self._renderer.render_room_outline,
+                        _outline_store.contour_points,
+                    )
+                    if outline_png is not None:
+                        png = outline_png
         return png
 
     # v2.3.0 Step 5 — calibration + rooms for xiaomi-vacuum-map-card
@@ -360,6 +378,24 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # Persist renderer state so the map survives an HA restart
         if self._renderer and self._renderer.has_data:
             asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
+
+        # F-EPHEMERAL — Extract and accumulate room outline
+        if (
+            self._renderer
+            and self._renderer.has_data
+            and self._config_entry is not None
+        ):
+            _outline_store = getattr(
+                self._config_entry.runtime_data, "outline_store", None
+            )
+            if _outline_store is not None:
+                _png = self._renderer.render()
+                asyncio.run_coroutine_threadsafe(
+                    _outline_store.async_update_from_png(
+                        _png, self.hass, self._config_entry.entry_id
+                    ),
+                    loop,
+                )
 
         self._mission_points = []
 
@@ -814,11 +850,13 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 if cal:
                     attrs["calibration"] = cal
             else:
-                # UMF-space anchors — three corners of bounding box
+                # UMF-space anchors — three corners of polygon bounding box.
+                # Use actual min/max corners so all three points are within the
+                # rendered image area and the card can calibrate correctly.
                 anchors = [
-                    (0.0,     0.0),
                     (min(xs), min(ys)),
-                    (max(xs), max(ys)),
+                    (max(xs), min(ys)),
+                    (min(xs), max(ys)),
                 ]
                 attrs["calibration"] = [
                     {

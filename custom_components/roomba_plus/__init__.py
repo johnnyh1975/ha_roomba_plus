@@ -42,6 +42,7 @@ from .const import (
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
     CONF_PRESENCE_SCHEDULING_ENABLED,
+    CONF_DEMAND_CLEANING_ENABLED,
     CONF_SMART_ZONE_DATA,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
@@ -60,6 +61,8 @@ from .mission_store import MissionStore
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
 from .blocking_manager import BlockingManager
+from .dirt_threshold_manager import DirtThresholdManager
+from .outline_store import OutlineStore
 from .maintenance_store import MaintenanceStore
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
@@ -1427,6 +1430,30 @@ async def async_setup_entry(
                 config_entry.data[CONF_BLID],
             )
 
+    # v2.4.0 F-EPHEMERAL — OutlineStore (EPHEMERAL robots with map enabled)
+    outline_store: OutlineStore | None = None
+    if (
+        map_capability == MapCapability.EPHEMERAL
+        and config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)
+    ):
+        outline_store = OutlineStore()
+        await outline_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "Roomba+ OutlineStore: loaded %d points for %s",
+            outline_store.contour_point_count, config_entry.data[CONF_BLID],
+        )
+
+    # v2.4.0 F11 — DirtThresholdManager (SMART + cloud + demand enabled)
+    dirt_threshold_manager: DirtThresholdManager | None = None
+    if (
+        map_capability == MapCapability.SMART
+        and cloud_coordinator is not None
+        and config_entry.options.get(CONF_DEMAND_CLEANING_ENABLED, False)
+    ):
+        dirt_threshold_manager = DirtThresholdManager(hass, config_entry)
+        await dirt_threshold_manager.async_load(config_entry.entry_id)
+        _LOGGER.debug("Roomba+ DirtThresholdManager: active for %s", config_entry.data[CONF_BLID])
+
     # v2.3.0 F8 — UMF spatial fusion aligner
     umf_aligner: Any | None = None
     if cloud_coordinator is not None and geometry_store is not None:
@@ -1482,6 +1509,8 @@ async def async_setup_entry(
         grid_store=grid_store,
         floor_label=config_entry.options.get(CONF_FLOOR, ""),
         umf_aligner=umf_aligner,
+        dirt_threshold_manager=dirt_threshold_manager,
+        outline_store=outline_store,
     )
 
     if presence_manager is not None:
@@ -1554,7 +1583,6 @@ async def async_setup_entry(
                 async_check_error_recurrence(hass, config_entry),
                 name="roomba_plus_error_recurrence_check",
             )
-
         config_entry.async_on_unload(
             cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)
         )

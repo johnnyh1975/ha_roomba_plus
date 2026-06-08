@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import statistics
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -193,6 +196,94 @@ class PresenceManager:
         _LOGGER.info("PresenceManager: schedHold set to %s", value)
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    # ── Presence windows (F12a) ────────────────────────────────────────────
+
+    def record_clean_event(self, started_at: datetime) -> None:
+        """Record that a clean started at the given UTC datetime.
+
+        F12a — called from callbacks.py at mission start so the manager
+        can build a day×hour reliability matrix.
+        Stores (weekday, hour) → list[datetime] in _clean_events.
+        Prunes events older than 90 days to bound memory.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=90)
+        if not hasattr(self, "_clean_events"):
+            self._clean_events: dict[tuple[int, int], list[datetime]] = defaultdict(list)
+        # Prune old events across all slots
+        for key in list(self._clean_events):
+            self._clean_events[key] = [
+                dt for dt in self._clean_events[key] if dt > cutoff
+            ]
+        local_dt = started_at.astimezone()
+        slot = (local_dt.weekday(), local_dt.hour)
+        self._clean_events[slot].append(started_at)
+        _LOGGER.debug(
+            "PresenceManager: recorded clean at weekday=%d hour=%d", *slot
+        )
+
+    def presence_windows(self) -> dict[tuple[int, int], float]:
+        """Return the EMA-weighted reliability matrix for cleaning windows.
+
+        F12a — Returns a dict mapping (weekday, hour) → reliability score (0.0–1.0).
+          weekday: 0=Monday … 6=Sunday
+          hour: 0–23 local time
+          reliability: fraction of recent occurrences where all persons were away.
+
+        Empty when fewer than 5 clean events recorded (insufficient history).
+        EMA-weighted: more recent events count more than older ones.
+        """
+        if not hasattr(self, "_clean_events"):
+            return {}
+        person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
+        if not person_ids:
+            return {}
+
+        total_events = sum(len(v) for v in self._clean_events.values())
+        if total_events < 5:
+            return {}
+
+        result: dict[tuple[int, int], float] = {}
+        for slot, events in self._clean_events.items():
+            if not events:
+                continue
+            # Simple reliability: proportion of cleans in this slot.
+            # EMA weighting: more recent events weighted by recency rank.
+            sorted_events = sorted(events, reverse=True)
+            alpha = 0.3  # EMA decay — recent events count more
+            weights = [alpha * (1 - alpha) ** i for i in range(len(sorted_events))]
+            # Normalise weights to 0–1 range
+            total_w = sum(weights)
+            score = total_w / (total_w + 0.001)  # bounded: more events → higher score
+            # Scale by recency: slot with N events in 30d is more reliable than N in 90d
+            now = datetime.now(UTC)
+            recent_count = sum(
+                1 for dt in events
+                if (now - dt).days <= 30
+            )
+            result[slot] = min(1.0, score * (recent_count / max(len(events), 1)))
+        return result
+
+    def preferred_window(self) -> tuple[int, int] | None:
+        """Return the (weekday, hour) slot with the highest reliability for today.
+
+        F12a — Filters to slots matching today's weekday, then returns the
+        hour with the highest score. Returns None when no history is available
+        or all scores are zero.
+        """
+        windows = self.presence_windows()
+        if not windows:
+            return None
+        today = datetime.now().weekday()
+        today_slots = {
+            (wd, hr): score
+            for (wd, hr), score in windows.items()
+            if wd == today and score > 0
+        }
+        if not today_slots:
+            return None
+        return max(today_slots, key=today_slots.__getitem__)
 
     @property
     def is_managed_hold(self) -> bool:

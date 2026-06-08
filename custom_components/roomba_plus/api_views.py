@@ -206,14 +206,52 @@ class MissionHistoryView(HomeAssistantView):
                 days = 28
 
             by_day = data.mission_store.query_by_day(days)
+            # F12b — compute per-day dirt density and 30-day baseline
+            # from cloud raw_records. DaySummary does not store dirt_density
+            # (it only aggregates MQTT fields); we compute it here from the
+            # cloud record timestamps grouped by local calendar date.
+            _p30d_baseline: float | None = None
+            _daily_density: dict[str, float] = {}
+            if data.has_cloud and data.cloud_coordinator is not None:
+                import statistics as _stat
+                from collections import defaultdict
+                from datetime import date as _date
+                _records = data.cloud_coordinator.raw_records or []
+                # Group densities by local calendar date
+                _by_day_cloud: dict[str, list[float]] = defaultdict(list)
+                for r in _records:
+                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0:
+                        ts = r.get("startTime") or r.get("timestamp")
+                        if ts:
+                            try:
+                                day_str = _date.fromtimestamp(int(ts)).isoformat()
+                                d = float(r["dirt"]) / (float(r["sqft"]) * 0.0929)
+                                _by_day_cloud[day_str].append(d)
+                            except (ValueError, OSError):
+                                pass
+                # Per-day median density
+                for _day_str, _dens in _by_day_cloud.items():
+                    _daily_density[_day_str] = _stat.median(_dens)
+                # 30-day baseline: median of all per-day medians
+                all_densities = list(_daily_density.values())
+                if len(all_densities) >= 5:
+                    _p30d_baseline = _stat.median(all_densities)
+
             result = [
                 {
-                    "date":      summary.date.isoformat(),
-                    "total":     summary.total,
-                    "completed": summary.completed,
-                    "stuck":     summary.stuck,
-                    "area_sqft": summary.area_sqft,
-                    "result":    summary.result,
+                    "date":               summary.date.isoformat(),
+                    "total":              summary.total,
+                    "completed":          summary.completed,
+                    "stuck":              summary.stuck,
+                    "area_sqft":          summary.area_sqft,
+                    "result":             summary.result,
+                    # F12b — dirt analytics computed from cloud records by date
+                    "dirt_density":       _daily_density.get(summary.date.isoformat()),
+                    "relative_to_baseline": (
+                        round(_daily_density[summary.date.isoformat()] / _p30d_baseline, 3)
+                        if summary.date.isoformat() in _daily_density and _p30d_baseline
+                        else None
+                    ),
                 }
                 for summary in sorted(by_day.values(), key=lambda s: s.date)
             ]

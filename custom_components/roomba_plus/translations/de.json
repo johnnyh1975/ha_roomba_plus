@@ -74,7 +74,8 @@
           "cloud_credentials": "iRobot Cloud-Zugangsdaten",
           "blocking_sensors": "Blocking sensors",
           "map_management": "Zone management",
-          "presence_scheduling": "Anwesenheitsbasierte Planung"
+          "presence_scheduling": "Anwesenheitsbasierte Planung",
+          "demand_cleaning": "Demand cleaning"
         }
       },
       "zones": {
@@ -164,6 +165,14 @@
           "presence_mode": "Modus",
           "away_delay_min": "Verzögerung nach dem Verlassen (Minuten)",
           "clean_delay_min": "Verzögerung vor Start des zweiten Roboters"
+        }
+      },
+      "demand_cleaning": {
+        "title": "Demand cleaning",
+        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "data": {
+          "demand_cleaning_enabled": "Enable demand cleaning",
+          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
         }
       }
     },
@@ -471,6 +480,15 @@
       },
       "recent_time_30d": {
         "name": "Reinigungszeit (30 T)"
+      },
+      "optimal_clean_window": {
+        "name": "Optimal clean window"
+      },
+      "recent_edge_coverage_ratio": {
+        "name": "Recent edge coverage ratio"
+      },
+      "total_energy_consumed": {
+        "name": "Total energy consumed"
       }
     },
     "binary_sensor": {
@@ -532,6 +550,9 @@
       },
       "mission_active": {
         "name": "Mission aktiv"
+      },
+      "demand_clean_blocked": {
+        "name": "Demand clean blocked"
       }
     },
     "button": {
@@ -719,6 +740,11 @@
     "error_recurrence": {
       "title": "Wiederkehrender Fehler: {label}",
       "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase '{phase}', Ort '{room}'. Empfohlene Maßnahme: {action}"
+    },
+    "schedule_suboptimal": {
+      "title": "Schedule may be missing high-dirt days",
+      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays.",
+      "fix_flow": null
     }
   },
   "device_automation": {
@@ -768,6 +794,18 @@
     },
     "map_updating": {
       "message": "Der Roboter aktualisiert gerade seine Smart Map. Warte, bis der Bereitschaftssensor 'Bereit' anzeigt, und versuche es erneut."
+    },
+    "entity_not_found": {
+      "message": "Entity {entity_id} not found in the entity registry."
+    },
+    "maintenance_store_unavailable": {
+      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+    },
+    "no_valid_segments": {
+      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+    },
+    "config_entry_not_found": {
+      "message": "No config entry found for {entity_id}. Try reloading the integration."
     }
   }
 }

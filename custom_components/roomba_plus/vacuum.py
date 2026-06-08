@@ -18,7 +18,10 @@ from homeassistant.components.vacuum import (
     VacuumActivity,
     VacuumEntityFeature,
 )
+# Segment is imported locally in async_get_segments — requires HA 2026.3.
+# hacs.json pins homeassistant >= 2026.3.0 so this is always safe in production.
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
@@ -53,10 +56,12 @@ from .const import (
     OVERLAP_DEEP,
     OVERLAP_EXTENDED,
     OVERLAP_STANDARD,
+    CONF_FLOOR,
+    DOMAIN,
     PHASE_TO_ACTIVITY,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -113,7 +118,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     """
 
     _attr_name = None
-    _attr_supported_features = SUPPORT_IROBOT
     _attr_available = True  # Always available so setup doesn't fail
 
     def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
@@ -125,6 +129,51 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         self._cap_position: bool = (
             self.vacuum_state.get("cap", {}).get("pose") == 1
         )
+
+    # ── HA lifecycle ──────────────────────────────────────────────────────────
+
+    async def async_added_to_hass(self) -> None:
+        """Extend parent setup to register cloud coordinator listener.
+
+        F-I15 (v2.4.0): IRobotVacuum is not a CoordinatorEntity, so the HA
+        framework does not call _handle_coordinator_update automatically.
+        We register manually so segment change-detection fires after each
+        cloud refresh (map retrain → async_create_segments_issue).
+        """
+        await super().async_added_to_hass()
+        if self._config_entry is not None:
+            cc = self._config_entry.runtime_data.cloud_coordinator
+            if cc is not None:
+                self.async_on_remove(
+                    cc.async_add_listener(self._handle_coordinator_update)
+                )
+
+    # ── Feature flags ────────────────────────────────────────────────────────
+
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Return supported features, adding CLEAN_AREA for SMART robots with cloud.
+
+        F-I15 (HA 2026.3): CLEAN_AREA is gated on:
+          - MapCapability.SMART (i/s/j/m-series only — stable region IDs)
+          - cloud coordinator active and has data
+          - not a Braava mop (Braava uses padWetness Select, not room segments)
+        """
+        flags = SUPPORT_IROBOT
+        data = (
+            self._config_entry.runtime_data
+            if self._config_entry is not None
+            else None
+        )
+        if (
+            data is not None
+            and data.map_capability == MapCapability.SMART
+            and data.has_cloud
+            and not is_mop(self.vacuum_state)
+            and hasattr(VacuumEntityFeature, "CLEAN_AREA")  # HA 2026.3+ only; silently absent on older
+        ):
+            flags |= VacuumEntityFeature.CLEAN_AREA
+        return flags
 
     # ── Activity ──────────────────────────────────────────────────────────
 
@@ -399,7 +448,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         live state.pmaps via _resolve_pmapv_id so it is never stale after a
         map retrain. Falls back to the first pmap in state if pmap_id is absent.
         """
-        from . import _resolve_pmapv_id
+        from .services import _resolve_pmapv_id
 
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
@@ -441,6 +490,126 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             "regions": normalised_regions,
         }
 
+    # ── CLEAN_AREA (F-I15, HA 2026.3) ───────────────────────────────────────
+
+    async def async_get_segments(self) -> list:
+        """Return regions as Segment objects for the CLEAN_AREA mapping UI.
+
+        Called when the user opens the area↔segment mapping in HA.
+        No async_refresh() needed — last coordinator poll data is current enough.
+        Gate: only reachable when CLEAN_AREA is in supported_features (SMART + cloud + HA 2026.3+).
+        """
+        # Defensive: Segment requires HA 2026.3+; guarded by hasattr in supported_features.
+        try:
+            from homeassistant.components.vacuum import Segment
+        except ImportError:
+            return []
+        data = self._config_entry.runtime_data if self._config_entry else None
+        if not data or not data.has_cloud or data.cloud_coordinator is None:
+            return []
+        floor_label = (
+            self._config_entry.options.get(CONF_FLOOR) or None
+            if self._config_entry else None
+        )
+        return [
+            Segment(
+                id=f"{data.cloud_coordinator.active_pmap_id}_{region['id']}",
+                name=region.get("name", region["id"]),
+                group=floor_label,
+            )
+            for region in data.cloud_coordinator.regions
+            if region.get("id")
+        ]
+
+    async def async_clean_segments(
+        self, segment_ids: list[str], **kwargs: Any
+    ) -> None:
+        """Start a region-cleaning mission for the given segment IDs.
+
+        F-I15: kwargs (including repeat) silently ignored — removed from spec Oct 2025.
+        twoPass is read from the robot's live noAutoPasses/twoPass state (CleaningPassesSelect).
+        Segments from other pmaps are silently ignored; raises ServiceValidationError
+        if none of the supplied IDs match the current map (F-RB-2).
+        """
+        data = self._config_entry.runtime_data if self._config_entry else None
+        if not data or not data.has_cloud or data.cloud_coordinator is None:
+            return
+
+        active_pmap_id = data.cloud_coordinator.active_pmap_id
+        region_ids: list[str] = []
+        for seg_id in segment_ids:
+            pmap_id, _, region_id = seg_id.partition("_")
+            if pmap_id == active_pmap_id:
+                region_ids.append(region_id)
+
+        if not region_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+
+        two_pass = self._get_two_pass()
+        regions = [
+            {
+                "region_id": rid,
+                "type": "rid",
+                "params": {"noAutoPasses": False, "twoPass": two_pass},
+            }
+            for rid in region_ids
+        ]
+
+        from .services import _resolve_pmapv_id
+        user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference,
+            "cleanMissionStatus",
+            {
+                "command": "start",
+                "pmap_id": active_pmap_id,
+                "user_pmapv_id": user_pmapv_id,
+                "regions": regions,
+                "ordered": 1,
+            },
+        )
+        # F-RB-1: immediate state update after segment clean command
+        await data.cloud_coordinator.async_refresh()
+
+    def _get_two_pass(self) -> bool:
+        """Read twoPass preference from live robot state.
+
+        Mirrors what CleaningPassesSelect reads — no entity lookup needed.
+        Returns False when the preference is absent (Auto/One-pass modes).
+        """
+        return bool(self.vacuum_state.get("twoPass", False))
+
+    def _handle_coordinator_update(self) -> None:
+        """Standard HA coordinator callback — checks for segment changes.
+
+        F-I15 change-detection: if the region set has changed since the user
+        last mapped areas, raise a Repair Issue prompting re-mapping.
+        Suppressed when last_seen_segments is None (never configured).
+        """
+        # No super() call needed — IRobotEntity is not a CoordinatorEntity.
+        # The listener is registered in async_added_to_hass; HA does not call
+        # this method automatically (no CoordinatorEntity in MRO).
+
+        data = self._config_entry.runtime_data if self._config_entry else None
+        if not data or not data.has_cloud or data.cloud_coordinator is None:
+            return
+
+        last_seen = self.last_seen_segments
+        if last_seen is None:
+            return  # never configured — suppress Repair Issue
+
+        active_pmap = data.cloud_coordinator.active_pmap_id
+        current_ids = {
+            f"{active_pmap}_{r['id']}"
+            for r in data.cloud_coordinator.regions
+            if r.get("id")
+        }
+        if current_ids != {seg.id for seg in last_seen}:
+            self.async_create_segments_issue()
+
     # ── Push updates ──────────────────────────────────────────────────────
 
     def on_message(self, json_data: dict[str, Any]) -> None:
@@ -471,7 +640,12 @@ class RoombaVacuumCarpetBoost(RoombaVacuum):
     """Roomba with carpet boost — exposes fan speed control."""
 
     _attr_fan_speed_list = FAN_SPEEDS
-    _attr_supported_features = SUPPORT_ROOMBA_CARPET_BOOST
+
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Add FAN_SPEED to the base feature set (Option B)."""
+        return super().supported_features | VacuumEntityFeature.FAN_SPEED
+
 
     @property
     def fan_speed(self) -> str | None:
@@ -519,7 +693,15 @@ class BraavaJet(IRobotVacuum):
     through the fan_speed interface as "<Behaviour>-<SprayAmount>".
     """
 
-    _attr_supported_features = SUPPORT_BRAAVA
+    @property
+    def supported_features(self) -> VacuumEntityFeature:
+        """Braava uses FAN_SPEED for mop mode — never CLEAN_AREA (Option B).
+
+        is_mop() guard in the parent property already excludes Braava from
+        CLEAN_AREA, but we override cleanly to add FAN_SPEED.
+        """
+        return SUPPORT_IROBOT | VacuumEntityFeature.FAN_SPEED
+
 
     def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise and build the fan speed list."""

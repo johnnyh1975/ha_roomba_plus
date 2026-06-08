@@ -65,6 +65,10 @@ EVENT_ALL_AWAY: Final = f"{DOMAIN}_all_away"
 EVENT_PERSON_DETECTED_DURING_CLEAN: Final = f"{DOMAIN}_person_detected_during_clean"
 
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
+# F11 — demand-based cleaning (DirtThresholdManager)
+CONF_DEMAND_CLEANING_ENABLED: Final = "demand_cleaning_enabled"
+CONF_DEMAND_MULTIPLIER: Final     = "demand_clean_multiplier"
+
 CONF_SMART_ZONE_ALIASES: Final = "smart_zone_aliases"   # dict[str, str]: region_id → display name
 CONF_SMART_ZONE_HIDDEN: Final = "smart_zone_hidden"     # list[str]: hidden region IDs
 

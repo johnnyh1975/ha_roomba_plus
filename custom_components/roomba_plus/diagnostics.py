@@ -62,6 +62,14 @@ async def async_get_config_entry_diagnostics(
     }
     if data.renderer is not None:
         map_diag["renderer"] = data.renderer.diagnostic_info()
+    # F-EPHEMERAL: outline_store diagnostics
+    _outline = getattr(data, "outline_store", None)
+    if _outline is not None:
+        map_diag["outline_store"] = {
+            "mission_count": _outline.mission_count,
+            "contour_point_count": _outline.contour_point_count,
+            "ready": _outline.ready,
+        }
 
     # ── Zone subsystem ─────────────────────────────────────────────────────────
     zone_diag: dict[str, Any] = {"available": data.zone_store is not None}

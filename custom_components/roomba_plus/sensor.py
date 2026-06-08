@@ -761,6 +761,39 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     # GROUP 4 — Statistics (DIAGNOSTIC, enabled)
 
+    # F12e — total energy consumed (HA Energy dashboard eligible)
+    # Formula: estCap (mAh) × 14.8V (LiIon nominal) × cycle_count / 1,000,000 → kWh
+    # Gate: bbchg3.estCap present AND batteryType != nimh (NiMH has different voltage)
+    RoombaSensorDescription(
+        key="total_energy_consumed",
+        translation_key="total_energy_consumed",
+        name="Total energy consumed",
+        native_unit_of_measurement="kWh",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
+        value_fn=lambda e: (
+            round(
+                e.battery_stats.get("estCap", 0)
+                * 14.8
+                * (
+                    e.battery_stats.get("nLithChrg")
+                    or e.battery_stats.get("nAvail")
+                    or 0
+                )
+                / 1_000_000,
+                3,
+            )
+            if e.battery_stats.get("estCap")
+            and (
+                e.battery_stats.get("nLithChrg")
+                or e.battery_stats.get("nAvail")
+            )
+            else None
+        ),
+    ),
+
     RoombaSensorDescription(
         key="total_missions",
         translation_key="total_missions",
@@ -1533,6 +1566,14 @@ async def async_setup_entry(
                 continue
             entities.append(CloudRawSensor(roomba, blid, cc, desc, config_entry))
 
+    # F12d — recent_edge_coverage_ratio (map-capable robots with GridStore)
+    if data.grid_store is not None and data.map_capability.value != "none":
+        entities.append(RoombaEdgeCoverageSensor(roomba, blid, config_entry))
+
+    # F12a — optimal_clean_window sensor (presence scheduling active)
+    if data.presence_manager is not None:
+        entities.append(RoombaOptimalCleanWindow(roomba, blid, config_entry))
+
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
     async_add_entities(entities)
@@ -2019,7 +2060,6 @@ def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]
 # ── F5 — Performance intelligence (CloudRawSensor + RoombaSensor functions) ───
 
 import statistics as _statistics
-nPARALLEL_UPDATES = 0
 
 
 def _raw_cleaning_speed(records: list[dict]) -> StateType:
@@ -2586,3 +2626,116 @@ class RawStateSensor(IRobotEntity, SensorEntity):
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         # Update on any MQTT message — this is a catch-all debug sensor
         return True
+
+
+# ── F12a — Optimal Clean Window sensor ────────────────────────────────────────
+
+class RoombaOptimalCleanWindow(IRobotEntity, SensorEntity):
+    """Timestamp sensor showing the optimal time to clean today.
+
+    F12a (v2.4.0) — derived from PresenceManager.preferred_window(), which
+    builds a day×hour reliability matrix from historical clean events.
+
+    State: ISO-8601 datetime of the next occurrence of the best window today.
+    None (unavailable) when fewer than 5 historical clean events exist.
+
+    device_class: TIMESTAMP — HA renders as a relative time widget.
+    entity_category: DIAGNOSTIC — opt-in; not shown in default dashboard view.
+    """
+
+    _attr_translation_key = "optimal_clean_window"
+    _attr_name = "Optimal clean window"  # G6: locale-independent slug
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = None  # timestamp sensors have no state_class
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_optimal_clean_window"
+
+    @property
+    def native_value(self) -> Any:
+        """Return the next datetime for the preferred cleaning window."""
+        import datetime as _dt
+        pm = self._config_entry.runtime_data.presence_manager
+        if pm is None:
+            return None
+        slot = pm.preferred_window()
+        if slot is None:
+            return None
+        _, hour = slot
+        # Build a datetime for the next occurrence of this hour today (or tomorrow
+        # if the hour has already passed today)
+        now = _dt.datetime.now(_dt.timezone.utc).astimezone()
+        candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += _dt.timedelta(days=1)
+        return candidate
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the full presence_windows matrix as attributes."""
+        pm = self._config_entry.runtime_data.presence_manager
+        if pm is None:
+            return {}
+        windows = pm.presence_windows()
+        # Serialise (weekday, hour) tuples as "wd_hr" strings for JSON
+        return {
+            "windows": {
+                f"{wd}_{hr}": round(score, 3)
+                for (wd, hr), score in windows.items()
+            },
+            "preferred_slot": pm.preferred_window(),
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        # Sensor is not MQTT-driven — update on demand only
+        return False
+
+
+# ── F12d — Edge Coverage Ratio sensor ─────────────────────────────────────────
+
+class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
+    """Ratio of edge cells to total cells in GridStore.
+
+    F12d (v2.4.0) — a low ratio with high total coverage indicates the robot
+    is over-cleaning the centre and under-covering room edges/walls.
+
+    State: float 0.0–1.0 (edge cells / total cells), or None when < 10 cells.
+    entity_category: DIAGNOSTIC.
+    Unit: None (dimensionless ratio).
+    """
+
+    _attr_translation_key = "recent_edge_coverage_ratio"
+    _attr_name = "Recent edge coverage ratio"  # G6: locale-independent slug
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = None
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_recent_edge_coverage_ratio"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return edge_coverage_ratio from GridStore, or None when insufficient data."""
+        gs = self._config_entry.runtime_data.grid_store
+        if gs is None:
+            return None
+        return gs.edge_coverage_ratio()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        gs = self._config_entry.runtime_data.grid_store
+        if gs is None:
+            return {}
+        return {
+            "total_cells": gs.cell_count,
+            "edge_depth_mm": 300,
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "pose" in new_state

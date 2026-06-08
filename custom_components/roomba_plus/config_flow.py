@@ -437,6 +437,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             menu.append("cloud_credentials")
         if "schedHold" in state:
             menu.append("presence_scheduling")
+        # F11 — demand_cleaning step for SMART robots with cloud credentials
+        if data.map_capability == MapCapability.SMART and data.has_cloud:
+            menu.append("demand_cleaning")
 
         return self.async_show_menu(
             step_id="init",
@@ -1259,6 +1262,51 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={
                 "current_user": current_user or "not configured",
             },
+        )
+
+    # ── F13 / F11 — Demand cleaning configuration ─────────────────────────────
+
+    async def async_step_demand_cleaning(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """F11 — Configure dirt-threshold demand cleaning.
+
+        Gate: SMART + cloud only. Shown when both are active.
+        Options stored: demand_cleaning_enabled (bool), demand_clean_multiplier (float).
+        """
+        from .const import CONF_DEMAND_CLEANING_ENABLED, CONF_DEMAND_MULTIPLIER
+        from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
+
+        if user_input is not None:
+            updated = dict(self.config_entry.options)
+            updated[CONF_DEMAND_CLEANING_ENABLED] = user_input.get(
+                CONF_DEMAND_CLEANING_ENABLED, False
+            )
+            updated[CONF_DEMAND_MULTIPLIER] = float(user_input.get(
+                CONF_DEMAND_MULTIPLIER, TRIGGER_MULTIPLIER_DEFAULT
+            ))
+            return self.async_create_entry(title="", data=updated)
+
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="demand_cleaning",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_DEMAND_CLEANING_ENABLED,
+                        default=options.get(CONF_DEMAND_CLEANING_ENABLED, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_DEMAND_MULTIPLIER,
+                        default=float(options.get(
+                            CONF_DEMAND_MULTIPLIER, TRIGGER_MULTIPLIER_DEFAULT
+                        )),
+                    ): vol.All(
+                        vol.Coerce(float),
+                        vol.Range(min=1.1, max=5.0),
+                    ),
+                }
+            ),
         )
 
 

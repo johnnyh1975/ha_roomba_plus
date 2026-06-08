@@ -147,11 +147,11 @@ rules:
       Opt-in diagnostic sensors (nav_panics, cliff counters, battery_capacity,
       rssi, snr, ip_address) set entity_registry_enabled_default=False.
   exception-translations:
-    status: todo
+    status: done
     comment: >
-      Most ServiceValidationError raises use translation keys. Three raw
-      f-string raises remain in services.py (lines ~244, ~250, ~373):
-      "Entity {id} not found" and "No config entry for {id}". These will
+      All ServiceValidationError raises use translation_key= (v2.4.0 F-RB-7).
+      Keys: entity_not_found, maintenance_store_unavailable, no_valid_segments
+      added in v2.4.0. All 9 exception keys defined in strings.json and
       be converted to translation_key pattern in v2.4.0 (F-RB-7).
   icon-translations:
     status: done

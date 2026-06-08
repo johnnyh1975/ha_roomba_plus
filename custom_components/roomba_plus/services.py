@@ -241,13 +241,23 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
     for entity_id in entity_ids:
         entry = ent_reg.async_get(entity_id)
         if entry is None:
-            raise ServiceValidationError(f"Entity {entity_id} not found")
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
 
         config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
             entry.config_entry_id
         )
         if config_entry is None:
-            raise ServiceValidationError(f"No config entry for {entity_id}")
+            raise ServiceValidationError(
+                f"No config entry for {entity_id}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
 
         data: RoombaData = config_entry.runtime_data
 
@@ -370,7 +380,12 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
         if config_entry is None:
-            raise ServiceValidationError(f"No config entry for {eid}")
+            raise ServiceValidationError(
+                f"No config entry for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
 
         data: RoombaData = config_entry.runtime_data
         if rooms and data.map_capability != MapCapability.SMART:

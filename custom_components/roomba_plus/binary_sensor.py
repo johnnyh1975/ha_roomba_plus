@@ -99,6 +99,14 @@ async def async_setup_entry(
     # v2.2.0 — Mission active sensor (all robots) — card fix C1
     entities.append(RoombaMissionActive(roomba, blid))
 
+    # F11 — demand clean blocked sensor (SMART + cloud + demand enabled)
+    data = config_entry.runtime_data
+    if (
+        data.dirt_threshold_manager is not None
+        and data.has_cloud
+    ):
+        entities.append(RoombaDemandCleanBlocked(roomba, blid, config_entry))
+
     async_add_entities(entities)
 
 
@@ -642,6 +650,65 @@ class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
         # charge phase with cycle!="none" = mid-mission recharge → still ON
         # charge phase with cycle=="none"  = caught by the guard above → OFF
         return phase not in self._FINAL_PHASES or phase == "charge"
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+
+class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
+    """ON when a demand clean was evaluated but blocked by presence or scheduling.
+
+    F11 (v2.4.0) — diagnostic entity. Shows users why demand cleaning
+    did not trigger despite dirt density exceeding the threshold.
+
+    ON states:
+      - Robot is busy (active mission, mid-mission recharge)
+      - BlockingManager.is_queued is True
+      - Presence gate blocked (someone home while demand triggered)
+
+    OFF = demand clean would be allowed to fire if density exceeded threshold.
+    None = DirtThresholdManager not configured or no evaluation yet.
+    """
+
+    _attr_translation_key = "demand_clean_blocked"
+    _attr_name = "Demand clean blocked"   # G6: locale-independent entity_id slug
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_demand_clean_blocked"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True when demand clean is currently blocked."""
+        data = self._config_entry.runtime_data
+
+        # Blocked if robot is active
+        state = data.roomba_reported_state()
+        cycle = state.get("cleanMissionStatus", {}).get("cycle", "none")
+        if cycle != "none":
+            return True
+
+        # Blocked if BlockingManager queued
+        bm = getattr(data, "blocking_manager", None)
+        if bm is not None and bm.is_queued:
+            return True
+
+        # Blocked if presence gate would prevent trigger
+        pm = getattr(data, "presence_manager", None)
+        if pm is not None:
+            person_ids = self._config_entry.options.get("presence_entities", [])
+            if person_ids:
+                all_away = all(
+                    (st := self.hass.states.get(eid)) is not None
+                    and st.state not in ("home", "Home")
+                    for eid in person_ids
+                )
+                if not all_away:
+                    return True
+
+        return False
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state

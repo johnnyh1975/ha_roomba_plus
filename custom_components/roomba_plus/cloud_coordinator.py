@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -32,9 +32,14 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Cloud map data changes only on map retrain — poll once per day as a
-# backstop; real refresh is triggered by user_pmapv_id MQTT change.
-_CLOUD_POLL_INTERVAL = timedelta(hours=24)
+# Cloud data changes only on mission end or map retrain — poll once per day.
+# Real-time mission state comes from MQTT push (callbacks.py), not cloud.
+# Post-mission cloud refresh is triggered explicitly by F4b, not by poll interval.
+_CLOUD_POLL_IDLE = timedelta(hours=24)
+
+# F-RB-4 — suppress UpdateFailed for this long after the last success.
+# Avoids entity unavailability on transient cloud outages (< 2 min).
+_MIN_UNAVAILABLE = timedelta(minutes=2)
 
 
 
@@ -286,7 +291,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER,
             name=f"iRobot cloud ({blid})",
             config_entry=config_entry,
-            update_interval=_CLOUD_POLL_INTERVAL,
+            update_interval=_CLOUD_POLL_IDLE,
         )
         self.blid = blid
         self._has_pmaps = has_pmaps
@@ -298,6 +303,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             session=async_get_clientsession(hass),
             country_code=country_code,
         )
+        # F-RB-4 — track last successful update for failure-suppression grace period
+        self._last_success_time: "datetime | None" = None
         _LOGGER.debug(
             "iRobot cloud: using country_code=%s, has_pmaps=%s for %s",
             country_code, has_pmaps, blid,
@@ -348,7 +355,23 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"iRobot cloud authentication failed: {exc}"
             ) from exc
         except CloudApiError as exc:
+            # F-RB-4 — suppress transient failures within the grace period.
+            # Return the last known good data so entities stay available.
+            if (
+                self._last_success_time is not None
+                and self.data is not None
+                and (datetime.now(UTC) - self._last_success_time) < _MIN_UNAVAILABLE
+            ):
+                _LOGGER.debug(
+                    "iRobot cloud: transient failure within grace period — "
+                    "returning last data for %s (%s)",
+                    self.blid, exc,
+                )
+                return self.data
             raise UpdateFailed(f"iRobot cloud update failed: {exc}") from exc
+
+        # F-RB-4 — stamp last success time for future failure-suppression checks.
+        self._last_success_time = datetime.now(UTC)
 
         # The /missionhistory endpoint returns a list of records.
         # Structure varies by firmware/region:
