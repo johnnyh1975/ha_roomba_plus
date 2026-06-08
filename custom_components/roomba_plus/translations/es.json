@@ -186,6 +186,9 @@
     "error": {
       "cloud_auth_failed": "Error de autenticación cloud. Comprueba tu email y contraseña de iRobot.",
       "cloud_unavailable": "No se pudo conectar al cloud de iRobot. Comprueba tu conexión a Internet e inténtalo de nuevo."
+    },
+    "abort": {
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
     }
   },
   "entity": {
@@ -747,8 +750,7 @@
     },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
-      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays.",
-      "fix_flow": null
+      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
     }
   },
   "device_automation": {

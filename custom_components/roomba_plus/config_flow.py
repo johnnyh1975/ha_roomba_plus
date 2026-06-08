@@ -418,6 +418,11 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         from .const import has_smart_map
         from . import roomba_reported_state
 
+        # Guard: runtime_data only exists after a successful async_setup_entry.
+        # If the integration failed to load (e.g. translation error, MQTT timeout),
+        # opening the options UI must not crash — show a disabled/minimal menu.
+        if not hasattr(self.config_entry, "runtime_data") or self.config_entry.runtime_data is None:
+            return self.async_abort(reason="integration_not_loaded")
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
 
         from .models import MapCapability

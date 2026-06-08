@@ -186,6 +186,9 @@
     "error": {
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw."
+    },
+    "abort": {
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
     }
   },
   "entity": {
@@ -747,8 +750,7 @@
     },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
-      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays.",
-      "fix_flow": null
+      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
     }
   },
   "device_automation": {
