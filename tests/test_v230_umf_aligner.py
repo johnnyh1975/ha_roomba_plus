@@ -40,10 +40,10 @@ def _make_gs(markers: list[_FakeMarker]) -> MagicMock:
 
 
 def _square_points2d(
-    x0: float = 0, y0: float = 0, size: float = 5000,
+    x0: float = 0, y0: float = 0, size: float = 5.0,
     id_prefix: str = "p",
 ) -> list[dict]:
-    """Four corners of a square in points2d format."""
+    """Four corners of a square in points2d format (coordinates in metres)."""
     corners = [
         (x0,         y0),
         (x0 + size,  y0),
@@ -71,13 +71,14 @@ def _aligner_with_door(
     n_markers: int = 2,
 ) -> tuple[UmfAligner, list[_FakeMarker]]:
     """Aligner pre-loaded with a door gap and matching GS markers."""
-    gap = (_DOOR_GAP_MIN + _DOOR_GAP_MAX) / 2  # 900 mm
-    # Two points straddling the door gap
+    # gap and coordinates in metres (UMF units) — _build_coord_lookup multiplies
+    # by UMF_TO_MM=1000 so thresholds (_DOOR_GAP_MIN/_DOOR_GAP_MAX in mm) apply correctly.
+    gap_m = (_DOOR_GAP_MIN + _DOOR_GAP_MAX) / 2 / 1000.0  # 0.9m (= 900mm after scaling)
     points2d = [
-        {"id": "a", "coordinates": [door_x - gap / 2, door_y]},
-        {"id": "b", "coordinates": [door_x + gap / 2, door_y]},
-        {"id": "c", "coordinates": [door_x - gap / 2 + 5000, door_y + 5000]},
-        {"id": "d", "coordinates": [door_x + gap / 2 + 5000, door_y + 5000]},
+        {"id": "a", "coordinates": [door_x - gap_m / 2, door_y]},
+        {"id": "b", "coordinates": [door_x + gap_m / 2, door_y]},
+        {"id": "c", "coordinates": [door_x - gap_m / 2 + 5.0, door_y + 5.0]},
+        {"id": "d", "coordinates": [door_x + gap_m / 2 + 5.0, door_y + 5.0]},
     ]
     regions = [
         {
@@ -149,7 +150,7 @@ class TestBuildCoordLookup:
     def test_normal_case(self):
         pts = [{"id": "p0", "coordinates": [100.0, 200.0]}]
         a = self._make(pts)
-        assert a._coord_lookup == {"p0": (100.0, 200.0)}
+        assert a._coord_lookup == {"p0": (100000.0, 200000.0)}  # 100.0m * UMF_TO_MM
 
     def test_missing_id_skipped(self):
         pts = [{"coordinates": [1, 2]}]
@@ -173,7 +174,7 @@ class TestBuildCoordLookup:
         ]
         a = self._make(pts)
         assert len(a._coord_lookup) == 2
-        assert a._coord_lookup["b"] == (1000.0, 0.0)
+        assert a._coord_lookup["b"] == (1000000.0, 0.0)  # 1000.0m * UMF_TO_MM
 
     def test_integer_coordinates_converted(self):
         pts = [{"id": "x", "coordinates": [5, 10]}]
@@ -202,7 +203,7 @@ class TestDetectDoorGaps:
     def test_gap_too_small(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [100, 0]},  # 100 mm < _DOOR_GAP_MIN
+            {"id": "b", "coordinates": [0.1, 0]},  # 0.1m = 100mm < _DOOR_GAP_MIN
         ]
         a = self._run(pts)
         assert a._door_candidates == []
@@ -210,7 +211,7 @@ class TestDetectDoorGaps:
     def test_gap_too_large(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [2000, 0]},  # 2000 mm > _DOOR_GAP_MAX
+            {"id": "b", "coordinates": [2.0, 0]},  # 2.0m = 2000mm > _DOOR_GAP_MAX
         ]
         a = self._run(pts)
         assert a._door_candidates == []
@@ -218,7 +219,7 @@ class TestDetectDoorGaps:
     def test_gap_at_minimum(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [_DOOR_GAP_MIN, 0]},
+            {"id": "b", "coordinates": [_DOOR_GAP_MIN / 1000.0, 0]},  # metres
         ]
         a = self._run(pts)
         assert len(a._door_candidates) == 1
@@ -226,7 +227,7 @@ class TestDetectDoorGaps:
     def test_gap_at_maximum(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [_DOOR_GAP_MAX, 0]},
+            {"id": "b", "coordinates": [_DOOR_GAP_MAX / 1000.0, 0]},  # metres
         ]
         a = self._run(pts)
         assert len(a._door_candidates) == 1
@@ -234,19 +235,19 @@ class TestDetectDoorGaps:
     def test_midpoint_correct(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [900, 0]},  # 900 mm — valid door gap
+            {"id": "b", "coordinates": [0.9, 0]},  # 0.9m = 900mm after UMF_TO_MM
         ]
         a = self._run(pts)
         assert len(a._door_candidates) == 1
         assert a._door_candidates[0] == pytest.approx((450.0, 0.0))
 
     def test_multiple_gaps(self):
-        gap = 900.0
+        gap = 0.9  # metres (= 900mm after UMF_TO_MM)
         pts = [
             {"id": "a", "coordinates": [0, 0]},
             {"id": "b", "coordinates": [gap, 0]},
-            {"id": "c", "coordinates": [gap + 10000, 0]},  # no gap here (too large)
-            {"id": "d", "coordinates": [gap + 10000 + gap, 0]},
+            {"id": "c", "coordinates": [gap + 10.0, 0]},  # no gap here (too large)
+            {"id": "d", "coordinates": [gap + 10.0 + gap, 0]},
         ]
         a = self._run(pts)
         assert len(a._door_candidates) == 2
@@ -254,7 +255,7 @@ class TestDetectDoorGaps:
     def test_missing_id_in_lookup_skipped(self):
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"coordinates": [900, 0]},  # no id
+            {"coordinates": [0.9, 0]},  # no id
         ]
         a = self._run(pts)
         assert a._door_candidates == []
@@ -263,8 +264,8 @@ class TestDetectDoorGaps:
         # Gap only detected between consecutive, not non-consecutive points
         pts = [
             {"id": "a", "coordinates": [0, 0]},
-            {"id": "b", "coordinates": [5000, 0]},  # too large
-            {"id": "c", "coordinates": [5900, 0]},  # 900 mm gap with b
+            {"id": "b", "coordinates": [5.0, 0]},    # 5m -> 5000mm, too large
+            {"id": "c", "coordinates": [5.9, 0]},    # 0.9m = 900mm gap with b
         ]
         a = self._run(pts)
         assert len(a._door_candidates) == 1
@@ -482,7 +483,7 @@ class TestTransforms:
 class TestRoomNameAt:
     def _aligner_with_rooms(self):
         a = UmfAligner(
-            _square_points2d(size=5000),
+            _square_points2d(size=5.0),
             [_square_region("r1")],
             _make_gs([]),
         )
@@ -508,7 +509,7 @@ class TestRoomNameAt:
 
     def test_fallback_to_rid_when_no_name(self):
         a = UmfAligner(
-            _square_points2d(size=5000),
+            _square_points2d(size=5.0),
             [{"id": "r99", "geometry": {"ids": [["p0", "p1", "p2", "p3"]]}}],
             _make_gs([]),
         )
@@ -596,7 +597,7 @@ class TestKeeputPolygonUmf:
 class TestCalibrationPoints:
     def _aligned_with_rooms(self):
         a = UmfAligner(
-            _square_points2d(size=5000),
+            _square_points2d(size=5.0),
             [_square_region("r1")],
             _make_gs([]),
         )
@@ -651,14 +652,17 @@ class TestCalibrationPoints:
 class TestAlign:
     def _make_two_door_aligner(self):
         """Aligner with 2 door gaps at y=0, matching 2 GS markers at same positions."""
-        gap = 900.0
-        door1_x, door2_x = 800.0, 5800.0
+        # UMF coordinates in metres; markers in pose-space mm (unchanged).
+        # After UMF_TO_MM: door1=800mm, door2=5800mm, gap=900mm
+        gap_m = 0.9          # metres (= 900mm)
+        door1_x_m, door2_x_m = 0.8, 5.8  # metres
+        door1_x, door2_x = 800.0, 5800.0  # mm — for GS markers (pose-space)
         points2d = [
-            {"id": "a", "coordinates": [door1_x - gap / 2, 0]},
-            {"id": "b", "coordinates": [door1_x + gap / 2, 0]},  # door 1 gap
-            {"id": "c", "coordinates": [2000, 5000]},
-            {"id": "d", "coordinates": [door2_x - gap / 2, 0]},
-            {"id": "e", "coordinates": [door2_x + gap / 2, 0]},  # door 2 gap
+            {"id": "a", "coordinates": [door1_x_m - gap_m / 2, 0]},
+            {"id": "b", "coordinates": [door1_x_m + gap_m / 2, 0]},  # door 1 gap
+            {"id": "c", "coordinates": [2.0, 5.0]},
+            {"id": "d", "coordinates": [door2_x_m - gap_m / 2, 0]},
+            {"id": "e", "coordinates": [door2_x_m + gap_m / 2, 0]},  # door 2 gap
         ]
         regions = [
             {
