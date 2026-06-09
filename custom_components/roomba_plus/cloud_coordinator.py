@@ -503,6 +503,14 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sorted(_regions[0].keys()) if _regions else [],
                 sorted(_det.get("map_header", {}).keys()),
             )
+            # v2.4.2 — log time_estimates value to confirm structure for
+            # mission progress feature (v2.6.0 roadmap). Only logged once
+            # per coordinator fetch to avoid log spam.
+            if _regions:
+                _LOGGER.debug(
+                    "iRobot cloud: first region time_estimates=%s",
+                    _regions[0].get("time_estimates"),
+                )
 
         _LOGGER.debug(
             "iRobot cloud: fetched %d pmap(s), %d favorite(s) for %s (has_pmaps=%s)",

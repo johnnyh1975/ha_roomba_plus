@@ -507,13 +507,21 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         data = self._config_entry.runtime_data if self._config_entry else None
         if not data or not data.has_cloud or data.cloud_coordinator is None:
             return []
+        active_pmap_id = data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            # Coordinator has not yet fetched pmap data — returning segments with a
+            # None prefix would create IDs that never match in async_clean_segments.
+            _LOGGER.debug(
+                "async_get_segments: active_pmap_id not yet available — returning empty"
+            )
+            return []
         floor_label = (
             self._config_entry.options.get(CONF_FLOOR) or None
             if self._config_entry else None
         )
         return [
             Segment(
-                id=f"{data.cloud_coordinator.active_pmap_id}_{region['id']}",
+                id=f"{active_pmap_id}_{region['id']}",
                 name=region.get("name", region["id"]),
                 group=floor_label,
             )

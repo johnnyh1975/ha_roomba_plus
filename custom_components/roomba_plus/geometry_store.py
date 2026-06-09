@@ -274,13 +274,13 @@ class GeometryStore:
 
     # ── Mission processing ────────────────────────────────────────────────────
 
-    def update_from_mission(self, zone_store: ZoneStore) -> None:
-        """Cluster gap midpoints from the last mission into DoorMarkers.
+    def update_from_midpoints(self, midpoints: list[tuple[float, float]]) -> None:
+        """Cluster gap midpoints into DoorMarkers.
 
-        Called after zone_store.process_mission() so that
-        zone_store.last_mission_gap_midpoints is already populated.
+        Primary write path for both EPHEMERAL (called via update_from_mission)
+        and SMART (called directly from image.py _handle_mission_end).
         """
-        for cx, cy in zone_store.last_mission_gap_midpoints:
+        for cx, cy in midpoints:
             existing = self._find_close_marker(cx, cy)
             if existing is not None:
                 existing.update(cx, cy)
@@ -298,6 +298,14 @@ class GeometryStore:
                     "GeometryStore: new door marker %s at (%.0f, %.0f)",
                     marker_id, cx, cy,
                 )
+
+    def update_from_mission(self, zone_store: ZoneStore) -> None:
+        """EPHEMERAL path — delegate to update_from_midpoints.
+
+        Called after zone_store.process_mission() so that
+        zone_store.last_mission_gap_midpoints is already populated.
+        """
+        self.update_from_midpoints(zone_store.last_mission_gap_midpoints)
 
     def record_drift(self, dx: float, dy: float) -> bool:
         """Accumulate drift magnitude. Returns True if threshold exceeded.

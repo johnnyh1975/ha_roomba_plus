@@ -1571,6 +1571,15 @@ async def async_setup_entry(
                     ms.async_save(hass, config_entry.entry_id),
                     name="roomba_plus_cloud_merge_save",
                 )
+            # v2.4.2 F11-WIRE — evaluate demand cleaning after every cloud refresh.
+            # DirtThresholdManager.async_evaluate() was instantiated but never
+            # called, making F11 demand cleaning completely non-functional.
+            _dtm = config_entry.runtime_data.dirt_threshold_manager
+            if _dtm is not None:
+                hass.async_create_task(
+                    _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id),
+                    name="roomba_plus_demand_clean_eval",
+                )
             # v2.3.0 — re-align UmfAligner when UMF version changes
             if _umf_version_changed(cloud_coordinator, config_entry):
                 hass.async_create_task(

@@ -33,6 +33,7 @@ import collections
 import datetime
 import io
 import logging
+import math
 from datetime import datetime as dt_datetime
 from typing import Any
 
@@ -49,7 +50,7 @@ from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
 from .models import MapCapability, RoombaConfigEntry
-from .zone_store import ZoneStore
+from .zone_store import GAP_THRESHOLD_MM, MAX_DOOR_WIDTH_MM, MIN_DOOR_WIDTH_MM, ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -374,6 +375,43 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
                     loop,
                 )
+
+        # v2.4.2 GS-SMART — accumulate door-crossing markers for SMART robots.
+        # SMART robots have no ZoneStore, so gap detection runs directly on
+        # the accumulated pose trajectory using the same constants as ZoneStore.
+        # Must be an elif so the EPHEMERAL block above (which already calls
+        # update_from_midpoints via update_from_mission) does not double-write.
+        elif (
+            self._map_capability == MapCapability.SMART
+            and self._config_entry is not None
+            and len(self._mission_points) >= 20
+        ):
+            _data = self._config_entry.runtime_data
+            if _data.geometry_store:
+                _midpoints: list[tuple[float, float]] = []
+                _pts = self._mission_points
+                for _i in range(len(_pts) - 1):
+                    _dist = math.hypot(
+                        _pts[_i + 1][0] - _pts[_i][0],
+                        _pts[_i + 1][1] - _pts[_i][1],
+                    )
+                    if _dist > GAP_THRESHOLD_MM and MIN_DOOR_WIDTH_MM <= _dist <= MAX_DOOR_WIDTH_MM:
+                        _midpoints.append((
+                            (_pts[_i][0] + _pts[_i + 1][0]) / 2.0,
+                            (_pts[_i][1] + _pts[_i + 1][1]) / 2.0,
+                        ))
+                _LOGGER.debug(
+                    "Map: SMART path — %d door gap midpoint(s) from %d pose points",
+                    len(_midpoints), len(self._mission_points),
+                )
+                if _midpoints:
+                    _data.geometry_store.update_from_midpoints(_midpoints)
+                    asyncio.run_coroutine_threadsafe(
+                        _data.geometry_store.async_save(
+                            self.hass, self._config_entry.entry_id
+                        ),
+                        loop,
+                    )
 
         # Persist renderer state so the map survives an HA restart
         if self._renderer and self._renderer.has_data:

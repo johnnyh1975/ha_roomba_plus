@@ -95,7 +95,7 @@ class UmfAligner:
         1. Build coord lookup from points2d.
         2. Detect door-width gaps in ordered points2d sequence.
         3. Resolve room and keepout polygons.
-        4. Collect GeometryStore door markers with mission_count >= 3.
+        4. Collect GeometryStore door markers with mission_count >= 2.
         5. Hungarian assignment (>= 2 pairs required).
         6. Estimate rigid body transform (rotation + translation).
         7. Validate via room centroid residuals.
@@ -106,7 +106,7 @@ class UmfAligner:
 
         gs_markers = [
             m for m in self._geometry_store.door_markers
-            if m.mission_count >= 3
+            if m.mission_count >= 2
         ]
         if len(gs_markers) < 2 or len(self._door_candidates) < 2:
             _LOGGER.debug(

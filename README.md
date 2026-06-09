@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.4.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.4.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -292,7 +292,7 @@ map_modes:
 
 > **Prerequisites for attributes to appear:**
 > 1. SMART robot with cloud credentials configured.
-> 2. UmfAligner confidence ≥ 0.70 (typically after 3+ missions with door crossings).
+> 2. UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings).
 > 3. At least one mission completed since integration setup (so cloud UMF geometry is available).
 >
 > Until these conditions are met, `image.roomba_rooms_map` serves a blank dark image and exposes no `calibration` or `rooms` attributes — the card will show "Invalid calibration". This is expected.
@@ -310,7 +310,7 @@ calibration_source:
 
 > Both entities require a SMART robot with cloud credentials and UmfAligner
 > confidence ≥ 0.70. The `rooms_map` entity returns a blank dark image until
-> that threshold is reached (typically after 3+ missions with door crossings).
+> that threshold is reached (typically after 2+ missions with door crossings).
 
 **Recommended for non-SMART robots:**
 
