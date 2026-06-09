@@ -19,7 +19,9 @@ from homeassistant.components.vacuum import (
     VacuumEntityFeature,
 )
 # Segment is imported locally in async_get_segments — requires HA 2026.3.
-# hacs.json pins homeassistant >= 2026.3.0 so this is always safe in production.
+# On HA < 2026.3, VacuumEntityFeature.CLEAN_AREA is absent, so supported_features
+# never sets the flag and HA never calls async_get_segments(). The try/except
+# ImportError below is defensive depth only; the hasattr guard is the primary gate.
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -545,10 +547,14 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         active_pmap_id = data.cloud_coordinator.active_pmap_id
         region_ids: list[str] = []
+        prefix = f"{active_pmap_id}_"
         for seg_id in segment_ids:
-            pmap_id, _, region_id = seg_id.partition("_")
-            if pmap_id == active_pmap_id:
-                region_ids.append(region_id)
+            # v2.4.3 PMAP-UNDERSCORE: pmap_ids may contain underscores (URL-safe
+            # base64 encoding). partition("_") splits on the first underscore and
+            # produces a wrong pmap_id for IDs like "2Bly_kGURy6OcUVTX7FN3w_19".
+            # Use a prefix check instead — region_ids are always plain integers.
+            if seg_id.startswith(prefix):
+                region_ids.append(seg_id[len(prefix):])
 
         if not region_ids:
             raise ServiceValidationError(
