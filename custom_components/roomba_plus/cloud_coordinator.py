@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import statistics
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -24,8 +26,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
+from .const import SQFT_TO_M2
 
 if TYPE_CHECKING:
     from .mission_store import MissionStore
@@ -260,6 +264,70 @@ def _aggregate_history(records: list) -> dict:
     return result
 
 
+def _compute_daily_dirt_density(records: list[dict]) -> dict[str, float]:
+    """P4 — Build a per-calendar-date median dirt density dict from raw records.
+
+    Called once per cloud fetch; result cached on coordinator so api_views.py
+    and repairs.py can read it without re-iterating the record list.
+
+    Uses HA's configured timezone (dt_util.as_local) so dates match the
+    DaySummary entries produced by MissionStore.query_by_day(), which also
+    uses dt_util.as_local. Using the server OS timezone would cause a mismatch
+    for users whose HA timezone differs from the server timezone.
+
+    Returns a dict keyed by ISO date string ("2026-06-01") → median dirt/m².
+    Empty when records list is empty or no record has both dirt and sqft.
+    """
+    by_day: dict[str, list[float]] = defaultdict(list)
+    for r in records:
+        if r.get("dirt") is None:
+            continue
+        sqft = r.get("sqft")
+        if not sqft or float(sqft) <= 0:
+            continue
+        ts = r.get("startTime") or r.get("timestamp")
+        if not ts:
+            continue
+        try:
+            # Bug 2 fix: use HA timezone, not server local timezone
+            local_dt = dt_util.as_local(datetime.fromtimestamp(int(ts), tz=UTC))
+            day_str = local_dt.date().isoformat()
+            by_day[day_str].append(float(r["dirt"]) / (float(sqft) * SQFT_TO_M2))
+        except (ValueError, OSError):
+            pass
+    return {day: statistics.median(dens) for day, dens in by_day.items()}
+
+
+def _parse_time_estimates(raw: list) -> dict[str, int | None]:
+    """TE1 — Normalise a region's time_estimates list to {one_pass_sec, two_pass_sec}.
+
+    Returns None for a key when:
+      - confidence != "GOOD_CONFIDENCE" (insufficient cleaning history)
+      - entry absent (Auto mode — robot decides passes at runtime)
+      - estimate value is not an integer
+
+    Downstream consumers check for None before using the value:
+        sec = est.get("two_pass_sec") if is_two_pass else est.get("one_pass_sec")
+        # sec is None → Auto mode or insufficient region history
+    """
+    result: dict[str, int | None] = {"one_pass_sec": None, "two_pass_sec": None}
+    if not isinstance(raw, list):
+        # Defensive guard: unexpected API shape (string, dict, etc.) returns both None
+        return result
+    for entry in raw:
+        if entry.get("confidence") != "GOOD_CONFIDENCE":
+            continue
+        params = entry.get("params", {})
+        sec = entry.get("estimate")
+        if not isinstance(sec, int):
+            continue
+        if params.get("twoPass") is True:
+            result["two_pass_sec"] = sec
+        elif params.get("twoPass") is False:
+            result["one_pass_sec"] = sec
+    return result
+
+
 class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for iRobot cloud data (pmaps, mission history, favorites).
 
@@ -305,6 +373,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         # F-RB-4 — track last successful update for failure-suppression grace period
         self._last_success_time: "datetime | None" = None
+        # P4: cached per-day dirt density — populated after each successful fetch
+        self.daily_dirt_density: dict[str, float] = {}
+        # IA74-PMAP: pmap_id seeded from local MQTT before first cloud fetch
+        self._seeded_pmap_id: str | None = None
         _LOGGER.debug(
             "iRobot cloud: using country_code=%s, has_pmaps=%s for %s",
             country_code, has_pmaps, blid,
@@ -558,6 +630,13 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     len(fallback), self.blid,
                 )
 
+        # P4: compute and cache per-day dirt density from the final record list.
+        # Stored as self.daily_dirt_density so api_views.py and repairs.py can
+        # read it without re-iterating the record list on every request.
+        self.daily_dirt_density = _compute_daily_dirt_density(
+            result["mission_history_raw"]
+        )
+
         return result
 
     # ── Helpers used by platforms ─────────────────────────────────────────────
@@ -579,9 +658,15 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def active_pmap_id(self) -> str | None:
-        """Return the pmap_id of the first active pmap, or None."""
+        """Return the pmap_id of the first active pmap, or None.
+
+        IA74-PMAP: falls back to _seeded_pmap_id (set from local MQTT pmaps
+        field on startup) when cloud data has not yet been fetched. This reduces
+        the window where vacuum.clean_area raises no_valid_segments on fresh
+        installs or immediately after adding cloud credentials.
+        """
         if not self.data:
-            return None
+            return getattr(self, "_seeded_pmap_id", None)
         for pmap in self.data.get("pmaps", []):
             details = pmap.get("active_pmapv_details", {})
             pmapv = details.get("active_pmapv", {})
@@ -589,6 +674,31 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if pid:
                 return pid
         return None
+
+    def seed_pmap_id_from_local(self, reported_state: dict) -> None:
+        """IA74-PMAP — Seed active_pmap_id from local MQTT pmaps field on startup.
+
+        Local robot state includes pmaps: [{"PMAP_ID": "PMAPV_ID"}].
+        next(iter(pmaps[0])) yields the active pmap_id locally without a
+        cloud fetch. Called once in async_setup_entry after the robot connects.
+        Only seeds when coordinator data is None (before first cloud fetch) so
+        it never overrides real cloud data.
+
+        Args:
+            reported_state: the reported section of the robot's MQTT state.
+        """
+        if self.data is not None:
+            return   # cloud data already present — don't override
+        pmaps: list[dict] = reported_state.get("pmaps", [])
+        if not pmaps or not isinstance(pmaps[0], dict):
+            return
+        local_pmap_id = next(iter(pmaps[0]), None)
+        if local_pmap_id:
+            self._seeded_pmap_id = local_pmap_id
+            _LOGGER.debug(
+                "iRobot cloud: seeded active_pmap_id=%s from local MQTT for %s",
+                local_pmap_id, self.blid,
+            )
 
     @property
     def regions(self) -> list[dict[str, Any]]:
@@ -623,10 +733,13 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             return [
                 {
-                    "id":          _rid(region),
-                    "name":        region.get("name", ""),
-                    "region_type": region.get("region_type", "default"),
-                    "pmap_id":     active_id,
+                    "id":             _rid(region),
+                    "name":           region.get("name", ""),
+                    "region_type":    region.get("region_type", "default"),
+                    "pmap_id":        active_id,
+                    "time_estimates": _parse_time_estimates(
+                        region.get("time_estimates") or []
+                    ),
                 }
                 for region in regions_raw
                 if _rid(region)   # skip entries with no resolvable ID

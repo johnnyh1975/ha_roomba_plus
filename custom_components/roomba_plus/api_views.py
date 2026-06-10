@@ -29,8 +29,9 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, SQFT_TO_M2
 
 if TYPE_CHECKING:
     from .models import RoombaData
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # F7o -- valid format values; unknown values return 400
-_VALID_FORMATS = {"summary", "records", "hazards"}
+_VALID_FORMATS = {"summary", "records", "hazards", "export"}
 
 
 def _build_local_zones_index(mission_store_records: list[dict]) -> dict[int, list[str]]:
@@ -206,35 +207,16 @@ class MissionHistoryView(HomeAssistantView):
                 days = 28
 
             by_day = data.mission_store.query_by_day(days)
-            # F12b — compute per-day dirt density and 30-day baseline
-            # from cloud raw_records. DaySummary does not store dirt_density
-            # (it only aggregates MQTT fields); we compute it here from the
-            # cloud record timestamps grouped by local calendar date.
+            # F12b — P4: per-day dirt density now cached on coordinator after each
+            # cloud fetch; read directly instead of re-iterating records here.
             _p30d_baseline: float | None = None
             _daily_density: dict[str, float] = {}
             if data.has_cloud and data.cloud_coordinator is not None:
-                import statistics as _stat
-                from collections import defaultdict
-                from datetime import date as _date
-                _records = data.cloud_coordinator.raw_records or []
-                # Group densities by local calendar date
-                _by_day_cloud: dict[str, list[float]] = defaultdict(list)
-                for r in _records:
-                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0:
-                        ts = r.get("startTime") or r.get("timestamp")
-                        if ts:
-                            try:
-                                day_str = _date.fromtimestamp(int(ts)).isoformat()
-                                d = float(r["dirt"]) / (float(r["sqft"]) * 0.0929)
-                                _by_day_cloud[day_str].append(d)
-                            except (ValueError, OSError):
-                                pass
-                # Per-day median density
-                for _day_str, _dens in _by_day_cloud.items():
-                    _daily_density[_day_str] = _stat.median(_dens)
-                # 30-day baseline: median of all per-day medians
+                _daily_density = data.cloud_coordinator.daily_dirt_density
+                # 30-day baseline: median of all cached per-day medians
                 all_densities = list(_daily_density.values())
                 if len(all_densities) >= 5:
+                    import statistics as _stat
                     _p30d_baseline = _stat.median(all_densities)
 
             result = [
@@ -245,7 +227,7 @@ class MissionHistoryView(HomeAssistantView):
                     "stuck":              summary.stuck,
                     "area_sqft":          summary.area_sqft,
                     "result":             summary.result,
-                    # F12b — dirt analytics computed from cloud records by date
+                    # F12b — dirt analytics read from coordinator cache
                     "dirt_density":       _daily_density.get(summary.date.isoformat()),
                     "relative_to_baseline": (
                         round(_daily_density[summary.date.isoformat()] / _p30d_baseline, 3)
@@ -315,6 +297,23 @@ class MissionHistoryView(HomeAssistantView):
 
             return self.json(hazards)
 
+        # -- format=export (F15) ----------------------------------------------
+        # Returns a versioned JSON bundle of all MissionStore records for
+        # backup / migration purposes.  Schema is frozen at version 1;
+        # new fields added in later versions carry null defaults.
+        if fmt == "export":
+            records_out: list[dict] = []
+            if data.mission_store is not None:
+                records_out = list(data.mission_store._records)
+            blid = entry.data.get("blid", "")
+            return self.json({
+                "export_version": 1,
+                "exported_at": dt_util.utcnow().isoformat(),
+                "blid": blid,
+                "record_count": len(records_out),
+                "records": records_out,
+            })
+
         # -- format=records ---------------------------------------------------
         # F7o -- distinguish coordinator failure from genuinely empty data.
         if data.has_cloud and not data.cloud_coordinator.last_update_success:
@@ -355,6 +354,112 @@ class MissionHistoryView(HomeAssistantView):
                     r["alignment_confidence"] = conf
 
         return self.json(records)
+
+
+class MissionHistoryImportView(HomeAssistantView):
+    """POST /api/roomba_plus/{entry_id}/mission_history/import
+
+    F16 — import a v1 export bundle produced by format=export.
+    Deduplicates against existing records by id — no overwrites.
+    Returns {"imported": N, "skipped": N, "errors": []}.
+    """
+
+    url = "/api/roomba_plus/{entry_id}/mission_history/import"
+    name = "api:roomba_plus:mission_history_import"
+    requires_auth = True
+
+    async def post(self, request: web.Request, entry_id: str) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN:
+            return self.json_message("Entry not found", status_code=404)
+
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            return self.json_message("Integration initialising", status_code=503)
+
+        data: RoombaData = entry.runtime_data
+        if data.mission_store is None:
+            return self.json_message("Mission store unavailable", status_code=503)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return self.json_message("Invalid JSON body", status_code=400)
+
+        if not isinstance(body, dict):
+            return self.json_message("Body must be a JSON object", status_code=400)
+
+        version = body.get("export_version")
+        if version is None:
+            return self.json_message(
+                "Missing export_version field", status_code=400
+            )
+        if version != 1:
+            return self.json_message(
+                f"Unsupported export_version {version!r}. Only version 1 is supported.",
+                status_code=400,
+            )
+
+        incoming: list[dict] = body.get("records", [])
+        if not isinstance(incoming, list):
+            return self.json_message("records must be a list", status_code=400)
+
+        # Bug 4 fix: reject oversized payloads before allocating memory.
+        # 2 × MAX_RECORDS is a generous ceiling — legitimate exports from a
+        # single robot can contain at most MAX_RECORDS (365) entries.
+        from .mission_store import MAX_RECORDS
+        if len(incoming) > MAX_RECORDS * 2:
+            return self.json_message(
+                f"records list too large: {len(incoming)} entries "
+                f"(maximum {MAX_RECORDS * 2})",
+                status_code=400,
+            )
+
+        # Build a full set of existing record IDs for O(1) dedup lookup
+        existing_ids: set[str] = {
+            r["id"] for r in data.mission_store._records if r.get("id")
+        }
+
+        imported = 0
+        skipped = 0
+        errors: list[str] = []
+
+        for i, rec in enumerate(incoming):
+            if not isinstance(rec, dict):
+                errors.append(f"Record at index {i} is not a dict — skipped")
+                skipped += 1
+                continue
+            rec_id = rec.get("id")
+            if not rec_id:
+                errors.append(f"Record at index {i} has no id field — skipped")
+                skipped += 1
+                continue
+            if rec_id in existing_ids:
+                skipped += 1
+                continue
+            # Append directly — bypasses MQTT dedup guard which only checks
+            # the last 5 records; import needs full-set dedup (done above).
+            data.mission_store._records.append(rec)
+            existing_ids.add(rec_id)
+            imported += 1
+
+        if imported > 0:
+            # Trim to MAX_RECORDS FIFO to maintain store invariant
+            if len(data.mission_store._records) > MAX_RECORDS:
+                data.mission_store._records = (
+                    data.mission_store._records[-MAX_RECORDS:]
+                )
+            await data.mission_store.async_save(hass, entry_id)
+            _LOGGER.info(
+                "MissionHistoryImport: imported %d new record(s) for %s",
+                imported, entry_id,
+            )
+
+        return self.json({
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+        })
 
 
 class HouseholdSummaryView(HomeAssistantView):

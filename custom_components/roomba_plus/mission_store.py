@@ -13,6 +13,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import logging
+import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, NamedTuple
@@ -20,6 +21,8 @@ from typing import Any, NamedTuple
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+
+from .const import SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -564,6 +567,144 @@ class MissionStore:
                 wrote = True
         return wrote
 
+    # ── L3 — Mission anomaly detection ────────────────────────────────────────
+
+    def compute_rolling_stats(self, days: int = 30) -> dict | None:
+        """Compute rolling mean/std for duration_min and area_sqft.
+
+        L3 — Returns None when fewer than 20 missions are available (insufficient
+        history to establish a stable baseline for anomaly detection).
+
+        Returns a dict with keys:
+          duration_mean, duration_std,
+          area_mean, area_std,
+          recharge_mean,
+          dirt_p75            (75th-percentile dirt_events from cloud-merged records)
+        """
+        records = self.query(days)
+        if len(records) < 20:
+            return None
+
+        durations = [r["duration_min"] for r in records if r.get("duration_min") is not None]
+        areas = [r["area_sqft"] for r in records
+                 if r.get("area_sqft") is not None and r["area_sqft"] > 0]
+        recharges = [r["recharge_min"] for r in records
+                     if r.get("recharge_min") is not None]
+        dirts = [r["dirt"] for r in records if r.get("dirt") is not None]
+
+        if len(durations) < 20:
+            return None
+
+        dur_mean = statistics.mean(durations)
+        dur_std  = statistics.stdev(durations) if len(durations) > 1 else 0.0
+        area_mean = statistics.mean(areas) if areas else None
+        area_std  = statistics.stdev(areas) if len(areas) > 1 else 0.0
+        rch_mean  = statistics.mean(recharges) if recharges else 0.0
+
+        # 75th-percentile dirt events
+        dirt_p75: float | None = None
+        if dirts:
+            dirts.sort()
+            dirt_p75 = dirts[int(len(dirts) * 0.75)]
+
+        return {
+            "duration_mean": dur_mean,
+            "duration_std":  dur_std,
+            "area_mean":     area_mean,
+            "area_std":      area_std,
+            "recharge_mean": rch_mean,
+            "dirt_p75":      dirt_p75,
+        }
+
+    def is_anomalous(
+        self,
+        record: dict,
+        stats: dict,
+        profile: Any = None,
+    ) -> bool:
+        """Return True when a record is statistically anomalous.
+
+        L3 conditions (any one triggers):
+          - duration > mean + 2×std AND area < mean_area − 1×std
+            → robot spending more time covering less area (obstacle / brush issue)
+          - recharge_min > learned_avg + 120 min
+            → unusually long recharge mid-mission (battery degrading)
+          - dirt > p75 × 2.5
+            → extreme dirt event (spill, accident, pet)
+
+        Pre-20-mission fallback (profile required):
+          - area < profile.typical_coverage_sqft × SQFT_TO_M2 × 0.4
+
+        Args:
+            record: a single MissionStore record dict.
+            stats:  output of compute_rolling_stats(); must not be None.
+            profile: RobotProfile instance or None; only used for pre-20-mission check.
+        """
+        dur   = record.get("duration_min")
+        area  = record.get("area_sqft")
+        rch   = record.get("recharge_min")
+        dirt  = record.get("dirt")
+
+        # Condition 1 — struggling: slow AND low coverage
+        if (
+            dur is not None
+            and stats["duration_std"] > 0
+            and dur > stats["duration_mean"] + 2 * stats["duration_std"]
+            and area is not None
+            and stats["area_mean"] is not None
+            and stats["area_std"] > 0
+            and area < stats["area_mean"] - stats["area_std"]
+        ):
+            return True
+
+        # Condition 2 — excessive recharge
+        if rch is not None and rch > stats["recharge_mean"] + 120:
+            return True
+
+        # Condition 3 — extreme dirt spike
+        if (
+            dirt is not None
+            and stats["dirt_p75"] is not None
+            and stats["dirt_p75"] > 0
+            and dirt > stats["dirt_p75"] * 2.5
+        ):
+            return True
+
+        # Pre-20-mission fallback via robot profile.
+        # Only engaged when no area statistics are available (stats["area_mean"]
+        # is None), which happens when either:
+        #   a) fewer than 20 missions exist in the window, OR
+        #   b) no mission in the window has area_sqft data (600-series).
+        # With a full statistical baseline (area_mean is not None), this check
+        # is intentionally skipped to avoid flagging legitimate partial room
+        # cleans (e.g. single-room scheduled clean) as anomalous.
+        if profile is not None and area is not None and stats["area_mean"] is None:
+            typical = getattr(profile, "typical_coverage_sqft", None)
+            if typical is not None and typical > 0:
+                typical_m2 = typical * SQFT_TO_M2
+                if area * SQFT_TO_M2 < typical_m2 * 0.4:
+                    return True
+
+        return False
+
+    @property
+    def consecutive_anomalous(self) -> int:
+        """Count of consecutive most-recent missions that are anomalous.
+
+        L3 — evaluated lazily when accessed; always reads fresh from _records.
+        Returns 0 when stats are unavailable (< 20 missions) or no anomalies.
+        """
+        stats = self.compute_rolling_stats()
+        if stats is None:
+            return 0
+        count = 0
+        for record in reversed(self._records):
+            if self.is_anomalous(record, stats):
+                count += 1
+            else:
+                break
+        return count
+
     def backfill_from_cloud(
         self,
         cloud_records: list[dict],
@@ -807,9 +948,6 @@ class MissionStore:
         if not self._records:
             return
 
-        # 1 sqft = 0.09290304 m² — named constant avoids magic number
-        _SQFT_TO_M2 = 0.0929
-
         # Group records by hour-truncated start timestamp (LTS granularity)
         area_stats: list[StatisticData] = []
         duration_stats: list[StatisticData] = []
@@ -835,7 +973,7 @@ class MissionStore:
             is_completed = r.get("result") in ("completed", "stuck_and_resumed")
 
             if area_sqft is not None:
-                area_m2 = round(float(area_sqft) * _SQFT_TO_M2, 2)
+                area_m2 = round(float(area_sqft) * SQFT_TO_M2, 2)
                 area_stats.append(StatisticData(start=bucket, sum=area_m2))
 
             duration_stats.append(StatisticData(start=bucket, sum=float(duration_min)))

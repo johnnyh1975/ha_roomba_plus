@@ -141,18 +141,26 @@ class OutlineStore:
         self._mission_count: int = 0
         self._contour_points: list[tuple[int, int]] = []
         self._canvas_size: tuple[int, int] | None = None
+        # P2: Store is stateless — construct once and reuse across load/save calls
+        self._store: Any = None
+
+    def _get_store(self, hass: Any, entry_id: str) -> Any:
+        """Return the cached Store, creating it on first call."""
+        if self._store is None:
+            from homeassistant.helpers.storage import Store
+            self._store = Store(
+                hass,
+                STORAGE_VERSION,
+                f"{STORAGE_KEY_PREFIX}_{entry_id}",
+                private=True,
+            )
+        return self._store
 
     # ── Persistence ────────────────────────────────────────────────────────────
 
     async def async_load(self, hass: Any, entry_id: str) -> None:
         """Load persisted outline state from hass.storage."""
-        from homeassistant.helpers.storage import Store
-        store = Store(
-            hass,
-            STORAGE_VERSION,
-            f"{STORAGE_KEY_PREFIX}_{entry_id}",
-            private=True,
-        )
+        store = self._get_store(hass, entry_id)
         data = await store.async_load()
         if data and isinstance(data, dict) and data.get("version") == STORAGE_VERSION:
             self._mission_count = int(data.get("mission_count", 0))
@@ -168,13 +176,7 @@ class OutlineStore:
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist outline state to hass.storage."""
-        from homeassistant.helpers.storage import Store
-        store = Store(
-            hass,
-            STORAGE_VERSION,
-            f"{STORAGE_KEY_PREFIX}_{entry_id}",
-            private=True,
-        )
+        store = self._get_store(hass, entry_id)
         await store.async_save({
             "version": STORAGE_VERSION,
             "mission_count": self._mission_count,

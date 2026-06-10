@@ -33,10 +33,13 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry
+
+from .const import SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,7 +83,7 @@ def _compute_dirt_density(record: dict) -> float | None:
     sqft_f = float(sqft)
     if sqft_f <= 0:
         return None
-    m2 = sqft_f * 0.0929
+    m2 = sqft_f * SQFT_TO_M2
     return float(dirt) / m2
 
 
@@ -103,18 +106,28 @@ class DirtThresholdManager:
         self._hass = hass
         self._entry = config_entry
         self._last_trigger_time: datetime | None = None
+        # P2: Store is stateless — construct once and reuse across load/save calls
+        self._store: "Store | None" = None
+        # L1: per-weekday baseline; populated after ≥4 cloud records per weekday
+        self._baseline_by_weekday: dict[int, float] = {}
+
+    def _get_store(self, entry_id: str) -> "Store":
+        """Return the cached Store, creating it on first call."""
+        if self._store is None:
+            from homeassistant.helpers.storage import Store
+            self._store = Store(
+                self._hass,
+                STORAGE_VERSION,
+                f"{STORAGE_KEY_PREFIX}_{entry_id}",
+                private=True,
+            )
+        return self._store
 
     # ── Persistence ────────────────────────────────────────────────────────────
 
     async def async_load(self, entry_id: str) -> None:
         """Load persisted _last_trigger_time from hass.storage."""
-        from homeassistant.helpers.storage import Store
-        store = Store(
-            self._hass,
-            STORAGE_VERSION,
-            f"{STORAGE_KEY_PREFIX}_{entry_id}",
-            private=True,
-        )
+        store = self._get_store(entry_id)
         data = await store.async_load()
         if data and isinstance(data, dict):
             ts = data.get("last_trigger_time")
@@ -125,24 +138,27 @@ class DirtThresholdManager:
                     _LOGGER.warning(
                         "DirtThresholdManager: invalid stored timestamp %r — resetting", ts
                     )
+            # L1: restore weekday baselines
+            stored_wdb = data.get("baseline_by_weekday", {})
+            if isinstance(stored_wdb, dict):
+                self._baseline_by_weekday = {
+                    int(k): float(v) for k, v in stored_wdb.items()
+                }
         _LOGGER.debug(
-            "DirtThresholdManager: loaded, last_trigger=%s", self._last_trigger_time
+            "DirtThresholdManager: loaded, last_trigger=%s weekday_baselines=%d",
+            self._last_trigger_time, len(self._baseline_by_weekday),
         )
 
     async def async_save(self, entry_id: str) -> None:
         """Persist _last_trigger_time to hass.storage."""
-        from homeassistant.helpers.storage import Store
-        store = Store(
-            self._hass,
-            STORAGE_VERSION,
-            f"{STORAGE_KEY_PREFIX}_{entry_id}",
-            private=True,
-        )
+        store = self._get_store(entry_id)
         await store.async_save({
             "version": STORAGE_VERSION,
             "last_trigger_time": (
                 self._last_trigger_time.isoformat() if self._last_trigger_time else None
             ),
+            # L1: persist weekday baselines so they survive HA restarts
+            "baseline_by_weekday": self._baseline_by_weekday,
         })
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -174,6 +190,44 @@ class DirtThresholdManager:
             return None
         return statistics.median(densities)
 
+    def _update_weekday_baseline(
+        self, records: list[dict], weekday: int
+    ) -> None:
+        """L1 — Rebuild the baseline for a specific weekday from 12 weeks of records.
+
+        Groups records by weekday using their startTime, computes the median
+        dirt density for this weekday, and stores it in _baseline_by_weekday.
+        Requires ≥ 4 records for the weekday to be reliable; falls back to the
+        flat median (compute_baseline) for weekdays with insufficient history.
+
+        Uses HA's configured timezone (dt_util.as_local) so weekday assignment
+        matches the user's local calendar, not the server OS timezone.
+        """
+        cutoff_ts = (datetime.now(UTC) - timedelta(weeks=12)).timestamp()
+        day_densities: list[float] = []
+        for r in records:
+            ts = r.get("startTime") or r.get("timestamp")
+            if not ts or float(ts) < cutoff_ts:
+                continue
+            try:
+                # Bug 1 fix: use HA timezone, not server local timezone
+                local_dt = dt_util.as_local(
+                    datetime.fromtimestamp(int(ts), tz=UTC)
+                )
+                wd = local_dt.weekday()
+            except (ValueError, OSError):
+                continue
+            if wd != weekday:
+                continue
+            d = _compute_dirt_density(r)
+            if d is not None:
+                day_densities.append(d)
+        if len(day_densities) >= 4:
+            self._baseline_by_weekday[weekday] = statistics.median(day_densities)
+        elif weekday in self._baseline_by_weekday:
+            # Keep the existing baseline — insufficient new data to update
+            pass
+
     def should_trigger(
         self,
         records: list[dict],
@@ -184,6 +238,9 @@ class DirtThresholdManager:
         Returns (trigger: bool, reason: str) — reason is logged at DEBUG.
         Does NOT check presence or blocking — caller handles those gates.
 
+        L1: compares against weekday-specific baseline when ≥4 records exist
+        for today's weekday; falls back to flat 30-day median otherwise.
+
         Args:
             records: raw_records from cloud coordinator (most-recent-first).
             multiplier: override trigger multiplier (default TRIGGER_MULTIPLIER_DEFAULT).
@@ -191,7 +248,14 @@ class DirtThresholdManager:
         if not records:
             return False, "no cloud records"
 
-        baseline = self.compute_baseline(records)
+        # L1: update weekday baseline for today, then select appropriate baseline
+        today_wd = dt_util.now().weekday()
+        self._update_weekday_baseline(records, today_wd)
+
+        weekday_baseline = self._baseline_by_weekday.get(today_wd)
+        flat_baseline = self.compute_baseline(records)
+
+        baseline = weekday_baseline if weekday_baseline is not None else flat_baseline
         if baseline is None:
             return False, f"insufficient records for baseline (need {MIN_RECORDS})"
         if baseline <= 0:
@@ -207,7 +271,8 @@ class DirtThresholdManager:
         if current <= threshold:
             return False, (
                 f"density {current:.3f} ≤ threshold {threshold:.3f} "
-                f"(baseline {baseline:.3f} × {mult})"
+                f"(baseline {baseline:.3f} × {mult}, "
+                f"{'weekday' if weekday_baseline is not None else 'flat'})"
             )
 
         # Min gap check
@@ -221,7 +286,8 @@ class DirtThresholdManager:
 
         return True, (
             f"density {current:.3f} > threshold {threshold:.3f} "
-            f"(baseline {baseline:.3f} × {mult}), gap ok"
+            f"(baseline {baseline:.3f} × {mult}, "
+            f"{'weekday' if weekday_baseline is not None else 'flat'}), gap ok"
         )
 
     async def async_evaluate(

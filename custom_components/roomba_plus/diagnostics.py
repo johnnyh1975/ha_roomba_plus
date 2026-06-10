@@ -158,6 +158,30 @@ async def async_get_config_entry_diagnostics(
             "bbchg3": state.get("bbchg3", {}),
         },
 
+        # RF0 — robot profile (confirms which profile was matched at startup)
+        "robot_profile": (
+            {
+                "name": data.robot_profile.name,
+                "battery_mah": data.robot_profile.battery_mah,
+                "battery_chemistry": data.robot_profile.battery_chemistry,
+                "battery_voltage": data.robot_profile.battery_voltage,
+                "estcap_scale_liion": data.robot_profile.estcap_scale_liion,
+                "estcap_scale_nimh": data.robot_profile.estcap_scale_nimh,
+            }
+            if data.robot_profile is not None else None
+        ),
+
+        # L2 — self-calibrating maintenance lifespan (v2.5.0)
+        "learned_maintenance": (
+            {
+                "learned_filter_hours": data.maintenance_store.learned_filter_hours,
+                "learned_brush_hours":  data.maintenance_store.learned_brush_hours,
+                "filter_reset_history_len": len(data.maintenance_store.filter_reset_history),
+                "brush_reset_history_len":  len(data.maintenance_store.brush_reset_history),
+            }
+            if data.maintenance_store is not None else None
+        ),
+
         # Last known position
         "position": state.get("pose"),
 

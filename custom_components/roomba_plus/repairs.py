@@ -20,8 +20,9 @@ import voluptuous as vol
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -705,22 +706,14 @@ async def async_check_schedule_optimisation(
     if data.mission_store is None:
         return
 
-    records = data.cloud_coordinator.raw_records
-    if not records or len(records) < 5:
-        return
-
     import statistics as _stat
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    # Compute 30-day baseline median dirt density
-    densities_all = [
-        float(r["dirt"]) / (float(r["sqft"]) * 0.0929)
-        for r in records[:30]
-        if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
-    ]
-    if len(densities_all) < 5:
+    # P4: per-day dirt density now cached on coordinator; read directly.
+    daily_density = data.cloud_coordinator.daily_dirt_density
+    if len(daily_density) < 5:
         return
-    baseline = _stat.median(densities_all)
+    baseline = _stat.median(daily_density.values())
     if not baseline:
         return
 
@@ -729,24 +722,27 @@ async def async_check_schedule_optimisation(
 
     # Build set of days with a completed clean in last 30 days
     by_day = data.mission_store.query_by_day(30)
-    clean_days: set[date] = {
+    clean_days: set = {
         day for day, summary in by_day.items()
         if summary.completed > 0
     }
 
-    # Check last 30 days for consecutive high-dirt days without a clean
-    today = date.today()
+    # Bug B fix: use HA timezone so day strings match daily_density keys
+    # (which use dt_util.as_local after the P4 fix) and clean_days
+    # (which use dt_util.as_local via query_by_day).
+    today = dt_util.now().date()
     consecutive_high_no_clean = 0
     trigger_days: list[str] = []
 
     for offset in range(1, 31):
         day = today - timedelta(days=offset)
-        summary = by_day.get(day)
-        if summary is None or summary.dirt_density is None:
+        # P4: use cached coordinator density, not summary.dirt_density
+        day_density = daily_density.get(day.isoformat())
+        if day_density is None:
             consecutive_high_no_clean = 0
             trigger_days = []
             continue
-        relative = summary.dirt_density / baseline
+        relative = day_density / baseline
         if relative > THRESHOLD and day not in clean_days:
             consecutive_high_no_clean += 1
             trigger_days.append(day.isoformat())
@@ -772,3 +768,40 @@ async def async_check_schedule_optimisation(
 
     # No issue — clear any stale one
     ir.async_delete_issue(hass, DOMAIN, "schedule_suboptimal")
+
+
+async def async_check_mission_anomaly(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """L3 — Fire or clear the mission_anomaly Repair Issue.
+
+    Fires when the last 2 consecutive missions are statistically anomalous
+    (see MissionStore.consecutive_anomalous). Clears automatically once
+    missions return to normal.
+    """
+    data = config_entry.runtime_data
+    if data.mission_store is None:
+        return
+
+    consecutive = data.mission_store.consecutive_anomalous
+    _LOGGER.debug(
+        "mission anomaly check: consecutive_anomalous=%d for %s",
+        consecutive, config_entry.entry_id,
+    )
+
+    if consecutive >= 2:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"mission_anomaly_{config_entry.entry_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="mission_anomaly",
+            translation_placeholders={"count": str(consecutive)},
+        )
+    else:
+        ir.async_delete_issue(
+            hass, DOMAIN, f"mission_anomaly_{config_entry.entry_id}"
+        )

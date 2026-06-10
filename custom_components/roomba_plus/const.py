@@ -1,6 +1,7 @@
 """Constants for the Roomba+ integration."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 from homeassistant.components.vacuum import VacuumActivity
@@ -116,6 +117,127 @@ SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width
 
+# ── Unit conversion ───────────────────────────────────────────────────────────
+SQFT_TO_M2: Final = 0.09290304   # exact SI definition: 1 ft² = 0.09290304 m²
+
+# ── RF0 — Robot manufacturer reference profiles ────────────────────────────────
+# Prior data for all self-calibrating learning features.  Consumed by L1–L8
+# and sensor.py for battery/maintenance computations.
+#
+# Data sources: iRobot support docs, FCC filings (battery mAh), NickWaterton
+# cross-reference (confirmed June 2026).  Hours marked TODO need per-model
+# iRobot support page verification.
+#
+# 9-series (Roomba 980): OEM battery is Li-ion 14.4V, confirmed June 2026.
+# Aftermarket batteries exist as 14.4V NiMH or 14.8V Li-ion — aftermarket
+# detection (L3) handles these at runtime via the estCap rolling-maximum.
+# estCap BMS scaling: 9-series firmware reports raw_estcap ÷ 3.73 ≈ mAh for
+# Li-ion; ÷ 1.87 for NiMH aftermarket packs.  Scalar applied in sensor.py.
+
+@dataclass(frozen=True)
+class RobotProfile:
+    """Manufacturer reference data for a robot family.
+
+    Used as the 'prior' by all self-calibrating features before enough
+    personal history exists.
+    """
+    name: str
+    battery_mah: int            # nominal NEW battery capacity (mAh)
+    battery_chemistry: str      # "lipo" | "nimh"
+    battery_voltage: float      # nominal pack voltage (V)
+    battery_cycles_eol: int     # manufacturer rated cycle count at ~80% capacity
+    filter_hours: int           # recommended replacement interval (h)  TODO: per-model
+    main_brush_hours: int       # recommended replacement interval (h)  TODO: per-model
+    side_brush_hours: int       # recommended replacement interval (h)  TODO: per-model
+    typical_coverage_sqft: int | None   # typical per-mission area; None for mops
+    map_capability: str         # "none" | "ephemeral" | "smart"
+    # estCap BMS scaling factors — confirmed June 2026.
+    # For i/s/j/e/6/m series: raw estCap == mAh directly → scale = 1.0.
+    # For 9-series old firmware: raw estCap is chemistry-scaled by the BMS:
+    #   Li-ion: raw ÷ 3.73 ≈ mAh   NiMH: raw ÷ 1.87 ≈ mAh  (ratio = 2.0 exactly)
+    # Usage: actual_mah = raw_estcap / estcap_scale_liion (or _nimh)
+    estcap_scale_liion: float = 1.0
+    estcap_scale_nimh:  float = 1.0
+
+
+ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
+    # key = first character of SKU (case-insensitive), matching iRobot SKU convention
+    "6": RobotProfile(
+        name="600-series",
+        battery_mah=1800, battery_chemistry="nimh", battery_voltage=14.4,
+        battery_cycles_eol=400,
+        filter_hours=60, main_brush_hours=120, side_brush_hours=120,
+        typical_coverage_sqft=800, map_capability="none",
+    ),
+    "e": RobotProfile(
+        name="e-series",
+        battery_mah=1800, battery_chemistry="lipo", battery_voltage=14.8,
+        battery_cycles_eol=400,
+        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        typical_coverage_sqft=1000, map_capability="ephemeral",
+    ),
+    "9": RobotProfile(
+        # OEM: Li-ion 14.4V, confirmed June 2026 (Roomba 980 R980040).
+        # battery_mah=3300 confirmed via raw_estcap ÷ 3.73 ≈ 3300 mAh nominal.
+        # Aftermarket: 14.4V NiMH (÷1.87) or 14.8V Li-ion (÷3.73).
+        name="900-series",
+        battery_mah=3300, battery_chemistry="lipo", battery_voltage=14.4,
+        battery_cycles_eol=400,
+        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        typical_coverage_sqft=1500, map_capability="ephemeral",
+        estcap_scale_liion=3.73,   # raw ÷ 3.73 = mAh for OEM Li-ion
+        estcap_scale_nimh=1.87,    # raw ÷ 1.87 = mAh for NiMH aftermarket
+    ),
+    "i": RobotProfile(
+        name="i-series",
+        battery_mah=1800, battery_chemistry="lipo", battery_voltage=14.8,
+        battery_cycles_eol=400,
+        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        typical_coverage_sqft=1200, map_capability="smart",
+    ),
+    "j": RobotProfile(
+        name="j-series",
+        battery_mah=2700, battery_chemistry="lipo", battery_voltage=14.8,
+        battery_cycles_eol=300,
+        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        typical_coverage_sqft=1400, map_capability="smart",
+    ),
+    "s": RobotProfile(
+        name="s9-series",
+        battery_mah=3300, battery_chemistry="lipo", battery_voltage=14.8,
+        battery_cycles_eol=300,
+        filter_hours=60, main_brush_hours=200, side_brush_hours=200,
+        typical_coverage_sqft=2000, map_capability="smart",
+    ),
+    "m": RobotProfile(
+        name="Braava m6",
+        battery_mah=2600, battery_chemistry="lipo", battery_voltage=14.8,
+        battery_cycles_eol=300,
+        filter_hours=60, main_brush_hours=0, side_brush_hours=0,
+        typical_coverage_sqft=None, map_capability="smart",
+    ),
+}
+
+
+def get_robot_profile(sku: str | None) -> RobotProfile | None:
+    """Return the RobotProfile for a given SKU string, or None when unknown.
+
+    Matches on the first character of the SKU (case-insensitive):
+        "i755840"  → ROBOT_PROFILES["i"]   (i-series)
+        "R980040"  → ROBOT_PROFILES["9"]   (900-series, note: "R" is not "9"!)
+        "s955840"  → ROBOT_PROFILES["s"]   (s9-series)
+
+    Note: some iRobot SKUs start with "R" for 900-series (e.g. "R980040").
+    These are handled by the "r" → "9" alias below.
+    """
+    if not sku:
+        return None
+    prefix = sku[0].lower()
+    # "r" prefix used on some 900-series SKUs (R980040, R960040)
+    if prefix == "r":
+        prefix = "9"
+    return ROBOT_PROFILES.get(prefix)
+
 # ── State/Phase mappings ──────────────────────────────────────────────────────
 # Extended phase map (superset of Core's STATE_MAP)
 
@@ -222,6 +344,18 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     120: {"label": "Battery not initialised",   "description": "The battery has not been initialised.",                   "action": "Reboot the robot. Contact support if the error persists."},
     122: {"label": "Charging system error",     "description": "The charging system has encountered an error.",           "action": "Check the home base and cable. Contact support if the error persists."},
     123: {"label": "Battery not initialised",   "description": "The battery has not been initialised.",                   "action": "Reboot the robot. Contact support if the error persists."},
+    # IA74-EC additions (v2.5.0): codes 130–215 confirmed from ia74/jeremywillans references
+    130: {"label": "Back-up limit detected",    "description": "The robot detected a back-up limit during cleaning.",      "action": "Remove obstacles behind the robot and retry."},
+    131: {"label": "Obstacle following failed", "description": "The robot failed to navigate around an obstacle.",         "action": "Clear obstacles from the cleaning area."},
+    132: {"label": "Hardware error",            "description": "A hardware component is not responding correctly.",        "action": "Reboot the robot. Contact support if the error persists."},
+    133: {"label": "Timed out navigating",      "description": "Navigation took longer than expected.",                    "action": "Ensure the robot has a clear path and retry."},
+    134: {"label": "Failed to recharge",        "description": "The robot could not locate or reach the dock to recharge.", "action": "Check the dock is accessible and unobstructed."},
+    140: {"label": "Left brush error",          "description": "The left brush has stalled or is blocked.",               "action": "Clean the left brush and its guards."},
+    141: {"label": "Right brush error",         "description": "The right brush has stalled or is blocked.",              "action": "Clean the right brush and its guards."},
+    160: {"label": "Navigation problem",        "description": "The robot has a general navigation problem.",             "action": "Place the robot in an open area and restart the mission."},
+    161: {"label": "Dock not found",            "description": "The robot could not find the dock after cleaning.",       "action": "Ensure the dock is plugged in and unobstructed."},
+    162: {"label": "Low battery — abort",       "description": "Battery too low to complete the mission.",               "action": "Allow the robot to charge fully before the next mission."},
+    163: {"label": "Mission failed",            "description": "The mission could not be completed.",                     "action": "Check for obstacles and retry."},
     216: {"label": "Charging base bag full",    "description": "The Clean Base bag is full and needs replacing.",         "action": "Replace the Clean Base bag."},
     224: {"label": "Smart Map localization failed", "description": "The robot could not localise on its Smart Map.",      "action": "Place the robot in an open area on the map and try again. Retrain the map if needed."},
     1010: {"label": "Clear path",              "description": "The robot's path is obstructed.",                          "action": "Clear obstacles from the robot's path and restart."},

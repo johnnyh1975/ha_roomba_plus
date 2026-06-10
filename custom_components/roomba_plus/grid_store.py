@@ -73,6 +73,10 @@ class GridStore:
     def __init__(self) -> None:
         self._cells: dict[tuple[int, int], float] = {}   # (gx, gy) → EMA weight
         self._stuck: dict[tuple[int, int], int]   = {}   # (gx, gy) → stuck count
+        # P3: edge_coverage_ratio cache keyed by edge_depth_mm — invalidated when
+        # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
+        # can coexist safely if future callers use non-default parameters.
+        self._edge_ratio_cache: dict[float, float] = {}
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -127,6 +131,8 @@ class GridStore:
             stuck_points: List of (x_mm, y_mm) positions where robot was stuck.
         """
         # 1. Decay all existing cells; prune below threshold
+        # P3: cells are about to change — invalidate the edge ratio cache
+        self._edge_ratio_cache.clear()
         to_prune = [
             cell for cell, weight in self._cells.items()
             if weight * DECAY < PRUNE_THRESHOLD
@@ -213,7 +219,15 @@ class GridStore:
         the robot is over-cleaning the centre and under-covering edges.
 
         Returns None when fewer than 10 cells exist (insufficient data).
+        P3: result is cached by edge_depth_mm and invalidated by update_from_mission;
+        safe to call repeatedly during a mission without re-computing on every pose
+        update. Keyed by edge_depth_mm so different callers with different parameters
+        each get their own correct cached value.
         """
+        # P3: return cached result when available (invalidated by update_from_mission)
+        cached = self._edge_ratio_cache.get(edge_depth_mm)
+        if cached is not None:
+            return cached
         if len(self._cells) < 10:
             return None
         bbox = self.bounding_box_mm()
@@ -230,7 +244,9 @@ class GridStore:
                 or y_max - y_mm <= edge_depth_mm
             ):
                 edge_count += 1
-        return round(edge_count / len(self._cells), 4)
+        result = round(edge_count / len(self._cells), 4)
+        self._edge_ratio_cache[edge_depth_mm] = result
+        return result
 
     def hotspots(
         self, threshold: int = STUCK_HOTSPOT_THRESHOLD

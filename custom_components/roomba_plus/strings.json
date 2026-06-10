@@ -765,6 +765,10 @@
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
       "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
+    },
+    "mission_anomaly": {
+      "title": "Unusual cleaning patterns detected",
+      "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
     }
   },
   "device_automation": {

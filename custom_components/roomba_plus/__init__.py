@@ -52,10 +52,11 @@ from .const import (
     DOMAIN,
     LOCAL_PLATFORMS,
     ROOMBA_SESSION,
+    get_robot_profile,
     has_pose,
     has_smart_map,
 )
-from .api_views import MissionHistoryView, HouseholdSummaryView
+from .api_views import MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
 from .grid_store import GridStore
 from .mission_store import MissionStore
 from .presence_manager import PresenceManager
@@ -1390,6 +1391,9 @@ async def async_setup_entry(
             has_pmaps=has_pmaps,
             mission_store=mission_store,   # CR3 — fallback source
         )
+        # IA74-PMAP: seed active_pmap_id from local MQTT before first cloud fetch
+        # so vacuum.clean_area is not blocked during the initial coordinator refresh.
+        cloud_coordinator.seed_pmap_id_from_local(state)
         try:
             await cloud_coordinator.async_config_entry_first_refresh()
             _LOGGER.info(
@@ -1511,6 +1515,7 @@ async def async_setup_entry(
         umf_aligner=umf_aligner,
         dirt_threshold_manager=dirt_threshold_manager,
         outline_store=outline_store,
+        robot_profile=get_robot_profile(state.get("sku")),
     )
 
     if presence_manager is not None:
@@ -1533,6 +1538,7 @@ async def async_setup_entry(
     if not hass.data.get("_roomba_plus_view_registered"):
         hass.http.register_view(MissionHistoryView())
         hass.http.register_view(HouseholdSummaryView())
+        hass.http.register_view(MissionHistoryImportView())
         hass.data["_roomba_plus_view_registered"] = True
 
     # ── Register services ──────────────────────────────────────────────────

@@ -61,6 +61,7 @@ from .const import (
     CONF_FLOOR,
     DOMAIN,
     PHASE_TO_ACTIVITY,
+    SQFT_TO_M2,
 )
 from .entity import IRobotEntity
 from .models import MapCapability, RoombaConfigEntry
@@ -369,7 +370,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         cleaned_area: int = mission.get("sqft", 0)
         if cleaned_area and self.hass.config.units is METRIC_SYSTEM:
-            cleaned_area = round(cleaned_area * 0.0929)
+            cleaned_area = round(cleaned_area * SQFT_TO_M2)
 
         return cleaning_time, cleaned_area
 

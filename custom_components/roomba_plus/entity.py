@@ -47,6 +47,7 @@ class IRobotEntity(Entity):
             ),
             manufacturer="iRobot",
             model=self.vacuum_state.get("sku"),
+            model_id=self.vacuum_state.get("sku"),   # IA74-MI: full SKU in device registry
             name=self._resolve_name(self.vacuum_state, blid),
             sw_version=self.vacuum_state.get("softwareVer"),
             hw_version=str(self.vacuum_state.get("hardwareRev", "")),

@@ -194,9 +194,13 @@ async def async_record_mission(
     # F6e — check for mixed schedule patterns after each mission
     # Guard: only fire when hass is fully initialised (has config attribute)
     if getattr(hass, "is_running", False):
-        from .repairs import async_check_mixed_schedule
+        from .repairs import async_check_mixed_schedule, async_check_mission_anomaly
         asyncio.run_coroutine_threadsafe(
             async_check_mixed_schedule(hass, entry), hass.loop
+        )
+        # L3 — check for consecutive anomalous missions after each append
+        asyncio.run_coroutine_threadsafe(
+            async_check_mission_anomaly(hass, entry), hass.loop
         )
 
     # Update L3 runtime error state.

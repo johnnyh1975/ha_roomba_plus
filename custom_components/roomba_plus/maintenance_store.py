@@ -14,6 +14,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import logging
+import statistics
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +57,13 @@ class MaintenanceStore:
     # Incremented by BlockingManager on timeout; reset to 0 on any completed mission.
     consecutive_skips: int = 0
 
+    # L2 — replacement history for self-calibrating lifespan (v2.5.0).
+    # Each entry is a bbrun.hr value at the time of replacement.
+    # After 2+ replacements, learned_filter_hours / learned_brush_hours are
+    # computed as the median of intervals between consecutive replacements.
+    filter_reset_history: list[int] = field(default_factory=list)
+    brush_reset_history: list[int] = field(default_factory=list)
+
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
@@ -76,6 +84,13 @@ class MaintenanceStore:
             self.baseline_estcap = float(raw_estcap) if raw_estcap is not None else None
             # F6g — 0 for pre-v2.1 installs
             self.consecutive_skips = int(data.get("consecutive_skips", 0))
+            # L2: restore replacement history (empty list for pre-v2.5 installs)
+            self.filter_reset_history = [
+                int(h) for h in data.get("filter_reset_history", [])
+            ]
+            self.brush_reset_history = [
+                int(h) for h in data.get("brush_reset_history", [])
+            ]
             _LOGGER.debug(
                 "MaintenanceStore: loaded — filter_reset=%dh brush_reset=%dh",
                 self.filter_reset_hr, self.brush_reset_hr,
@@ -95,21 +110,37 @@ class MaintenanceStore:
             "battery_reset_at": self.battery_reset_at,
             "baseline_estcap":  self.baseline_estcap,   # F5d
             "consecutive_skips": self.consecutive_skips, # F6g
+            "filter_reset_history": self.filter_reset_history,  # L2
+            "brush_reset_history":  self.brush_reset_history,   # L2
         })
 
     # ── Reset methods ─────────────────────────────────────────────────────────
 
     def reset_filter(self, current_hr: int) -> None:
-        """Record current bbrun.hr and wall-clock time as filter replacement point."""
+        """Record current bbrun.hr and wall-clock time as filter replacement point.
+
+        L2: appends to filter_reset_history for self-calibrating lifespan.
+        After 2+ replacements, learned_filter_hours provides the personal interval.
+        """
+        # L2: record history before updating reset_hr so the interval is computable
+        self.filter_reset_history.append(current_hr)
         self.filter_reset_hr = current_hr
         self.filter_reset_at = dt_util.now().isoformat()
-        _LOGGER.info("MaintenanceStore: filter reset at %dh", current_hr)
+        _LOGGER.info("MaintenanceStore: filter reset at %dh (history len=%d)",
+                     current_hr, len(self.filter_reset_history))
 
     def reset_brush(self, current_hr: int) -> None:
-        """Record current bbrun.hr and wall-clock time as brush replacement point."""
+        """Record current bbrun.hr and wall-clock time as brush replacement point.
+
+        L2: appends to brush_reset_history for self-calibrating lifespan.
+        After 2+ replacements, learned_brush_hours provides the personal interval.
+        """
+        # L2: record history before updating reset_hr
+        self.brush_reset_history.append(current_hr)
         self.brush_reset_hr = current_hr
         self.brush_reset_at = dt_util.now().isoformat()
-        _LOGGER.info("MaintenanceStore: brush reset at %dh", current_hr)
+        _LOGGER.info("MaintenanceStore: brush reset at %dh (history len=%d)",
+                     current_hr, len(self.brush_reset_history))
 
     def reset_battery(self, current_hr: int) -> None:
         """Record current bbrun.hr and wall-clock time as battery replacement point."""
@@ -119,6 +150,7 @@ class MaintenanceStore:
 
     def reset_pad(self, current_hr: int) -> None:
         """Braava alias for reset_brush — pad and brush share the same store slot."""
+        self.brush_reset_history.append(current_hr)
         self.brush_reset_hr = current_hr
         self.brush_reset_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
@@ -138,14 +170,60 @@ class MaintenanceStore:
                 "MaintenanceStore: baseline_estcap set to %.0f mAh", estcap
             )
 
+    # ── L2 — Self-calibrating lifespan ───────────────────────────────────────
+
+    @property
+    def learned_filter_hours(self) -> float | None:
+        """Median interval between filter replacements, or None if < 2 resets.
+
+        L2: after 2+ replacements, returns the personal filter lifespan.
+        Exposed in diagnostics. Used by filter_remaining when available.
+        """
+        if len(self.filter_reset_history) < 2:
+            return None
+        intervals = [
+            self.filter_reset_history[i] - self.filter_reset_history[i - 1]
+            for i in range(1, len(self.filter_reset_history))
+            if self.filter_reset_history[i] > self.filter_reset_history[i - 1]
+        ]
+        return statistics.median(intervals) if intervals else None
+
+    @property
+    def learned_brush_hours(self) -> float | None:
+        """Median interval between brush replacements, or None if < 2 resets.
+
+        L2: after 2+ replacements, returns the personal brush lifespan.
+        Exposed in diagnostics. Used by brush_remaining when available.
+        """
+        if len(self.brush_reset_history) < 2:
+            return None
+        intervals = [
+            self.brush_reset_history[i] - self.brush_reset_history[i - 1]
+            for i in range(1, len(self.brush_reset_history))
+            if self.brush_reset_history[i] > self.brush_reset_history[i - 1]
+        ]
+        return statistics.median(intervals) if intervals else None
+
     # ── Remaining-life calculations ───────────────────────────────────────────
 
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next filter replacement."""
+        """Hours remaining until next filter replacement.
+
+        L2: uses learned_filter_hours when available (after 2+ replacements),
+        falling back to the configured threshold otherwise.
+        Uses round() not int() to avoid systematic truncation error (up to 59 min).
+        """
+        effective = round(self.learned_filter_hours or threshold)
         hours_since_reset = current_hr - self.filter_reset_hr
-        return max(0, threshold - hours_since_reset)
+        return max(0, effective - hours_since_reset)
 
     def brush_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next brush/pad replacement."""
+        """Hours remaining until next brush/pad replacement.
+
+        L2: uses learned_brush_hours when available (after 2+ replacements),
+        falling back to the configured threshold otherwise.
+        Uses round() not int() to avoid systematic truncation error (up to 59 min).
+        """
+        effective = round(self.learned_brush_hours or threshold)
         hours_since_reset = current_hr - self.brush_reset_hr
-        return max(0, threshold - hours_since_reset)
+        return max(0, effective - hours_since_reset)

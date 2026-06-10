@@ -17,23 +17,46 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout
+from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
+from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
 from .const import (
+    CONF_AWAY_DELAY_MIN,
     CONF_BLID,
+    CONF_BLOCKING_BEHAVIOR,
+    CONF_BLOCKING_SENSORS,
+    CONF_BLOCKING_TIMEOUT_MIN,
+    CONF_CLEAN_DELAY_MIN,
     CONF_CONTINUOUS,
+    CONF_DEMAND_CLEANING_ENABLED,
+    CONF_DEMAND_MULTIPLIER,
     CONF_FLOOR,
+    CONF_IROBOT_PASSWORD,
+    CONF_IROBOT_USERNAME,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
+    CONF_PRESENCE_ENTITIES,
+    CONF_PRESENCE_MODE,
+    CONF_PRESENCE_SCHEDULING_ENABLED,
+    CONF_SMART_ZONE_ALIASES,
+    CONF_SMART_ZONE_HIDDEN,
+    DEFAULT_AWAY_DELAY_MIN,
+    DEFAULT_BLOCKING_BEHAVIOR,
+    DEFAULT_BLOCKING_TIMEOUT_MIN,
+    DEFAULT_CLEAN_DELAY_MIN,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
+    DEFAULT_PRESENCE_MODE,
     DOMAIN,
     ROOMBA_SESSION,
+    has_smart_map,
 )
-from .models import RoombaConfigEntry
+from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
+from .models import MapCapability, RoombaConfigEntry
+from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -321,7 +344,6 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         Skipping leaves cloud_coordinator disabled — all local MQTT
         functionality continues to work normally.
         """
-        from .const import CONF_IROBOT_USERNAME, CONF_IROBOT_PASSWORD
 
         errors: dict[str, str] = {}
 
@@ -332,7 +354,6 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             if username and password:
                 # Validate credentials before storing
                 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                from .cloud_api import IrobotCloudApi, AuthenticationError, CloudApiError
                 api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
                 try:
                     await api.authenticate()
@@ -415,8 +436,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Options menu — connection settings or Smart Map zone entry."""
-        from .const import has_smart_map
-        from . import roomba_reported_state
 
         # Guard: runtime_data only exists after a successful async_setup_entry.
         # If the integration failed to load (e.g. translation error, MQTT timeout),
@@ -425,7 +444,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_abort(reason="integration_not_loaded")
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
 
-        from .models import MapCapability
         data = self.config_entry.runtime_data
 
         # Build model-appropriate menu.
@@ -502,13 +520,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         """Configure blocking sensors for the smart_start service."""
         from homeassistant.helpers import selector
 
-        from .const import (
-            CONF_BLOCKING_BEHAVIOR,
-            CONF_BLOCKING_SENSORS,
-            CONF_BLOCKING_TIMEOUT_MIN,
-            DEFAULT_BLOCKING_BEHAVIOR,
-            DEFAULT_BLOCKING_TIMEOUT_MIN,
-        )
 
         if user_input is not None:
             updated = dict(self.config_entry.options)
@@ -562,16 +573,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Configure presence-aware scheduling."""
         from homeassistant.helpers import selector
-        from .const import (
-            CONF_AWAY_DELAY_MIN,
-            CONF_CLEAN_DELAY_MIN,
-            CONF_PRESENCE_ENTITIES,
-            CONF_PRESENCE_MODE,
-            CONF_PRESENCE_SCHEDULING_ENABLED,
-            DEFAULT_AWAY_DELAY_MIN,
-            DEFAULT_CLEAN_DELAY_MIN,
-            DEFAULT_PRESENCE_MODE,
-        )
 
         if user_input is not None:
             updated = dict(self.config_entry.options)
@@ -651,8 +652,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         """
         from homeassistant.helpers import selector
 
-        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
-        from .models import MapCapability
 
         if not hasattr(self, "_pending_zone_edits"):
             self._pending_zone_edits: dict[str, dict[str, Any]] = {}
@@ -739,8 +738,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
     def _build_zone_index_options(self, data: Any, options: dict) -> list[dict]:
         """Build selector option list for the map_management index step."""
-        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
-        from .models import MapCapability
 
         opts: list[dict] = []
 
@@ -796,8 +793,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
     def _resolve_current_zone_name(self, zone_id: str, data: Any, options: dict) -> str:
         """Resolve the best current display name for zone_id."""
-        from .const import CONF_SMART_ZONE_ALIASES
-        from .models import MapCapability
 
         if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
             for zone in data.zone_store.zones:
@@ -819,8 +814,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
     def _resolve_current_zone_hidden(self, zone_id: str, data: Any, options: dict) -> bool:
         """Return the current hidden state for zone_id."""
-        from .const import CONF_SMART_ZONE_HIDDEN
-        from .models import MapCapability
 
         if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
             for zone in data.zone_store.zones:
@@ -831,8 +824,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
     def _save_zone_edits_atomic(self) -> ConfigFlowResult:
         """Apply all pending zone edits atomically in a single options write."""
-        from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
-        from .models import MapCapability
 
         data = self.config_entry.runtime_data
         options = dict(self.config_entry.options)
@@ -896,8 +887,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         Dynamically generates one text field per unconfirmed zone.
         """
-        from .zone_store import ZoneStore
-        from .models import MapCapability
 
         data = self.config_entry.runtime_data
         if data.map_capability != MapCapability.EPHEMERAL or not data.zone_store:
@@ -939,9 +928,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         Dynamically generates one text field per unlabelled region_id.
         Saves user-assigned names to config_entry.options["smart_zone_labels"].
         """
-        from .const import has_smart_map
 
-        from . import roomba_reported_state
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
         if not has_smart_map(state):
             return self.async_create_entry(title="", data=self.config_entry.options)
@@ -1048,8 +1035,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         pmap_id is resolved automatically from live state.pmaps so the user
         does not need to find it manually.
         """
-        from .const import has_smart_map
-        from . import roomba_reported_state
 
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
         if not has_smart_map(state):
@@ -1169,7 +1154,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Door-width calibration — adjusts map scale from measured door-gap widths."""
-        from .models import MapCapability
 
         data = self.config_entry.runtime_data
         if data.map_capability == MapCapability.NONE or not data.zone_store:
@@ -1220,7 +1204,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         reload so the cloud coordinator is re-initialised with the new values.
         Clearing both fields removes the credentials and disables cloud features.
         """
-        from .const import CONF_IROBOT_USERNAME, CONF_IROBOT_PASSWORD
 
         errors: dict[str, str] = {}
         current_user = self.config_entry.data.get(CONF_IROBOT_USERNAME, "")
@@ -1234,7 +1217,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             if username and password:
                 # Validate before storing
                 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                from .cloud_api import IrobotCloudApi, AuthenticationError, CloudApiError
                 api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
                 try:
                     await api.authenticate()
@@ -1279,9 +1261,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         Gate: SMART + cloud only. Shown when both are active.
         Options stored: demand_cleaning_enabled (bool), demand_clean_multiplier (float).
         """
-        from .const import CONF_DEMAND_CLEANING_ENABLED, CONF_DEMAND_MULTIPLIER
-        from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
-
         if user_input is not None:
             updated = dict(self.config_entry.options)
             updated[CONF_DEMAND_CLEANING_ENABLED] = user_input.get(

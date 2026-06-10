@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AWAY_DELAY_MIN,
@@ -63,6 +64,8 @@ class PresenceManager:
         # presence-managed holds from manual ScheduleHoldSwitch toggles.
         self._managed_hold: bool = False
         self._did_unfreeze: bool = False  # True only when PM actually performed the unfreeze
+        # R1: initialised here so record_clean_event/presence_windows never need hasattr
+        self._clean_events: dict[tuple[int, int], list[datetime]] = defaultdict(list)
 
     # ── Setup ─────────────────────────────────────────────────────────────────
 
@@ -205,18 +208,21 @@ class PresenceManager:
         F12a — called from callbacks.py at mission start so the manager
         can build a day×hour reliability matrix.
         Stores (weekday, hour) → list[datetime] in _clean_events.
-        Prunes events older than 90 days to bound memory.
+        P5: prunes events older than 90 days only when total > 500 events;
+        for typical use (≤180 events over 90 days) the check is O(1).
         """
-        now = datetime.now(UTC)
-        cutoff = now - timedelta(days=90)
-        if not hasattr(self, "_clean_events"):
-            self._clean_events: dict[tuple[int, int], list[datetime]] = defaultdict(list)
-        # Prune old events across all slots
-        for key in list(self._clean_events):
-            self._clean_events[key] = [
-                dt for dt in self._clean_events[key] if dt > cutoff
-            ]
-        local_dt = started_at.astimezone()
+        # P5: only prune when the total event count exceeds the threshold
+        total = sum(len(v) for v in self._clean_events.values())
+        if total > 500:
+            cutoff = dt_util.utcnow() - timedelta(days=90)
+            for key in list(self._clean_events):
+                self._clean_events[key] = [
+                    dt for dt in self._clean_events[key] if dt > cutoff
+                ]
+        # Bug A fix: use dt_util.as_local() so the slot weekday and hour match
+        # HA's configured timezone, not the server OS timezone. This must agree
+        # with preferred_window() which uses dt_util.now().weekday().
+        local_dt = dt_util.as_local(started_at)
         slot = (local_dt.weekday(), local_dt.hour)
         self._clean_events[slot].append(started_at)
         _LOGGER.debug(
@@ -234,8 +240,6 @@ class PresenceManager:
         Empty when fewer than 5 clean events recorded (insufficient history).
         EMA-weighted: more recent events count more than older ones.
         """
-        if not hasattr(self, "_clean_events"):
-            return {}
         person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
         if not person_ids:
             return {}
@@ -257,7 +261,7 @@ class PresenceManager:
             total_w = sum(weights)
             score = total_w / (total_w + 0.001)  # bounded: more events → higher score
             # Scale by recency: slot with N events in 30d is more reliable than N in 90d
-            now = datetime.now(UTC)
+            now = dt_util.utcnow()
             recent_count = sum(
                 1 for dt in events
                 if (now - dt).days <= 30
@@ -271,11 +275,16 @@ class PresenceManager:
         F12a — Filters to slots matching today's weekday, then returns the
         hour with the highest score. Returns None when no history is available
         or all scores are zero.
+
+        R2: uses dt_util.now() so today's weekday is derived from HA's configured
+        timezone, not the server OS timezone. Affects users whose HA server runs
+        in UTC while their location is not UTC (midnight crossovers would return
+        the wrong day with datetime.now()).
         """
         windows = self.presence_windows()
         if not windows:
             return None
-        today = datetime.now().weekday()
+        today = dt_util.now().weekday()   # R2: HA timezone, not server timezone
         today_slots = {
             (wd, hr): score
             for (wd, hr), score in windows.items()

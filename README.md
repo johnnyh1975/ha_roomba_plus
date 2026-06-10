@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.4.3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.5.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -346,6 +346,8 @@ Track consumable life and get ahead of replacements before the robot starts fail
 | Battery capacity retention (%) | Degradation relative to design capacity |
 | Estimated battery end of life (days) | Projected days until battery needs replacement |
 
+**Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours logged between resets and uses that instead of the configured threshold. If you always replace the filter at 55 h because it looks dirty at that point, the sensor reflects your real usage — not a generic default. The learned interval is visible in the diagnostics download under `learned_maintenance`.
+
 #### Replacement tracking
 
 Press the corresponding button (or call the action) after replacing a consumable — the remaining-life countdown restarts:
@@ -453,6 +455,16 @@ action: "Remove the brush roll and clear hair or debris, then reinsert."
 
 The error state is cleared automatically when the next mission completes successfully.
 
+#### Mission Anomaly Detection (v2.5+)
+
+Roomba+ monitors each completed mission against the last 30 days of your robot's own history. If two consecutive missions are statistically unusual — the robot spent significantly more time covering significantly less area, had an abnormally long mid-mission recharge, or encountered extreme dirt levels — a **Repair Issue** is raised automatically:
+
+> *"Unusual cleaning patterns detected — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."*
+
+The issue clears on its own once missions return to normal. No configuration required — detection activates after 20 missions of history.
+
+Anomaly detection needs at least 20 completed missions before it activates. It uses your robot's personal performance history as the baseline, not a generic threshold.
+
 #### Performance sensors — cloud, opt-in
 
 Derived from the iRobot cloud mission history:
@@ -466,7 +478,7 @@ Derived from the iRobot cloud mission history:
 | Coverage (%) | % of home baseline area cleaned, self-calibrating |
 | Consecutive clean skips | Opt-in |
 | Edge coverage ratio | Fraction of occupancy cells near room walls vs interior — low ratio with high coverage indicates under-edging (v2.4+, opt-in) |
-| Total energy consumed (kWh) | Cumulative energy from charge cycle count × battery capacity × 14.8 V. State class `TOTAL_INCREASING` — eligible for HA Energy dashboard (v2.4+, LiIon only) |
+| Total energy consumed (kWh) | Cumulative energy from charge cycle count × battery capacity × pack voltage. State class `TOTAL_INCREASING` — eligible for HA Energy dashboard (v2.4+). **v2.5: corrected for 900-series** — 980/985 firmware reports a scaled raw value; Roomba+ now divides by the confirmed BMS scale factor (÷3.73 for Li-ion) to get the correct mAh before computing energy. |
 
 #### Wi-Fi sensors — cloud, opt-in
 
@@ -522,7 +534,7 @@ GET /api/roomba_plus/{entry_id}/mission_history
 
 | Parameter | Default | Values | Description |
 |---|---|---|---|
-| `format` | `summary` | `summary` / `records` / `hazards` | Response shape |
+| `format` | `summary` | `summary` / `records` / `hazards` / `export` | Response shape |
 | `days` | `28` (summary) / `90` (records) | `1`–`90` | Lookback window |
 
 `format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`. From v2.4.0: `dirt_density` (median dirt events/m² for the day) and `relative_to_baseline` (ratio to the 30-day median — values > 1.5 indicate an unusually dirty day). Both are `null` without cloud credentials or fewer than 5 cloud records.
@@ -530,6 +542,33 @@ GET /api/roomba_plus/{entry_id}/mission_history
 `format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`. From v2.3.0: `room_coverage` (per-room fraction from timeline, no cloud required) and `alignment_confidence` (null until UmfAligner aligned).
 
 `format=hazards` — obstacle pin array. Returns GridStore stuck hotspots (`stuck_events`), cloud-detected obstacle centroids (`robot_learned`), and user-configured no-go zones (`keepout`, v2.3+). Each entry has `gx`, `gy`, `x_mm`, `y_mm`, `stuck_count`, `bearing_deg`, `distance_mm`, `source`, `room_name` (populated from UmfAligner in v2.3+ when confidence ≥ 0.70).
+
+**`format=export` (v2.5+)** — full mission log as a versioned JSON bundle. Use this to back up mission history before reinstalling the integration or migrating to a new HA instance.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=export" \
+     -o roomba_backup.json
+```
+
+Response: `{"export_version": 1, "exported_at": "...", "blid": "...", "record_count": N, "records": [...]}`
+
+**Mission history import (v2.5+):**
+
+```
+POST /api/roomba_plus/{entry_id}/mission_history/import
+Content-Type: application/json
+```
+
+Body: an export bundle produced by `format=export`. Records are deduplicated by `id` — existing records are never overwritten. Returns `{"imported": N, "skipped": N, "errors": []}`.
+
+```bash
+curl -X POST \
+     -H "Authorization: Bearer <token>" \
+     -H "Content-Type: application/json" \
+     -d @roomba_backup.json \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission_history/import"
+```
 
 `GET /api/roomba_plus/household?days=28` — household aggregate. Returns `period_days`, `total` (missions/completed/completion_pct/area_sqft), `robots[]` (per-entry breakdown with `floor` label), and `floors[]` (grouped by floor label when any robot has a floor label set).
 
@@ -580,7 +619,9 @@ Configure via **Settings → Devices & Services → Roomba+ → Configure → De
 | Enable demand cleaning | Off | Master toggle |
 | Trigger multiplier | 1.5 | Fire when density > baseline × multiplier (1.1–5.0) |
 
-How it works: after each mission, the latest dirt density is compared to the 30-day median baseline (requires ≥ 5 cloud records to establish). When the threshold is exceeded and all gates pass (robot idle, no blocking sensor active, min 6 h since last demand trigger), a start command is sent automatically. The `demand_clean_blocked` sensor shows which gate is currently preventing a trigger.
+How it works: after each mission, the latest dirt density is compared against the baseline for today's weekday (requires ≥ 4 cloud records on that weekday to activate) or the 30-day flat median as a fallback (requires ≥ 5 records). When the threshold is exceeded and all gates pass (robot idle, no blocking sensor active, min 6 h since last demand trigger), a start command is sent automatically. The `demand_clean_blocked` sensor shows which gate is currently preventing a trigger.
+
+**Weekday-aware baseline (v2.5+):** If your floor is consistently dirtier on Mondays than Thursdays (pets, different routines), demand cleaning now accounts for this. The baseline for each weekday is built independently from the last 12 weeks of records for that day. Monday's threshold is set by Monday's history, not by a flat average. The weekday baseline takes over automatically once ≥ 4 records exist for that day; no configuration needed.
 
 Binary sensor: `binary_sensor.demand_clean_blocked` — ON when a demand clean would currently be blocked (robot busy, blocking sensor active, or presence gate). OFF = demand clean could fire if threshold is exceeded.
 
@@ -640,6 +681,8 @@ The diagnostics download (Settings → device → ⋮ → Download diagnostics) 
 - Zone subsystem: gap threshold, calibration scale, full zone list with bounding boxes
 - Geometry subsystem: door marker count, wall/door/obstacle counts, drift, wall offset
 - Cloud subsystem: coordinator status, last exception, `pmap_count_total`, `active_pmap_id`, `region_count_active`
+- **v2.5+** `robot_profile`: confirmed profile matched at startup (name, chemistry, voltage, BMS scale factors)
+- **v2.5+** `learned_maintenance`: learned filter and brush lifespan hours, reset history length
 
 ---
 
@@ -802,8 +845,12 @@ automation:
 | Demand-based cleaning (dirt threshold) | ❌ | ✅ (v2.4, SMART + cloud) |
 | Optimal clean window sensor | ❌ | ✅ (v2.4) |
 | Edge coverage ratio sensor | ❌ | ✅ (v2.4) |
-| Total energy consumed (kWh, Energy dashboard) | ❌ | ✅ (v2.4, LiIon) |
+| Total energy consumed (kWh, Energy dashboard) | ❌ | ✅ (v2.4, LiIon; v2.5 corrected for 900-series) |
 | Room outline — 900-series (ephemeral, progressive) | ❌ | ✅ (v2.4) |
+| Mission history export / import (REST API) | ❌ | ✅ (v2.5) |
+| Self-calibrating maintenance thresholds | ❌ | ✅ (v2.5) |
+| Weekday-aware demand cleaning baseline | ❌ | ✅ (v2.5, SMART + cloud) |
+| Mission anomaly detection (Repair Issue) | ❌ | ✅ (v2.5) |
 | German translation | ✅ | ✅ |
 
 ---
@@ -860,7 +907,29 @@ The sensor needs at least 5 completed missions since the integration was set up 
 
 Check the `binary_sensor.demand_clean_blocked` sensor — it shows whether the robot is busy, a blocking sensor is active, or the minimum 6-hour gap since the last trigger has not elapsed. Also ensure cloud credentials are configured and at least 5 cloud mission records exist (check Settings → Devices → Roomba+ → ⋮ → Download diagnostics for `region_count_active`).
 
-**Presence manager unfreezes schedule but robot doesn't clean**
+**Mission history export/import**
+
+Export: `GET /api/roomba_plus/<entry_id>/mission_history?format=export` with a long-lived token. Import: `POST /api/roomba_plus/<entry_id>/mission_history/import` with the exported JSON as the body. Import deduplicates — safe to run multiple times. The `entry_id` is in Settings → device → ⋮ → System information.
+
+**"Unusual cleaning patterns" Repair Issue fires for normal short cleans**
+
+The anomaly detection (v2.5+) uses your robot's personal performance history as the baseline. If the flag fires for a normal targeted single-room clean, this means the single-room area is far smaller than your typical full-home baseline — which is technically correct. The issue self-resolves: if the next mission is normal, the counter resets and the issue clears. Two consecutive anomalous missions are required to fire the issue. No action needed if your robot is otherwise functioning normally.
+
+**`demand_clean_blocked` stays ON even though the robot is idle**
+
+Check all four gates: (1) robot cycle state — `vacuum.roomba` must be `docked` or `idle`, not `cleaning` or `returning`; (2) blocking sensors — any configured blocking sensor is ON; (3) presence — all tracked persons must be away if presence mode is `away_only`; (4) minimum gap — 6 hours must have elapsed since the last demand trigger. The sensor's `blocking_reason` attribute shows which gate is active.
+
+**Demand cleaning triggers too often / not often enough**
+
+Adjust the trigger multiplier in Configure → Demand cleaning. `1.5` (default) fires when dirt density is 50 % above the baseline for today's weekday. Lower the multiplier for more frequent triggers; raise it to require dirtier conditions. After v2.5, the baseline is weekday-specific — Monday's threshold is set by Monday's history — so the multiplier applies relative to each day's normal level.
+
+**Self-calibrating filter/brush thresholds: when do they activate?**
+
+After two or more resets of a given component (filter or brush), Roomba+ computes the median interval between resets and uses that as the effective threshold. Until two resets have been performed, the configured threshold (Settings → Configure → hours) is used. The learned values are visible in the diagnostics download under `learned_maintenance`.
+
+**Total energy consumed shows an unexpected value after upgrading to v2.5 on a Roomba 980**
+
+This is expected — v2.5 corrects the energy calculation for 900-series robots. The 980/985 firmware reports a raw BMS value that is approximately 3.73× the actual mAh. Previous versions used this raw value directly, giving a result roughly 4× too high. After the upgrade, the sensor will show the correct lower value and continue accumulating correctly from that point.
 
 Confirm the cleaning schedule is set in the iRobot app and enabled for the correct days. Roomba+ controls the hold — it does not set the schedule itself.
 

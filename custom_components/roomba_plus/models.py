@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from roombapy import Roomba
     from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
+    from .const import RobotProfile
     from .geometry_store import GeometryStore
     from .grid_store import GridStore                # v2.2.0 F9
     from .umf_aligner import UmfAligner              # v2.3.0 F8
@@ -85,6 +86,8 @@ class RoombaData:
     dirt_threshold_manager: "DirtThresholdManager | None" = None
     # v2.4.0 — Room outline accumulator (F-EPHEMERAL, 900-series only)
     outline_store: "OutlineStore | None" = None
+    # v2.5.0 — Manufacturer reference profile for self-calibrating features (RF0)
+    robot_profile: "RobotProfile | None" = None
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

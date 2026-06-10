@@ -65,6 +65,7 @@ from .const import (
     NOT_READY_LABELS,
     PAD_LABELS,
     PHASE_LABELS,
+    SQFT_TO_M2,
     has_carpet_boost,
     has_clean_base,
     has_pose,
@@ -374,7 +375,7 @@ def _area_cleaned_today(store: Any) -> StateType:
     if not areas:
         return None
     # Convert sqft -> m² (consistent with all other area sensors)
-    return round(sum(areas) * 0.0929, 1)
+    return round(sum(areas) * SQFT_TO_M2, 1)
 
 
 def _last_error_code_value(entity: "IRobotEntity") -> StateType:
@@ -626,6 +627,57 @@ def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
 _EOL_THRESHOLD = 65.0  # % — typical lithium end-of-life
 
 
+def _estcap_to_mah(entity: "IRobotEntity") -> float | None:
+    """Return the robot's current estimated capacity in mAh, applying the
+    9-series BMS scale when the profile requires it.
+
+    For i/s/j/e/6 series (scale=1.0): raw estCap == mAh directly.
+    For 9-series old firmware: raw estCap is BMS-scaled.
+      Li-ion (nLithChrg present and > 0): raw ÷ 3.73
+      NiMH   (nNimhChrg present and > 0): raw ÷ 1.87
+    Chemistry is detected at runtime via nNimhChrg / nLithChrg fields.
+
+    Returns None when estCap is absent or zero.
+    """
+    raw = entity.battery_stats.get("estCap")
+    if not raw:
+        return None
+    profile = entity._config_entry.runtime_data.robot_profile
+    if profile is None or (profile.estcap_scale_liion == 1.0
+                           and profile.estcap_scale_nimh == 1.0):
+        return float(raw)
+    # 9-series: detect chemistry from cycle-count fields
+    nimh_cycles = entity.battery_stats.get("nNimhChrg") or 0
+    lith_cycles = entity.battery_stats.get("nLithChrg") or 0
+    if nimh_cycles > 0 and lith_cycles == 0:
+        scale = profile.estcap_scale_nimh
+    else:
+        scale = profile.estcap_scale_liion   # default: OEM Li-ion
+    return float(raw) / scale
+
+
+def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
+    """F12e — total energy consumed in kWh (HA Energy dashboard eligible).
+
+    Formula: actual_mAh × voltage × cycle_count / 1_000_000 → kWh
+    For 9-series: raw estCap is divided by the BMS scale before use.
+    Cycle count from nLithChrg (preferred) or nAvail (fallback).
+    """
+    actual_mah = _estcap_to_mah(entity)
+    if actual_mah is None:
+        return None
+    cycles = (
+        entity.battery_stats.get("nLithChrg")
+        or entity.battery_stats.get("nNimhChrg")
+        or entity.battery_stats.get("nAvail")
+    )
+    if not cycles:
+        return None
+    profile = entity._config_entry.runtime_data.robot_profile
+    voltage = profile.battery_voltage if profile is not None else 14.8
+    return round(actual_mah * voltage * int(cycles) / 1_000_000, 3)
+
+
 def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
     """F5g — days remaining until battery capacity falls to EOL_THRESHOLD (65%).
 
@@ -762,8 +814,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     # GROUP 4 — Statistics (DIAGNOSTIC, enabled)
 
     # F12e — total energy consumed (HA Energy dashboard eligible)
-    # Formula: estCap (mAh) × 14.8V (LiIon nominal) × cycle_count / 1,000,000 → kWh
-    # Gate: bbchg3.estCap present AND batteryType != nimh (NiMH has different voltage)
+    # F12e — total energy consumed.
+    # RF0: scale applied via _total_energy_consumed_kwh for 9-series BMS correction.
+    # Gate: bbchg3.estCap present.  batteryType field is unreliable (contains
+    # iRobot part numbers, not chemistry strings) — chemistry detected at runtime
+    # via nNimhChrg / nLithChrg cycle-count fields inside the helper.
     RoombaSensorDescription(
         key="total_energy_consumed",
         translation_key="total_energy_consumed",
@@ -772,26 +827,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
-        value_fn=lambda e: (
-            round(
-                e.battery_stats.get("estCap", 0)
-                * 14.8
-                * (
-                    e.battery_stats.get("nLithChrg")
-                    or e.battery_stats.get("nAvail")
-                    or 0
-                )
-                / 1_000_000,
-                3,
-            )
-            if e.battery_stats.get("estCap")
-            and (
-                e.battery_stats.get("nLithChrg")
-                or e.battery_stats.get("nAvail")
-            )
-            else None
-        ),
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
+        value_fn=_total_energy_consumed_kwh,
     ),
 
     RoombaSensorDescription(
@@ -855,7 +892,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: (
             None
             if (sqft := e.run_stats.get("sqft")) is None
-            else round(sqft * 0.0929, 1)
+            else round(sqft * SQFT_TO_M2, 1)
         ),
     ),
     RoombaSensorDescription(
@@ -1476,7 +1513,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
         value_fn=_battery_capacity_retention,
     ),
 
@@ -1489,7 +1526,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}) and s.get("batteryType") != "nimh",
+        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
         value_fn=_estimated_battery_eol,
     ),
 
@@ -2065,7 +2102,7 @@ import statistics as _statistics
 def _raw_cleaning_speed(records: list[dict]) -> StateType:
     """F5a — median cleaning speed (m²/min) across the API window.
 
-    Cloud API returns sqft — converted to m² (× 0.0929) for consistency
+    Cloud API returns sqft — converted to m² (× SQFT_TO_M2) for consistency
     with all other area sensors in Roomba+.
     Uses runM (clean time excl. recharge) preferred over durationM.
     Skips records missing either field or with zero time.
@@ -2075,7 +2112,7 @@ def _raw_cleaning_speed(records: list[dict]) -> StateType:
         sqft = r.get("sqft")
         run_m = r.get("runM") or r.get("durationM")
         if sqft is not None and run_m and float(run_m) > 0:
-            m2_per_min = float(sqft) * 0.0929 / float(run_m)
+            m2_per_min = float(sqft) * SQFT_TO_M2 / float(run_m)
             speeds.append(m2_per_min)
     if not speeds:
         return None
@@ -2085,7 +2122,7 @@ def _raw_cleaning_speed(records: list[dict]) -> StateType:
 def _raw_dirt_density(records: list[dict]) -> StateType:
     """F5b — median dirt events per m² across the API window.
 
-    Cloud API returns sqft — converted to m² (÷ 0.0929) for consistency.
+    Cloud API returns sqft — converted to m² (÷ SQFT_TO_M2) for consistency.
     Rising values indicate a dirtier floor OR worn brushes (debris not
     captured, sensor re-fires).  The cause attribute distinguishes them.
     """
@@ -2094,7 +2131,7 @@ def _raw_dirt_density(records: list[dict]) -> StateType:
         dirt = r.get("dirt")
         sqft = r.get("sqft")
         if dirt is not None and sqft and float(sqft) > 0:
-            m2 = float(sqft) * 0.0929
+            m2 = float(sqft) * SQFT_TO_M2
             densities.append(float(dirt) / m2)
     if not densities:
         return None
@@ -2127,7 +2164,7 @@ def _raw_dirt_density_attrs(records: list[dict]) -> dict:
         dirt = r.get("dirt")
         sqft = r.get("sqft")
         if dirt is not None and sqft and float(sqft) > 0:
-            dirt_densities.append(float(dirt) / (float(sqft) * 0.0929))
+            dirt_densities.append(float(dirt) / (float(sqft) * SQFT_TO_M2))
     speeds = []
     for r in records:
         sqft = r.get("sqft")
@@ -2462,6 +2499,11 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
+        # R3: return False when cloud is not configured so HA shows "Unavailable"
+        # rather than showing None state with available=True. Distinguishes
+        # "cloud not configured" from "coordinator not yet updated".
+        if not self._config_entry.runtime_data.has_cloud:
+            return False
         return (
             self._coordinator.last_update_success
             and self._coordinator.data is not None
