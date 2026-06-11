@@ -162,6 +162,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._last_phase: str = ""
         self._last_stuck_count: int = 0
         self._mission_points: list[tuple[float, float]] = []
+        self._stuck_mission_points: list[tuple[float, float]] = []
 
         # Initial timestamp so frontend knows an image exists from the start
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
@@ -299,6 +300,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 if self._renderer:
                     self._renderer.reset()
                     self._mission_points = []
+                    self._stuck_mission_points = []
                     _LOGGER.debug("Map: mission started, renderer reset")
 
             if (current_phase in MISSION_END_PHASES
@@ -319,6 +321,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             stuck = self.vacuum_state.get("bbrun", {}).get("nStuck", 0)
             if stuck > self._last_stuck_count:
                 self._renderer.mark_stuck()
+                # Record stuck position in mm for GridStore
+                if self._mission_points:
+                    self._stuck_mission_points.append(self._mission_points[-1])
             self._last_stuck_count = stuck
 
         self.schedule_update_ha_state()
@@ -438,7 +443,27 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     loop,
                 )
 
+        # Update GridStore for coverage heatmap (all pose-capable robots)
+        if self._config_entry is not None and self._mission_points:
+            _gdata = self._config_entry.runtime_data
+            if _gdata.grid_store is not None:
+                _gdata.grid_store.update_from_mission(
+                    self._mission_points,
+                    self._stuck_mission_points,
+                )
+                asyncio.run_coroutine_threadsafe(
+                    _gdata.grid_store.async_save(
+                        self.hass, self._config_entry.entry_id
+                    ),
+                    loop,
+                )
+                _LOGGER.debug(
+                    "GridStore: updated from mission — %d pose pts, %d stuck pts",
+                    len(self._mission_points), len(self._stuck_mission_points),
+                )
+
         self._mission_points = []
+        self._stuck_mission_points = []
 
     async def _async_save_map_state(self) -> None:
         """Write renderer state to hass.storage after mission end."""

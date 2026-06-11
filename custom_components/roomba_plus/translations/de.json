@@ -69,14 +69,14 @@
       "init": {
         "title": "Roomba+ konfigurieren",
         "menu_options": {
-          "settings": "Verbindungseinstellungen",
-          "smart_zones_manual": "Smart Map Zonen manuell eingeben",
-          "cloud_credentials": "iRobot Cloud-Zugangsdaten",
-          "blocking_sensors": "Blocking sensors",
-          "map_management": "Zone management",
-          "presence_scheduling": "Anwesenheitsbasierte Planung",
-          "demand_cleaning": "Demand cleaning",
-          "rooms": "Räume & Zonen"
+          "settings": "⚙ Verbindungseinstellungen",
+          "smart_zones_manual": "🗺 Smart Map Zonen manuell eingeben",
+          "cloud_credentials": "⚙ iRobot Cloud-Zugangsdaten",
+          "blocking_sensors": "🗓 Sperrsensoren",
+          "map_management": "🗺 Zonenverwaltung",
+          "presence_scheduling": "🗓 Anwesenheitsbasierte Planung",
+          "demand_cleaning": "🗓 Bedarfsreinigung",
+          "rooms": "🗺 Räume & Zonen"
         }
       },
       "zones": {

@@ -73,14 +73,14 @@
       "init": {
         "title": "Configure Roomba+",
         "menu_options": {
-          "settings": "Connection settings",
-          "smart_zones_manual": "Manually enter Smart Map zones",
-          "cloud_credentials": "iRobot cloud credentials",
-          "blocking_sensors": "Blocking sensors",
-          "map_management": "Zone management",
-          "presence_scheduling": "Presence-aware scheduling",
-          "demand_cleaning": "Demand cleaning",
-          "rooms": "Rooms & zones"
+          "settings": "⚙ Connection settings",
+          "smart_zones_manual": "🗺 Manually enter Smart Map zones",
+          "cloud_credentials": "⚙ iRobot cloud credentials",
+          "blocking_sensors": "🗓 Blocking sensors",
+          "map_management": "🗺 Zone management",
+          "presence_scheduling": "🗓 Presence-aware scheduling",
+          "demand_cleaning": "🗓 Demand cleaning",
+          "rooms": "🗺 Rooms & zones"
         }
       },
       "zones": {

@@ -21,6 +21,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import logging
+import asyncio
 import time
 from typing import Any
 
@@ -83,7 +84,8 @@ class MissionTimerStore:
         message. Ignores inter-message gaps > 120 s (e.g. recharges, pauses,
         HA restarts) to avoid double-counting non-cleaning time.
 
-        Saves asynchronously via hass.async_create_task to avoid blocking
+        Saves asynchronously via asyncio.run_coroutine_threadsafe (thread-safe;
+        called from paho-MQTT thread via callbacks.py) to avoid blocking
         the MQTT callback loop.
         """
         now = time.monotonic()
@@ -92,10 +94,10 @@ class MissionTimerStore:
             self.mission_id = mission_id
             self.run_sec = 0
             self._last_phase_ts = now
-            hass.async_create_task(
+            asyncio.run_coroutine_threadsafe(
                 self.async_save(hass, entry_id),
-                name="roomba_plus_timer_save",
-            )
+                hass.loop,
+                )
             return
 
         if self._last_phase_ts > 0:
@@ -103,10 +105,10 @@ class MissionTimerStore:
             # Clamp: ignore gaps > 120 s (recharge, pause, restart)
             if 0 < delta < 120:
                 self.run_sec += int(delta)
-                hass.async_create_task(
+                asyncio.run_coroutine_threadsafe(
                     self.async_save(hass, entry_id),
-                    name="roomba_plus_timer_save",
-                )
+                    hass.loop,
+                    )
         self._last_phase_ts = now
 
     def on_phase_other(self) -> None:
@@ -118,7 +120,7 @@ class MissionTimerStore:
         self.mission_id = None
         self.run_sec = 0
         self._last_phase_ts = 0.0
-        hass.async_create_task(
+        asyncio.run_coroutine_threadsafe(
             self.async_save(hass, entry_id),
-            name="roomba_plus_timer_clear",
-        )
+            hass.loop,
+            )

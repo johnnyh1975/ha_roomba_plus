@@ -73,14 +73,14 @@
       "init": {
         "title": "Roomba+ configureren",
         "menu_options": {
-          "settings": "Verbindingsinstellingen",
-          "smart_zones_manual": "Smart Map-zones handmatig invoeren",
-          "cloud_credentials": "iRobot cloud-inloggegevens",
-          "blocking_sensors": "Blocking sensors",
-          "map_management": "Zone management",
-          "presence_scheduling": "Aanwezigheidsgestuurde planning",
-          "demand_cleaning": "Demand cleaning",
-          "rooms": "Kamers en zones"
+          "settings": "⚙ Verbindingsinstellingen",
+          "smart_zones_manual": "🗺 Smart Map-zones handmatig invoeren",
+          "cloud_credentials": "⚙ iRobot cloud-inloggegevens",
+          "blocking_sensors": "🗓 Blokkerende sensoren",
+          "map_management": "🗺 Zonebeheer",
+          "presence_scheduling": "🗓 Aanwezigheidsgestuurde planning",
+          "demand_cleaning": "🗓 Reinigen op aanvraag",
+          "rooms": "🗺 Kamers en zones"
         }
       },
       "zones": {
