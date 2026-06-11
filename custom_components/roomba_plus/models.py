@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from .zone_store import ZoneStore
     from .dirt_threshold_manager import DirtThresholdManager  # v2.4 F11
     from .outline_store import OutlineStore                    # v2.4 F-EPHEMERAL
+    from .robot_profile_store import RobotProfileStore        # v2.6 L4
+    from .mission_timer_store import MissionTimerStore        # v2.6 MP1
 
 
 class MapCapability(Enum):
@@ -88,6 +90,13 @@ class RoombaData:
     outline_store: "OutlineStore | None" = None
     # v2.5.0 — Manufacturer reference profile for self-calibrating features (RF0)
     robot_profile: "RobotProfile | None" = None
+    # v2.6.0 — Centralised learned state store (L4)
+    robot_profile_store: "RobotProfileStore | None" = None
+    # v2.6.0 MS1 — Timestamp set when DirtThresholdManager fires a start command.
+    # callbacks.py checks this within 30 s to stamp initiator="demand" on the record.
+    demand_triggered_ts: float | None = None
+    # v2.6.0 MP1 — Persistent mission run-timer (SMART + cloud only)
+    mission_timer_store: "MissionTimerStore | None" = None
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

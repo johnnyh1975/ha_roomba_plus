@@ -219,6 +219,14 @@ class MissionHistoryView(HomeAssistantView):
                     import statistics as _stat
                     _p30d_baseline = _stat.median(all_densities)
 
+            # L5: per-room relative dirtiness from RobotProfileStore
+            _room_dirt_relative: dict[str, float] | None = None
+            _rps = getattr(data, "robot_profile_store", None)
+            if _rps is not None:
+                rd = _rps.room_dirt_relative()
+                if rd:
+                    _room_dirt_relative = rd
+
             result = [
                 {
                     "date":               summary.date.isoformat(),
@@ -234,6 +242,8 @@ class MissionHistoryView(HomeAssistantView):
                         if summary.date.isoformat() in _daily_density and _p30d_baseline
                         else None
                     ),
+                    # L5 (v2.6.0) — per-room dirtiness index (once per day, not per-summary)
+                    "room_dirt_index": _room_dirt_relative,
                 }
                 for summary in sorted(by_day.values(), key=lambda s: s.date)
             ]

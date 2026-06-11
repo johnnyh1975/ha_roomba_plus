@@ -219,7 +219,10 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
 }
 
 
-def get_robot_profile(sku: str | None) -> RobotProfile | None:
+def get_robot_profile(
+    sku: str | None,
+    battery_type: str | None = None,
+) -> RobotProfile | None:
     """Return the RobotProfile for a given SKU string, or None when unknown.
 
     Matches on the first character of the SKU (case-insensitive):
@@ -229,6 +232,19 @@ def get_robot_profile(sku: str | None) -> RobotProfile | None:
 
     Note: some iRobot SKUs start with "R" for 900-series (e.g. "R980040").
     These are handled by the "r" → "9" alias below.
+
+    battery_type — when provided (from the live MQTT ``batteryType`` field),
+    overrides the profile's default ``battery_chemistry``.  This matters for
+    900-series robots where the OEM Li-Ion pack may have been replaced with an
+    aftermarket NiMH pack (or vice-versa).  The profile always stores both
+    ``estcap_scale_liion`` and ``estcap_scale_nimh``; only the active chemistry
+    selector needs to be updated so battery-related sensors pick the right
+    scale factor.
+
+    Example: Roomba 980 with aftermarket NiMH battery →
+        battery_type="nimh", profile default="lipo"
+        → returned profile has battery_chemistry="nimh"
+        → battery_capacity_retention uses estcap_scale_nimh (1.87×) ✅
     """
     if not sku:
         return None
@@ -236,7 +252,20 @@ def get_robot_profile(sku: str | None) -> RobotProfile | None:
     # "r" prefix used on some 900-series SKUs (R980040, R960040)
     if prefix == "r":
         prefix = "9"
-    return ROBOT_PROFILES.get(prefix)
+    profile = ROBOT_PROFILES.get(prefix)
+    if profile is None:
+        return None
+
+    # Override battery_chemistry from live device state when it differs from
+    # the profile default.  Only "lipo" and "nimh" are recognised; unknown
+    # values are silently ignored so the profile default is preserved.
+    if battery_type and battery_type.lower() in ("lipo", "nimh"):
+        resolved = battery_type.lower()
+        if resolved != profile.battery_chemistry:
+            import dataclasses as _dc
+            profile = _dc.replace(profile, battery_chemistry=resolved)
+
+    return profile
 
 # ── State/Phase mappings ──────────────────────────────────────────────────────
 # Extended phase map (superset of Core's STATE_MAP)

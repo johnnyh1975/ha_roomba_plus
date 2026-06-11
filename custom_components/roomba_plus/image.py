@@ -307,8 +307,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
             self._last_phase = current_phase
 
-        # Pose update
-        if "pose" in state and self._renderer and current_phase in CLEANING_PHASES:
+        # Pose update — process regardless of phase so the map and direction
+        # vector stay live even when the robot is stuck, returning, or
+        # between phases.  Renderer reset (mission-start) and _handle_mission_end()
+        # remain gated on phase transitions.
+        if "pose" in state and self._renderer:
             self._handle_pose(state["pose"])
 
         # Stuck detection

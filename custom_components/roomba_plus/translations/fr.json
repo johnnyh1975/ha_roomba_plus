@@ -79,7 +79,8 @@
           "blocking_sensors": "Blocking sensors",
           "map_management": "Zone management",
           "presence_scheduling": "Planification selon la présence",
-          "demand_cleaning": "Demand cleaning"
+          "demand_cleaning": "Demand cleaning",
+          "rooms": "Pièces et zones"
         }
       },
       "zones": {
@@ -188,7 +189,8 @@
       "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "demand_cleaning_not_supported": "Le nettoyage à la demande nécessite un robot SMART avec des identifiants cloud configurés."
     }
   },
   "entity": {
@@ -203,7 +205,7 @@
         "name": "Missions – Durée moyenne"
       },
       "total_missions": {
-        "name": "Missions total"
+        "name": "Missions – Total"
       },
       "successful_missions": {
         "name": "Missions réussies"
@@ -489,13 +491,22 @@
         "name": "Temps de nettoyage (30 j)"
       },
       "optimal_clean_window": {
-        "name": "Optimal clean window"
+        "name": "Présence – Fenêtre de nettoyage optimale"
       },
       "recent_edge_coverage_ratio": {
-        "name": "Recent edge coverage ratio"
+        "name": "Performance – Couverture des bords (30 j)"
       },
       "total_energy_consumed": {
-        "name": "Total energy consumed"
+        "name": "Énergie totale consommée"
+      },
+      "mission_progress": {
+        "name": "Progression de mission"
+      },
+      "map_learning": {
+        "name": "Apprentissage cartographique"
+      },
+      "zone_summary": {
+        "name": "Récapitulatif des zones"
       }
     },
     "binary_sensor": {
@@ -559,7 +570,7 @@
         "name": "Mission active"
       },
       "demand_clean_blocked": {
-        "name": "Demand clean blocked"
+        "name": "Nettoyage à la demande bloqué"
       }
     },
     "button": {

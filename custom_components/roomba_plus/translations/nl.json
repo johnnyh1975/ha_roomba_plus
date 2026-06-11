@@ -79,7 +79,8 @@
           "blocking_sensors": "Blocking sensors",
           "map_management": "Zone management",
           "presence_scheduling": "Aanwezigheidsgestuurde planning",
-          "demand_cleaning": "Demand cleaning"
+          "demand_cleaning": "Demand cleaning",
+          "rooms": "Kamers en zones"
         }
       },
       "zones": {
@@ -188,7 +189,8 @@
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens."
     }
   },
   "entity": {
@@ -489,13 +491,22 @@
         "name": "Reinigingstijd (30 d)"
       },
       "optimal_clean_window": {
-        "name": "Optimal clean window"
+        "name": "Aanwezigheid – Optimaal reinigingsvenster"
       },
       "recent_edge_coverage_ratio": {
-        "name": "Recent edge coverage ratio"
+        "name": "Prestaties – Randdekkingsverhouding (30 d)"
       },
       "total_energy_consumed": {
-        "name": "Total energy consumed"
+        "name": "Totaal energieverbruik"
+      },
+      "mission_progress": {
+        "name": "Missievortgang"
+      },
+      "map_learning": {
+        "name": "Kaartleren"
+      },
+      "zone_summary": {
+        "name": "Zonesamenvatting"
       }
     },
     "binary_sensor": {
@@ -559,7 +570,7 @@
         "name": "Missie actief"
       },
       "demand_clean_blocked": {
-        "name": "Demand clean blocked"
+        "name": "Vraag reinigen geblokkeerd"
       }
     },
     "button": {

@@ -284,6 +284,17 @@ def make_mission_callback(
                 except Exception:  # noqa: BLE001
                     pass
 
+            # MS1 (v2.6.0): override initiator to "demand" when DirtThresholdManager
+            # fired a start command within the last 30 seconds.
+            _demand_ts = getattr(entry.runtime_data, "demand_triggered_ts", None)
+            if isinstance(_demand_ts, float):
+                import time as _t_mod
+                if _t_mod.monotonic() - _demand_ts <= 30.0:
+                    mission = dict(mission)  # copy to avoid mutating reported state
+                    mission["initiator"] = "demand"
+                    entry.runtime_data.demand_triggered_ts = None
+                    _LOGGER.info("MissionStore: mission initiator overridden → demand")
+
         # F4e — accumulate recharge time on every hmMidMsn entry
         if phase == "hmMidMsn":
             rechrgM = reported.get("cleanMissionStatus", {}).get("rechrgM")
@@ -354,6 +365,11 @@ def make_mission_callback(
                 ),
                 hass.loop,
             )
+            # MP1 (v2.6.0): clear mission timer at end
+            _mts = getattr(entry.runtime_data, "mission_timer_store", None)
+            if _mts is not None:
+                _mts.clear(hass, entry.entry_id)
+
             current_mission_zones = []
             mission_start_ts = 0
             nstuck_at_start = 0
@@ -361,6 +377,15 @@ def make_mission_callback(
             last_recharge_phase_ts = 0.0
             had_stuck_event = False
             stuck_cleared_ts = 0.0
+
+        # MP1 (v2.6.0): accumulate run-only seconds in MissionTimerStore
+        _mts_upd = getattr(entry.runtime_data, "mission_timer_store", None)
+        if _mts_upd is not None and mission_start_ts:
+            _mission_id = f"{entry.data.get('blid', '')}_{mission_start_ts}"
+            if phase == "run":
+                _mts_upd.on_phase_run(_mission_id, hass, entry.entry_id)
+            else:
+                _mts_upd.on_phase_other()
 
         last_phase = phase
 

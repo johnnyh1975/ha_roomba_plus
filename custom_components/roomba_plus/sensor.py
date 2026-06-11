@@ -606,20 +606,27 @@ def _mop_behavior(entity: "IRobotEntity") -> StateType:
 # ── F5d — Battery capacity retention ─────────────────────────────────────────
 
 def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
-    """F5d — battery capacity as % of baseline estCap.
+    """F5d — battery capacity as % of OEM nominal (RF0 profile.battery_mah).
 
-    Calls record_estcap_if_needed on every update so the baseline is
-    established automatically on first MQTT message containing estCap.
+    Uses _estcap_to_mah() to convert the raw BMS estCap to mAh before
+    comparison.  This gives a meaningful absolute percentage from day one
+    (e.g. 157% = aftermarket battery larger than OEM; 79% = degraded OEM pack).
+
+    Also records the converted mAh value as the self-learning baseline so
+    aftermarket detection can compare against profile.battery_mah × 1.15.
+
     Below 75% explains rising recharge fraction (F5c) without schedule changes.
     """
     store = entity._config_entry.runtime_data.maintenance_store
-    est_cap = entity.battery_stats.get("estCap")
-    if store is None or est_cap is None:
+    profile = entity._config_entry.runtime_data.robot_profile
+    if store is None or profile is None or profile.battery_mah == 0:
         return None
-    store.record_estcap_if_needed(float(est_cap))
-    if store.baseline_estcap is None or store.baseline_estcap == 0:
+    capacity_mah = _estcap_to_mah(entity)
+    if capacity_mah is None:
         return None
-    return round(float(est_cap) / store.baseline_estcap * 100, 1)
+    # Record converted mAh (not raw BMS value) as self-learning baseline
+    store.record_estcap_if_needed(capacity_mah)
+    return round(capacity_mah / profile.battery_mah * 100, 1)
 
 
 # ── F5g — Estimated battery end-of-life ──────────────────────────────────────
@@ -646,14 +653,20 @@ def _estcap_to_mah(entity: "IRobotEntity") -> float | None:
     if profile is None or (profile.estcap_scale_liion == 1.0
                            and profile.estcap_scale_nimh == 1.0):
         return float(raw)
-    # 9-series: detect chemistry from cycle-count fields
+    # 9-series: detect current chemistry from cycle-count fields.
+    # nNimhChrg and nLithChrg are lifetime counters — both may be > 0 when
+    # the user has replaced the OEM Li-ion pack with an NiMH aftermarket battery.
+    # In that case nLithChrg > 0 still reflects the OEM period.
+    # Heuristic: if any NiMH cycles have been recorded, assume NiMH is current.
+    # This is correct for the common cases:
+    #   - OEM Li-ion only:           nLithChrg > 0, nNimhChrg = 0 → Li-ion ✓
+    #   - NiMH only (or swapped):    nNimhChrg > 0                 → NiMH  ✓
     nimh_cycles = entity.battery_stats.get("nNimhChrg") or 0
-    lith_cycles = entity.battery_stats.get("nLithChrg") or 0
-    if nimh_cycles > 0 and lith_cycles == 0:
+    if nimh_cycles > 0:
         scale = profile.estcap_scale_nimh
     else:
         scale = profile.estcap_scale_liion   # default: OEM Li-ion
-    return float(raw) / scale
+    return round(float(raw) / scale)  # mAh to nearest integer
 
 
 def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
@@ -661,16 +674,24 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
 
     Formula: actual_mAh × voltage × cycle_count / 1_000_000 → kWh
     For 9-series: raw estCap is divided by the BMS scale before use.
-    Cycle count from nLithChrg (preferred) or nAvail (fallback).
+    Cycle count is also chemistry-aware: uses nNimhChrg when NiMH is detected
+    (nNimhChrg > 0), nLithChrg otherwise — important when the user has replaced
+    the OEM Li-ion pack with NiMH aftermarket (nLithChrg stays at the OEM count).
     """
     actual_mah = _estcap_to_mah(entity)
     if actual_mah is None:
         return None
-    cycles = (
-        entity.battery_stats.get("nLithChrg")
-        or entity.battery_stats.get("nNimhChrg")
-        or entity.battery_stats.get("nAvail")
-    )
+
+    # Select cycle count matching the detected chemistry (same logic as _estcap_to_mah)
+    nimh_cycles = entity.battery_stats.get("nNimhChrg") or 0
+    if nimh_cycles > 0:
+        cycles = nimh_cycles          # NiMH battery — use NiMH cycle counter
+    else:
+        cycles = (
+            entity.battery_stats.get("nLithChrg")   # Li-ion primary
+            or entity.battery_stats.get("nAvail")    # fallback for old firmware
+        )
+
     if not cycles:
         return None
     profile = entity._config_entry.runtime_data.robot_profile
@@ -780,7 +801,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="filter_remaining_hours",
         name="Maintenance – Filter",
         native_unit_of_measurement=UnitOfTime.HOURS,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         threshold_fn=lambda e: e._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
     ),
@@ -789,7 +810,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="brush_remaining_hours",
         name="Maintenance – Brushes",
         native_unit_of_measurement=UnitOfTime.HOURS,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
     ),
@@ -943,7 +964,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="signal_noise",
         translation_key="signal_noise",
-        name="Signal noise",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dB",
         state_class=SensorStateClass.MEASUREMENT,
@@ -1004,7 +1024,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_recharge_time",
         translation_key="mission_recharge_time",
-        name="Recharge time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1014,7 +1033,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="mission_expire_time",
         translation_key="mission_expire_time",
-        name="Mission expire time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -1071,7 +1089,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="next_clean",
         name="Status – Next clean",
         device_class=SensorDeviceClass.TIMESTAMP,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         filter_fn=lambda s: bool(s.get("cleanSchedule2") or s.get("cleanSchedule")),
         value_fn=lambda e: None,   # computed in RoombaSensor.native_value
     ),
@@ -1260,7 +1278,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="clean_streak",
         name="Missions – Clean streak",
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
     ),
     RoombaSensorDescription(
@@ -1290,7 +1308,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=1,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         filter_fn=lambda s: has_pose(s),   # 600-series reports no sqft
         value_fn=lambda e: _mission_store_value(e, _area_cleaned_today),
     ),
@@ -1298,7 +1316,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="last_mission_result",
         translation_key="last_mission_result",
         name="Missions – Last result",
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("result") if s.latest() else None
         ),
@@ -1434,7 +1452,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Filter days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         filter_fn=lambda s: not is_mop(s),
         value_fn=_filter_days_until_due,
     ),
@@ -1444,7 +1462,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Brush days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         filter_fn=lambda s: not is_mop(s),
         value_fn=_brush_days_until_due,
     ),
@@ -1469,10 +1487,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Battery capacity",
         native_unit_of_measurement="mAh",
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
-        value_fn=lambda e: e.battery_stats.get("estCap"),
+        value_fn=_estcap_to_mah,   # RF0: divides by BMS scale for 9-series
     ),
     RoombaSensorDescription(
         key="nav_panics",
@@ -1509,7 +1528,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="battery_capacity_retention",
         translation_key="battery_capacity_retention",
-        name="Maintenance – Battery capacity retention",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1607,9 +1625,25 @@ async def async_setup_entry(
     if data.grid_store is not None and data.map_capability.value != "none":
         entities.append(RoombaEdgeCoverageSensor(roomba, blid, config_entry))
 
+    # IA74-LP (v2.6.0) — learning_percentage (SMART + cloud only)
+    if data.map_capability.value == "smart" and data.cloud_coordinator is not None:
+        entities.append(RoombaLearningPercentageSensor(roomba, blid, config_entry))
+
+    # IA74-ZONE (v2.6.0) — zone summary (SMART + cloud only)
+    if data.map_capability.value == "smart" and data.cloud_coordinator is not None:
+        entities.append(RoombaZoneSummarySensor(roomba, blid, config_entry))
+
     # F12a — optimal_clean_window sensor (presence scheduling active)
     if data.presence_manager is not None:
         entities.append(RoombaOptimalCleanWindow(roomba, blid, config_entry))
+
+    # MP1 (v2.6.0) — mission progress (SMART + cloud + timer store)
+    if (
+        data.map_capability.value == "smart"
+        and data.cloud_coordinator is not None
+        and data.mission_timer_store is not None
+    ):
+        entities.append(RoombaMissionProgress(roomba, blid, config_entry))
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
@@ -2495,7 +2529,15 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         if self.entity_description.attributes_fn is None:
             return {}
-        return self.entity_description.attributes_fn(self._coordinator.raw_records)
+        attrs = dict(self.entity_description.attributes_fn(self._coordinator.raw_records))
+        # L5 (v2.6.0): add by_room dirtiness to recent_dirt_density sensor
+        if self.entity_description.key == "recent_dirt_density":
+            rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
+            if rps is not None:
+                rel = rps.room_dirt_relative()
+                if rel:
+                    attrs["by_room"] = {rid: round(v, 3) for rid, v in rel.items()}
+        return attrs
 
     @property
     def available(self) -> bool:
@@ -2631,8 +2673,12 @@ class RawStateSensor(IRobotEntity, SensorEntity):
     Intended for power users and debugging unknown robot models.
     """
 
-    _attr_translation_key = "raw_state"
-    _attr_name            = "Raw MQTT state"   # G6: locale-independent entity_id slug
+    entity_description = SensorEntityDescription(
+        key="raw_state",
+        name="Raw MQTT state",
+        translation_key="raw_state",
+    )
+
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
 
@@ -2685,8 +2731,13 @@ class RoombaOptimalCleanWindow(IRobotEntity, SensorEntity):
     entity_category: DIAGNOSTIC — opt-in; not shown in default dashboard view.
     """
 
-    _attr_translation_key = "optimal_clean_window"
-    _attr_name = "Optimal clean window"  # G6: locale-independent slug
+    entity_description = SensorEntityDescription(
+        key="optimal_clean_window",
+        name="Optimal clean window",
+        translation_key="optimal_clean_window",
+    )
+
+    _attr_entity_category = None  # reclassified: main entity (v2.6.0)
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = None  # timestamp sensors have no state_class
@@ -2729,6 +2780,9 @@ class RoombaOptimalCleanWindow(IRobotEntity, SensorEntity):
                 for (wd, hr), score in windows.items()
             },
             "preferred_slot": pm.preferred_window(),
+            # ALG2 (v2.6.0): True when the best window is today, so cards and
+            # automations can distinguish "clean now" from "clean tomorrow".
+            "window_is_today": pm.window_is_today,
         }
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -2749,8 +2803,12 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
     Unit: None (dimensionless ratio).
     """
 
-    _attr_translation_key = "recent_edge_coverage_ratio"
-    _attr_name = "Recent edge coverage ratio"  # G6: locale-independent slug
+    entity_description = SensorEntityDescription(
+        key="recent_edge_coverage_ratio",
+        name="Recent edge coverage ratio",
+        translation_key="recent_edge_coverage_ratio",
+    )
+
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = None
@@ -2774,10 +2832,331 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
         gs = self._config_entry.runtime_data.grid_store
         if gs is None:
             return {}
-        return {
+        attrs: dict[str, Any] = {
             "total_cells": gs.cell_count,
             "edge_depth_mm": 300,
         }
+        # L6 (v2.6.0): ratio vs personal baseline (1.0 = on-par; <1 = below norm)
+        rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
+        if rps is not None and rps.coverage_baseline_ready:
+            current = self.native_value
+            if isinstance(current, float) and rps.coverage_baseline:
+                attrs["coverage_vs_baseline"] = round(
+                    current / rps.coverage_baseline, 3
+                )
+        return attrs
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "pose" in new_state
+
+
+def _get_planned_room_order(data: Any) -> list[str]:
+    """Resolve planned_room_order from lastCommand.regions in MQTT state.
+
+    MP1 helper — reads the live MQTT state so planned order is available
+    immediately at mission start without waiting for a cloud refresh.
+    Returns an empty list when no room-select command was issued (whole-home).
+    """
+    cc = getattr(data, "cloud_coordinator", None)
+    if cc is None:
+        return []
+    reported = data.roomba.master_state.get("state", {}).get("reported", {})
+    last_cmd = reported.get("lastCommand", {})
+    region_ids = [
+        r.get("region_id")
+        for r in (last_cmd.get("regions") or [])
+        if r.get("region_id")
+    ]
+    if not region_ids:
+        return []
+    id_to_name = {r["id"]: r["name"] for r in cc.regions if r.get("id")}
+    return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
+
+
+# ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
+
+class RoombaMissionProgress(IRobotEntity, SensorEntity):
+    """Estimated mission completion percentage (0–100).
+
+    MP1 (v2.6.0) — uses per-room time estimates from TE1 and elapsed run-only
+    seconds from MissionTimerStore to show real-time mission progress without
+    requiring manual calibration.
+
+    Available only for SMART robots with cloud credentials and a loaded
+    MissionTimerStore. Shows Unknown when no mission is active.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="mission_progress",
+        name="Mission progress",
+        translation_key="mission_progress",
+    )
+
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = None  # main entity — visible on device page
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_mission_progress"
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _room_estimates(self, planned_order: list[str]) -> list[int | None]:
+        """Return per-room time estimates (seconds) in planned order.
+
+        Reads from cloud_coordinator.regions[*].time_estimates (TE1).
+        Returns None for any room where confidence < GOOD_CONFIDENCE or
+        pass mode is Auto (no estimate available at runtime for Auto).
+        """
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return [None] * len(planned_order)
+
+        # Determine pass mode from select entity state
+        pass_key = "two_pass_sec"
+        reported = self._config_entry.runtime_data.roomba_reported_state()
+        noap = reported.get("cleanMissionStatus", {}).get("noAutoPasses", True)
+        two_pass = reported.get("cleanMissionStatus", {}).get("twoPass", False)
+        if not noap:
+            # Auto mode — no reliable per-room estimate
+            pass_key = None
+        elif two_pass:
+            pass_key = "two_pass_sec"
+        else:
+            pass_key = "one_pass_sec"
+
+        # Build name→estimates map from coordinator
+        region_map: dict[str, dict] = {}
+        for region in cc.regions:
+            name = region.get("name", "")
+            if name:
+                region_map[name.lower()] = region.get("time_estimates", {})
+
+        result: list[int | None] = []
+        for room_name in planned_order:
+            est = region_map.get(room_name.lower(), {})
+            if pass_key is None:
+                result.append(None)
+            else:
+                result.append(est.get(pass_key))
+        return result
+
+    # ── Sensor state ──────────────────────────────────────────────────────────
+
+    @property
+    def native_value(self) -> StateType:
+        """Return completion % (0–100) or None when inactive."""
+        data = self._config_entry.runtime_data
+        state = data.roomba_reported_state()
+        phase = state.get("cleanMissionStatus", {}).get("phase", "")
+        mts = data.mission_timer_store
+
+        # Not in a cleaning phase → not active
+        if phase not in ("run", "hmMidMsn", "evac", "charge"):
+            return None
+        if mts is None or mts.mission_id is None:
+            return None
+
+        elapsed = mts.run_sec
+        planned_order: list[str] = _get_planned_room_order(data)
+        if not planned_order:
+            # No room sequence — use elapsed vs. rolling mean as fallback
+            rps = getattr(data, "robot_profile_store", None)
+            mean_sec = (
+                round((rps.mission_duration_mean or 0) * 60)
+                if rps is not None else 0
+            )
+            if mean_sec > 0:
+                return min(99, round(elapsed / mean_sec * 100))
+            return None
+
+        estimates = self._room_estimates(planned_order)
+        if any(e is None for e in estimates):
+            # At least one room has no estimate — use count-based progress
+            total_rooms = len(planned_order)
+            # Estimate current room from elapsed vs. mean-per-room
+            total_known = sum(e for e in estimates if e is not None)
+            avg_sec = total_known / max(len([e for e in estimates if e is not None]), 1)
+            if avg_sec > 0:
+                completed_rooms = min(total_rooms - 1, int(elapsed / avg_sec))
+                return min(99, round(completed_rooms / total_rooms * 100))
+            return None
+
+        total_sec = sum(estimates)  # type: ignore[arg-type]
+        if total_sec == 0:
+            return None
+        return min(99, round(elapsed / total_sec * 100))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self._config_entry.runtime_data
+        state = data.roomba_reported_state()
+        phase = state.get("cleanMissionStatus", {}).get("phase", "")
+        mts = data.mission_timer_store
+        if mts is None or mts.mission_id is None:
+            return {}
+
+        planned_order: list[str] = _get_planned_room_order(data)
+        elapsed = mts.run_sec
+        estimates = self._room_estimates(planned_order) if planned_order else []
+
+        # Determine current and next room from elapsed
+        current_room: str | None = None
+        next_room: str | None = None
+        estimated_remaining_min: int | None = None
+
+        if planned_order and estimates and all(e is not None for e in estimates):
+            cumulative = 0
+            for i, est in enumerate(estimates):
+                assert est is not None
+                if elapsed < cumulative + est:
+                    current_room = planned_order[i]
+                    next_room = planned_order[i + 1] if i + 1 < len(planned_order) else None
+                    remaining_sec = (cumulative + est - elapsed) + sum(
+                        estimates[j]  # type: ignore[arg-type]
+                        for j in range(i + 1, len(estimates))
+                    )
+                    estimated_remaining_min = max(0, round(remaining_sec / 60))
+                    break
+                cumulative += est
+            else:
+                # All rooms elapsed — in final room
+                current_room = planned_order[-1]
+
+        return {
+            "current_room": current_room,
+            "next_room": next_room,
+            "elapsed_run_min": round(elapsed / 60) if elapsed else 0,
+            "estimated_remaining_min": estimated_remaining_min,
+            "room_sequence": planned_order,
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _on_state_change() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            self._config_entry.runtime_data.roomba.register_on_message_callback(
+                lambda _: _on_state_change()
+            ) if hasattr(
+                self._config_entry.runtime_data.roomba, "register_on_message_callback"
+            ) else lambda: None
+        )
+
+
+# ── IA74-LP — Map Learning Percentage sensor ───────────────────────────────────
+
+class RoombaLearningPercentageSensor(IRobotEntity, SensorEntity):
+    """Map learning completeness score from the iRobot cloud (0–100 %).
+
+    IA74-LP (v2.6.0) — SMART robots only. The robot's own assessment of how
+    well it knows its environment. Low values indicate the robot has not fully
+    explored the home; a stable map requires values near 100.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="map_learning",
+        name="Map learning",
+        translation_key="map_learning",
+    )
+
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_map_learning"
+
+    @property
+    def native_value(self) -> StateType:
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return None
+        return cc.learning_percentage
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # Updated by cloud coordinator listener only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(cc.async_add_listener(_on_coordinator_update))
+
+
+# ── IA74-ZONE — Zone Summary sensor ───────────────────────────────────────────
+
+class RoombaZoneSummarySensor(IRobotEntity, SensorEntity):
+    """Count of active clean zones on the SMART map.
+
+    IA74-ZONE (v2.6.0) — surfaces the three zone categories as a single sensor
+    (state = clean zone count) with keepout and observed counts as attributes.
+    Provides a quick map health overview without requiring the user to open the
+    iRobot app.
+
+    SMART + cloud only. State = number of clean zones (int).
+    """
+
+    entity_description = SensorEntityDescription(
+        key="zone_summary",
+        name="Zone summary",
+        translation_key="zone_summary",
+    )
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_zone_summary"
+
+    @property
+    def native_value(self) -> StateType:
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return None
+        return cc.zone_counts.get("clean")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return {}
+        counts = cc.zone_counts
+        return {
+            "clean_zones":    counts.get("clean", 0),
+            "keepout_zones":  counts.get("keepout", 0),
+            "observed_zones": counts.get("observed", 0),
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # updated by cloud coordinator only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(cc.async_add_listener(_on_coordinator_update))

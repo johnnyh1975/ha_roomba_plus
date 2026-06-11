@@ -75,7 +75,8 @@
           "blocking_sensors": "Blocking sensors",
           "map_management": "Zone management",
           "presence_scheduling": "Anwesenheitsbasierte Planung",
-          "demand_cleaning": "Demand cleaning"
+          "demand_cleaning": "Demand cleaning",
+          "rooms": "Räume & Zonen"
         }
       },
       "zones": {
@@ -184,7 +185,8 @@
       "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "demand_cleaning_not_supported": "Bedarfsgesteuerte Reinigung erfordert einen SMART-Roboter mit konfigurierten Cloud-Zugangsdaten."
     }
   },
   "entity": {
@@ -196,7 +198,7 @@
         "name": "Missionen – Gesamtzeit"
       },
       "average_mission_time": {
-        "name": "Missionen – Ø Dauer"
+        "name": "Missionen – Durchschn. Dauer"
       },
       "total_missions": {
         "name": "Missionen gesamt"
@@ -352,13 +354,13 @@
         "name": "Anwesenheit – Nächstes Reinigungsfenster"
       },
       "filter_wear_rate": {
-        "name": "Wartung – Filter Verschleißrate"
+        "name": "Wartung – Filter Verschleissrate"
       },
       "brush_wear_rate": {
-        "name": "Wartung – Bürsten Verschleißrate"
+        "name": "Wartung – Bursten Verschleissrate"
       },
       "pad_wear_rate": {
-        "name": "Wartung – Pad Verschleißrate"
+        "name": "Wartung – Pad Verschleissrate"
       },
       "filter_days_until_due": {
         "name": "Wartung – Filter Tage bis fällig"
@@ -485,13 +487,22 @@
         "name": "Reinigungszeit (30 T)"
       },
       "optimal_clean_window": {
-        "name": "Optimal clean window"
+        "name": "Anwesenheit – Optimales Reinigungsfenster"
       },
       "recent_edge_coverage_ratio": {
-        "name": "Recent edge coverage ratio"
+        "name": "Leistung – Kantenabdeckung (30 T)"
       },
       "total_energy_consumed": {
-        "name": "Total energy consumed"
+        "name": "Gesamter Energieverbrauch"
+      },
+      "mission_progress": {
+        "name": "Missionsfortschritt"
+      },
+      "map_learning": {
+        "name": "Kartenlernen"
+      },
+      "zone_summary": {
+        "name": "Zonenübersicht"
       }
     },
     "binary_sensor": {
@@ -555,7 +566,7 @@
         "name": "Mission aktiv"
       },
       "demand_clean_blocked": {
-        "name": "Demand clean blocked"
+        "name": "Bedarfsreinigung blockiert"
       }
     },
     "button": {

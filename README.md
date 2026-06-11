@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.5.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.6.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -9,67 +9,99 @@
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
 **Why Roomba+?**
-- **100+ entities** (91 sensors, 15 binary sensors, 19 controls, 2 map images) vs 13 in the Core integration — maintenance life, wear rates, mission history, error intelligence, presence analytics, performance tracking, and more
-- **Zero cloud dependency** — all robot control goes through local MQTT; cloud credentials are optional and only used for map sync and history enrichment
-- **Automation-ready** — blocking sensor gate, presence-aware scheduling, device triggers, and named HA actions make Roomba a first-class citizen in your automations
+- **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
+- **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
+- **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
+- **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
+- **Gold quality scale** — 1884 tests, 7 languages, full config entry migration chain, CI/CD.
 
-> 📊 **[Full feature comparison with HA Core Roomba and roomba_rest980 →](COMPARISON.md)**
+> 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
 ---
 
-| Series | Examples | Map | Zones | Cloud features | Schedule hold | Bin present | Tested |
-|---|---|---|---|---|---|---|---|
-| **600** (Bump & Run) | Roomba 694, 692 | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ untested |
-| **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ✅ mission history | ❌ | ❌ | ✅ **Roomba 980** |
-| **i-series** | i3, i7, i7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **i7+** |
-| **s-series** | s9+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ⚠️ untested |
-| **j-series** | j7, j7+ | ✅ | ✅ Smart Map | ✅ optional | ✅ | ✅ | ✅ **j-series** |
-| **Braava** | m6 | ✅ | ✅ Smart Map | ✅ optional | ✅ | ❌ (mop ready ✅) | ⚠️ untested |
+## Contents
 
-> **Tested hardware:** Roomba 980, Roomba i7+, and j-series (lewis firmware). Support for other series is implemented based on protocol documentation, capability flags, and the roombapy library.
+- [Supported hardware](#supported-hardware)
+- [Installation](#installation)
+- [Getting started](#getting-started)
+- [Migration](#migration)
+- [Features](#features)
+  - [🔴 Robot status & control](#-robot-status--control)
+  - [🟠 Cleaning & zones](#-cleaning--zones)
+  - [🟡 Maintenance & health](#-maintenance--health)
+  - [🟢 Mission history & intelligence](#-mission-history--intelligence)
+  - [🔵 Presence & scheduling](#-presence--scheduling)
+  - [⚪ Connectivity & advanced](#-connectivity--advanced)
+- [Room cleaning setup (HA 2026.3+)](#room-cleaning-setup-ha-20263)
+- [Automation examples](#automation-examples)
+- [Dashboard example](#dashboard-example)
+- [Documentation](#documentation)
+- [Translations](#translations)
+- [Credits](#credits)
 
-> Cloud features require your iRobot app email and password. They are entirely optional — all local MQTT functionality works identically without them.
+---
+
+## Supported hardware
+
+| Series | Examples | Map | Zones | Cloud features | Tested |
+|---|---|---|---|---|---|
+| **600** (Bump & run) | Roomba 694, 692 | ❌ | ❌ | ❌ | ⚠️ untested |
+| **900** (VSLAM) | Roomba 980, 985 | ✅ ephemeral | ✅ automatic | ✅ history | ✅ **Roomba 980** |
+| **i-series** | i3, i7, i7+ | ✅ Smart Map | ✅ Smart Map | ✅ optional | ✅ **i7+** |
+| **s-series** | s9+ | ✅ Smart Map | ✅ Smart Map | ✅ optional | ⚠️ untested |
+| **j-series** | j7, j7+ | ✅ Smart Map | ✅ Smart Map | ✅ optional | ✅ **j-series** |
+| **Braava** | m6 | ✅ Smart Map | ✅ Smart Map | ✅ optional | ⚠️ untested |
+
+**Capability tiers:** 600-series = bump-and-run (no map or zones). 900-series = VSLAM ephemeral map, automatic zone detection, cloud history. i/s/j/Braava = Smart Map with persistent named rooms, favorites, and full cloud integration.
+
+> Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them.
 
 ---
 
 ## Installation
 
-### Requirements
-
-- Home Assistant 2024.11 or newer
-- HACS installed (recommended) or manual install
+**Requirements:** Home Assistant 2024.11 or newer · HACS installed (for recommended install)
 
 ### HACS (recommended)
 
 1. HACS → Integrations → ⋮ → Custom repositories
-2. URL: `https://github.com/johnnyh1975/ha_roomba_plus` | Category: Integration
+2. URL: `https://github.com/johnnyh1975/ha_roomba_plus` · Category: Integration
 3. Install **Roomba+** → restart HA
 
 ### Manual
 
-1. Copy `custom_components/roomba_plus/` into your HA configuration directory
-2. Restart HA
+Copy `custom_components/roomba_plus/` into your HA `config/` directory, then restart HA.
 
-### Setup
+### First-time setup
 
 1. Settings → Devices & Services → Add integration → **Roomba+**
-2. Roomba is discovered automatically via DHCP/Zeroconf
+2. Roomba is discovered automatically via DHCP/Zeroconf — or enter the IP manually
 3. Hold the **HOME** button on the robot for ~2 seconds until it plays tones
-4. Integration connects
-5. **(Smart Map robots, optional)** Enter your iRobot app email and password to enable cloud features — or leave blank to skip
+4. *(Smart Map robots, optional)* Enter your iRobot app email and password to enable cloud features
 
-> **Note:** Roomba+ and the built-in Core Roomba integration cannot run at the same time — they compete for the same local MQTT connection. Remove the Core integration first.
+> **Note:** Roomba+ and the built-in Core Roomba integration cannot run simultaneously — they share the same local MQTT connection. Remove the Core integration first.
 
-### Adding or updating cloud credentials after setup
+### Adding or updating cloud credentials
 
 Settings → Devices & Services → Roomba+ → Configure → **iRobot cloud credentials**
 
-Enter your iRobot email and password, or clear both fields to disable cloud features. A credential test runs before saving.
+Enter email and password, or clear both fields to disable cloud. A connection test runs before saving.
 
-### Reconfiguration
+### Reconfiguration (IP/password change)
 
-Host IP address and password can be changed without removing and re-adding the integration:
-**Settings → Devices → Roomba+ → ⋮ → Reconfigure**
+Settings → Devices → Roomba+ → ⋮ → **Reconfigure** — no need to remove and re-add.
+
+---
+
+## Getting started
+
+After installation, five steps to get the most out of Roomba+:
+
+1. **Check the map** — open the device page. `image.{name}_cleaning_map` renders automatically for 900-series and Smart Map robots. No configuration required.
+2. **Smart Map robots: add cloud credentials** — Settings → Devices → Roomba+ → Configure → iRobot cloud credentials. Room names, favorites, and history appear immediately.
+3. **Replace `vacuum.start` with `roomba_plus.smart_start`** in all automations — it respects blocking sensors and optionally targets specific rooms.
+4. **Set a blocking sensor** (optional) — Settings → Configure → Blocking sensors. Pick any binary sensor (door contact, occupancy, person home). The robot will queue or abort rather than starting when it fires.
+5. **Reset consumables after replacing them** — Settings → device → press the Filter / Brush / Battery reset button. The remaining-life countdown restarts.
 
 ---
 
@@ -79,7 +111,7 @@ Host IP address and password can be changed without removing and re-adding the i
 
 1. Settings → Devices & Services → iRobot Roomba and Braava → Delete
 2. Restart Home Assistant
-3. Add Roomba+ via HACS
+3. Install and set up Roomba+ via HACS
 
 ### From roomba_rest980
 
@@ -87,56 +119,53 @@ Host IP address and password can be changed without removing and re-adding the i
 2. Add Roomba+ — it connects directly to the robot without middleware
 3. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
 
----
+### Multiple robots
 
-## Multiple robots
-
-Each robot is set up as a separate integration entry with its own device, entities, and storage. Repeat the Add Integration flow for each robot. Cloud credentials are stored per robot.
+Each robot is a separate integration entry with its own device, entities, and storage. Repeat the Add Integration flow for each robot. Cloud credentials are stored per robot.
 
 ---
 
 ## Features
 
-### 🔴 Robot Status & Control
+### 🔴 Robot status & control
 
-**Status sensors** give you full visibility into what the robot is doing at every moment:
+**Status sensors:**
 
 | Sensor / Entity | Notes |
 |---|---|
 | Phase | Idle / Stopped detection beyond the standard HA states |
 | Error code | 80+ error codes with `description` and `action` attributes |
 | Readiness | Whether the robot is ready to start |
-| Job initiator | Who triggered the current mission |
+| Job initiator | Who triggered the current mission (`schedule`, `manual`, `demand`) |
 | Next scheduled clean | From `cleanSchedule2` or legacy `cleanSchedule` |
-| Battery | Charge percentage |
+| Battery level | Charge percentage |
 | Connected | MQTT connectivity binary sensor |
 | IP address | Current robot IP |
 | RSSI / SNR / Signal noise | Wi-Fi signal quality |
 
-**Controls** let you drive the robot beyond the standard HA vacuum card:
+**Controls:**
 
 | Control | Type | Notes |
 |---|---|---|
 | Cleaning passes | Select | Auto / One pass / Two passes |
-| Carpet boost | Select | Automatic / Eco / Performance (980 and compatible) |
+| Carpet boost | Select | Automatic / Eco / Performance (900-series) |
 | Edge cleaning | Switch | |
 | Always finish | Switch | Keep cleaning even when bin is full (i7+/s9+/j7+ with Clean Base) |
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
 | Locate robot | Button | Play find-me tone |
 | Evacuate bin | Button | Clean Base models only |
 
-**Actions** callable from automations (Settings → Automations → Actions → Roomba+):
+**Actions** (Settings → Automations → Actions → Roomba+):
 
-| Action | Applies to | Description |
+| Action | Robots | Description |
 |---|---|---|
-| `roomba_plus.smart_start` | All robots | Start with blocking-sensor check |
-| `roomba_plus.clean_room` | SMART robots (i/s/j) | Clean one or more named rooms |
-| HA area mapping (`vacuum.clean_area`) | SMART robots + cloud, **HA 2026.3+** | Map HA areas to rooms; clean any area directly from the vacuum card. Silently absent on older HA. |
-| `roomba_plus.reset_filter` | All robots | Record filter replacement |
-| `roomba_plus.reset_brush` | All robots | Record brush replacement |
-| `roomba_plus.reset_battery` | All robots | Record battery replacement |
-| `roomba_plus.reset_pad` | Braava | Record cleaning pad replacement |
-| `roomba_plus.clean_sequence` | All robots | Start robot B when robot A finishes |
+| `roomba_plus.smart_start` | All | Start with blocking-sensor gate; optionally targets rooms on SMART robots |
+| `roomba_plus.clean_room` | SMART | Clean one or more named rooms — no HA 2026.3+ required |
+| `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup-ha-20263) |
+| `roomba_plus.reset_filter` | All | Record filter replacement |
+| `roomba_plus.reset_brush` | All | Record brush / pad replacement |
+| `roomba_plus.reset_battery` | All | Record battery replacement |
+| `roomba_plus.clean_sequence` | All | Start robot B when robot A finishes |
 
 **Device triggers** for automations:
 
@@ -149,26 +178,47 @@ Each robot is set up as a separate integration entry with its own device, entiti
 | Docked | Robot is docked and charging |
 | Error reported | Robot reports any error |
 
-**Experimental buttons — 900-series only (disabled by default)**
+**Experimental buttons — 900-series only** (disabled by default, enable via entity list):
 
-Enable individually via Settings → Devices & Services → Roomba+ → device → entity list.
-
-| Button | Command | What it does |
-|---|---|---|
-| Spot clean | `spot` | Cleans a small area around the robot's current position |
-| Quick clean | `quick` | Shorter full-floor mission |
-| Sleep | `sleep` | Sends the robot to low-power sleep state |
-| Power off | `off` | Powers the robot off completely |
-
-> After `power off` the robot will not respond to local MQTT until physically woken — press the Clean button or use the iRobot app.
+| Button | What it does |
+|---|---|
+| Spot clean | Cleans a small area around the robot's current position |
+| Quick clean | Shorter full-floor mission |
+| Sleep | Sends the robot to low-power sleep state |
+| Power off | Powers the robot off completely |
 
 ---
 
-### 🟠 Cleaning & Zones
+### 🟠 Cleaning & zones
 
-#### Smart Start with blocking sensor gate — all robots
+#### `clean_room` vs `vacuum.clean_area`
 
-Prevent cleaning from starting when a door is open, a room is occupied, or people are home. Configure via **Settings → Devices & Services → Roomba+ → Configure → Blocking sensors**.
+Two ways to clean specific rooms — choose based on your HA version and setup:
+
+| | `roomba_plus.clean_room` | `vacuum.clean_area` |
+|---|---|---|
+| HA version | Any | 2026.3+ only |
+| Setup required | None | One-time area mapping in device settings |
+| Room reference | Name string (`"Kitchen"`) | HA area ID |
+| After map retrain | Continues working | Prompts re-mapping |
+
+```yaml
+# clean_room — works on any HA version, no setup required
+action: roomba_plus.clean_room
+target:
+  entity_id: vacuum.roomba
+data:
+  room_name:
+    - Kitchen
+    - Hallway
+  ordered: true   # clean in sequence rather than most-efficient order
+```
+
+#### Smart Start with blocking sensor gate
+
+Prevent cleaning from starting when a door is open, a room is occupied, or people are home.
+
+Configure: Settings → Devices & Services → Roomba+ → Configure → **Blocking sensors**
 
 | Option | Values | Default |
 |---|---|---|
@@ -176,227 +226,135 @@ Prevent cleaning from starting when a door is open, a room is occupied, or peopl
 | Behavior when blocked | `abort` or `queue and wait` | `queue and wait` |
 | Queue timeout | 5–120 min | 30 min |
 
-Use `roomba_plus.smart_start` instead of `vacuum.start` in automations:
-
 ```yaml
 action: roomba_plus.smart_start
 target:
   entity_id: vacuum.roomba
 data:
-  override_blocking: false   # set true to bypass sensors
-  # rooms: [Kitchen, Hallway]  # SMART robots only
+  override_blocking: false   # set true to bypass sensors in this call
+  rooms:                     # SMART robots only — omit for whole-home clean
+    - Kitchen
+    - Hallway
 ```
 
 - **abort** — fires `roomba_plus_start_blocked` event immediately if any sensor is ON
 - **queue** — waits until all sensors clear (up to timeout), then starts; fires `roomba_plus_start_timeout` if expired
-- Unavailable/unknown sensors are treated as non-blocking
+- Unavailable / unknown sensors are treated as non-blocking
 
-Binary sensor: `start_blocked` (ON while queued, with `blocking_entities`, `queued_since`, `timeout_at` attributes).
+Binary sensor `{name}_start_blocked` — ON while queued, with `blocking_entities`, `queued_since`, `timeout_at` attributes.
 
-#### Zone Management UI — 900-series and Smart Map robots
+#### Zone management
 
-A unified config flow replaces the disconnected rename + repair flows:
-
-**Settings → Devices & Services → Roomba+ → Configure → Zone management**
+Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms & zones**
 
 - Browse all zones in a structured index
-- Rename any zone with a text input (Smart Map robots: alias overrides cloud name)
+- Rename any zone; Smart Map robots use the alias alongside the cloud name
 - Hide zones — removed from selectors, `clean_room`, and repair issues
-- Changes saved atomically — one write, no partial state
-- Alias-clear-on-match: typing the same name as the cloud name removes the alias so future cloud renames flow through automatically
+- Changes saved atomically
 
-#### Cloud zone sync — Smart Map robots (i/s/j/Braava, optional)
+#### Cloud zone sync — Smart Map robots
 
-When cloud credentials are configured:
+> ☁️ Requires cloud credentials
 
-- Room and zone names come directly from your Smart Map — no manual repair-flow naming required
-- One select entity per floor; robots with multiple Smart Maps get one per map (inactive maps disabled by default)
-- Each saved cleaning routine in the iRobot app appears as a button entity
-- `clean_room` action uses cloud names directly — no naming flow required
-- Roomba+ detects map version changes in MQTT and immediately refreshes cloud data without waiting for the 24-hour poll
-- The `smart_zones_need_naming` repair issue is suppressed when cloud is active
-
-> Cloud credentials are stored encrypted in HA. All robot control commands go through local MQTT — only map metadata is fetched from the cloud.
-
-#### Zone naming — Smart Map robots without cloud credentials
-
-When new room IDs are discovered via MQTT, a HA Repair Issue is raised automatically. The fix flow opens directly in the Repairs dialog. The form accepts both newline-separated (`1=Kitchen` per line) and comma-separated (`1=Kitchen,17=Hallway`) input.
+- Room and zone names come directly from the Smart Map — no manual naming required
+- One select entity per floor; multiple Smart Maps supported
+- Each saved iRobot app routine appears as a button entity
+- `clean_room` uses cloud names directly; map version changes trigger an immediate refresh
 
 #### Zone detection — 900-series
 
-Automatic room segmentation from travel data:
+Automatic room segmentation from travel data across missions. Doorway crossings detected, clustered after ≥2 sightings, and persisted across restarts. User naming via Options Flow.
 
-- Doorway crossings detected and shown as markers on the map
-- Markers clustered across missions — shown after ≥2 sightings
-- Detected zones persist across restarts
-- User naming via Options Flow after each mission
-- Calibration via door-width wizard
+#### Cleaning map
 
-#### Cleaning map — 900-series and Smart Map robots
-
-Live map of the current cleaning mission as a HA image entity:
-
-- White background, blue travel path, light-blue cleaned area
-- Dock marker, robot position with direction arrow
-- Stuck events marked on the map
-- Map state survives HA restarts — persisted to `hass.storage` after each mission
-- Room outline suggestions — dashed rectangles from zone bounding boxes (900-series)
-- Door crossing markers — small circles showing door crossings accumulated across missions
+`image.{name}_cleaning_map` — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
 
 ```yaml
-# Minimal dashboard card
 type: picture-entity
 entity: image.roomba_cleaning_map
 show_name: false
 show_state: false
+```
+
+#### Rooms map — Smart Map robots (v2.3+)
+
+`image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). Both map entities expose `calibration` and `rooms` attributes for xiaomi-vacuum-map-card integration.
+
+```yaml
+type: custom:xiaomi-vacuum-map-card
+entity: vacuum.roomba
+map_source:
+  camera: image.roomba_rooms_map
+calibration_source:
+  camera: true                 # reads calibration attribute automatically
+map_modes:
+  - template: vacuum_clean_segment
+    service_call_schema:
+      service: roomba_plus.clean_room
+      service_data:
+        entity_id: "[[entity_id]]"
+        room_name: "[[selection]]"
+        ordered: true
+    predefined_selections:
+      - id: Kitchen             # must match the room name exactly (case-insensitive)
+        label:
+          text: Kitchen
 ```
 
 #### Coverage map (v2.2+)
 
-`image.{name}_coverage_map` — EMA-weighted occupancy heatmap. Updated at each mission end. Attributes include `cell_count`, `stuck_event_count`, `decay`, `visit_increment`, and bounding box. Gated behind pose capability — registered automatically when `image.{name}_cleaning_map` would also be registered.
-
-#### Room outline — 900-series (v2.4+)
-
-`image.{name}_cleaning_map` gains a progressive grey room outline overlay for EPHEMERAL robots (980, 985) after ≥ 2 missions. Extracted from each mission's cleaned-area image using PIL edge detection (no Cloud, no OpenCV) and EMA-merged across missions — the outline sharpens progressively. Persisted to `hass.storage` so it survives HA restarts. SMART robots use UmfAligner polygons instead.
-
-#### Rooms map (v2.3+, SMART robots)
-
-`image.{name}_rooms_map` — static room layout from the UMF floor plan. Shows
-room polygons on a dark canvas with no cleaning history overlay. Only visible
-once UmfAligner confidence ≥ 0.70. This is the preferred source for
-`lovelace-xiaomi-vacuum-map-card` configuration.
-
-Both `image.{name}_cleaning_map` and `image.{name}_rooms_map` expose:
-- `calibration` — three anchor point pairs for coordinate mapping
-- `rooms` — per-room polygon outlines in image pixel space
-
-**xiaomi-vacuum-map-card (HACS) — v2.3+ setup:**
-
-```yaml
-type: custom:xiaomi-vacuum-map-card
-entity: vacuum.roomba
-map_source:
-  camera: image.roomba_rooms_map        # use rooms_map for clean display
-calibration_source:
-  camera: true                          # reads calibration attribute
-map_modes:
-  - template: vacuum_clean_segment
-    predefined_selections:
-      - id: Kitchen
-        label: Kitchen
-        rooms:
-          - Kitchen
-      # add one entry per room; id and label must match the room names
-      # returned by Roomba+ in the rooms attribute
-```
-
-> **Prerequisites for attributes to appear:**
-> 1. SMART robot with cloud credentials configured.
-> 2. UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings).
-> 3. At least one mission completed since integration setup (so cloud UMF geometry is available).
->
-> Until these conditions are met, `image.roomba_rooms_map` serves a blank dark image and exposes no `calibration` or `rooms` attributes — the card will show "Invalid calibration". This is expected.
-
-For the cleaning history map instead:
-
-```yaml
-type: custom:xiaomi-vacuum-map-card
-entity: vacuum.roomba
-map_source:
-  camera: image.roomba_cleaning_map
-calibration_source:
-  camera: true
-```
-
-> Both entities require a SMART robot with cloud credentials and UmfAligner
-> confidence ≥ 0.70. The `rooms_map` entity returns a blank dark image until
-> that threshold is reached (typically after 2+ missions with door crossings).
-
-**Recommended for non-SMART robots:**
-
-```yaml
-type: picture-entity
-entity: image.roomba_cleaning_map
-show_name: false
-show_state: false
-```
-
-#### Smart Map saving binary sensor — Smart Map robots
-
-`binary_sensor.roomba_smart_map_saving` is ON while the robot is saving or uploading its Smart Map after a training run or boundary edit. Use this in automations that need to wait before issuing zone clean commands.
-
-#### Start map training — Smart Map robots
-
-Button that triggers a mapping survey without cleaning. Useful after moving furniture or adding a new room before the robot rebuilds its Smart Map.
+`image.{name}_coverage_map` — EMA-weighted occupancy heatmap, updated at each mission end.
 
 ---
 
-### 🟡 Maintenance & Health
-
-Track consumable life and get ahead of replacements before the robot starts failing missions.
+### 🟡 Maintenance & health
 
 #### Remaining life sensors
 
 | Sensor | Notes |
 |---|---|
-| Filter remaining hours | With configurable threshold; `threshold_hours` attribute |
-| Brush remaining hours | With configurable threshold; `threshold_hours` attribute |
+| Filter remaining hours | Configurable threshold; `threshold_hours` attribute |
+| Brush remaining hours | Configurable threshold; `threshold_hours` attribute |
 | Cleaning pad remaining hours | Braava only |
-| Charge cycles | From `bbchg3` |
-| Battery capacity retention (%) | Degradation relative to design capacity |
-| Estimated battery end of life (days) | Projected days until battery needs replacement |
+| Battery capacity retention (%) | Degradation relative to design capacity (profile-corrected, v2.5+) |
+| Estimated battery end of life (days) | Projected days until battery replacement |
 
-**Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours logged between resets and uses that instead of the configured threshold. If you always replace the filter at 55 h because it looks dirty at that point, the sensor reflects your real usage — not a generic default. The learned interval is visible in the diagnostics download under `learned_maintenance`.
+**Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
 
 #### Replacement tracking
 
-Press the corresponding button (or call the action) after replacing a consumable — the remaining-life countdown restarts:
-
-| Sensor | Button / Action | Available for |
+| Sensor | Button / Action | Robots |
 |---|---|---|
-| `filter_last_replaced` | `reset_filter` | All robots |
+| `filter_last_replaced` | `reset_filter` | All |
 | `brush_last_replaced` | `reset_brush` | Vacuums |
 | `pad_last_replaced` | `reset_pad` | Braava |
-| `battery_last_replaced` | `reset_battery` | All robots |
-
-Settings → device page → Configuration → press the reset button, or call the action from an automation.
+| `battery_last_replaced` | `reset_battery` | All |
 
 #### Maintenance due binary sensor
 
-`binary_sensor.roomba_maintenance_due` is ON when any consumable has reached zero remaining hours.
-Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). One trigger instead of four separate threshold checks.
+`binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable).
 
 #### Wear Intelligence
 
-Filter, brush, and pad wear rates tracked since the last replacement reset:
-
 | Sensor | Notes |
 |---|---|
-| Filter wear rate (h/day) | Recalculated after every reset |
-| Brush wear rate (h/day) | Recalculated after every reset |
-| Filter days until due | Projected days remaining at current rate |
-| Brush days until due | Projected days remaining at current rate |
+| Filter / brush wear rate (h/day) | Recalculated after each reset |
+| Filter / brush days until due | Projected days at current wear rate |
 | Pad wear rate / days until due | Braava only |
 
-> All wear sensors show `Unknown` for the first 3 days after a reset — this is expected. A rate based on fewer days would be unreliable.
+> Wear sensors show `Unknown` for the first 3 days after a reset.
 
-#### Device diagnostics — opt-in
+#### Device diagnostics (opt-in)
 
-Disabled by default. Enable via Settings → device → entity list.
-
-| Sensor | Notes |
-|---|---|
-| Battery capacity (mAh) | From `bbchg3` |
-| Navigation panic events | From `bbrun` |
-| Cliff events front / rear | From `bbrun` |
+Battery capacity (mAh) · Navigation panic events · Cliff events front / rear
 
 ---
 
-### 🟢 Mission History & Intelligence
+### 🟢 Mission history & intelligence
 
-#### Mission Log
+#### Mission log
 
-Every mission is recorded to a persistent log (up to 365 entries, FIFO). The log survives HA restarts.
+Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survives HA restarts.
 
 | Sensor | Notes |
 |---|---|
@@ -404,190 +362,100 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). The log
 | Missions last 30 days | Count of completed missions |
 | Completion rate (30 days) | Completed ÷ total × 100 |
 | Area cleaned today | Sum of mission area today (VSLAM robots) |
-| Last mission result | `completed` / `stuck` / `cancelled` / `error` |
+| Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
 
-Zone attribution by robot type: 600-series returns result and duration only; 900-series uses ZoneStore zone names; i/s/j-series uses `lastCommand.regions` reverse-looked-up against the active Smart Map.
+#### Mission progress (v2.6+)
 
-#### Mission Phase Intelligence
+> ☁️ Requires cloud credentials · SMART robots only
 
-| Sensor / Binary sensor | Notes |
-|---|---|
-| `mission_elapsed_min` | Minutes elapsed in the current mission. Uses `mssnM` from MQTT when available; falls back to wall-clock elapsed from `mssnStrtTm` (lewis firmware does not report `mssnM` mid-mission). |
-| `mission_recharge_minutes` | Minutes until robot resumes after a mid-mission dock. Decrements live every 60 seconds — no MQTT push required. |
-| `mission_expire_minutes` | Minutes until the mission expires. Same live countdown. |
-| `mission_id` | Stable string across all recharge cycles of one mission (opt-in) |
-| `binary_sensor.mission_active` | ON for the entire mission arc — run, hmMidMsn, mid-mission recharge, hmPostMsn. OFF when cycle returns to `none`. Distinct from `mid_mission_recharge` which is ON only during the charge phase. |
-| `binary_sensor.mid_mission_recharge` | ON when `phase=charge` and `cycle≠none` — distinguishes mid-mission recharge from user-pause and from completed charging |
+`sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and elapsed run-only seconds. The timer persists across HA restarts.
 
-#### Room Intelligence — Smart Map robots, cloud required
+Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` (null in Auto pass mode) · `room_sequence`
 
-Vacuum entity attributes populated from the active mission and post-mission timeline:
-
-| Attribute | When available | Notes |
-|---|---|---|
-| `planned_room_order` | **During mission** (live) | Rooms in the order requested, resolved from `lastCommand.regions` against the active Smart Map. Populated immediately at mission start — no cloud poll required. |
-| `mission_destination` | **During mission** (live) | Last room in `planned_room_order` — the final destination of the current mission. |
-| `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned (status=0 or status=6 `room` events from timeline). Available within ~30 minutes of mission end once cloud timeline is merged. |
-| `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) from timeline `totalArea`. Dict keyed by room name. |
-
-**Source priority:**
-- During an active mission (`phase: run` or `hmMidMsn`): `planned_room_order` and `mission_destination` come from `lastCommand.regions` (lewis firmware) or `cleanMissionStatus.cmd.regions` (other variants), resolved against the active Smart Map region names.
-- Post-mission: all four attributes are populated from the merged MissionStore timeline. `planned_room_order` and `mission_destination` switch to the timeline source at mission end.
-
-**Prerequisites:** Cloud credentials configured, `region_count_active > 0` in diagnostics. All four attributes are `null` on robots without a Smart Map or without cloud credentials.
-
-#### Error Intelligence
+#### Mission phase sensors
 
 | Sensor | Notes |
 |---|---|
-| `last_error_code` | From live MQTT (priority) or persisted MissionStore value |
+| `mission_elapsed_min` | Minutes elapsed in the current mission |
+| `mission_recharge_minutes` | Countdown until robot resumes after mid-mission dock |
+| `mission_expire_minutes` | Countdown until the mission expires |
+| `binary_sensor.mission_active` | ON for the entire mission arc including mid-mission recharge |
+| `binary_sensor.mid_mission_recharge` | ON only during the mid-mission charge phase |
+
+#### Room intelligence — Smart Map robots
+
+> ☁️ Requires cloud credentials
+
+| Attribute | When | Notes |
+|---|---|---|
+| `planned_room_order` | **During mission** | Rooms in requested order; populated at mission start |
+| `mission_destination` | **During mission** | Last room in `planned_room_order` |
+| `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned |
+| `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) |
+
+#### Error intelligence
+
+| Sensor | Notes |
+|---|---|
+| `last_error_code` | From live MQTT or persisted MissionStore value; `description` + `action` attributes |
 | `last_error_at` | Timestamp of the last error or stuck event |
 | `last_error_zone` | Zone where the error occurred |
 | `stuck_count_30d` | Stuck events in the last 30 days |
 | `problem_zone` | Most frequently stuck zone over 30 days (VSLAM robots) |
 
-`last_error_code` exposes actionable attributes:
-```yaml
-description: "The main brush roll is jammed."
-action: "Remove the brush roll and clear hair or debris, then reinsert."
-```
+#### Mission anomaly detection (v2.5+)
 
-The error state is cleared automatically when the next mission completes successfully.
+Monitors each mission against the last 30 days of your robot's personal history. A Repair Issue is raised after two consecutive statistically unusual missions. Activates after 20 missions of history and clears automatically once missions return to normal.
 
-#### Mission Anomaly Detection (v2.5+)
+#### Performance sensors
 
-Roomba+ monitors each completed mission against the last 30 days of your robot's own history. If two consecutive missions are statistically unusual — the robot spent significantly more time covering significantly less area, had an abnormally long mid-mission recharge, or encountered extreme dirt levels — a **Repair Issue** is raised automatically:
-
-> *"Unusual cleaning patterns detected — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."*
-
-The issue clears on its own once missions return to normal. No configuration required — detection activates after 20 missions of history.
-
-Anomaly detection needs at least 20 completed missions before it activates. It uses your robot's personal performance history as the baseline, not a generic threshold.
-
-#### Performance sensors — cloud, opt-in
-
-Derived from the iRobot cloud mission history:
+> ☁️ Requires cloud credentials
 
 | Sensor | Notes |
 |---|---|
 | Cleaning speed (sqft/min) | Median across recent missions |
 | Cleaning speed trend | `improving` / `stable` / `declining` |
-| Dirt density (events/sqft) | With `cause` attribute: `brush_wear` vs `floor_dirty` |
+| Dirt density (events/m²) | `cause` attribute (`brush_wear` / `floor_dirty`); `by_room` attribute (v2.6) |
 | Recharge fraction (%) | Share of mission time spent recharging |
 | Coverage (%) | % of home baseline area cleaned, self-calibrating |
-| Consecutive clean skips | Opt-in |
-| Edge coverage ratio | Fraction of occupancy cells near room walls vs interior — low ratio with high coverage indicates under-edging (v2.4+, opt-in) |
-| Total energy consumed (kWh) | Cumulative energy from charge cycle count × battery capacity × pack voltage. State class `TOTAL_INCREASING` — eligible for HA Energy dashboard (v2.4+). **v2.5: corrected for 900-series** — 980/985 firmware reports a scaled raw value; Roomba+ now divides by the confirmed BMS scale factor (÷3.73 for Li-ion) to get the correct mAh before computing energy. |
+| Edge coverage ratio | Fraction of cells near walls vs interior; `coverage_vs_baseline` attribute (v2.6) |
+| Total energy consumed (kWh) | State class `TOTAL_INCREASING` — eligible for HA Energy dashboard |
+| Wi-Fi signal floor (%) | Minimum signal seen during a mission |
+| Wi-Fi signal stability (%) | Variance across the mission — high = dead zone |
 
-#### Wi-Fi sensors — cloud, opt-in
+#### Map intelligence — Smart Map robots (v2.6+)
 
-| Sensor | Notes |
-|---|---|
-| Wi-Fi signal floor (%) | Minimum signal seen during the mission — useful for dead-zone detection |
-| Wi-Fi signal stability (%) | Variance across the mission — high variance indicates a dead zone |
-
-#### Cloud diagnostics — all robots with credentials
-
-Six sensors derived from the iRobot `/missionhistory` API (~30-day window):
-
-| Sensor | Description |
-|---|---|
-| Recent completion rate | % of missions completed |
-| Recent mid-mission recharges | Total recharge events |
-| Recent Clean Base evacuations | Total bin evacuations |
-| Recent dirt events | Total dirt detection events |
-| Recent error code (cloud) | `pauseId` from the most recent failed mission — more reliable than MQTT. Attributes: `label`, `description`, `action` |
-| Recent error time (cloud) | Timestamp of the most recent failed mission |
-
-**900-series timestamp backfill:** 900-series firmware resets `mssnStrtTm=0` at mission end. Roomba+ automatically corrects these timestamps on startup using authoritative cloud values — no action required.
-
-**Cloud analytics persistence (v2.1.3+):** Cloud fields (`dirt`, `chrgM`, `wlBars`, `timeline`) are now written into the local MissionStore after each mission, both at startup and within minutes of mission completion. These fields are no longer lost when HA restarts before the next cloud poll.
-
-#### Cloud history sensors — all robots with credentials
+> ☁️ Requires cloud credentials
 
 | Sensor | Notes |
 |---|---|
-| Lifetime missions | True lifetime count from the cloud record |
-| Recent cleaned area (30 d) | Sum of cleaned area across the ~30-mission API window (m²) |
-| Recent cleaning time (30 d) | Sum of `runM` (actual cleaning time, excluding recharges) |
-
-> Area and time reflect the API window (~30 recent missions), not a true lifetime accumulator — the iRobot API does not expose one. The `source: recent_mission_window` attribute documents this.
+| `sensor.{name}_map_learning` | Map completeness score (0–100 %) from the iRobot cloud |
+| `sensor.{name}_zone_summary` | Clean zone count; `keepout_zones`, `observed_zones` attributes |
 
 #### HA Long-Term Statistics
 
-Roomba+ automatically backfills up to 365 days of mission history into HA Long-Term Statistics on every startup. To view it:
+Roomba+ backfills up to 365 days of mission history into HA Long-Term Statistics on every startup. Add a Statistics graph card and search for `roomba_plus:` — three series: area cleaned, mission duration, missions completed.
 
-1. Add a **Statistics graph card** to your dashboard
-2. Search for `roomba_plus:` to find the three series:
-   - **Area cleaned** (m², daily sum — requires cloud credentials)
-   - **Mission duration** (min, daily sum)
-   - **Missions completed** (count, daily sum)
-
-This works without the companion card and survives HA recorder purges indefinitely.
-
-#### REST History API
+#### REST history API
 
 ```
-GET /api/roomba_plus/{entry_id}/mission_history
-```
-
-| Parameter | Default | Values | Description |
-|---|---|---|---|
-| `format` | `summary` | `summary` / `records` / `hazards` / `export` | Response shape |
-| `days` | `28` (summary) / `90` (records) | `1`–`90` | Lookback window |
-
-`format=summary` — day-aggregated records: `date`, `total`, `completed`, `stuck`, `area_sqft`, `result`. From v2.4.0: `dirt_density` (median dirt events/m² for the day) and `relative_to_baseline` (ratio to the 30-day median — values > 1.5 indicate an unusually dirty day). Both are `null` without cloud credentials or fewer than 5 cloud records.
-
-`format=records` — per-mission records with unified shape. Cloud robots include `run_min`, `recharges`, `evacuations`, `dirt_events`, `wifi_signal`. All robots include `started_at`, `ended_at`, `duration_min`, `area_sqft`, `result`, `initiator`, `zones`, `error_code`, `source`. From v2.3.0: `room_coverage` (per-room fraction from timeline, no cloud required) and `alignment_confidence` (null until UmfAligner aligned).
-
-`format=hazards` — obstacle pin array. Returns GridStore stuck hotspots (`stuck_events`), cloud-detected obstacle centroids (`robot_learned`), and user-configured no-go zones (`keepout`, v2.3+). Each entry has `gx`, `gy`, `x_mm`, `y_mm`, `stuck_count`, `bearing_deg`, `distance_mm`, `source`, `room_name` (populated from UmfAligner in v2.3+ when confidence ≥ 0.70).
-
-**`format=export` (v2.5+)** — full mission log as a versioned JSON bundle. Use this to back up mission history before reinstalling the integration or migrating to a new HA instance.
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=export" \
-     -o roomba_backup.json
-```
-
-Response: `{"export_version": 1, "exported_at": "...", "blid": "...", "record_count": N, "records": [...]}`
-
-**Mission history import (v2.5+):**
-
-```
+GET /api/roomba_plus/{entry_id}/mission_history?format=summary|records|hazards|export
 POST /api/roomba_plus/{entry_id}/mission_history/import
-Content-Type: application/json
+GET /api/roomba_plus/household
 ```
 
-Body: an export bundle produced by `format=export`. Records are deduplicated by `id` — existing records are never overwritten. Returns `{"imported": N, "skipped": N, "errors": []}`.
-
-```bash
-curl -X POST \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d @roomba_backup.json \
-     "https://<ha>/api/roomba_plus/<entry_id>/mission_history/import"
-```
-
-`GET /api/roomba_plus/household?days=28` — household aggregate. Returns `period_days`, `total` (missions/completed/completion_pct/area_sqft), `robots[]` (per-entry breakdown with `floor` label), and `floors[]` (grouped by floor label when any robot has a floor label set).
-
-The `entry_id` is found in **Settings → Devices → Roomba+ → ⋮ → System information**.
-
-Requires a valid HA long-lived access token:
-```
-Authorization: Bearer <long-lived-token>
-```
+> Full parameter reference, response shapes, and curl examples: **[docs/API.md](docs/API.md)**
 
 ---
 
-### 🔵 Presence & Scheduling
+### 🔵 Presence & scheduling
 
-#### Presence-Aware Scheduling — i/s/j/Braava
+#### Presence-aware scheduling — i/s/j/Braava
 
-Automatically unfreeze the cleaning schedule when everyone leaves home, and re-freeze it when someone returns.
+Automatically unfreeze the cleaning schedule when everyone leaves home.
 
-Configure via **Settings → Devices & Services → Roomba+ → Configure → Presence-aware scheduling**.
+Configure: Settings → Configure → **Presence-aware scheduling**
 
 | Option | Description | Default |
 |---|---|---|
@@ -596,127 +464,132 @@ Configure via **Settings → Devices & Services → Roomba+ → Configure → Pr
 | Mode | `Unfreeze when all away` or `Fire event (manual control)` | Unfreeze when all away |
 | Delay after leaving | Minutes to wait before unfreezing (0–60) | 5 min |
 
-How it works:
-- When all tracked persons leave, a configurable delay starts
-- After the delay, `schedHold` is set to `false` — the robot's existing schedule runs normally
-- When anyone returns, `schedHold` is set back to `true`
-- The manager only re-freezes a hold it created — it never interferes with a hold set manually via the Schedule Hold switch
+The manager only re-freezes a hold it created — never interferes with a hold set manually via the Schedule Hold switch.
 
-Events fired:
-- `roomba_plus_all_away` — when delay expires in `always_ask` mode
-- `roomba_plus_person_detected_during_clean` — when someone returns while a clean is running
+Events: `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean`
 
-Binary sensor: `schedule_hold_active` — ON when `schedHold` is true. The `source` attribute distinguishes `presence_manager` from `manual`.
+`sensor.{name}_optimal_clean_window` — best hour to clean today, derived from historical away patterns. Attributes include `window_is_today: bool` (v2.6) so automations can distinguish "best window is today" from "best window is tomorrow".
 
-#### Demand Cleaning — SMART robots with cloud (v2.4+)
+#### Demand cleaning — SMART robots with cloud (v2.4+)
 
-Automatically trigger an unscheduled clean when the floor is significantly dirtier than usual. Requires cloud credentials (dirt density derived from cloud mission records).
+> ☁️ Requires cloud credentials
 
-Configure via **Settings → Devices & Services → Roomba+ → Configure → Demand cleaning**.
+Automatically trigger an unscheduled clean when the floor is significantly dirtier than usual.
+
+Configure: Settings → Configure → **Demand cleaning**
 
 | Option | Default | Description |
 |---|---|---|
 | Enable demand cleaning | Off | Master toggle |
-| Trigger multiplier | 1.5 | Fire when density > baseline × multiplier (1.1–5.0) |
+| Trigger multiplier | 1.5 | Fire when dirt density > baseline × multiplier |
 
-How it works: after each mission, the latest dirt density is compared against the baseline for today's weekday (requires ≥ 4 cloud records on that weekday to activate) or the 30-day flat median as a fallback (requires ≥ 5 records). When the threshold is exceeded and all gates pass (robot idle, no blocking sensor active, min 6 h since last demand trigger), a start command is sent automatically. The `demand_clean_blocked` sensor shows which gate is currently preventing a trigger.
+After each mission, dirt density is compared against the weekday-aware baseline (v2.5+) or 30-day flat median. All gates must pass before a trigger fires: robot idle, no blocking sensor active, all tracked persons away (if presence mode is `away_only`), minimum 6 h since last demand trigger.
 
-**Weekday-aware baseline (v2.5+):** If your floor is consistently dirtier on Mondays than Thursdays (pets, different routines), demand cleaning now accounts for this. The baseline for each weekday is built independently from the last 12 weeks of records for that day. Monday's threshold is set by Monday's history, not by a flat average. The weekday baseline takes over automatically once ≥ 4 records exist for that day; no configuration needed.
+`binary_sensor.{name}_demand_clean_blocked` — ON when any gate is active. The `blocking_reason` attribute (v2.6) names the specific gate.
 
-Binary sensor: `binary_sensor.demand_clean_blocked` — ON when a demand clean would currently be blocked (robot busy, blocking sensor active, or presence gate). OFF = demand clean could fire if threshold is exceeded.
-
-#### Presence analytics sensors
+#### Presence analytics
 
 | Sensor | Notes |
 |---|---|
 | Clean opportunities (7 days) | Away windows long enough for a full clean |
 | Clean utilisation (7 days) | % of those windows that resulted in a clean |
-| Next likely clean window | Heuristic forecast of the next likely away window |
-| Optimal clean window | Timestamp sensor — best hour to clean today derived from historical mission start times. Requires ≥ 5 recorded cleans since integration setup; shows `Unknown` until then. Updates after every mission. (v2.4+) |
+| Next likely clean window | Heuristic forecast |
+| Optimal clean window | Best hour today; `window_is_today` attribute (v2.6) |
 
 ---
 
-### ⚪ Connectivity & Advanced
+### ⚪ Connectivity & advanced
 
-#### Braava / Mop sensors
+#### Braava / mop sensors
 
-| Sensor | Notes |
-|---|---|
-| Tank level | Water tank fill level |
-| Mop pad type | Pad material |
-| Mop clean mode | `Dry` / `Wet` derived from `padWetness` |
-| Mop tank status | `Ready` / `Fill Tank` / `Lid Open` / `Tank Missing` |
-| Mop ARS behavior | Auto Replenishment System mode |
-| Mop ready / tank present / lid closed | Binary sensors |
-| Lid open | Binary sensor — ON when lid is open |
-| Tank present | Binary sensor — ON when water tank is installed |
+Tank level · Mop pad type · Mop clean mode · Mop tank status (`Ready` / `Fill Tank` / `Lid Open` / `Tank Missing`) · Mop ready / tank present / lid closed binary sensors
 
-**Braava pad wetness control:** select wetness level (Low / Medium / High) independently for disposable and reusable pads.
-
-#### Navigation
-
-| Sensor | Notes |
-|---|---|
-| Navigation quality / l_squal | VSLAM robots, opt-in |
-| Nav panics | Opt-in |
+Braava pad wetness control: select wetness level (Low / Medium / High) independently for disposable and reusable pads.
 
 #### Configuration reference
 
-All options: **Settings → Devices → Roomba+ → Configure**
+Settings → Devices → Roomba+ → Configure
 
 **Connection settings:**
 
 | Parameter | Default | Description |
 |---|---|---|
-| Continuous connection | `true` | Keep MQTT connection open permanently. Disable on flaky networks. |
-| Connection delay (s) | `30` | Seconds between reconnect attempts. |
-| Map enabled | `true` | Enable live map rendering (900-series / EPHEMERAL robots). |
-| Map size (px) | `600` | Rendered map image size in pixels (400–1200). |
-| Map scale (mm/px) | `10.0` | Millimetres per pixel. Lower = more detail, smaller coverage area. |
+| Continuous connection | `true` | Keep MQTT connection open permanently |
+| Connection delay (s) | `30` | Seconds between reconnect attempts |
+| Map enabled | `true` | Enable live map rendering (900-series) |
+| Map size (px) | `600` | Rendered map image size (400–1200) |
+| Map scale (mm/px) | `10.0` | Millimetres per pixel |
+
+**Options menu structure (v2.6):**
+
+| Section | Steps |
+|---|---|
+| ⚙ Connection | Settings · iRobot cloud credentials |
+| 🗓 Scheduling | Blocking sensors · Presence-aware scheduling · Demand cleaning |
+| 🗺 Map | Zone management · Rooms & zones |
 
 #### Diagnostics download
 
-The diagnostics download (Settings → device → ⋮ → Download diagnostics) includes:
-- Map subsystem: renderer config, pose point count, stuck events, cached image status
-- Zone subsystem: gap threshold, calibration scale, full zone list with bounding boxes
-- Geometry subsystem: door marker count, wall/door/obstacle counts, drift, wall offset
-- Cloud subsystem: coordinator status, last exception, `pmap_count_total`, `active_pmap_id`, `region_count_active`
-- **v2.5+** `robot_profile`: confirmed profile matched at startup (name, chemistry, voltage, BMS scale factors)
-- **v2.5+** `learned_maintenance`: learned filter and brush lifespan hours, reset history length
+Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zone subsystem, geometry subsystem, cloud subsystem, `robot_profile` (v2.5+: confirmed profile, chemistry, BMS scale factors), and `learned_maintenance` (v2.5+: learned filter and brush lifespan hours).
 
 ---
 
-## Automation ideas
+## Room cleaning setup (HA 2026.3+)
 
-### I want the robot to clean automatically when I leave home
+`vacuum.clean_area` is a native HA action that lets you trigger room cleaning using HA areas (the same areas used for lights, climate, and other devices). It is the recommended approach on HA 2026.3 or newer. On older HA, use `roomba_plus.clean_room` instead — it works identically without any setup.
+
+**Prerequisites:** SMART robot · cloud credentials configured · HA 2026.3+
+
+### One-time setup
+
+1. HA will raise a Repair notification: **"Map vacuum segments to areas"** — this is expected
+2. Open the vacuum entity → ⚙ Entity settings → **"Map vacuum segments to areas"**
+3. Match each robot room to a Home Assistant area
+4. Save
+
+If the robot retrains its map later, HA raises the Repair again to re-confirm the mapping.
+
+### Using the action
+
+```yaml
+action: vacuum.clean_area
+target:
+  entity_id: vacuum.roomba
+data:
+  cleaning_area_id:
+    - living_room    # HA area ID (not the room name string)
+    - kitchen
+```
+
+`roomba_plus.clean_room` (by room name) and `vacuum.clean_area` (by HA area) are fully interchangeable for SMART robots on HA 2026.3+.
+
+---
+
+## Automation examples
+
+### Start cleaning when everyone leaves
 
 ```yaml
 automation:
-  - alias: "Roomba — start when everyone is away"
-    trigger:
-      - platform: state
-        entity_id: group.all_people
-        to: "not_home"
-    condition:
-      - condition: time
-        after: "09:00:00"
-        before: "18:00:00"
-      - condition: state
-        entity_id: input_boolean.roomba_cleaned_today
-        state: "off"
-    action:
-      - service: vacuum.start
-        target:
-          entity_id: vacuum.roomba
-      - service: input_boolean.turn_on
-        target:
-          entity_id: input_boolean.roomba_cleaned_today
+  alias: "Roomba — start when all away"
+  trigger:
+    - platform: state
+      entity_id: group.all_people
+      to: "not_home"
+  condition:
+    - condition: time
+      after: "09:00:00"
+      before: "18:00:00"
+  action:
+    - action: roomba_plus.smart_start
+      target:
+        entity_id: vacuum.roomba
 ```
 
-### I want to clean specific rooms on a schedule
+### Clean specific rooms on a schedule
 
 ```yaml
-service: roomba_plus.clean_room
+action: roomba_plus.clean_room
 target:
   entity_id: vacuum.roomba
 data:
@@ -726,244 +599,131 @@ data:
   ordered: true
 ```
 
-### I want presence-aware cleaning with full control over timing
+### Presence-aware cleaning with full timing control
 
 ```yaml
-# Use "always_ask" mode in Presence-Aware Scheduling, then:
+# Set Presence-aware scheduling to "Fire event" mode, then:
 automation:
-  - alias: "Roomba — targeted clean when all away"
-    trigger:
-      - platform: event
-        event_type: roomba_plus_all_away
-    condition:
-      - condition: time
-        after: "09:00:00"
-        before: "20:00:00"
-    action:
-      - service: roomba_plus.smart_start
-        target:
-          entity_id: vacuum.roomba
-        data:
-          rooms:
-            - Kitchen
-            - Hallway
+  alias: "Roomba — targeted clean when all away"
+  trigger:
+    - platform: event
+      event_type: roomba_plus_all_away
+  condition:
+    - condition: time
+      after: "09:00:00"
+      before: "20:00:00"
+  action:
+    - action: roomba_plus.smart_start
+      target:
+        entity_id: vacuum.roomba
+      data:
+        rooms:
+          - Kitchen
+          - Hallway
 ```
 
-### I want to pause the robot automatically when someone comes home mid-clean
+### Pause when someone comes home mid-clean
 
 ```yaml
 automation:
-  - alias: "Roomba — pause when someone comes home mid-clean"
-    trigger:
-      - platform: event
-        event_type: roomba_plus_person_detected_during_clean
-    action:
-      - service: vacuum.pause
-        target:
-          entity_id: vacuum.roomba
-      - service: notify.mobile_app
-        data:
-          message: "Roomba paused — someone came home."
+  alias: "Roomba — pause when someone arrives mid-clean"
+  trigger:
+    - platform: event
+      event_type: roomba_plus_person_detected_during_clean
+  action:
+    - action: vacuum.pause
+      target:
+        entity_id: vacuum.roomba
+    - action: notify.mobile_app
+      data:
+        message: "Roomba paused — someone came home."
 ```
 
-### I want to clean a room only after the Smart Map has finished saving
+### Wait for map save before cleaning
 
 ```yaml
 automation:
-  - alias: "Roomba — clean kitchen after map save completes"
-    trigger:
-      - platform: state
-        entity_id: binary_sensor.roomba_smart_map_saving
-        to: "off"
-    condition:
-      - condition: state
+  alias: "Roomba — clean kitchen after map save"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.roomba_smart_map_saving
+      to: "off"
+  condition:
+    - condition: state
+      entity_id: input_boolean.roomba_kitchen_pending
+      state: "on"
+  action:
+    - action: roomba_plus.clean_room
+      target:
+        entity_id: vacuum.roomba
+      data:
+        room_name: Kitchen
+    - action: input_boolean.turn_off
+      target:
         entity_id: input_boolean.roomba_kitchen_pending
-        state: "on"
-    action:
-      - service: roomba_plus.clean_room
-        target:
-          entity_id: vacuum.roomba
-        data:
-          room_name: Kitchen
-      - service: input_boolean.turn_off
-        target:
-          entity_id: input_boolean.roomba_kitchen_pending
 ```
 
 ---
 
-## Comparison with the Core integration
+## Dashboard example
 
-| Feature | Core Roomba | Roomba+ |
-|---|---|---|
-| Sensors | 13 | 73 local + 20 cloud |
-| Cleaning map | ❌ | ✅ |
-| Map persists across restarts | ❌ | ✅ |
-| Zone detection (900-series) | ❌ | ✅ |
-| Smart Map zone naming | ❌ | ✅ |
-| Smart Map zones from cloud | ❌ | ✅ |
-| Multi-map support | ❌ | ✅ |
-| Favorites from cloud | ❌ | ✅ |
-| Maintenance reset | ❌ | ✅ |
-| Wear Intelligence | ❌ | ✅ |
-| Battery capacity retention | ❌ | ✅ |
-| Edge cleaning toggle | ❌ | ✅ |
-| Always finish (binPause) | ❌ | ✅ |
-| Schedule hold | ❌ | ✅ |
-| Bin present sensor | ❌ | ✅ |
-| Mop ready / clean mode / tank status | ❌ | ✅ |
-| Mission recharge / expire sensors (live countdown) | ❌ | ✅ |
-| SNR + signal noise sensors | ❌ | ✅ |
-| Wi-Fi floor + stability sensors | ❌ | ✅ |
-| IP address sensor | ❌ | ✅ |
-| Idle / Stopped phase detection | ❌ | ✅ |
-| Error codes (80+) with description + action | ❌ | ✅ |
-| Device triggers | ❌ | ✅ |
-| Consumable timestamp sensors | ❌ | ✅ |
-| Blocking sensor gate (smart_start) | ❌ | ✅ |
-| Zone management UI | ❌ | ✅ |
-| Mission log (365 entries, persisted) | ❌ | ✅ |
-| Error intelligence | ❌ | ✅ |
-| Performance sensors (speed, coverage, dirt density) | ❌ | ✅ |
-| Presence-aware scheduling | ❌ | ✅ |
-| REST mission history API | ❌ | ✅ |
-| HA Long-Term Statistics backfill | ❌ | ✅ |
-| Cloud diagnostics (completion rate, recharges, dirt) | ❌ | ✅ |
-| Lifetime stats from cloud | ❌ | ✅ |
-| Spot / quick clean (980, experimental) | ❌ | ✅ |
-| Sleep / power off (980, experimental) | ❌ | ✅ |
-| Carpet Boost (980) | ❌ | ✅ |
-| Extended diagnostics download | ❌ | ✅ |
-| Coverage heatmap (GridStore) | ❌ | ✅ |
-| Household REST endpoint | ❌ | ✅ |
-| Obstacle hazards REST endpoint | ❌ | ✅ |
-| Mission-active binary sensor | ❌ | ✅ |
-| Carpet boost select entity | ❌ | ✅ |
-| Sequential cleaning (clean_sequence) | ❌ | ✅ |
-| CR4 room coverage attributes | ❌ | ✅ |
-| HA area mapping (`vacuum.clean_area`) | ❌ | ✅ (v2.4, SMART + cloud) |
-| Demand-based cleaning (dirt threshold) | ❌ | ✅ (v2.4, SMART + cloud) |
-| Optimal clean window sensor | ❌ | ✅ (v2.4) |
-| Edge coverage ratio sensor | ❌ | ✅ (v2.4) |
-| Total energy consumed (kWh, Energy dashboard) | ❌ | ✅ (v2.4, LiIon; v2.5 corrected for 900-series) |
-| Room outline — 900-series (ephemeral, progressive) | ❌ | ✅ (v2.4) |
-| Mission history export / import (REST API) | ❌ | ✅ (v2.5) |
-| Self-calibrating maintenance thresholds | ❌ | ✅ (v2.5) |
-| Weekday-aware demand cleaning baseline | ❌ | ✅ (v2.5, SMART + cloud) |
-| Mission anomaly detection (Repair Issue) | ❌ | ✅ (v2.5) |
-| German translation | ✅ | ✅ |
+A minimal dashboard combining the map, vacuum card, and key sensors:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: picture-entity
+    entity: image.roomba_cleaning_map
+    show_name: false
+    show_state: false
+
+  - type: vacuum
+    entity: vacuum.roomba
+    features:
+      - type: start-pause
+      - type: return-home
+
+  - type: glance
+    entities:
+      - entity: sensor.roomba_clean_streak
+        name: Streak
+      - entity: sensor.roomba_last_mission_result
+        name: Last mission
+      - entity: sensor.roomba_filter_remaining_hours
+        name: Filter
+      - entity: sensor.roomba_mission_progress
+        name: Progress
+    columns: 4
+```
 
 ---
 
-## Troubleshooting
+## Documentation
 
-**"Failed to connect" during setup**
+| | |
+|---|---|
+| [Feature comparison →](docs/COMPARISON.md) | Roomba+ vs HA Core vs roomba_rest980 |
+| [REST API →](docs/API.md) | Full endpoint reference with response shapes and examples |
+| [Troubleshooting →](docs/TROUBLESHOOTING.md) | Common problems grouped by topic |
+| [GitHub Releases →](https://github.com/johnnyh1975/ha_roomba_plus/releases) | Changelogs and release notes |
 
-Press the physical **Clean** button on the robot to start a manual cleaning job, then immediately attempt credential retrieval in HA. Some models only respond while actively running.
-
-If automatic pairing fails entirely: → [Retrieve iRobot credentials manually](https://www.home-assistant.io/integrations/roomba/#retrieving-your-credentials)
-
-**The iRobot app loses connection when Roomba+ is running**
-
-Expected — the robot only allows one local MQTT connection. Either disable continuous mode in Settings → Roomba+ → Configure, or accept that the app will use the cloud while Roomba+ is connected.
-
-**Cloud authentication fails**
-
-Check your iRobot app email and password. If you see an "mqtt slot" error, close the iRobot app on all devices and wait a few minutes before retrying.
-
-**smart_start queues forever / never starts**
-
-Check that the blocking sensors are reporting correctly. Unavailable or unknown sensors are treated as non-blocking. If the queue expires, `roomba_plus_start_timeout` is fired — automate on this event to alert or retry.
-
-**Zone management — changes not reflected in dropdown immediately**
-
-Alias and hidden changes are written immediately, but the zone select dropdown may take one MQTT message cycle to refresh. This is a known limitation — typically resolves within seconds when the robot is active.
-
-**filter_last_replaced / brush_last_replaced shows Unknown**
-
-These sensors are Unknown until the first reset is performed. Press the reset button or call the reset action to populate them.
-
-**Wear Intelligence sensors show Unknown**
-
-Wear sensors need at least 3 days of mission data since the last reset to calculate a meaningful rate. They will populate automatically.
-
-**Mission log sensors show Unknown after upgrading**
-
-The mission log is populated going forward only. Streak, completion rate, and area sensors will be Unknown until the first mission completes after upgrading — this is expected.
-
-**`last_error_code` shows a stale error after the robot has recovered**
-
-The error state clears automatically when the next mission completes successfully. If it persists, restart HA to force re-reading the mission log from storage.
-
-**Presence-aware scheduling step not visible in options menu**
-
-The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
-
-**`optimal_clean_window` shows Unknown**
-
-The sensor needs at least 5 completed missions since the integration was set up before it calculates a window. It will populate automatically — no action required. Once 5 missions have recorded, the sensor updates within minutes of the next mission end.
-
-**Demand cleaning never triggers despite being enabled**
-
-Check the `binary_sensor.demand_clean_blocked` sensor — it shows whether the robot is busy, a blocking sensor is active, or the minimum 6-hour gap since the last trigger has not elapsed. Also ensure cloud credentials are configured and at least 5 cloud mission records exist (check Settings → Devices → Roomba+ → ⋮ → Download diagnostics for `region_count_active`).
-
-**Mission history export/import**
-
-Export: `GET /api/roomba_plus/<entry_id>/mission_history?format=export` with a long-lived token. Import: `POST /api/roomba_plus/<entry_id>/mission_history/import` with the exported JSON as the body. Import deduplicates — safe to run multiple times. The `entry_id` is in Settings → device → ⋮ → System information.
-
-**"Unusual cleaning patterns" Repair Issue fires for normal short cleans**
-
-The anomaly detection (v2.5+) uses your robot's personal performance history as the baseline. If the flag fires for a normal targeted single-room clean, this means the single-room area is far smaller than your typical full-home baseline — which is technically correct. The issue self-resolves: if the next mission is normal, the counter resets and the issue clears. Two consecutive anomalous missions are required to fire the issue. No action needed if your robot is otherwise functioning normally.
-
-**`demand_clean_blocked` stays ON even though the robot is idle**
-
-Check all four gates: (1) robot cycle state — `vacuum.roomba` must be `docked` or `idle`, not `cleaning` or `returning`; (2) blocking sensors — any configured blocking sensor is ON; (3) presence — all tracked persons must be away if presence mode is `away_only`; (4) minimum gap — 6 hours must have elapsed since the last demand trigger. The sensor's `blocking_reason` attribute shows which gate is active.
-
-**Demand cleaning triggers too often / not often enough**
-
-Adjust the trigger multiplier in Configure → Demand cleaning. `1.5` (default) fires when dirt density is 50 % above the baseline for today's weekday. Lower the multiplier for more frequent triggers; raise it to require dirtier conditions. After v2.5, the baseline is weekday-specific — Monday's threshold is set by Monday's history — so the multiplier applies relative to each day's normal level.
-
-**Self-calibrating filter/brush thresholds: when do they activate?**
-
-After two or more resets of a given component (filter or brush), Roomba+ computes the median interval between resets and uses that as the effective threshold. Until two resets have been performed, the configured threshold (Settings → Configure → hours) is used. The learned values are visible in the diagnostics download under `learned_maintenance`.
-
-**Total energy consumed shows an unexpected value after upgrading to v2.5 on a Roomba 980**
-
-This is expected — v2.5 corrects the energy calculation for 900-series robots. The 980/985 firmware reports a raw BMS value that is approximately 3.73× the actual mAh. Previous versions used this raw value directly, giving a result roughly 4× too high. After the upgrade, the sensor will show the correct lower value and continue accumulating correctly from that point.
-
-Confirm the cleaning schedule is set in the iRobot app and enabled for the correct days. Roomba+ controls the hold — it does not set the schedule itself.
-
-**Smart Map zones not appearing (i/s/j-series)**
-
-Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. If cloud credentials are configured, the repair flow is suppressed and names come directly from the cloud.
-
-**Recent cleaned area / cleaning time show lower values than expected**
-
-These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time. The `source: recent_mission_window` attribute documents this. The **total missions** sensor is different — it reads the lifetime counter embedded in every cloud record.
-
-**Cloud mission history not available for my Roomba 980**
-
-Go to Settings → Roomba+ → Configure → iRobot cloud credentials and re-save your credentials, then restart HA.
-
-**`clean_room` says "rooms from different maps" after deleting the old map**
-
-The iRobot cloud cache may take up to 24 hours to clear. Re-save the cloud credentials step in Configure to force an immediate coordinator refresh.
+Questions or issues? → [GitHub Issues](https://github.com/johnnyh1975/ha_roomba_plus/issues) · [HA Community Forum](https://community.home-assistant.io)
 
 ---
 
 ## Translations
 
-| Language | Code | Status |
-|---|---|---|
-| English | `en` | ✅ Complete |
-| German | `de` | ✅ Complete |
-| French | `fr` | ✅ Complete (community contribution) |
-| Italian | `it` | ✅ Complete — native speaker review welcome |
-| Spanish | `es` | ✅ Complete — native speaker review welcome |
-| Portuguese | `pt` | ✅ Complete (European) — native speaker review welcome |
-| Dutch | `nl` | ✅ Complete — native speaker review welcome |
+| Language | Status |
+|---|---|
+| English | ✅ Complete |
+| German | ✅ Complete |
+| French | ✅ Complete |
+| Italian | ✅ Complete — native speaker review welcome |
+| Spanish | ✅ Complete — native speaker review welcome |
+| Portuguese | ✅ Complete (European) — native speaker review welcome |
+| Dutch | ✅ Complete — native speaker review welcome |
 
-To contribute a translation or report an incorrect phrase, open an issue or pull request with the corrected `translations/<lang>.json` file.
+To contribute or report an incorrect phrase: open an issue or PR with the corrected `translations/<lang>.json`.
 
 ---
 

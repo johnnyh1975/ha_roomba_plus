@@ -290,6 +290,49 @@ class DirtThresholdManager:
             f"{'weekday' if weekday_baseline is not None else 'flat'}), gap ok"
         )
 
+    def gate_blocked(self) -> tuple[bool, str]:
+        """Return (is_blocked, reason) for the first active gate.
+
+        ALG3 (v2.6.0) — single source of truth for the demand-clean gate
+        logic used by both async_evaluate (execution path) and
+        RoombaDemandCleanBlocked sensor (binary display path). Previously the
+        sensor duplicated all gate checks inline.
+
+        Returns (True, reason_str) when any gate is blocking.
+        Returns (False, "") when all gates are clear.
+        The caller is responsible for also checking should_trigger().
+        """
+        if not self.enabled:
+            return True, "demand_cleaning_disabled"
+
+        data = self._entry.runtime_data
+
+        # Gate 2: presence (all away) — only when PresenceManager is active
+        pm = getattr(data, "presence_manager", None)
+        if pm is not None:
+            person_ids: list[str] = self._entry.options.get("presence_entities", [])
+            if person_ids:
+                all_away = all(
+                    (st := self._hass.states.get(eid)) is not None
+                    and st.state not in ("home", "Home")
+                    for eid in person_ids
+                )
+                if not all_away:
+                    return True, "not_all_away"
+
+        # Gate 3: BlockingManager — no active block queued
+        bm = getattr(data, "blocking_manager", None)
+        if bm is not None and bm.is_queued:
+            return True, "blocking_sensor_queued"
+
+        # Gate 4: robot must be docked/idle
+        state = data.roomba_reported_state()
+        cycle = state.get("cleanMissionStatus", {}).get("cycle", "none")
+        if cycle != "none":
+            return True, f"robot_busy_{cycle}"
+
+        return False, ""
+
     async def async_evaluate(
         self,
         coordinator: "IrobotCloudCoordinator",
@@ -324,33 +367,10 @@ class DirtThresholdManager:
         if not trigger:
             return
 
-        # Gate 2: presence (all away) — only when PresenceManager is active
-        pm = getattr(data, "presence_manager", None)
-        if pm is not None:
-            person_ids: list[str] = self._entry.options.get("presence_entities", [])
-            if person_ids:
-                all_away = all(
-                    (st := self._hass.states.get(eid)) is not None
-                    and st.state not in ("home", "Home")
-                    for eid in person_ids
-                )
-                if not all_away:
-                    _LOGGER.debug("DirtThresholdManager: blocked — not all away")
-                    return
-
-        # Gate 3: BlockingManager — no active block queued
-        bm = getattr(data, "blocking_manager", None)
-        if bm is not None and bm.is_queued:
-            _LOGGER.debug("DirtThresholdManager: blocked — BlockingManager is_queued")
-            return
-
-        # Gate 4: robot must be docked/idle — never interrupt a running mission
-        state = data.roomba_reported_state()
-        cycle = state.get("cleanMissionStatus", {}).get("cycle", "none")
-        if cycle != "none":
-            _LOGGER.debug(
-                "DirtThresholdManager: blocked — robot busy (cycle=%s)", cycle
-            )
+        # Gate 2–4: use gate_blocked() — single source of truth (ALG3)
+        blocked, block_reason = self.gate_blocked()
+        if blocked:
+            _LOGGER.debug("DirtThresholdManager: blocked — %s", block_reason)
             return
 
         # All gates passed — send start command
@@ -360,6 +380,11 @@ class DirtThresholdManager:
         )
         self._last_trigger_time = datetime.now(UTC)
         await self.async_save(entry_id)
+
+        # MS1 (v2.6.0): stamp demand_triggered_ts so callbacks.py can mark
+        # the resulting mission record with initiator="demand" within 30 s.
+        import time as _time
+        data.demand_triggered_ts = _time.monotonic()
 
         roomba = data.roomba
         await self._hass.async_add_executor_job(roomba.send_command, "start")

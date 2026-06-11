@@ -65,6 +65,8 @@ from .blocking_manager import BlockingManager
 from .dirt_threshold_manager import DirtThresholdManager
 from .outline_store import OutlineStore
 from .maintenance_store import MaintenanceStore
+from .robot_profile_store import RobotProfileStore  # v2.6 L4
+from .mission_timer_store import MissionTimerStore  # v2.6 MP1
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
@@ -91,11 +93,12 @@ async def async_migrate_entry(
                       German slugs to English slugs in the entity registry so that
                       automations, history, and the Lovelace card are unaffected.
       9 → 10 (v2.1.1): Fix swapped completion_rate entity_ids.
-      10 → 11 (v2.1.2): Rename cloud history sensor entity_ids:
-                        *_lifetime_area → *_recent_area_30d
-                        *_lifetime_time → *_recent_time_30d
-                        These sensors were misnamed — they aggregate the ~30-mission
-                        API window, not true lifetime totals.
+      13 → 14 (v2.5.0): Fix locale-dependent entity_id slugs for signal_noise,
+                        mission_recharge_time, and mission_expire_time sensors
+                        (added in v2.4.3 with translation_key; German installs
+                        got slugs "signalrauschen", "ladezeit", "missionsablauf").
+                        translation_key removed from those descriptions; slugs
+                        locked to English name= values.
     """
     current = config_entry.version
     _LOGGER.info(
@@ -1159,6 +1162,828 @@ async def async_migrate_entry(
         )
         current = 13
 
+    if current == 13:
+        # v13 → v14 (v2.5.0): fix locale-dependent entity_id slugs for three
+        # sensors added in v2.4.3 whose descriptions had translation_key set,
+        # causing HA to generate entity_ids from the translated display name
+        # on first registration.
+        #
+        # Affected sensors (unique_id suffix → correct entity_id suffix):
+        #   _signal_noise          → _signal_noise         (DE was: _signalrauschen)
+        #   _mission_recharge_time → _recharge_time        (DE was: _ladezeit)
+        #   _mission_expire_time   → _mission_expire_time  (DE was: _missionsablauf)
+        #
+        # Fix: translation_key removed from these descriptions in v2.5.0.
+        # Migration: detect entities by unique_id suffix; if entity_id does not
+        # end with the expected suffix, derive the device prefix from a sibling
+        # entity and rename. Idempotent on English installs.
+
+        from homeassistant.helpers import entity_registry as er
+
+        entity_reg = er.async_get(hass)
+        slug_renamed_14 = 0
+
+        # uid_suffix → correct entity_id suffix
+        _V14_RENAMES: dict[str, str] = {
+            "_signal_noise":          "_signal_noise",
+            "_mission_recharge_time": "_recharge_time",
+            "_mission_expire_time":   "_mission_expire_time",
+        }
+        _V14_SORTED = sorted(_V14_RENAMES.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+        # Identify target entities
+        targets_14: list[tuple[Any, str, str]] = []
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            for uid_suffix, correct_eid_suffix in _V14_SORTED:
+                if uid.endswith(uid_suffix):
+                    targets_14.append((entry_er, uid_suffix, correct_eid_suffix))
+                    break
+
+        # Build blid → sibling list for device-prefix derivation
+        all_blid_entities_14: dict[str, list] = {}
+        for entry_er in list(entity_reg.entities.values()):
+            if entry_er.platform != DOMAIN:
+                continue
+            uid = entry_er.unique_id or ""
+            tail = uid  # any tail we can strip to find the device prefix
+            for uid_suffix, _ in _V14_SORTED:
+                if uid.endswith(uid_suffix):
+                    blid_key = uid[: -len(uid_suffix)]
+                    all_blid_entities_14.setdefault(blid_key, []).append(entry_er)
+                    break
+
+        for entry_er, uid_suffix, correct_eid_suffix in targets_14:
+            uid = entry_er.unique_id or ""
+            blid_key = uid[: -len(uid_suffix)]
+
+            if entry_er.entity_id.endswith(correct_eid_suffix):
+                continue  # already has the correct English suffix
+
+            # Derive device prefix from a sibling entity whose entity_id
+            # name already ends with the tail of its own unique_id.
+            device_prefix: str | None = None
+            for sibling in all_blid_entities_14.get(blid_key, []):
+                s_uid = sibling.unique_id or ""
+                s_name = sibling.entity_id.split(".", 1)[-1]
+                tail = s_uid[len(blid_key):]  # e.g. "_lifetime_missions"
+                if tail and s_name.endswith(tail):
+                    device_prefix = s_name[: -len(tail)]
+                    break
+
+            # Second fallback: any sibling entity for the same blid
+            if device_prefix is None:
+                for any_e in list(entity_reg.entities.values()):
+                    if any_e.platform != DOMAIN:
+                        continue
+                    s_uid = any_e.unique_id or ""
+                    if not s_uid.startswith(blid_key):
+                        continue
+                    tail = s_uid[len(blid_key):]
+                    s_name = any_e.entity_id.split(".", 1)[-1]
+                    if tail and s_name.endswith(tail):
+                        device_prefix = s_name[: -len(tail)]
+                        break
+
+            if not device_prefix:
+                _LOGGER.warning(
+                    "Roomba+: v14 migration — could not compute prefix for %s "
+                    "(uid=%s) — skipping",
+                    entry_er.entity_id, uid,
+                )
+                continue
+
+            correct_eid = f"{entry_er.domain}.{device_prefix}{correct_eid_suffix}"
+
+            if entity_reg.async_get(correct_eid) is None:
+                entity_reg.async_update_entity(
+                    entry_er.entity_id, new_entity_id=correct_eid
+                )
+                slug_renamed_14 += 1
+                _LOGGER.info(
+                    "Roomba+: v14 renamed locale-slug entity %s → %s",
+                    entry_er.entity_id, correct_eid,
+                )
+            else:
+                entity_reg.async_remove(entry_er.entity_id)
+                slug_renamed_14 += 1
+                _LOGGER.info(
+                    "Roomba+: v14 removed duplicate locale-slug entity %s "
+                    "(target %s already existed)",
+                    entry_er.entity_id, correct_eid,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=14)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 14 "
+            "(%d locale-slug entity_id(s) processed — see v15 for corrected fix)",
+            config_entry.entry_id, slug_renamed_14,
+        )
+        current = 14
+
+    if current == 14:
+        # v14 → v15 (v2.5.0 hotfix): redo the locale-slug entity_id fix using the
+        # device registry instead of the sibling-based prefix derivation that was
+        # used in v13→v14.  The sibling approach failed because German entity_id
+        # suffixes (e.g. "_ladezeit") do not match the English uid suffixes
+        # (e.g. "_mission_recharge_time"), so no sibling ever produced a device
+        # prefix and the three affected entities were silently skipped.
+        #
+        # New approach: look up each entity's device via device_registry, compute
+        # device_slug = slugify(device.name_by_user or device.name), then construct
+        # the correct entity_id as "sensor.{device_slug}_{en_slug}".  This works
+        # for any locale.
+        #
+        # Affected sensors (unique_id suffix → correct English entity_id suffix):
+        #   _signal_noise          → _signal_noise        (DE was: _signalrauschen)
+        #   _mission_recharge_time → _recharge_time       (DE was: _ladezeit)
+        #   _mission_expire_time   → _mission_expire_time  (DE was: _missionsablauf)
+
+        from homeassistant.helpers import (
+            entity_registry as er_helper,
+            device_registry as dr_helper,
+        )
+        from homeassistant.util import slugify as _slugify
+
+        entity_reg = er_helper.async_get(hass)
+        device_reg  = dr_helper.async_get(hass)
+        slug_renamed_15 = 0
+
+        # uid_suffix → correct English entity_id slug (derived from name= value)
+        _V15_TARGETS: list[tuple[str, str]] = [
+            ("_signal_noise",          "signal_noise"),
+            ("_mission_recharge_time", "recharge_time"),
+            ("_mission_expire_time",   "mission_expire_time"),
+        ]
+
+        # Use the blid from config entry data to construct exact unique_ids
+        # for the three affected sensors, then search the full entity registry
+        # by exact unique_id.  This bypasses all platform/domain filters which
+        # were silently returning zero results on HA 2026.x installs.
+        blid = config_entry.data.get("blid", "")
+        if not blid:
+            _LOGGER.warning(
+                "Roomba+: v15 migration — blid not in config entry data, "
+                "cannot locate locale-slug entities"
+            )
+        else:
+            # One-pass unique_id → EntityEntry index (all entries, no filtering)
+            uid_index: dict[str, Any] = {
+                e.unique_id: e
+                for e in entity_reg.entities.values()
+                if e.unique_id
+            }
+            _LOGGER.debug(
+                "Roomba+: v15 migration — registry has %d entries, blid=%s…",
+                len(uid_index), blid[:8],
+            )
+
+            for uid_suffix, en_slug in _V15_TARGETS:
+                target_uid = f"{blid}{uid_suffix}"
+                entry_er = uid_index.get(target_uid)
+
+                if entry_er is None:
+                    _LOGGER.debug(
+                        "Roomba+: v15 — entity not in registry (uid=%s) — skip", target_uid
+                    )
+                    continue
+
+                eid = entry_er.entity_id
+                expected_suffix = f"_{en_slug}"
+                if eid.endswith(expected_suffix):
+                    _LOGGER.debug(
+                        "Roomba+: v15 — %s already correct — skip", eid
+                    )
+                    continue
+
+                # Derive correct entity_id from device name
+                device = device_reg.async_get(entry_er.device_id) if entry_er.device_id else None
+                if device is None:
+                    _LOGGER.warning(
+                        "Roomba+: v15 — no device for %s (uid=%s) — skip", eid, target_uid
+                    )
+                    continue
+
+                device_name = device.name_by_user or device.name or ""
+                device_slug = _slugify(device_name)
+                if not device_slug:
+                    _LOGGER.warning(
+                        "Roomba+: v15 — empty device slug for %s — skip", eid
+                    )
+                    continue
+
+                correct_eid = f"sensor.{device_slug}{expected_suffix}"
+                existing = entity_reg.async_get(correct_eid)
+
+                if existing is not None and existing.entity_id != eid:
+                    entity_reg.async_remove(eid)
+                    slug_renamed_15 += 1
+                    _LOGGER.info(
+                        "Roomba+: v15 removed locale-slug duplicate %s "
+                        "(target %s already exists)", eid, correct_eid,
+                    )
+                else:
+                    entity_reg.async_update_entity(eid, new_entity_id=correct_eid)
+                    slug_renamed_15 += 1
+                    _LOGGER.info(
+                        "Roomba+: v15 renamed locale-slug %s → %s", eid, correct_eid,
+                    )
+
+        hass.config_entries.async_update_entry(config_entry, version=15)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 15 "
+            "(%d locale-slug entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed_15,
+        )
+        current = 15
+
+    if current == 15:
+        # v15 → v16 (v2.5.0 hotfix-2): rename battery_capacity_retention whose
+        # German translation "Wartung – Akkukapazität" produced the entity_id
+        # sensor.*_wartung_akkukapazitat in old HA versions.
+        #
+        # Also handles any remaining locale-slug entity_ids not caught by v14/v15
+        # by expanding the target list, still using the blid-based exact-uid lookup
+        # introduced in v15 so the platform filter bypass remains in effect.
+        #
+        # Confirmed affected on user's HA 2026.6 / v2.5.0 (June 2026):
+        #   battery_capacity_retention → sensor.*_wartung_akkukapazitat
+        #
+        # The sensors signal_noise / mission_recharge_time / mission_expire_time
+        # are confirmed absent from the entity registry on the Roomba 980 because
+        # firmware v2.4.17-138 does not expose the required data fields — no entry
+        # to rename, consistent with v15 reporting 0 renames.
+
+        from homeassistant.helpers import (
+            entity_registry as er_helper_16,
+            device_registry as dr_helper_16,
+        )
+        from homeassistant.util import slugify as _slugify_16
+
+        entity_reg_16 = er_helper_16.async_get(hass)
+        device_reg_16  = dr_helper_16.async_get(hass)
+        slug_renamed_16 = 0
+
+        # Complete set: v15 targets + battery_capacity_retention
+        _V16_TARGETS: list[tuple[str, str]] = [
+            ("_signal_noise",           "signal_noise"),
+            ("_mission_recharge_time",  "recharge_time"),
+            ("_mission_expire_time",    "mission_expire_time"),
+            ("_battery_capacity_retention", "battery_capacity_retention"),
+        ]
+
+        blid_16 = config_entry.data.get("blid", "")
+        if not blid_16:
+            _LOGGER.warning(
+                "Roomba+: v16 migration — blid not in config entry data"
+            )
+        else:
+            uid_index_16: dict[str, Any] = {
+                e.unique_id: e
+                for e in entity_reg_16.entities.values()
+                if e.unique_id
+            }
+            _LOGGER.debug(
+                "Roomba+: v16 migration — registry %d entries, blid=%s…",
+                len(uid_index_16), blid_16[:8],
+            )
+
+            for uid_suffix, en_slug in _V16_TARGETS:
+                target_uid = f"{blid_16}{uid_suffix}"
+                entry_er = uid_index_16.get(target_uid)
+
+                if entry_er is None:
+                    _LOGGER.debug(
+                        "Roomba+: v16 — uid=%s not in registry — skip", target_uid
+                    )
+                    continue
+
+                eid = entry_er.entity_id
+                expected_suffix = f"_{en_slug}"
+                if eid.endswith(expected_suffix):
+                    _LOGGER.debug("Roomba+: v16 — %s already correct — skip", eid)
+                    continue
+
+                device = device_reg_16.async_get(entry_er.device_id) if entry_er.device_id else None
+                if device is None:
+                    _LOGGER.warning("Roomba+: v16 — no device for %s — skip", eid)
+                    continue
+
+                device_name = device.name_by_user or device.name or ""
+                device_slug = _slugify_16(device_name)
+                if not device_slug:
+                    _LOGGER.warning("Roomba+: v16 — empty device slug for %s — skip", eid)
+                    continue
+
+                correct_eid = f"sensor.{device_slug}{expected_suffix}"
+                existing = entity_reg_16.async_get(correct_eid)
+
+                if existing is not None and existing.entity_id != eid:
+                    entity_reg_16.async_remove(eid)
+                    slug_renamed_16 += 1
+                    _LOGGER.info(
+                        "Roomba+: v16 removed duplicate %s (target %s exists)",
+                        eid, correct_eid,
+                    )
+                else:
+                    entity_reg_16.async_update_entity(eid, new_entity_id=correct_eid)
+                    slug_renamed_16 += 1
+                    _LOGGER.info(
+                        "Roomba+: v16 renamed %s → %s", eid, correct_eid,
+                    )
+
+        hass.config_entries.async_update_entry(config_entry, version=16)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 16 "
+            "(%d locale-slug entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed_16,
+        )
+        current = 16
+
+    if current == 16:
+        # v16 → v17: final locale-slug fix using entity_id suffix search.
+        #
+        # Root cause: the affected entity was registered in a very old Roomba+
+        # version with a unique_id format that no longer matches the current
+        # {blid}_{key} pattern, so all uid-based lookups (v13–v16) returned
+        # nothing.  The only reliable anchor is the German entity_id suffix
+        # itself (e.g. "*_wartung_akkukapazitat").
+        #
+        # Fix: iterate all entities for this config entry, match any that end
+        # with a known German suffix, rename the entity_id to the English
+        # equivalent AND patch the unique_id to the current {blid}_{key} format
+        # so future HA startups find the entity correctly without creating a
+        # duplicate.
+        #
+        # Confirmed affected entity (June 2026):
+        #   sensor.*_wartung_akkukapazitat  (battery_capacity_retention)
+        #   DE translation: "Wartung – Akkukapazität"  ← slugifies to this
+        #
+        # The full de.json-derived German→English map is included so any
+        # other locale-slug survivors (on other users' installs) are also fixed.
+
+        from homeassistant.helpers import (
+            entity_registry as er_helper_17,
+            device_registry as dr_helper_17,
+        )
+        from homeassistant.util import slugify as _slugify_17
+
+        entity_reg_17 = er_helper_17.async_get(hass)
+        device_reg_17  = dr_helper_17.async_get(hass)
+        blid_17 = config_entry.data.get("blid", "")
+        slug_renamed_17 = 0
+
+        # German entity_id suffix → (sensor key, entity domain)
+        # Generated from de.json: all keys where slugify(DE name) != key.
+        _V17_DE_EN: dict[str, tuple[str, str]] = {
+            # sensor entities
+            "_wartung_akkukapazitat":                  ("battery_capacity_retention", "sensor"),
+            "_wartung_ladezyklen":                     ("battery_cycles",              "sensor"),
+            "_wartung_akku_zuletzt_gewechselt":        ("battery_last_replaced",       "sensor"),
+            "_wartung_bursten_tage_bis_fallig":        ("brush_days_until_due",        "sensor"),
+            "_wartung_bursten_zuletzt_gewechselt":     ("brush_last_replaced",         "sensor"),
+            "_wartung_bursten":                        ("brush_remaining_hours",       "sensor"),
+            "_wartung_bursten_verschleissrate":        ("brush_wear_rate",             "sensor"),
+            "_wartung_gesch_akkuende":                 ("estimated_battery_eol",       "sensor"),
+            "_wartung_filter_tage_bis_fallig":         ("filter_days_until_due",       "sensor"),
+            "_wartung_filter_zuletzt_gewechselt":      ("filter_last_replaced",        "sensor"),
+            "_wartung_filter":                         ("filter_remaining_hours",      "sensor"),
+            "_wartung_filter_verschleissrate":         ("filter_wear_rate",            "sensor"),
+            "_ladezeit":                               ("mission_recharge_time",       "sensor"),
+            "_missionsablauf":                         ("mission_expire_time",         "sensor"),
+            "_signalrauschen":                         ("signal_noise",                "sensor"),
+            "_mission_aktiv":                          ("mission_active",              "binary_sensor"),
+        }
+
+        # Sort longest suffix first to avoid prefix collisions (e.g. _wartung_bursten
+        # vs _wartung_bursten_tage_bis_fallig)
+        _V17_SORTED = sorted(_V17_DE_EN.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+        for entry_er in list(entity_reg_17.entities.values()):
+            if entry_er.config_entry_id != config_entry.entry_id:
+                continue
+
+            eid = entry_er.entity_id
+
+            for de_suffix, (en_key, domain) in _V17_SORTED:
+                if not eid.endswith(de_suffix):
+                    continue
+
+                # Derive correct entity_id from device name
+                device = device_reg_17.async_get(entry_er.device_id) if entry_er.device_id else None
+                if device is None:
+                    _LOGGER.warning(
+                        "Roomba+: v17 — no device for %s — skip", eid
+                    )
+                    break
+
+                device_name = device.name_by_user or device.name or ""
+                device_slug = _slugify_17(device_name)
+                if not device_slug:
+                    _LOGGER.warning(
+                        "Roomba+: v17 — empty device slug for %s — skip", eid
+                    )
+                    break
+
+                correct_eid = f"{domain}.{device_slug}_{en_key}"
+                correct_uid = f"{blid_17}_{en_key}" if blid_17 else None
+
+                existing = entity_reg_17.async_get(correct_eid)
+                if existing is not None and existing.entity_id != eid:
+                    # Target entity_id already taken — remove the stale entry
+                    entity_reg_17.async_remove(eid)
+                    slug_renamed_17 += 1
+                    _LOGGER.info(
+                        "Roomba+: v17 removed stale locale-slug %s "
+                        "(target %s already exists)", eid, correct_eid,
+                    )
+                else:
+                    kwargs: dict[str, Any] = {"new_entity_id": correct_eid}
+                    if correct_uid and entry_er.unique_id != correct_uid:
+                        kwargs["new_unique_id"] = correct_uid
+                    entity_reg_17.async_update_entity(eid, **kwargs)
+                    slug_renamed_17 += 1
+                    _LOGGER.info(
+                        "Roomba+: v17 renamed locale-slug %s → %s (uid→%s)",
+                        eid, correct_eid, correct_uid,
+                    )
+                break  # matched — move to next entity
+
+        # Phase 2 — wrong device-name prefix.
+        # When the device is renamed in HA, existing entity_ids are NOT updated.
+        # Entities first registered under the old device name keep the old prefix
+        # (e.g. "abstellraum_roomba_980_og_*") while newer entities use the
+        # current name ("roomba_980_og_*").
+        #
+        # Detection: entity_id prefix doesn't match {domain}.{current_device_slug}_
+        # Anchor: unique_id starts with {blid}_ → entity name = uid[len(blid)+1:]
+        # Only renames when we can verify the sensor key from the unique_id.
+
+        for entry_er in list(entity_reg_17.entities.values()):
+            if entry_er.config_entry_id != config_entry.entry_id:
+                continue
+            if not entry_er.device_id:
+                continue
+            if not entry_er.unique_id:
+                continue
+            uid = entry_er.unique_id
+            if not (blid_17 and uid.startswith(f"{blid_17}_")):
+                continue  # unique_id in old format — can't derive key safely
+
+            entity_name = uid[len(blid_17) + 1:]  # e.g. "total_energy_consumed"
+            domain = entry_er.entity_id.split(".", 1)[0]
+            device = device_reg_17.async_get(entry_er.device_id)
+            if device is None:
+                continue
+
+            device_name = device.name_by_user or device.name or ""
+            device_slug = _slugify_17(device_name)
+            if not device_slug:
+                continue
+
+            expected_eid = f"{domain}.{device_slug}_{entity_name}"
+            if entry_er.entity_id == expected_eid:
+                continue  # already correct
+
+            existing = entity_reg_17.async_get(expected_eid)
+            if existing is not None and existing.entity_id != entry_er.entity_id:
+                # Target already taken — skip (the active entity is already there)
+                _LOGGER.debug(
+                    "Roomba+: v17 ph2 — target %s already exists, skipping %s",
+                    expected_eid, entry_er.entity_id,
+                )
+                continue
+
+            entity_reg_17.async_update_entity(
+                entry_er.entity_id, new_entity_id=expected_eid
+            )
+            slug_renamed_17 += 1
+            _LOGGER.info(
+                "Roomba+: v17 renamed old-device-prefix %s → %s",
+                entry_er.entity_id, expected_eid,
+            )
+
+        hass.config_entries.async_update_entry(config_entry, version=17)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 17 "
+            "(%d locale-slug entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed_17,
+        )
+        current = 17
+
+    if current == 17:
+        # v17 → v18 (v2.5.0 hotfix-3): two remaining problems from v17.
+        #
+        # Problem A — wartung_akkukapazitat was renamed in v17 phase 1 but
+        # immediately re-created by HA because battery_capacity_retention still
+        # had translation_key set, making German HA generate the German slug on
+        # every fresh entity registration.  Fixed in v2.5.0: translation_key
+        # removed from battery_capacity_retention descriptor.  The orphaned
+        # German-slug entity must be removed so there is no duplicate when HA
+        # registers the sensor under the English entity_id.
+        #
+        # Problem B — the three entities with the old device-name prefix
+        # (abstellraum_roomba_980_og_*) were not renamed by v17 phase 2
+        # because the uid-prefix check silently found nothing.  Replaced here
+        # with entity_id substring matching — the same technique that worked in
+        # v17 phase 1.
+        #
+        # Unified algorithm (single pass over all entities for this config entry):
+        #
+        #   1. Skip entities that already start with {domain}.{device_slug}_
+        #   2. German suffix: rename using the DE→EN map (same as v17)
+        #      If the target entity_id already exists → remove the stale one.
+        #   3. Old device prefix: find {device_slug}_ as a substring, extract
+        #      the entity_name from what follows, rename to correct prefix.
+        #      If the target already exists → remove the stale one.
+
+        from homeassistant.helpers import (
+            entity_registry as er_helper_18,
+            device_registry as dr_helper_18,
+        )
+        from homeassistant.util import slugify as _slugify_18
+
+        entity_reg_18 = er_helper_18.async_get(hass)
+        device_reg_18  = dr_helper_18.async_get(hass)
+        slug_renamed_18 = 0
+
+        # German suffix → (English sensor key, entity domain) — full map from de.json
+        _V18_DE_EN: dict[str, tuple[str, str]] = {
+            "_wartung_akkukapazitat":               ("battery_capacity_retention", "sensor"),
+            "_wartung_ladezyklen":                  ("battery_cycles",             "sensor"),
+            "_wartung_akku_zuletzt_gewechselt":     ("battery_last_replaced",      "sensor"),
+            "_wartung_bursten_tage_bis_fallig":     ("brush_days_until_due",       "sensor"),
+            "_wartung_bursten_zuletzt_gewechselt":  ("brush_last_replaced",        "sensor"),
+            "_wartung_bursten":                     ("brush_remaining_hours",      "sensor"),
+            "_wartung_bursten_verschleissrate":     ("brush_wear_rate",            "sensor"),
+            "_wartung_gesch_akkuende":              ("estimated_battery_eol",      "sensor"),
+            "_wartung_filter_tage_bis_fallig":      ("filter_days_until_due",      "sensor"),
+            "_wartung_filter_zuletzt_gewechselt":   ("filter_last_replaced",       "sensor"),
+            "_wartung_filter":                      ("filter_remaining_hours",     "sensor"),
+            "_wartung_filter_verschleissrate":      ("filter_wear_rate",           "sensor"),
+            "_ladezeit":                            ("mission_recharge_time",      "sensor"),
+            "_missionsablauf":                      ("mission_expire_time",        "sensor"),
+            "_signalrauschen":                      ("signal_noise",               "sensor"),
+            "_mission_aktiv":                       ("mission_active",             "binary_sensor"),
+        }
+        _V18_DE_SORTED = sorted(_V18_DE_EN.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+        def _v18_rename_or_remove(old_eid: str, correct_eid: str) -> bool:
+            """Rename old_eid → correct_eid; if target exists, remove old_eid.
+            Returns True when an action was taken."""
+            if old_eid == correct_eid:
+                return False
+            existing = entity_reg_18.async_get(correct_eid)
+            if existing is not None:
+                entity_reg_18.async_remove(old_eid)
+                _LOGGER.info(
+                    "Roomba+: v18 removed stale %s (target %s already exists)",
+                    old_eid, correct_eid,
+                )
+            else:
+                entity_reg_18.async_update_entity(old_eid, new_entity_id=correct_eid)
+                _LOGGER.info("Roomba+: v18 renamed %s → %s", old_eid, correct_eid)
+            return True
+
+        for entry_er in list(entity_reg_18.entities.values()):
+            if entry_er.config_entry_id != config_entry.entry_id:
+                continue
+
+            eid = entry_er.entity_id
+            domain, _, eid_body = eid.partition(".")
+
+            device = device_reg_18.async_get(entry_er.device_id) if entry_er.device_id else None
+            if device is None:
+                continue
+            device_name = device.name_by_user or device.name or ""
+            device_slug = _slugify_18(device_name)
+            if not device_slug:
+                continue
+
+            # Skip entities that already have the correct device prefix
+            if eid_body.startswith(f"{device_slug}_"):
+                continue
+
+            # Step A: German suffix → English key rename
+            handled = False
+            for de_suffix, (en_key, en_domain) in _V18_DE_SORTED:
+                if eid.endswith(de_suffix):
+                    correct_eid = f"{en_domain}.{device_slug}_{en_key}"
+                    if _v18_rename_or_remove(eid, correct_eid):
+                        slug_renamed_18 += 1
+                    handled = True
+                    break
+
+            if handled:
+                continue
+
+            # Step B: old device prefix — find device_slug substring, extract entity_name
+            marker = f"{device_slug}_"
+            idx = eid_body.find(marker)
+            if idx < 0:
+                continue  # device_slug not found in entity_id body — can't determine name
+
+            entity_name = eid_body[idx + len(marker):]
+            if not entity_name:
+                continue
+
+            correct_eid = f"{domain}.{device_slug}_{entity_name}"
+            if _v18_rename_or_remove(eid, correct_eid):
+                slug_renamed_18 += 1
+
+        hass.config_entries.async_update_entry(config_entry, version=18)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 18 "
+            "(%d entity_id(s) fixed)",
+            config_entry.entry_id, slug_renamed_18,
+        )
+        current = 18
+
+    if current == 18:
+        # v18 → v19: remove orphaned entity registry entries that have no
+        # unique_id and that are left over from old Roomba+ versions.
+        #
+        # Root cause: very old Roomba+ versions registered entities without
+        # unique_ids. When unique_ids were added later, HA created new registry
+        # entries for the new unique_ids, leaving the old no-uid entries as
+        # orphans. The v18 migration renamed them but since they had no uid,
+        # HA registered fresh entities alongside them, resulting in duplicates.
+        #
+        # Fix: remove all entities for this config entry that:
+        #   a) have unique_id = None  (no-uid orphans — safe to delete; the
+        #      active sensor will create a correct entry via uid lookup), OR
+        #   b) end with a known German locale suffix  (stale German-slug entry
+        #      that keeps being re-created in the same HA session due to HA's
+        #      "recently deleted" entity_id reuse mechanism — removing it in a
+        #      separate migration version ensures the deletion persists across
+        #      a cold restart, after which the sensor registers with the correct
+        #      English entity_id from name=).
+
+        from homeassistant.helpers import entity_registry as er_helper_19
+
+        entity_reg_19 = er_helper_19.async_get(hass)
+        removed_19 = 0
+
+        # German suffixes to catch any remaining locale-slug entries
+        _V19_DE_SUFFIXES = tuple(
+            "_" + k for k in [
+                "wartung_akkukapazitat", "wartung_ladezyklen",
+                "wartung_akku_zuletzt_gewechselt", "wartung_bursten",
+                "wartung_bursten_tage_bis_fallig",
+                "wartung_bursten_zuletzt_gewechselt",
+                "wartung_bursten_verschleissrate", "wartung_gesch_akkuende",
+                "wartung_filter", "wartung_filter_tage_bis_fallig",
+                "wartung_filter_zuletzt_gewechselt",
+                "wartung_filter_verschleissrate",
+                "ladezeit", "missionsablauf", "signalrauschen",
+            ]
+        )
+
+        for entry_er in list(entity_reg_19.entities.values()):
+            if entry_er.config_entry_id != config_entry.entry_id:
+                continue
+
+            remove = False
+
+            # Case a: no unique_id — orphaned entry from old Roomba+ version
+            if entry_er.unique_id is None:
+                remove = True
+
+            # Case b: German locale slug suffix
+            elif entry_er.entity_id.endswith(_V19_DE_SUFFIXES):
+                remove = True
+
+            if remove:
+                entity_reg_19.async_remove(entry_er.entity_id)
+                removed_19 += 1
+                _LOGGER.info(
+                    "Roomba+: v19 removed orphaned/stale entity %s (uid=%s)",
+                    entry_er.entity_id, entry_er.unique_id,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=19)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 19 "
+            "(%d orphaned entity_id(s) removed)",
+            config_entry.entry_id, removed_19,
+        )
+        current = 19
+
+    if current == 19:
+        # v19 → v20: no-op version bump.
+        #
+        # The original v20 migration used uid suffixes to compute expected
+        # entity_ids, but several uids themselves contained the wrong key
+        # (e.g. "cloud_recent_dirt_events" instead of "recent_dirt_events")
+        # because a previous buggy task had mutated them.  This caused v20 to
+        # rename CORRECT entity_ids to WRONG ones (reverse direction).
+        #
+        # The corrective pass is in v21 (suffix-based, direction-safe).
+        hass.config_entries.async_update_entry(config_entry, version=20)
+        _LOGGER.info("Roomba+: migrated entry %s to version 20 (no-op)",
+                     config_entry.entry_id)
+        current = 20
+
+    if current == 20:
+        # v20 → v21: suffix-based entity_id correction.
+        #
+        # Fixes entity_ids that were corrupted by the bad v20 migration
+        # (which renamed correct → wrong using uid-based keys) and by a
+        # previous buggy post-setup task that added "cloud_" prefixes or
+        # stripped descriptive words from entity_id suffixes.
+        #
+        # Uses entity_id SUFFIX matching (longest-first, no uid lookup)
+        # so the direction is always correct regardless of uid content.
+
+        from homeassistant.helpers import entity_registry as er_helper_21
+
+        entity_reg_21 = er_helper_21.async_get(hass)
+        renamed_21 = 0
+
+        # Suffix corrections — sorted longest-first to prevent partial matches.
+        # Format: wrong_suffix → correct_suffix
+        _FIXES_21 = sorted({
+            "_cloud_recent_recharge_fraction": "_recent_recharge_fraction",
+            "_cloud_recent_completion_rate":   "_recent_completion_rate",
+            "_cloud_recent_cleaning_speed":    "_recent_cleaning_speed",
+            "_cloud_cleaning_speed_trend":     "_cleaning_speed_trend",
+            "_cloud_recent_coverage_pct":      "_recent_coverage_pct",
+            "_cloud_recent_dirt_density":      "_recent_dirt_density",
+            "_cloud_recent_dirt_events":       "_recent_dirt_events",
+            "_cloud_recent_error_code":        "_recent_error_code",
+            "_cloud_recent_error_time":        "_recent_error_time",
+            "_cloud_recent_recharges":         "_recent_recharges",
+            "_cloud_lifetime_missions":        "_lifetime_missions",
+            "_cloud_recent_area_30d":          "_recent_area_30d",
+            "_cloud_recent_time_30d":          "_recent_time_30d",
+            "_cloud_recent_wifi_floor":        "_recent_wifi_floor",
+            "_cloud_recent_wifi_stability":    "_recent_wifi_stability",
+        }.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+        for entry_er in list(entity_reg_21.entities.values()):
+            if entry_er.config_entry_id != config_entry.entry_id:
+                continue
+            eid = entry_er.entity_id
+            domain = eid.split(".", 1)[0]
+            new_eid = None
+
+            # Cloud-prefix sensors
+            for wrong, correct in _FIXES_21:
+                if eid.endswith(wrong):
+                    new_eid = eid[: -len(wrong)] + correct
+                    break
+
+            # battery → battery_level (sensor only)
+            if new_eid is None and domain == "sensor" and eid.endswith("_battery"):
+                new_eid = eid + "_level"
+
+            # image _map → _cleaning_map
+            # Guard: must NOT already end with _cleaning_map or _coverage_map
+            if new_eid is None and domain == "image":
+                if (eid.endswith("_map")
+                        and not eid.endswith("_cleaning_map")
+                        and not eid.endswith("_coverage_map")):
+                    new_eid = eid[:-4] + "_cleaning_map"
+
+            if new_eid is None or new_eid == eid:
+                continue
+
+            existing = entity_reg_21.async_get(new_eid)
+            if existing is not None and existing.entity_id != eid:
+                entity_reg_21.async_remove(new_eid)
+                _LOGGER.info("Roomba+: v21 removed zombie %s", new_eid)
+
+            entity_reg_21.async_update_entity(eid, new_entity_id=new_eid)
+            renamed_21 += 1
+            _LOGGER.info("Roomba+: v21 renamed %s → %s", eid, new_eid)
+
+        hass.config_entries.async_update_entry(config_entry, version=21)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 21 (%d entity_id(s) corrected)",
+            config_entry.entry_id, renamed_21,
+        )
+        current = 21
+
+    if current == 21:
+        # v21 → v22: set demand_clean_multiplier default for existing entries.
+        # Prior versions may have demand_cleaning_enabled=True without the
+        # multiplier key (added in v2.6.0 config flow). Defaulting here ensures
+        # existing demand-cleaning users keep their current behaviour (1.5×).
+        from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
+        new_options = dict(config_entry.options)
+        new_options.setdefault("demand_clean_multiplier", TRIGGER_MULTIPLIER_DEFAULT)
+        hass.config_entries.async_update_entry(
+            config_entry, options=new_options, version=22
+        )
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 22 "
+            "(demand_clean_multiplier default set)",
+            config_entry.entry_id,
+        )
+        current = 22
+
     if current == config_entry.version:
         _LOGGER.debug(
             "Roomba+: config entry %s already at version %d — no migration needed",
@@ -1169,6 +1994,63 @@ async def async_migrate_entry(
 
 
 # v2.3.0 F8 — UmfAligner re-alignment helpers ─────────────────────────────────
+
+async def _async_update_robot_profile_store(
+    hass: Any,
+    entry: "RoombaConfigEntry",
+    mission_store: "MissionStore",
+    robot_profile_store: "RobotProfileStore",
+) -> None:
+    """Update RobotProfileStore from the latest MissionStore and GridStore data.
+
+    v2.6.0 L5/L6 — called after each successful cloud refresh so the learned
+    state stays fresh. Saves the store only when at least one value changes.
+
+    L5: extracts timeline.finEvents room passCount data from the most recent
+    merged record and calls update_room_dirt_index() for each completed room.
+
+    L6: reads edge_coverage_ratio from GridStore (if available) and calls
+    update_coverage_baseline() so the navigation efficiency baseline converges.
+    """
+    from .const import SQFT_TO_M2
+
+    changed = False
+
+    # ── L5: per-room dirtiness from latest record's timeline ─────────────────
+    records = mission_store.query(days=1)  # last 24 h — pick the most recent
+    if records:
+        latest = records[-1]
+        timeline = latest.get("timeline") or {}
+        fin_events = timeline.get("finEvents", [])
+        for event in fin_events:
+            if event.get("type") != "room":
+                continue
+            room = event.get("room", {})
+            # Only status=0 (pass complete) or status=6 (post-error recovery)
+            if room.get("status") not in (0, 6):
+                continue
+            rid = str(room.get("rid", ""))
+            pass_count = int(room.get("passCount", 0))
+            area_sqft = room.get("totalArea") or room.get("area") or 0
+            area_m2 = float(area_sqft) * SQFT_TO_M2
+            if rid and pass_count > 0 and area_m2 > 0:
+                robot_profile_store.update_room_dirt_index(rid, pass_count, area_m2)
+                changed = True
+
+    # ── L6: navigation efficiency baseline from GridStore ─────────────────────
+    gs = getattr(entry.runtime_data, "grid_store", None)
+    if gs is not None:
+        try:
+            ratio = gs.edge_coverage_ratio()
+            if ratio is not None and ratio > 0:
+                robot_profile_store.update_coverage_baseline(ratio)
+                changed = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    if changed:
+        await robot_profile_store.async_save(hass, entry.entry_id)
+
 
 def _umf_version_changed(
     coordinator: Any,
@@ -1458,6 +2340,18 @@ async def async_setup_entry(
         await dirt_threshold_manager.async_load(config_entry.entry_id)
         _LOGGER.debug("Roomba+ DirtThresholdManager: active for %s", config_entry.data[CONF_BLID])
 
+    # v2.6.0 L4 — RobotProfileStore (all capability tiers)
+    robot_profile_store = RobotProfileStore()
+    await robot_profile_store.async_load(hass, config_entry.entry_id)
+    _LOGGER.debug("RobotProfileStore: loaded for %s", config_entry.data[CONF_BLID])
+
+    # v2.6.0 MP1 — MissionTimerStore (SMART + cloud only)
+    mission_timer_store: MissionTimerStore | None = None
+    if map_capability == MapCapability.SMART and cloud_coordinator is not None:
+        mission_timer_store = MissionTimerStore()
+        await mission_timer_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug("MissionTimerStore: loaded for %s", config_entry.data[CONF_BLID])
+
     # v2.3.0 F8 — UMF spatial fusion aligner
     umf_aligner: Any | None = None
     if cloud_coordinator is not None and geometry_store is not None:
@@ -1515,7 +2409,12 @@ async def async_setup_entry(
         umf_aligner=umf_aligner,
         dirt_threshold_manager=dirt_threshold_manager,
         outline_store=outline_store,
-        robot_profile=get_robot_profile(state.get("sku")),
+        robot_profile=get_robot_profile(
+            state.get("sku"),
+            battery_type=state.get("batteryType"),   # override chemistry from live state
+        ),
+        robot_profile_store=robot_profile_store,
+        mission_timer_store=mission_timer_store,
     )
 
     if presence_manager is not None:
@@ -1534,7 +2433,7 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
-    # ── v1.8.0 — REST API view ─────────────────────────────────────────────
+    # ── v1.8.0 — REST API view    # ── v1.8.0 — REST API view ─────────────────────────────────────────────
     if not hass.data.get("_roomba_plus_view_registered"):
         hass.http.register_view(MissionHistoryView())
         hass.http.register_view(HouseholdSummaryView())
@@ -1578,8 +2477,6 @@ async def async_setup_entry(
                     name="roomba_plus_cloud_merge_save",
                 )
             # v2.4.2 F11-WIRE — evaluate demand cleaning after every cloud refresh.
-            # DirtThresholdManager.async_evaluate() was instantiated but never
-            # called, making F11 demand cleaning completely non-functional.
             _dtm = config_entry.runtime_data.dirt_threshold_manager
             if _dtm is not None:
                 hass.async_create_task(
@@ -1598,6 +2495,13 @@ async def async_setup_entry(
                 async_check_error_recurrence(hass, config_entry),
                 name="roomba_plus_error_recurrence_check",
             )
+            # v2.6.0 L5/L6 — update RobotProfileStore from latest cloud data
+            _rps = config_entry.runtime_data.robot_profile_store
+            if _rps is not None:
+                hass.async_create_task(
+                    _async_update_robot_profile_store(hass, config_entry, ms, _rps),
+                    name="roomba_plus_profile_store_update",
+                )
         config_entry.async_on_unload(
             cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)
         )

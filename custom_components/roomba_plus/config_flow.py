@@ -115,7 +115,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     and full manual fallback with explicit password entry.
     """
 
-    VERSION = 13
+    VERSION = 22
 
     def __init__(self) -> None:
         """Initialise the flow."""
@@ -435,40 +435,51 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Options menu — connection settings or Smart Map zone entry."""
+        """Options menu — grouped by Connection / Scheduling / Map.
+
+        CF1 (v2.6.0): three logical sections replace the previous flat list.
+        CF4: zones and smart_zones are unified under a single "rooms" entry.
+        """
 
         # Guard: runtime_data only exists after a successful async_setup_entry.
-        # If the integration failed to load (e.g. translation error, MQTT timeout),
-        # opening the options UI must not crash — show a disabled/minimal menu.
         if not hasattr(self.config_entry, "runtime_data") or self.config_entry.runtime_data is None:
             return self.async_abort(reason="integration_not_loaded")
         state = roomba_reported_state(self.config_entry.runtime_data.roomba)
-
         data = self.config_entry.runtime_data
 
-        # Build model-appropriate menu.
-        # All robots: settings, blocking_sensors (L5, model-agnostic).
-        # EPHEMERAL + SMART: additionally map_management (L7).
-        # EPHEMERAL + SMART: additionally cloud_credentials (v1.9.0).
-        #   SMART: unlocks zones, favorites, lifetime stats.
-        #   EPHEMERAL (980/900): unlocks lifetime mission stats only.
-        # v1.8.0 L6 — presence_scheduling added when robot supports schedHold
-        menu: list[str] = ["settings", "blocking_sensors"]
-        if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
-            menu.insert(1, "map_management")
+        # ── ⚙  Connection ──────────────────────────────────────────────────
+        menu: list[str] = ["settings"]
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.append("cloud_credentials")
+
+        # ── 🗓  Scheduling ─────────────────────────────────────────────────
+        menu.append("blocking_sensors")
         if "schedHold" in state:
             menu.append("presence_scheduling")
-        # F11 — demand_cleaning step for SMART robots with cloud credentials
         if data.map_capability == MapCapability.SMART and data.has_cloud:
             menu.append("demand_cleaning")
+
+        # ── 🗺  Map ────────────────────────────────────────────────────────
+        if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
+            menu.append("map_management")
+        # CF4: single "rooms" entry routes internally to zones/smart_zones
+        if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
+            menu.append("rooms")
 
         return self.async_show_menu(
             step_id="init",
             menu_options=menu,
             description_placeholders={},
         )
+
+    async def async_step_rooms(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """CF4 — Route to zones or smart_zones based on map_capability."""
+        data = self.config_entry.runtime_data
+        if data.map_capability == MapCapability.SMART:
+            return await self.async_step_smart_zones(user_input)
+        return await self.async_step_zones(user_input)
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
@@ -1248,6 +1259,14 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             errors=errors,
             description_placeholders={
                 "current_user": current_user or "not configured",
+                # CF3 (v2.6.0): contextual scope label so SMART and EPHEMERAL
+                # users understand what cloud credentials unlock for their robot.
+                "cloud_scope": (
+                    "room maps and analytics"
+                    if getattr(self.config_entry.runtime_data, "map_capability", None)
+                    and self.config_entry.runtime_data.map_capability.value == "smart"
+                    else "analytics only"
+                ),
             },
         )
 
@@ -1258,9 +1277,18 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """F11 — Configure dirt-threshold demand cleaning.
 
-        Gate: SMART + cloud only. Shown when both are active.
+        CF2 (v2.6.0): returns async_abort with a clear reason when the robot
+        does not meet the gate conditions, instead of silently omitting the step.
+        Gate: SMART + cloud only.
         Options stored: demand_cleaning_enabled (bool), demand_clean_multiplier (float).
         """
+        data = self.config_entry.runtime_data
+        if (
+            not hasattr(data, "map_capability")
+            or data.map_capability.value != "smart"
+            or not data.has_cloud
+        ):
+            return self.async_abort(reason="demand_cleaning_not_supported")
         if user_input is not None:
             updated = dict(self.config_entry.options)
             updated[CONF_DEMAND_CLEANING_ENABLED] = user_input.get(

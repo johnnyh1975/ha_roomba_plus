@@ -375,11 +375,7 @@ class IrobotCloudApi:
         url = f"{self._deployment['httpBaseAuth']}/v1/user/automations"
         result = await self._aws_get(url)
         _LOGGER.debug(
-            "iRobot cloud: automations response type=%s keys=%s"
-            # TODO: remove this debug log once the response shape is confirmed
-            # empirically from a live API trace. Add entity creation in v2.2.
-            " (shape TBD — no entities created yet)",
-            type(result).__name__,
-            list(result.keys()) if isinstance(result, dict) else "n/a",
+            "iRobot cloud: automations response — %d item(s)",
+            len(result) if isinstance(result, (dict, list)) else 0,
         )
         return result if isinstance(result, dict) else {}

@@ -58,11 +58,13 @@ class MaintenanceStore:
     consecutive_skips: int = 0
 
     # L2 — replacement history for self-calibrating lifespan (v2.5.0).
-    # Each entry is a bbrun.hr value at the time of replacement.
-    # After 2+ replacements, learned_filter_hours / learned_brush_hours are
-    # computed as the median of intervals between consecutive replacements.
     filter_reset_history: list[int] = field(default_factory=list)
     brush_reset_history: list[int] = field(default_factory=list)
+
+    # IA74-MAINT (v2.6.0) — clean/inspect timestamps (calendar-based, no bbrun.hr)
+    wheel_cleaned_at: str | None = None
+    contact_cleaned_at: str | None = None
+    bin_cleaned_at: str | None = None
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
@@ -91,6 +93,10 @@ class MaintenanceStore:
             self.brush_reset_history = [
                 int(h) for h in data.get("brush_reset_history", [])
             ]
+            # IA74-MAINT: calendar-based inspect timestamps
+            self.wheel_cleaned_at   = data.get("wheel_cleaned_at")
+            self.contact_cleaned_at = data.get("contact_cleaned_at")
+            self.bin_cleaned_at     = data.get("bin_cleaned_at")
             _LOGGER.debug(
                 "MaintenanceStore: loaded — filter_reset=%dh brush_reset=%dh",
                 self.filter_reset_hr, self.brush_reset_hr,
@@ -112,6 +118,10 @@ class MaintenanceStore:
             "consecutive_skips": self.consecutive_skips, # F6g
             "filter_reset_history": self.filter_reset_history,  # L2
             "brush_reset_history":  self.brush_reset_history,   # L2
+            # IA74-MAINT
+            "wheel_cleaned_at":   self.wheel_cleaned_at,
+            "contact_cleaned_at": self.contact_cleaned_at,
+            "bin_cleaned_at":     self.bin_cleaned_at,
         })
 
     # ── Reset methods ─────────────────────────────────────────────────────────
@@ -157,17 +167,20 @@ class MaintenanceStore:
 
     # ── F5d — Battery capacity baseline ──────────────────────────────────────
 
-    def record_estcap_if_needed(self, estcap: float) -> None:
-        """Record estCap as baseline on first valid observation.
+    def record_estcap_if_needed(self, estcap_mah: float) -> None:
+        """Record converted mAh capacity as baseline on first valid observation.
 
         F5d — called by battery_capacity_retention sensor on every MQTT update.
-        Only sets the baseline once; subsequent calls are no-ops so the baseline
-        never drifts once established.  Persisted via async_save after the call.
+        Receives the *converted* mAh value (raw estCap ÷ chemistry scale),
+        NOT the raw BMS value.  Only sets the baseline once; subsequent calls
+        are no-ops so the baseline never drifts once established.
+        Persisted via async_save after the call.
         """
-        if self.baseline_estcap is None and estcap > 0:
-            self.baseline_estcap = float(estcap)
+        if self.baseline_estcap is None and estcap_mah > 0:
+            self.baseline_estcap = float(estcap_mah)
             _LOGGER.info(
-                "MaintenanceStore: baseline_estcap set to %.0f mAh", estcap
+                "MaintenanceStore: baseline_estcap set to %.0f mAh "
+                "(converted from raw BMS value)", estcap_mah
             )
 
     # ── L2 — Self-calibrating lifespan ───────────────────────────────────────

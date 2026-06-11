@@ -79,7 +79,8 @@
           "blocking_sensors": "Blocking sensors",
           "map_management": "Zone management",
           "presence_scheduling": "Programación según presencia",
-          "demand_cleaning": "Demand cleaning"
+          "demand_cleaning": "Demand cleaning",
+          "rooms": "Habitaciones y zonas"
         }
       },
       "zones": {
@@ -188,7 +189,8 @@
       "cloud_unavailable": "No se pudo conectar al cloud de iRobot. Comprueba tu conexión a Internet e inténtalo de nuevo."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings."
+      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "demand_cleaning_not_supported": "La limpieza bajo demanda requiere un robot SMART con credenciales de nube configuradas."
     }
   },
   "entity": {
@@ -489,13 +491,22 @@
         "name": "Tiempo de limpieza (30 d)"
       },
       "optimal_clean_window": {
-        "name": "Optimal clean window"
+        "name": "Presencia – Ventana de limpieza óptima"
       },
       "recent_edge_coverage_ratio": {
-        "name": "Recent edge coverage ratio"
+        "name": "Rendimiento – Cobertura de bordes (30 d)"
       },
       "total_energy_consumed": {
-        "name": "Total energy consumed"
+        "name": "Energía total consumida"
+      },
+      "mission_progress": {
+        "name": "Progreso de misión"
+      },
+      "map_learning": {
+        "name": "Aprendizaje del mapa"
+      },
+      "zone_summary": {
+        "name": "Resumen de zonas"
       }
     },
     "binary_sensor": {
@@ -559,7 +570,7 @@
         "name": "Misión activa"
       },
       "demand_clean_blocked": {
-        "name": "Demand clean blocked"
+        "name": "Limpieza bajo demanda bloqueada"
       }
     },
     "button": {

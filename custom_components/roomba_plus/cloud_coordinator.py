@@ -675,6 +675,26 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return pid
         return None
 
+    @property
+    def learning_percentage(self) -> int | None:
+        """IA74-LP (v2.6.0): Return map learning_percentage from the active pmap.
+
+        This is the SMART map's own completeness score (0–100). Exposed as a
+        SensorDeviceClass.MEASUREMENT sensor. Gate: SMART + cloud only.
+        Returns None when no data or the field is absent.
+        """
+        if not self.data:
+            return None
+        for pmap in self.data.get("pmaps", []):
+            details = pmap.get("active_pmapv_details", {})
+            pct = details.get("map_header", {}).get("learning_percentage")
+            if pct is not None:
+                try:
+                    return int(pct)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
     def seed_pmap_id_from_local(self, reported_state: dict) -> None:
         """IA74-PMAP — Seed active_pmap_id from local MQTT pmaps field on startup.
 
@@ -783,6 +803,19 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return []
 
     # ── v2.2.0 UMF properties (F9 / F22a) ────────────────────────────────────
+
+    @property
+    def zone_counts(self) -> dict[str, int]:
+        """IA74-ZONE (v2.6.0) — count clean zones, keepout zones, observed zones.
+
+        Returns dict with keys: clean, keepout, observed.
+        Used by ZoneSummarySensor to surface a high-level map health overview.
+        """
+        return {
+            "clean":    len(self.zones),
+            "keepout":  len(self.keepout_zones),
+            "observed": len(self.observed_zone_centroids),
+        }
 
     @property
     def umf_data(self) -> dict[str, Any]:

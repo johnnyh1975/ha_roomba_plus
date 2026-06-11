@@ -17,6 +17,7 @@ from typing import Any
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
+    BinarySensorEntityDescription,
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -113,8 +114,12 @@ async def async_setup_entry(
 class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     """Binary sensor that is ON when the Roomba's bin is full."""
 
-    _attr_translation_key = "bin_full"
-    _attr_name = "Bin full"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="bin_full",
+        name="Bin full",
+        translation_key="bin_full",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -139,8 +144,12 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
     the robot cannot start a cleaning mission.
     """
 
-    _attr_translation_key = "bin_present"
-    _attr_name = "Bin present"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="bin_present",
+        name="Bin present",
+        translation_key="bin_present",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -166,8 +175,12 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     to reflect real-time connectivity without polling.
     """
 
-    _attr_translation_key = "connected"
-    _attr_name = "Connected"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="connected",
+        name="Connected",
+        translation_key="connected",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -207,8 +220,12 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
     Only created when mopReady is present in the state (Braava m6).
     """
 
-    _attr_translation_key = "mop_ready"
-    _attr_name = "Mop problem"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mop_ready",
+        name="Mop problem",
+        translation_key="mop_ready",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -251,8 +268,12 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
     Only created on Braava m6 (mopReady present in state).
     """
 
-    _attr_translation_key = "mop_tank_present"
-    _attr_name = "Mop tank present"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mop_tank_present",
+        name="Mop tank present",
+        translation_key="mop_tank_present",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -281,8 +302,12 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
     Only created on Braava m6 (mopReady present in state).
     """
 
-    _attr_translation_key = "mop_lid_closed"
-    _attr_name = "Mop lid open"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mop_lid_closed",
+        name="Mop lid open",
+        translation_key="mop_lid_closed",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -330,8 +355,12 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
     OFF = idle (map save complete, commands accepted normally).
     """
 
-    _attr_translation_key = "map_saving"
-    _attr_name = "Smart Map saving"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="map_saving",
+        name="Smart Map saving",
+        translation_key="map_saving",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.UPDATE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -370,8 +399,12 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
     consumables are due and by how many hours they are overdue.
     """
 
-    _attr_translation_key = "maintenance_due"
-    _attr_name = "Maintenance due"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="maintenance_due",
+        name="Maintenance due",
+        translation_key="maintenance_due",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -446,8 +479,12 @@ class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
     started, and when the timeout will expire.
     """
 
-    _attr_translation_key = "start_blocked"
-    _attr_name = "Start blocked"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="start_blocked",
+        name="Start blocked",
+        translation_key="start_blocked",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -498,8 +535,12 @@ class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
     Only created when the robot reports schedHold in its state.
     """
 
-    _attr_translation_key = "schedule_hold_active"
-    _attr_name = "Schedule hold active"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="schedule_hold_active",
+        name="Schedule hold active",
+        translation_key="schedule_hold_active",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -535,8 +576,12 @@ class RoombaMopLidOpen(IRobotEntity, BinarySensorEntity):
     Only created when `lidOpen` is present in the initial state.
     """
 
-    _attr_translation_key = "mop_lid_open"
-    _attr_name = "Lid open"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mop_lid_open",
+        name="Lid open",
+        translation_key="mop_lid_open",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -562,8 +607,12 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
     Only created when `tankPresent` is present as a top-level state key.
     """
 
-    _attr_translation_key = "mop_tank_present_direct"
-    _attr_name = "Tank present"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mop_tank_present_direct",
+        name="Tank present",
+        translation_key="mop_tank_present_direct",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.PRESENCE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -590,8 +639,12 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     Always created on all robots — the condition is universal across firmware.
     """
 
-    _attr_translation_key = "mid_mission_recharge"
-    _attr_name = "Mid-mission recharge"  # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mid_mission_recharge",
+        name="Mid-mission recharge",
+        translation_key="mid_mission_recharge",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -629,8 +682,12 @@ class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
     phase=="charge" with cycle=="none" = final dock after mission → OFF.
     """
 
-    _attr_translation_key = "mission_active"
-    _attr_name = "Mission active"           # G6: locale-independent entity_id slug
+    entity_description = BinarySensorEntityDescription(
+        key="mission_active",
+        name="Mission active",
+        translation_key="mission_active",
+    )
+
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -670,9 +727,13 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
     None = DirtThresholdManager not configured or no evaluation yet.
     """
 
-    _attr_translation_key = "demand_clean_blocked"
-    _attr_name = "Demand clean blocked"   # G6: locale-independent entity_id slug
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    entity_description = BinarySensorEntityDescription(
+        key="demand_clean_blocked",
+        name="Demand clean blocked",
+        translation_key="demand_clean_blocked",
+    )
+
+    _attr_entity_category = None  # reclassified DIAG→MAIN (v2.6.0)
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
         super().__init__(roomba, blid)
@@ -681,34 +742,17 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return True when demand clean is currently blocked."""
+        """Return True when demand clean is currently blocked.
+
+        ALG3 (v2.6.0): delegates to DirtThresholdManager.gate_blocked() —
+        single source of truth for gate logic.
+        """
         data = self._config_entry.runtime_data
-
-        # Blocked if robot is active
-        state = data.roomba_reported_state()
-        cycle = state.get("cleanMissionStatus", {}).get("cycle", "none")
-        if cycle != "none":
-            return True
-
-        # Blocked if BlockingManager queued
-        bm = getattr(data, "blocking_manager", None)
-        if bm is not None and bm.is_queued:
-            return True
-
-        # Blocked if presence gate would prevent trigger
-        pm = getattr(data, "presence_manager", None)
-        if pm is not None:
-            person_ids = self._config_entry.options.get("presence_entities", [])
-            if person_ids:
-                all_away = all(
-                    (st := self.hass.states.get(eid)) is not None
-                    and st.state not in ("home", "Home")
-                    for eid in person_ids
-                )
-                if not all_away:
-                    return True
-
-        return False
+        dtm = getattr(data, "dirt_threshold_manager", None)
+        if dtm is None:
+            return None
+        blocked, _ = dtm.gate_blocked()
+        return blocked
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state

@@ -51,6 +51,16 @@ _HOME_STATES = frozenset({"home", "on", "true"})
 _ACTIVE_CLEANING_PHASES = frozenset({"run", "hmMidMsn", "evac"})
 
 
+def _event_dt(item: object) -> object:
+    """Return the datetime from a _clean_events entry.
+
+    Handles both the v2.5.0 format (plain datetime) and the v2.6.0 format
+    ((datetime, was_all_away) tuple). Backward-compat for pre-existing data
+    seeded by tests or migrated from storage.
+    """
+    return item[0] if isinstance(item, tuple) else item
+
+
 class PresenceManager:
     """Manage schedHold based on tracked person entity states."""
 
@@ -207,7 +217,12 @@ class PresenceManager:
 
         F12a — called from callbacks.py at mission start so the manager
         can build a day×hour reliability matrix.
-        Stores (weekday, hour) → list[datetime] in _clean_events.
+        Stores (weekday, hour) → list[(datetime, was_all_away)] in _clean_events.
+
+        ALG1 (v2.6.0): snapshots presence state at the moment of recording so
+        the reliability score genuinely measures "fraction of cleans where everyone
+        was away", not just recency of historical cleans.
+
         P5: prunes events older than 90 days only when total > 500 events;
         for typical use (≤180 events over 90 days) the check is O(1).
         """
@@ -217,28 +232,45 @@ class PresenceManager:
             cutoff = dt_util.utcnow() - timedelta(days=90)
             for key in list(self._clean_events):
                 self._clean_events[key] = [
-                    dt for dt in self._clean_events[key] if dt > cutoff
+                    item for item in self._clean_events[key]
+                    if _event_dt(item) > cutoff
                 ]
         # Bug A fix: use dt_util.as_local() so the slot weekday and hour match
         # HA's configured timezone, not the server OS timezone. This must agree
         # with preferred_window() which uses dt_util.now().weekday().
         local_dt = dt_util.as_local(started_at)
         slot = (local_dt.weekday(), local_dt.hour)
-        self._clean_events[slot].append(started_at)
+
+        # ALG1: snapshot whether all tracked persons are currently away.
+        person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
+        was_all_away = (
+            bool(person_ids)
+            and all(
+                (st := self._hass.states.get(eid)) is not None
+                and st.state not in _HOME_STATES
+                for eid in person_ids
+            )
+        )
+        self._clean_events[slot].append((started_at, was_all_away))
         _LOGGER.debug(
-            "PresenceManager: recorded clean at weekday=%d hour=%d", *slot
+            "PresenceManager: recorded clean at weekday=%d hour=%d away=%s",
+            *slot, was_all_away,
         )
 
     def presence_windows(self) -> dict[tuple[int, int], float]:
-        """Return the EMA-weighted reliability matrix for cleaning windows.
+        """Return the away-reliability matrix for cleaning windows.
 
         F12a — Returns a dict mapping (weekday, hour) → reliability score (0.0–1.0).
           weekday: 0=Monday … 6=Sunday
           hour: 0–23 local time
-          reliability: fraction of recent occurrences where all persons were away.
+          reliability: fraction of cleans in this slot where all persons were away.
+
+        ALG1 (v2.6.0): score is now away_cleans / total_cleans per slot,
+        measuring genuine "away during clean" rather than recency weighting.
+        Slots with fewer than 3 recent observations are excluded to avoid
+        a single lucky away-clean giving a false high reliability.
 
         Empty when fewer than 5 clean events recorded (insufficient history).
-        EMA-weighted: more recent events count more than older ones.
         """
         person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
         if not person_ids:
@@ -248,25 +280,21 @@ class PresenceManager:
         if total_events < 5:
             return {}
 
+        now = dt_util.utcnow()
         result: dict[tuple[int, int], float] = {}
         for slot, events in self._clean_events.items():
             if not events:
                 continue
-            # Simple reliability: proportion of cleans in this slot.
-            # EMA weighting: more recent events weighted by recency rank.
-            sorted_events = sorted(events, reverse=True)
-            alpha = 0.3  # EMA decay — recent events count more
-            weights = [alpha * (1 - alpha) ** i for i in range(len(sorted_events))]
-            # Normalise weights to 0–1 range
-            total_w = sum(weights)
-            score = total_w / (total_w + 0.001)  # bounded: more events → higher score
-            # Scale by recency: slot with N events in 30d is more reliable than N in 90d
-            now = dt_util.utcnow()
-            recent_count = sum(
-                1 for dt in events
-                if (now - dt).days <= 30
-            )
-            result[slot] = min(1.0, score * (recent_count / max(len(events), 1)))
+            # Consider only the last 30 days for scoring
+            recent = [
+                item for item in events
+                if (now - _event_dt(item)).days <= 30
+            ]
+            if len(recent) < 3:
+                # Insufficient recent history for this slot
+                continue
+            away_count = sum(1 for item in recent if isinstance(item, tuple) and item[1])
+            result[slot] = away_count / len(recent)
         return result
 
     def preferred_window(self) -> tuple[int, int] | None:
@@ -293,6 +321,19 @@ class PresenceManager:
         if not today_slots:
             return None
         return max(today_slots, key=today_slots.__getitem__)
+
+    @property
+    def window_is_today(self) -> bool:
+        """True when the best cleaning window falls on today's weekday.
+
+        ALG2 (v2.6.0) — exposed as extra_state_attributes on the
+        optimal_clean_window sensor so cards and automations can distinguish
+        "clean now (today)" from "clean tomorrow at this time".
+        """
+        slot = self.preferred_window()
+        if slot is None:
+            return False
+        return slot[0] == dt_util.now().weekday()
 
     @property
     def is_managed_hold(self) -> bool:
