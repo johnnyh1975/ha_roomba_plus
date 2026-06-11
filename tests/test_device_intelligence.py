@@ -34,6 +34,7 @@ def _make_entity(vacuum_state: dict, bbchg3: dict | None = None, bbrun: dict | N
     class _FakeRuntimeData:
         mission_store = None
         maintenance_store = None
+        robot_profile = None   # no profile → _estcap_to_mah returns raw estCap (scale=1.0)
 
     class _FakeConfigEntry:
         runtime_data = _FakeRuntimeData()

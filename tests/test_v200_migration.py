@@ -115,7 +115,7 @@ class TestMigrateEntryV1ToV2:
 
     def test_returns_true(self):
         entry = self._run_migration({})
-        assert entry.version == 13  # current config entry version as of v2.3.0
+        assert entry.version == 22  # current config entry version as of v2.5.0 (v15)
 
     def test_adds_marker_key(self):
         entry = self._run_migration({})
@@ -141,7 +141,7 @@ class TestMigrateEntryV1ToV2:
     def test_version_bumped_to_13(self):
         """v1 entry migrates through all steps to current version (12)."""
         entry = self._run_migration({})
-        assert entry.version == 13
+        assert entry.version == 22
 
     def test_already_at_v12_noop(self):
         """An entry already at the current version (12) is returned as-is."""
@@ -292,7 +292,7 @@ class TestMigrationV11ToV12:
 
     def test_version_bumped_to_13(self):
         entry = self._run_from_v11({"continuous": True})
-        assert entry.version == 13
+        assert entry.version == 22
 
     def test_existing_options_preserved(self):
         opts = {"continuous": False, "delay": 60, "presence_scheduling_enabled": True}
@@ -374,7 +374,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 13
+        assert entry.version == 22
         assert any("recent_area_30d" in new for _, new in renamed), \
             f"Expected area slug renamed, got: {renamed}"
 
@@ -392,7 +392,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 13
+        assert entry.version == 22
         assert any("recent_time_30d" in new for _, new in renamed), \
             f"Expected time slug renamed, got: {renamed}"
 
@@ -413,7 +413,7 @@ class TestMigrationV11ToV12SlugFix:
         """Slug fix does not interfere with floor_label being added."""
         entry, _, _ = self._run_from_v11_with_entities([])
         assert entry.options.get("floor_label") == ""
-        assert entry.version == 13
+        assert entry.version == 22
 
 
 class TestMigrationV12ToV13:
@@ -478,7 +478,7 @@ class TestMigrationV12ToV13:
     def test_version_bumped_to_13(self):
         """Entry at v12 is bumped to v13."""
         entry, _, _ = self._run_from_v12_with_entities([])
-        assert entry.version == 13
+        assert entry.version == 22
 
     def test_german_cleaning_map_renamed(self):
         """image.*_reinigungskarte → image.*_cleaning_map (DE install)."""
@@ -604,3 +604,545 @@ class TestMigrationV12ToV13:
         _, renamed, removed = self._run_from_v12_with_entities(entities)
         # Should not crash; entity is skipped
         assert removed == []
+
+
+class TestMigrationV13ToV14:
+    """v13 → v14: attempted locale-slug fix (device prefix derivation was buggy,
+    actual rename now happens in v14→v15)."""
+
+    def test_version_bumped(self):
+        """Entry at v13 is eventually bumped to v15 (through v14)."""
+        import asyncio
+        from unittest.mock import MagicMock, patch, AsyncMock
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=13, options={"continuous": True})
+        hass = _FakeHass()
+
+        fake_er = MagicMock()
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: []
+        fake_er.async_get = lambda eid: None
+
+        fake_dr = MagicMock()
+        fake_dr.async_get = lambda device_id: None
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=fake_dr):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        assert entry.version == 22
+
+
+class TestMigrationV14ToV15:
+    """v14 → v15: locale-slug fix using device registry (robust, any locale)."""
+
+    BLID = "TEST_BLID_000000000000000000000000"
+
+    def _make_entity(self, entity_id, unique_id, device_id="dev_1"):
+        from unittest.mock import MagicMock
+        return MagicMock(
+            platform="roomba_plus",
+            domain="sensor",
+            entity_id=entity_id,
+            unique_id=unique_id,
+            config_entry_id="entry_abc",
+            device_id=device_id,
+        )
+
+    def _run_from_v14(self, fake_entities, device_name="Abstellraum Roomba 980 OG"):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        # blid in data must match the uid prefix used in fake entities
+        entry = _FakeConfigEntry(version=14, options={"continuous": True})
+        hass = _FakeHass()
+
+        entities_by_id = {e.entity_id: e for e in fake_entities}
+
+        renamed = []
+        removed = []
+
+        fake_er = MagicMock()
+        fake_er.async_get = lambda eid: entities_by_id.get(eid)
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: list(entities_by_id.values())
+
+        def _async_update_entity(old_eid, *, new_entity_id=None, **kwargs):
+            if new_entity_id:
+                obj = entities_by_id.pop(old_eid, None)
+                if obj:
+                    obj.entity_id = new_entity_id
+                    entities_by_id[new_entity_id] = obj
+                renamed.append((old_eid, new_entity_id))
+
+        def _async_remove(eid):
+            entities_by_id.pop(eid, None)
+            removed.append(eid)
+
+        fake_er.async_update_entity = _async_update_entity
+        fake_er.async_remove = _async_remove
+
+        fake_device = MagicMock()
+        fake_device.name_by_user = None
+        fake_device.name = device_name
+
+        fake_dr = MagicMock()
+        fake_dr.async_get = lambda device_id: fake_device if device_id else None
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                       return_value=list(entities_by_id.values())), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=fake_dr):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, renamed, removed
+
+    def test_version_bumped_to_15(self):
+        entry, _, _ = self._run_from_v14([])
+        assert entry.version == 22
+
+    def test_german_ladezeit_renamed_to_recharge_time(self):
+        """sensor.*_ladezeit → sensor.*_recharge_time (DE, mission_recharge_time)."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_ladezeit",
+            f"{self.BLID}_mission_recharge_time",
+        )
+        _, renamed, _ = self._run_from_v14([entity])
+        assert any("recharge_time" in new for _, new in renamed), \
+            f"Expected recharge_time in {renamed}"
+
+    def test_german_missionsablauf_renamed_to_mission_expire_time(self):
+        """sensor.*_missionsablauf → sensor.*_mission_expire_time (DE)."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_missionsablauf",
+            f"{self.BLID}_mission_expire_time",
+        )
+        _, renamed, _ = self._run_from_v14([entity])
+        assert any("mission_expire_time" in new for _, new in renamed), \
+            f"Expected mission_expire_time in {renamed}"
+
+    def test_german_signalrauschen_renamed_to_signal_noise(self):
+        """sensor.*_signalrauschen → sensor.*_signal_noise (DE)."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_signalrauschen",
+            f"{self.BLID}_signal_noise",
+        )
+        _, renamed, _ = self._run_from_v14([entity])
+        assert any("signal_noise" in new for _, new in renamed), \
+            f"Expected signal_noise in {renamed}"
+
+    def test_english_install_no_rename(self):
+        """English slugs already correct — no rename on English install."""
+        entities = [
+            self._make_entity("sensor.roomba_recharge_time",      f"{self.BLID}_mission_recharge_time"),
+            self._make_entity("sensor.roomba_mission_expire_time", f"{self.BLID}_mission_expire_time"),
+            self._make_entity("sensor.roomba_signal_noise",        f"{self.BLID}_signal_noise"),
+        ]
+        _, renamed, _ = self._run_from_v14(entities)
+        assert renamed == [], f"No rename expected on English install, got: {renamed}"
+
+    def test_device_name_slug_used_for_prefix(self):
+        """Device name is slugified to compute the new entity_id prefix."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_ladezeit",
+            f"{self.BLID}_mission_recharge_time",
+        )
+        _, renamed, _ = self._run_from_v14([entity], device_name="Abstellraum Roomba 980 OG")
+        new_eids = [new for _, new in renamed]
+        assert any(new.startswith("sensor.abstellraum_roomba_980_og") for new in new_eids), \
+            f"Expected abstellraum_roomba_980_og prefix in {new_eids}"
+
+    def test_no_device_id_skipped(self):
+        """Entity without device_id is skipped gracefully — no crash."""
+        entity = self._make_entity(
+            "sensor.roomba_ladezeit",
+            f"{self.BLID}_mission_recharge_time",
+            device_id=None,
+        )
+        _, renamed, _ = self._run_from_v14([entity])
+        assert renamed == []
+
+
+
+class TestMigrationV15ToV16:
+    """v15 → v16: battery_capacity_retention locale-slug fix
+    (DE: 'Wartung – Akkukapazität' → slug 'wartung_akkukapazitat')."""
+
+    BLID = "TEST_BLID_000000000000000000000000"
+
+    def _make_entity(self, entity_id, unique_id, device_id="dev_1"):
+        from unittest.mock import MagicMock
+        return MagicMock(
+            platform="roomba_plus", domain="sensor",
+            entity_id=entity_id, unique_id=unique_id,
+            config_entry_id="entry_abc", device_id=device_id,
+        )
+
+    def _run_from_v15(self, fake_entities, device_name="Roomba 980 - OG"):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=15, options={"continuous": True})
+        hass = _FakeHass()
+
+        entities_by_id = {e.entity_id: e for e in fake_entities}
+        renamed = []
+        removed = []
+
+        fake_er = MagicMock()
+        fake_er.async_get = lambda eid: entities_by_id.get(eid)
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: list(entities_by_id.values())
+
+        def _async_update(old_eid, *, new_entity_id=None, **kw):
+            if new_entity_id:
+                obj = entities_by_id.pop(old_eid, None)
+                if obj:
+                    obj.entity_id = new_entity_id
+                    entities_by_id[new_entity_id] = obj
+                renamed.append((old_eid, new_entity_id))
+
+        def _async_remove(eid):
+            entities_by_id.pop(eid, None)
+            removed.append(eid)
+
+        fake_er.async_update_entity = _async_update
+        fake_er.async_remove = _async_remove
+
+        fake_device = MagicMock()
+        fake_device.name_by_user = None
+        fake_device.name = device_name
+
+        fake_dr = MagicMock()
+        fake_dr.async_get = lambda did: fake_device if did else None
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=fake_dr):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, renamed, removed
+
+    def test_version_bumped_to_16(self):
+        entry, _, _ = self._run_from_v15([])
+        assert entry.version == 22
+
+    def test_wartung_akkukapazitat_renamed_to_battery_capacity_retention(self):
+        """sensor.*_wartung_akkukapazitat → sensor.*_battery_capacity_retention."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat",
+            f"{self.BLID}_battery_capacity_retention",
+        )
+        _, renamed, _ = self._run_from_v15([entity])
+        assert any("battery_capacity_retention" in new for _, new in renamed), \
+            f"Expected battery_capacity_retention in {renamed}"
+
+    def test_device_slug_from_current_name(self):
+        """Device name 'Roomba 980 - OG' → slug 'roomba_980_og'."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat",
+            f"{self.BLID}_battery_capacity_retention",
+        )
+        _, renamed, _ = self._run_from_v15([entity], device_name="Roomba 980 - OG")
+        new_eids = [new for _, new in renamed]
+        assert any("roomba_980_og" in eid for eid in new_eids), \
+            f"Expected roomba_980_og prefix in {new_eids}"
+
+    def test_already_correct_not_renamed(self):
+        entity = self._make_entity(
+            "sensor.roomba_980_og_battery_capacity_retention",
+            f"{self.BLID}_battery_capacity_retention",
+        )
+        _, renamed, _ = self._run_from_v15([entity])
+        assert renamed == []
+
+    def test_entity_not_in_registry_skipped(self):
+        """No entity with battery_capacity_retention uid → 0 renames."""
+        _, renamed, _ = self._run_from_v15([])
+        assert renamed == []
+
+
+class TestMigrationV16ToV17:
+    """v16→v17: entity_id-suffix based locale-slug fix + unique_id repair."""
+
+    BLID = "TEST_BLID_000000000000000000000000"
+
+    def _make_entity(self, entity_id, unique_id, device_id="dev_1", config_entry_id="test_entry_id"):
+        from unittest.mock import MagicMock
+        return MagicMock(
+            entity_id=entity_id, unique_id=unique_id,
+            config_entry_id=config_entry_id, device_id=device_id,
+        )
+
+    def _run_from_v16(self, fake_entities, device_name="Roomba 980 - OG"):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=16, options={"continuous": True})
+        hass = _FakeHass()
+
+        entities_by_id = {e.entity_id: e for e in fake_entities}
+        renamed = []
+        removed = []
+        uid_updates = []
+
+        fake_er = MagicMock()
+        fake_er.async_get = lambda eid: entities_by_id.get(eid)
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: list(entities_by_id.values())
+
+        def _async_update(old_eid, *, new_entity_id=None, new_unique_id=None, **kw):
+            obj = entities_by_id.pop(old_eid, None)
+            if new_entity_id and obj:
+                obj.entity_id = new_entity_id
+                entities_by_id[new_entity_id] = obj
+                renamed.append((old_eid, new_entity_id))
+            if new_unique_id:
+                uid_updates.append((old_eid, new_unique_id))
+
+        fake_er.async_update_entity = _async_update
+        fake_er.async_remove = lambda eid: (entities_by_id.pop(eid, None), removed.append(eid))
+
+        fake_device = MagicMock()
+        fake_device.name_by_user = None
+        fake_device.name = device_name
+        fake_dr = MagicMock()
+        fake_dr.async_get = lambda did: fake_device if did else None
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=fake_dr):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, renamed, removed, uid_updates
+
+    def test_version_bumped_to_17(self):
+        entry, *_ = self._run_from_v16([])
+        assert entry.version == 22
+
+    def test_wartung_akkukapazitat_renamed(self):
+        """Core case: wartung_akkukapazitat → battery_capacity_retention."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat",
+            "OLD_UID_FORMAT_abc123",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, uid_updates = self._run_from_v16([entity])
+        assert any("battery_capacity_retention" in new for _, new in renamed), \
+            f"Expected battery_capacity_retention in {renamed}"
+
+    def test_unique_id_also_updated(self):
+        """unique_id is updated to {blid}_{key} so future startups find it."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat",
+            "OLD_UID",
+            config_entry_id="test_entry_id",
+        )
+        _, _, _, uid_updates = self._run_from_v16([entity])
+        expected_uid = f"{self.BLID}_battery_capacity_retention"
+        assert any(new_uid == expected_uid for _, new_uid in uid_updates), \
+            f"Expected uid update to {expected_uid}, got {uid_updates}"
+
+    def test_other_config_entry_not_touched(self):
+        """Entities from other config entries are not renamed."""
+        entity = self._make_entity(
+            "sensor.some_device_wartung_akkukapazitat",
+            "OTHER_UID",
+            config_entry_id="different_entry",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        assert renamed == []
+
+    def test_already_correct_not_renamed(self):
+        entity = self._make_entity(
+            "sensor.roomba_980_og_battery_capacity_retention",
+            f"{TestMigrationV16ToV17.BLID}_battery_capacity_retention",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        assert renamed == []
+
+    def test_domain_preserved_binary_sensor(self):
+        """binary_sensor.* mission_aktiv → mission_active preserves binary_sensor domain."""
+        entity = self._make_entity(
+            "binary_sensor.abstellraum_roomba_980_og_mission_aktiv",
+            "OLD_BINARY_UID",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        new_eids = [new for _, new in renamed]
+        assert any(new.startswith("binary_sensor.") for new in new_eids), \
+            f"Expected binary_sensor domain in {new_eids}"
+
+    # Phase 2 tests: wrong-device-prefix rename
+
+    def test_old_device_prefix_renamed(self):
+        """entity with correct uid but old device prefix → renamed to current prefix."""
+        entity = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_total_energy_consumed",
+            f"{TestMigrationV16ToV17.BLID}_total_energy_consumed",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        new_eids = [new for _, new in renamed]
+        assert any("roomba_980_og_total_energy_consumed" in e for e in new_eids), \
+            f"Expected roomba_980_og prefix in {new_eids}"
+
+    def test_binary_sensor_old_prefix_renamed(self):
+        entity = self._make_entity(
+            "binary_sensor.abstellraum_roomba_980_og_mission_active",
+            f"{TestMigrationV16ToV17.BLID}_mission_active",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        new_eids = [new for _, new in renamed]
+        assert any("binary_sensor.roomba_980_og_mission_active" == e for e in new_eids), \
+            f"Expected binary_sensor.roomba_980_og_mission_active in {new_eids}"
+
+    def test_already_correct_prefix_skipped(self):
+        entity = self._make_entity(
+            "sensor.roomba_980_og_total_energy_consumed",
+            f"{TestMigrationV16ToV17.BLID}_total_energy_consumed",
+            config_entry_id="test_entry_id",
+        )
+        _, renamed, _, _ = self._run_from_v16([entity])
+        ph2_renames = [(o, n) for o, n in renamed
+                       if "total_energy_consumed" in n]
+        assert ph2_renames == [], f"Should not rename already-correct entity, got {ph2_renames}"
+
+
+class TestMigrationV17ToV18:
+    """v17→v18: German suffix removal + old-device-prefix rename via entity_id matching."""
+
+    BLID = "TEST_BLID_000000000000000000000000"
+    DEVICE_NAME = "Roomba 980 - OG"   # → slug roomba_980_og
+
+    def _make_entity(self, entity_id, unique_id="uid", device_id="dev_1"):
+        from unittest.mock import MagicMock
+        return MagicMock(
+            entity_id=entity_id, unique_id=unique_id,
+            config_entry_id="test_entry_id", device_id=device_id,
+        )
+
+    def _run_from_v17(self, fake_entities):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=17, options={"continuous": True})
+        hass = _FakeHass()
+
+        entities_by_id = {e.entity_id: e for e in fake_entities}
+        renamed = []
+        removed = []
+
+        fake_er = MagicMock()
+        fake_er.async_get = lambda eid: entities_by_id.get(eid)
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: list(entities_by_id.values())
+
+        def _update(old_eid, *, new_entity_id=None, **kw):
+            if new_entity_id:
+                obj = entities_by_id.pop(old_eid, None)
+                if obj:
+                    obj.entity_id = new_entity_id
+                    entities_by_id[new_entity_id] = obj
+                renamed.append((old_eid, new_entity_id))
+
+        fake_er.async_update_entity = _update
+        fake_er.async_remove = lambda eid: (entities_by_id.pop(eid, None), removed.append(eid))
+
+        fake_device = MagicMock()
+        fake_device.name_by_user = None
+        fake_device.name = self.DEVICE_NAME
+        fake_dr = MagicMock()
+        fake_dr.async_get = lambda did: fake_device if did else None
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=fake_dr):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, renamed, removed
+
+    def test_version_bumped_to_18(self):
+        entry, *_ = self._run_from_v17([])
+        assert entry.version == 22
+
+    # Step A — German suffix
+
+    def test_wartung_akkukapazitat_removed_when_target_exists(self):
+        """If roomba_980_og_battery_capacity_retention already exists (from v17),
+        the stale wartung entity is removed — no duplicate."""
+        german = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat")
+        english = self._make_entity(
+            "sensor.roomba_980_og_battery_capacity_retention")
+        _, renamed, removed = self._run_from_v17([german, english])
+        assert "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat" in removed
+        assert renamed == []
+
+    def test_wartung_akkukapazitat_renamed_when_no_target(self):
+        """If target doesn't exist yet, rename instead of remove."""
+        german = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_wartung_akkukapazitat")
+        _, renamed, removed = self._run_from_v17([german])
+        assert any("battery_capacity_retention" in new for _, new in renamed)
+        assert removed == []
+
+    # Step B — old device prefix
+
+    def test_old_prefix_total_energy_consumed_renamed(self):
+        e = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_total_energy_consumed")
+        _, renamed, _ = self._run_from_v17([e])
+        assert any("roomba_980_og_total_energy_consumed" in new for _, new in renamed)
+
+    def test_old_prefix_mission_active_renamed(self):
+        e = self._make_entity(
+            "binary_sensor.abstellraum_roomba_980_og_mission_active")
+        _, renamed, _ = self._run_from_v17([e])
+        assert any("binary_sensor.roomba_980_og_mission_active" == new for _, new in renamed)
+
+    def test_old_prefix_recent_edge_coverage_renamed(self):
+        e = self._make_entity(
+            "sensor.abstellraum_roomba_980_og_recent_edge_coverage_ratio")
+        _, renamed, _ = self._run_from_v17([e])
+        assert any("roomba_980_og_recent_edge_coverage_ratio" in new for _, new in renamed)
+
+    def test_already_correct_prefix_skipped(self):
+        e = self._make_entity("sensor.roomba_980_og_total_energy_consumed")
+        _, renamed, removed = self._run_from_v17([e])
+        assert renamed == [] and removed == []
+
+    def test_old_prefix_target_exists_removes_stale(self):
+        old = self._make_entity("sensor.abstellraum_roomba_980_og_total_energy_consumed")
+        new = self._make_entity("sensor.roomba_980_og_total_energy_consumed")
+        _, renamed, removed = self._run_from_v17([old, new])
+        assert "sensor.abstellraum_roomba_980_og_total_energy_consumed" in removed
+        assert renamed == []

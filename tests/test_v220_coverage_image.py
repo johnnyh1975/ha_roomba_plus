@@ -94,7 +94,9 @@ class TestCoverageImageIdentity:
     def test_translation_key(self):
         entity = _make_entity()
         # translation_key is set as class attr but may be a property in some HA versions
-        tk = getattr(entity, "_attr_translation_key", None) or getattr(entity, "translation_key", None)
+        tk = (getattr(entity, "_attr_translation_key", None)
+           or getattr(entity, "translation_key", None)
+           or getattr(getattr(entity, "entity_description", None), "translation_key", None))
         assert tk == "coverage_map"
 
     def test_content_type_png(self):

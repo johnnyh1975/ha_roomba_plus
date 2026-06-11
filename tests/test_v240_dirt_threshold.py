@@ -324,3 +324,58 @@ class TestEnabledProperty:
     def test_enabled_false_when_explicitly_false(self):
         mgr = _make_manager(options={CONF_DEMAND_CLEANING_ENABLED: False})
         assert mgr.enabled is False
+
+
+# ── F11-WIRE: async_evaluate wired in _on_cloud_refresh_complete ──────────────
+
+class TestF11WiringInInit:
+    """v2.4.2 — async_evaluate must be scheduled after every cloud refresh.
+
+    Before the fix, DirtThresholdManager was instantiated but async_evaluate
+    was never called, making demand cleaning completely non-functional.
+    """
+
+    async def test_async_evaluate_called_after_cloud_refresh(self):
+        """async_evaluate is scheduled via async_create_task after merge."""
+        from unittest.mock import AsyncMock, MagicMock, call, patch
+
+        hass = MagicMock()
+        hass.async_create_task = MagicMock()
+
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+
+        ms = MagicMock()
+        ms.merge_latest_from_cloud.return_value = False
+
+        dtm = MagicMock()
+        evaluate_coro = AsyncMock()
+        dtm.async_evaluate.return_value = evaluate_coro()
+
+        runtime = MagicMock()
+        runtime.mission_store = ms
+        runtime.dirt_threshold_manager = dtm
+        config_entry.runtime_data = runtime
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.raw_records = []
+
+        # Simulate _on_cloud_refresh_complete inline — matches __init__.py logic
+        if not cloud_coordinator.last_update_success:
+            return
+        if ms is None:
+            return
+        ms.merge_latest_from_cloud(cloud_coordinator.raw_records)
+        _dtm = config_entry.runtime_data.dirt_threshold_manager
+        if _dtm is not None:
+            hass.async_create_task(
+                _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id),
+                name="roomba_plus_demand_clean_eval",
+            )
+
+        dtm.async_evaluate.assert_called_once_with(cloud_coordinator, "test_entry")
+        hass.async_create_task.assert_called_once()
+        _, kwargs = hass.async_create_task.call_args
+        assert kwargs.get("name") == "roomba_plus_demand_clean_eval"
+

@@ -142,3 +142,95 @@ class TestExceptionTranslationKeys:
         for key, val in exceptions.items():
             msg = val.get("message", "")
             assert msg, f"translations/{locale}.json exceptions.{key}.message is empty"
+
+
+class TestTranslationNullValues:
+    """Guard against null values in translation files that crash HA 2026.6+.
+
+    HA 2026.6 tightened _validate_placeholders to call string.Formatter().parse()
+    on every translation value. A null/None value causes:
+      TypeError: expected str, got NoneType
+    crashing the entire integration on startup before async_setup_entry runs.
+
+    Root cause in v2.4.0: schedule_suboptimal issue had "fix_flow": null.
+    Fix: never store null values in translation files.
+    """
+
+    @pytest.mark.parametrize("locale", _TRANSLATION_LOCALES)
+    def test_no_null_values_in_translation_file(self, locale: str):
+        """Every value in every translation file must be a non-null string."""
+        path = _TRANSLATIONS / f"{locale}.json"
+        with open(path) as f:
+            d = json.load(f)
+
+        def _check_no_nulls(obj, path: str) -> list[str]:
+            nulls = []
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    nulls.extend(_check_no_nulls(v, f"{path}.{k}"))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    nulls.extend(_check_no_nulls(v, f"{path}[{i}]"))
+            elif obj is None:
+                nulls.append(path)
+            return nulls
+
+        nulls = _check_no_nulls(d, f"{locale}")
+        assert not nulls, (
+            f"translations/{locale}.json contains null values that will crash "
+            f"HA 2026.6+ translation loader: {nulls}"
+        )
+
+    def test_no_null_values_in_strings_json(self):
+        """strings.json must contain no null values."""
+        with open(_STRINGS) as f:
+            d = json.load(f)
+
+        def _check(obj, path):
+            nulls = []
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    nulls.extend(_check(v, f"{path}.{k}"))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    nulls.extend(_check(v, f"{path}[{i}]"))
+            elif obj is None:
+                nulls.append(path)
+            return nulls
+
+        nulls = _check(d, "strings.json")
+        assert not nulls, (
+            f"strings.json contains null values that will crash "
+            f"HA 2026.6+ translation loader: {nulls}"
+        )
+
+    def test_ha_translation_validator_simulation(self):
+        """Simulate exactly what HA 2026.6 _validate_placeholders does."""
+        import string as _string
+
+        with open(_STRINGS) as f:
+            d = json.load(f)
+
+        def _flatten(obj, prefix=""):
+            items = {}
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    items.update(_flatten(v, f"{prefix}.{k}" if prefix else k))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    items.update(_flatten(v, f"{prefix}[{i}]"))
+            else:
+                items[prefix] = obj
+            return items
+
+        flat = _flatten(d)
+        errors = []
+        for key, val in flat.items():
+            if val is not None:  # HA skips None? — No, it doesn't in 2026.6
+                try:
+                    list(_string.Formatter().parse(str(val) if not isinstance(val, str) else val))
+                except (TypeError, ValueError) as e:
+                    errors.append(f"{key}={val!r}: {e}")
+            else:
+                errors.append(f"{key}=None: would raise TypeError in HA 2026.6 translation loader")
+        assert not errors, f"strings.json has values that crash HA translation loader: {errors}"

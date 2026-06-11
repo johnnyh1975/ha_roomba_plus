@@ -109,7 +109,8 @@ class TestMissionActiveSensor:
     def test_translation_key(self):
         s = _mission_sensor()
         # _attr_translation_key may be wrapped as a property in some HA versions
-        tk = type(s).__dict__.get("_attr_translation_key")
+        tk = (type(s).__dict__.get("_attr_translation_key") or
+              getattr(getattr(s, "entity_description", None), "translation_key", None))
         if isinstance(tk, property):
             tk = tk.fget(s)
         assert tk == "mission_active"
@@ -189,7 +190,9 @@ class TestCarpetBoostSelect:
         assert s.new_state_filter({"cleanMissionStatus": {}}) is False
 
     def test_translation_key(self):
-        tk = type(_boost_entity()).__dict__.get("_attr_translation_key")
+        e = _boost_entity()
+        tk = (type(e).__dict__.get("_attr_translation_key") or
+              getattr(getattr(e, "entity_description", None), "translation_key", None))
         if isinstance(tk, property):
             tk = tk.fget(_boost_entity())
         assert tk == "carpet_boost_select"

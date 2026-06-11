@@ -36,12 +36,25 @@ from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _entity(battery_stats: dict = None, vacuum_state: dict = None) -> MagicMock:
+def _entity(battery_stats: dict = None, vacuum_state: dict = None,
+            battery_mah: int = 2000) -> MagicMock:
+    """Create a test entity.
+
+    battery_mah — sets robot_profile.battery_mah for retention calculations.
+                  Default 2000 matches legacy test values (non-9-series, scale=1.0).
+    """
+    from unittest.mock import MagicMock as _MM
     e = MagicMock()
     e.battery_stats = battery_stats or {}
     e.vacuum_state = vacuum_state or {}
     store = MaintenanceStore()
     e._config_entry.runtime_data.maintenance_store = store
+    # RF0 robot_profile — scale=1.0 (non-9-series) so raw estCap == mAh directly
+    profile = _MM()
+    profile.battery_mah = battery_mah
+    profile.estcap_scale_liion = 1.0
+    profile.estcap_scale_nimh  = 1.0
+    e._config_entry.runtime_data.robot_profile = profile
     return e
 
 
@@ -259,22 +272,23 @@ class TestCoveragePct:
 # ── F5d — battery capacity retention ─────────────────────────────────────────
 
 class TestBatteryCapacityRetention:
-    def test_100_pct_at_baseline(self):
-        e = _entity(battery_stats={"estCap": 2000})
-        e._config_entry.runtime_data.maintenance_store.baseline_estcap = 2000.0
+    def test_100_pct_at_nominal(self):
+        # estCap == profile.battery_mah → 100%
+        e = _entity(battery_stats={"estCap": 2000}, battery_mah=2000)
         assert _battery_capacity_retention(e) == 100.0
 
     def test_75_pct_degraded(self):
-        e = _entity(battery_stats={"estCap": 1500})
-        e._config_entry.runtime_data.maintenance_store.baseline_estcap = 2000.0
+        # estCap=1500 mAh / profile.battery_mah=2000 = 75%
+        e = _entity(battery_stats={"estCap": 1500}, battery_mah=2000)
         assert _battery_capacity_retention(e) == 75.0
 
     def test_sets_baseline_on_first_call(self):
-        e = _entity(battery_stats={"estCap": 2000})
+        # Baseline receives the converted mAh value (= raw for scale=1.0)
+        e = _entity(battery_stats={"estCap": 2000}, battery_mah=2000)
         store = e._config_entry.runtime_data.maintenance_store
         assert store.baseline_estcap is None
         _battery_capacity_retention(e)
-        assert store.baseline_estcap == 2000.0
+        assert store.baseline_estcap == 2000.0  # scale=1.0: mAh == raw
 
     def test_baseline_not_overwritten_on_subsequent_calls(self):
         e = _entity(battery_stats={"estCap": 1800})

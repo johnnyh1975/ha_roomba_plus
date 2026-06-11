@@ -407,3 +407,90 @@ class TestHacsJson:
         assert 'hasattr(VacuumEntityFeature, "CLEAN_AREA")' in src, (
             "supported_features must use hasattr guard for CLEAN_AREA (runtime feature detection)"
         )
+
+
+class TestAsyncGetSegmentsNonePmapGuard:
+    """SEG-NONE: async_get_segments must return [] when active_pmap_id is None.
+
+    Without this guard, segment IDs are stored as "None_19" etc. which never
+    match in async_clean_segments, causing misleading no_valid_segments errors.
+    """
+
+    async def test_returns_empty_when_active_pmap_id_is_none(self):
+        """active_pmap_id = None → return [] immediately, no segments created."""
+        data = _make_smart_data()
+        data.cloud_coordinator.active_pmap_id = None
+        v = _make_vacuum_entity(runtime_data=data)
+        segments = await v.async_get_segments()
+        assert segments == [], (
+            "async_get_segments must return [] when active_pmap_id is None "
+            "to prevent storing 'None_XX' segment IDs"
+        )
+
+    async def test_no_none_prefix_in_returned_segment_ids(self):
+        """Segment IDs must never start with 'None_'."""
+        v = _make_vacuum_entity()
+        # Ensure active_pmap_id is set to a real value
+        v._config_entry.runtime_data.cloud_coordinator.active_pmap_id = "MAP001"
+        segments = await v.async_get_segments()
+        for seg in segments:
+            assert not seg.id.startswith("None_"), (
+                f"Segment ID '{seg.id}' starts with 'None_' — pmap_id was None when created"
+            )
+
+
+# ── v2.4.3 PMAP-UNDERSCORE: pmap_id with underscore breaks partition ──────────
+
+class TestPmapUnderscoreRegression:
+    """v2.4.3 — partition('_') splits on first underscore, producing a wrong
+    pmap_id when the pmap_id itself contains underscores (URL-safe base64).
+
+    Affected user: ronluba (pmap_id='2Bly_kGURy6OcUVTX7FN3w').
+    vacuum.clean_area raised no_valid_segments for every call — all segments
+    were silently rejected because '2Bly' != '2Bly_kGURy6OcUVTX7FN3w'.
+
+    Fix: use startswith(f'{active_pmap_id}_') + suffix extraction instead of
+    partition, which correctly handles any pmap_id regardless of underscores.
+    """
+
+    async def test_clean_area_succeeds_when_pmap_id_contains_underscore(self):
+        """Segment IDs with underscore-containing pmap_id must be accepted."""
+        from unittest.mock import AsyncMock, patch
+
+        pmap_id = "2Bly_kGURy6OcUVTX7FN3w"   # ronluba's actual pmap_id
+        region_id = "19"
+        seg_id = f"{pmap_id}_{region_id}"
+
+        data = _make_smart_data()
+        data.cloud_coordinator.active_pmap_id = pmap_id
+        data.cloud_coordinator.async_refresh = AsyncMock()
+
+        v = _make_vacuum_entity(runtime_data=data)
+
+        with patch.object(v, "hass") as mock_hass:
+            mock_hass.async_add_executor_job = AsyncMock()
+            await v.async_clean_segments([seg_id])
+
+        mock_hass.async_add_executor_job.assert_called_once()
+        payload = mock_hass.async_add_executor_job.call_args[0][2]
+        assert payload["pmap_id"] == pmap_id, (
+            f"pmap_id must be '{pmap_id}', not a truncated value"
+        )
+        assert len(payload["regions"]) == 1
+        assert payload["regions"][0]["region_id"] == region_id
+
+    async def test_clean_area_raises_for_wrong_pmap(self):
+        """Segment IDs from a different pmap must still be rejected."""
+        pmap_id = "2Bly_kGURy6OcUVTX7FN3w"
+        other_pmap_id = "OTHER_pmap_id_entirely"
+        seg_id = f"{other_pmap_id}_42"
+
+        data = _make_smart_data()
+        data.cloud_coordinator.active_pmap_id = pmap_id
+
+        v = _make_vacuum_entity(runtime_data=data)
+
+        with pytest.raises(ServiceValidationError):
+            with patch.object(v, "hass"):
+                await v.async_clean_segments([seg_id])
+

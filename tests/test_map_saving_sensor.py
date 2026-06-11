@@ -142,7 +142,7 @@ class TestMapSavingMetadata:
 
     def test_translation_key(self):
         sensor = _make_sensor()
-        assert sensor._attr_translation_key == "map_saving"
+        assert sensor.entity_description.translation_key == "map_saving"
 
     def test_device_class_update(self):
         from homeassistant.components.binary_sensor import BinarySensorDeviceClass

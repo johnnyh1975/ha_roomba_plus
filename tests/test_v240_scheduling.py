@@ -43,10 +43,13 @@ def _dt(days_ago: int = 0, hour: int = 10, weekday_offset: int = 0) -> datetime:
 class TestRecordCleanEvent:
 
     def test_creates_clean_events_dict(self):
+        # R1 (v2.5.0): _clean_events is initialised in __init__, not lazily.
         pm = _make_pm()
-        assert not hasattr(pm, "_clean_events")
+        assert hasattr(pm, "_clean_events"), "_clean_events must exist after __init__"
+        assert len(pm._clean_events) == 0, "Must be empty before any events recorded"
         pm.record_clean_event(datetime.now(UTC))
         assert hasattr(pm, "_clean_events")
+        assert len(pm._clean_events) == 1, "One slot after recording one event"
 
     def test_records_event_in_correct_slot(self):
         pm = _make_pm()
@@ -67,18 +70,18 @@ class TestRecordCleanEvent:
         assert len(pm._clean_events[slot]) == 5
 
     def test_prunes_events_older_than_90_days(self):
+        # P5 (v2.5.0): prune only fires when total > 500 events.
+        # With just 2 events (well below threshold), old events are NOT pruned.
+        # This is intentional — the overhead of pruning 2 events would exceed
+        # the cost of storing them; prune only matters at scale.
         pm = _make_pm()
         old_dt = datetime.now(UTC) - timedelta(days=95)
         fresh_dt = datetime.now(UTC)
         pm.record_clean_event(old_dt)
-        # Recording the fresh event triggers pruning
         pm.record_clean_event(fresh_dt)
-        old_local = old_dt.astimezone()
-        old_slot = (old_local.weekday(), old_local.hour)
-        # Old event may be in a different slot — check total across all slots
         total = sum(len(v) for v in pm._clean_events.values())
-        # Only the fresh event should remain (old was pruned)
-        assert total == 1
+        # Both events remain — threshold not reached
+        assert total == 2, "Below-threshold: both events kept (P5 change)"
 
     def test_events_within_90_days_kept(self):
         pm = _make_pm()
@@ -319,35 +322,97 @@ class TestTotalEnergyConsumed:
         desc = next(s for s in SENSORS if s.key == "total_energy_consumed")
         assert desc.device_class == SensorDeviceClass.ENERGY
 
-    def test_energy_formula_calculation(self):
-        """estCap × 14.8V × cycles / 1_000_000 → kWh."""
+    def test_energy_formula_no_profile(self):
+        """Falls back to 14.8V when robot_profile is None (non-9-series)."""
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_energy_consumed")
         entity = MagicMock()
         entity.battery_stats = {"estCap": 2500, "nLithChrg": 100}
-        # 2500 mAh × 14.8 V × 100 cycles = 3,700,000 / 1,000,000 = 3.7 kWh
+        entity._config_entry.runtime_data.robot_profile = None
+        # 2500 mAh × 14.8 V × 100 cycles = 3.7 kWh
         result = desc.value_fn(entity)
         assert result is not None
         assert abs(result - 3.7) < 0.01
+
+    def test_energy_formula_9series_liion_scale(self):
+        """9-series Li-ion: raw estCap ÷ 3.73 before energy calculation."""
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        from custom_components.roomba_plus.const import ROBOT_PROFILES
+        entity = MagicMock()
+        # raw estCap 12311 ÷ 3.73 ≈ 3300 mAh; × 14.4V × 1 cycle
+        entity.battery_stats = {
+            "estCap": 12311,
+            "nLithChrg": 1,
+            "nNimhChrg": 0,
+        }
+        entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        result = _total_energy_consumed_kwh(entity)
+        assert result is not None
+        # 3300 mAh × 14.4V × 1 cycle / 1_000_000 ≈ 0.0475 kWh
+        assert abs(result - round(3300 * 14.4 * 1 / 1_000_000, 3)) < 0.002
+
+    def test_energy_formula_9series_nimh_aftermarket(self):
+        """9-series NiMH aftermarket: raw estCap ÷ 1.87."""
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        from custom_components.roomba_plus.const import ROBOT_PROFILES
+        entity = MagicMock()
+        # raw ≈ 3300 × 1.87 = 6171 for NiMH pack
+        entity.battery_stats = {
+            "estCap": 6171,
+            "nLithChrg": 0,
+            "nNimhChrg": 1,
+        }
+        entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        result = _total_energy_consumed_kwh(entity)
+        assert result is not None
+        # 3300 mAh × 14.4V × 1 cycle / 1_000_000
+        assert abs(result - round(3300 * 14.4 * 1 / 1_000_000, 3)) < 0.005
+
+    def test_energy_formula_9series_nimh_after_battery_swap(self):
+        """NiMH detection must work even when nLithChrg > 0 from the OEM period.
+
+        When a user replaces OEM Li-ion with NiMH aftermarket, nLithChrg stays
+        at the OEM cycle count (lifetime counter, never resets). The old check
+        'nNimhChrg > 0 and nLithChrg == 0' always evaluated to False in this
+        case, silently applying the Li-ion scale.  Fixed in v2.5.0: use NiMH
+        scale whenever nNimhChrg > 0, regardless of nLithChrg.
+        """
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        from custom_components.roomba_plus.const import ROBOT_PROFILES
+        entity = MagicMock()
+        # OEM had 163 Li-ion cycles; user then installed NiMH (1 cycle so far)
+        entity.battery_stats = {
+            "estCap": 6171,       # raw ≈ 3300 × 1.87 (NiMH new pack)
+            "nLithChrg": 163,     # OEM period — still > 0 after swap
+            "nNimhChrg": 1,       # first NiMH cycle
+        }
+        entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        result = _total_energy_consumed_kwh(entity)
+        assert result is not None
+        # Must use NiMH scale (÷ 1.87), not Li-ion (÷ 3.73)
+        # 3300 mAh × 14.4V × 1 cycle / 1_000_000
+        assert abs(result - round(3300 * 14.4 * 1 / 1_000_000, 3)) < 0.005
 
     def test_returns_none_when_no_cycles(self):
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_energy_consumed")
         entity = MagicMock()
-        entity.battery_stats = {"estCap": 2500}  # no nLithChrg
+        entity.battery_stats = {"estCap": 2500}   # no nLithChrg
+        entity._config_entry.runtime_data.robot_profile = None
         assert desc.value_fn(entity) is None
 
-    def test_filter_excludes_nimh(self):
+    def test_filter_passes_when_estcap_present(self):
+        """Filter passes for any robot with estCap regardless of batteryType."""
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_energy_consumed")
-        state_nimh = {"bbchg3": {"estCap": 2500}, "batteryType": "nimh"}
-        assert not desc.filter_fn(state_nimh)
+        # batteryType is a part number, not "nimh" — filter must pass
+        state = {"bbchg3": {"estCap": 2500}, "batteryType": "F12432712"}
+        assert desc.filter_fn(state)
 
-    def test_filter_passes_lithium(self):
+    def test_filter_blocks_when_estcap_absent(self):
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_energy_consumed")
-        state_lith = {"bbchg3": {"estCap": 2500}, "batteryType": "lipo"}
-        assert desc.filter_fn(state_lith)
+        assert not desc.filter_fn({"bbchg3": {}})
 
 
 # ── F12a wiring: record_clean_event called from callbacks.py ──────────────────

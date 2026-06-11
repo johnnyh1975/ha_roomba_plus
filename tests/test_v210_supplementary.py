@@ -2,11 +2,14 @@
 
 Covers two bugs diagnosed from production diagnostics (Roomba 980, R980040):
 
-BUG A — Battery retention / EOL sensors surface on NiMH robots (v2.1 only):
-  battery_capacity_retention and estimated_battery_eol are lithium-specific
-  metrics (retention % and 65% EOL threshold). The 980 reports estCap in bbchg3
-  but uses a NiMH battery — showing these sensors produces meaningless values.
-  Fix: filter_fn requires batteryType != "nimh" in addition to estCap present.
+BUG A — Battery retention / EOL sensors: filter_fn update (v2.5.0 revision):
+  battery_capacity_retention and estimated_battery_eol were originally gated on
+  batteryType != "nimh" based on the incorrect assumption that the 980 uses a NiMH
+  battery. Confirmed June 2026: the 980 OEM battery is Li-ion 14.4V. Additionally,
+  batteryType at runtime contains iRobot part numbers ("F12432712"), not chemistry
+  strings — the "nimh" gate never fired in production.
+  The math for both sensors (retention %, EOL days) is scale-invariant: the BMS
+  scale cancels in the ratio. The filter is now simply "estCap present in bbchg3".
 
 BUG B — recent_evacuations surfaces on robots without a Clean Base (v2.0 + v2.1):
   The 980 has no Clean Base. The cloud always records evacs=0. The sensor was
@@ -17,10 +20,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 
-# ── Bug A: NiMH guard on battery retention / EOL sensors ─────────────────────
+# ── Bug A: battery retention / EOL filter (v2.5.0 revision) ──────────────────
 
 class TestBatteryRetentionNiMHGuard:
-    """battery_capacity_retention must not surface on NiMH robots."""
+    """battery_capacity_retention filter: only estCap presence matters (v2.5.0).
+
+    batteryType gate removed: batteryType contains part numbers, never "nimh",
+    and the 980 OEM battery is Li-ion (confirmed June 2026). Math is
+    scale-invariant — filter passes for any chemistry when estCap is present.
+    """
 
     def _desc(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -32,14 +40,18 @@ class TestBatteryRetentionNiMHGuard:
         state = {"bbchg3": {"estCap": 2000}, "batteryType": "lipo"}
         assert desc.filter_fn(state) is True
 
-    def test_nimh_with_estcap_suppressed(self):
-        """NiMH battery with estCap → sensor NOT created (meaningless values)."""
+    def test_nimh_string_with_estcap_now_surfaces(self):
+        """batteryType='nimh' with estCap → now True (filter removed, math is scale-invariant).
+
+        In practice batteryType is never 'nimh' (it's a part number), but even if
+        it were, the scale-invariant math makes the sensor correct for any chemistry.
+        """
         desc = self._desc()
         state = {"bbchg3": {"estCap": 9720}, "batteryType": "nimh"}
-        assert desc.filter_fn(state) is False
+        assert desc.filter_fn(state) is True
 
     def test_no_battery_type_with_estcap_surfaces(self):
-        """Unknown battery type with estCap → assume lithium, surface sensor."""
+        """Unknown battery type with estCap → sensor surfaces."""
         desc = self._desc()
         state = {"bbchg3": {"estCap": 2000}}
         assert desc.filter_fn(state) is True
@@ -50,18 +62,18 @@ class TestBatteryRetentionNiMHGuard:
         assert desc.filter_fn({"bbchg3": {}, "batteryType": "lipo"}) is False
         assert desc.filter_fn({"bbchg3": {}, "batteryType": "nimh"}) is False
 
-    def test_980_exact_state_suppressed(self):
-        """Exact 980 diagnostics state: estCap=9720, batteryType=nimh → suppressed."""
+    def test_980_exact_state_surfaces(self):
+        """Exact 980 diagnostics state: estCap present → sensor surfaces (v2.5.0)."""
         desc = self._desc()
         state = {
             "bbchg3": {"estCap": 9720, "nLithChrg": 290, "nNimhChrg": 19},
-            "batteryType": "nimh",
+            "batteryType": "F12432712",   # actual runtime value: part number not "nimh"
         }
-        assert desc.filter_fn(state) is False
+        assert desc.filter_fn(state) is True
 
 
 class TestEstimatedBatteryEolNiMHGuard:
-    """estimated_battery_eol must not surface on NiMH robots."""
+    """estimated_battery_eol filter: only estCap presence matters (v2.5.0)."""
 
     def _desc(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -71,21 +83,23 @@ class TestEstimatedBatteryEolNiMHGuard:
         desc = self._desc()
         assert desc.filter_fn({"bbchg3": {"estCap": 2000}, "batteryType": "lipo"}) is True
 
-    def test_nimh_suppressed(self):
+    def test_nimh_string_now_surfaces(self):
+        """batteryType='nimh' no longer suppressed — filter only checks estCap."""
         desc = self._desc()
-        assert desc.filter_fn({"bbchg3": {"estCap": 9720}, "batteryType": "nimh"}) is False
+        assert desc.filter_fn({"bbchg3": {"estCap": 9720}, "batteryType": "nimh"}) is True
 
     def test_no_battery_type_surfaces(self):
         desc = self._desc()
         assert desc.filter_fn({"bbchg3": {"estCap": 2000}}) is True
 
-    def test_980_exact_state_suppressed(self):
+    def test_980_exact_state_surfaces(self):
+        """980 exact state: sensor now surfaces (batteryType is a part number, not 'nimh')."""
         desc = self._desc()
         state = {
             "bbchg3": {"estCap": 9720, "nLithChrg": 290, "nNimhChrg": 19},
-            "batteryType": "nimh",
+            "batteryType": "F12432712",
         }
-        assert desc.filter_fn(state) is False
+        assert desc.filter_fn(state) is True
 
 
 class TestBatteryCapacityMahUnaffected:
