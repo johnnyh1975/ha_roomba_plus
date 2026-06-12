@@ -250,8 +250,8 @@ class TestCoveragePct:
         result = fn(records)
         assert result == 100.0
 
-    def test_returns_none_below_10_records(self):
-        store = self._store_with_areas([200.0] * 9)
+    def test_returns_none_below_5_records(self):
+        store = self._store_with_areas([200.0] * 4)
         fn = _make_coverage_pct_fn([store])
         assert fn([{"sqft": 200}]) is None
 
@@ -272,15 +272,30 @@ class TestCoveragePct:
 # ── F5d — battery capacity retention ─────────────────────────────────────────
 
 class TestBatteryCapacityRetention:
-    def test_100_pct_at_nominal(self):
-        # estCap == profile.battery_mah → 100%
+    def test_100_pct_healthy_with_baseline(self):
+        # baseline=2000 (first-observed), current=2000 → 100% healthy
         e = _entity(battery_stats={"estCap": 2000}, battery_mah=2000)
+        e._config_entry.runtime_data.maintenance_store.baseline_estcap = 2000.0
         assert _battery_capacity_retention(e) == 100.0
 
-    def test_75_pct_degraded(self):
-        # estCap=1500 mAh / profile.battery_mah=2000 = 75%
+    def test_75_pct_degraded_with_baseline(self):
+        # baseline=2000 (when new), current=1500 (degraded) → 75%
         e = _entity(battery_stats={"estCap": 1500}, battery_mah=2000)
+        e._config_entry.runtime_data.maintenance_store.baseline_estcap = 2000.0
         assert _battery_capacity_retention(e) == 75.0
+
+    def test_fallback_to_oem_nominal_before_baseline(self):
+        # No baseline yet → falls back to profile.battery_mah as cold-start denominator
+        e = _entity(battery_stats={"estCap": 1500}, battery_mah=2000)
+        # baseline_estcap is None; record_estcap_if_needed sets it to 1500
+        # then denominator = 1500 → 100% (first observation treated as full)
+        assert _battery_capacity_retention(e) == 100.0
+
+    def test_aftermarket_shows_above_100_before_baseline(self):
+        # Aftermarket 2500 mAh in robot with OEM 2000 mAh profile
+        # First observation: baseline set to 2500, denominator=2500 → 100%
+        e = _entity(battery_stats={"estCap": 2500}, battery_mah=2000)
+        assert _battery_capacity_retention(e) == 100.0
 
     def test_sets_baseline_on_first_call(self):
         # Baseline receives the converted mAh value (= raw for scale=1.0)

@@ -136,12 +136,13 @@ class TestAreaCleanedToday:
     @pytest.mark.asyncio
     async def test_none_when_no_today_records(self):
         store = await _store_with(_make_record(1, "completed", area_sqft=200.0))
-        assert _area_cleaned_today(store) is None
+        assert _area_cleaned_today(store) == 0.0
 
     @pytest.mark.asyncio
-    async def test_none_for_600_series(self):
+    async def test_zero_for_600_series_no_area(self):
+        # 600-series records have area_sqft=None → no areas → 0.0 m²
         store = await _store_with(_make_record(0, "completed", area_sqft=None))
-        assert _area_cleaned_today(store) is None
+        assert _area_cleaned_today(store) == 0.0
 
 
 # ── _problem_zone_value ───────────────────────────────────────────────────────

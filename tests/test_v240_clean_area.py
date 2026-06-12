@@ -219,7 +219,6 @@ class TestAsyncCleanSegments:
 
     async def test_matching_pmap_sends_command(self):
         v = _make_vacuum_entity()
-        v.vacuum.set_preference = MagicMock()
         v._config_entry.runtime_data.cloud_coordinator.async_refresh = AsyncMock()
 
         with patch.object(v, 'hass') as mock_hass:
@@ -228,11 +227,13 @@ class TestAsyncCleanSegments:
 
         mock_hass.async_add_executor_job.assert_called_once()
         call_args = mock_hass.async_add_executor_job.call_args
-        # Second arg is the preference key
-        assert call_args[0][1] == "cleanMissionStatus"
-        payload = call_args[0][2]
-        assert payload["command"] == "start"
-        assert payload["pmap_id"] == "MAP001"
+        # Uses send_command("start", params) — not set_preference (Bug 5 fix)
+        assert call_args[0][1] == "start"
+        params = call_args[0][2]
+        assert params["pmap_id"] == "MAP001"
+        assert len(params["regions"]) == 2
+        assert params["regions"][0]["region_id"] == "19"
+        assert params["regions"][1]["region_id"] == "21"
 
     async def test_non_matching_pmap_raises_service_validation_error(self):
         v = _make_vacuum_entity()
@@ -256,9 +257,9 @@ class TestAsyncCleanSegments:
             await v.async_clean_segments(["MAP001_19", "OTHERMAP_21"])
 
         call_args = mock_hass.async_add_executor_job.call_args
-        payload = call_args[0][2]
-        assert len(payload["regions"]) == 1
-        assert payload["regions"][0]["region_id"] == "19"
+        params = call_args[0][2]
+        assert len(params["regions"]) == 1
+        assert params["regions"][0]["region_id"] == "19"
 
     async def test_two_pass_false_by_default(self):
         v = _make_vacuum_entity(state={})  # no twoPass key

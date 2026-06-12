@@ -379,8 +379,8 @@ class TestP75Area:
             })
         return store
 
-    def test_returns_none_below_10_records(self):
-        store = self._store_with_areas([100.0] * 9)
+    def test_returns_none_below_5_records(self):
+        store = self._store_with_areas([100.0] * 4)
         assert store.p75_area(30) is None
 
     def test_returns_value_at_10_records(self):

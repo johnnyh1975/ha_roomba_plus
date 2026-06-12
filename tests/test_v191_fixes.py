@@ -257,7 +257,7 @@ class TestAreaCleanedTodayM2:
 
     def test_none_when_no_records(self):
         store = MissionStore()
-        assert _area_cleaned_today(store) is None
+        assert _area_cleaned_today(store) == 0.0
 
     def test_unit_is_square_meters(self):
         desc = _get_sensor("area_cleaned_today")
