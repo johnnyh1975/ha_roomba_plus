@@ -2234,9 +2234,11 @@ async def async_setup_entry(
     last_error_code: int | None = None
     last_error_at: str | None = None
     last_error_zone: str | None = None
+    _ERROR_RESULTS = frozenset({
+        "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
+    })
     for _rec in reversed(mission_store._records):
-        _res = _rec.get("result")
-        if _res in ("error", "stuck") and _rec.get("error_code"):
+        if _rec.get("result") in _ERROR_RESULTS and _rec.get("error_code"):
             last_error_code = _rec["error_code"]
             last_error_at   = _rec.get("ended_at")
             last_error_zone = (_rec.get("zones") or [None])[0]

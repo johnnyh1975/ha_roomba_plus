@@ -334,6 +334,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         params = {
             "ordered": 1 if ordered else 0,
             "pmap_id": pmap_id,
+            "user_pmapv_id": user_pmapv_id,
             "regions": [
                 {
                     "region_id": rid,

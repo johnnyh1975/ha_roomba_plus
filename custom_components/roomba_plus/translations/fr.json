@@ -73,14 +73,14 @@
       "init": {
         "title": "Configurer Roomba+",
         "menu_options": {
-          "settings": "⚙ Paramètres de connexion",
-          "smart_zones_manual": "🗺 Saisir manuellement les zones Smart Map",
-          "cloud_credentials": "⚙ Identifiants cloud iRobot",
-          "blocking_sensors": "🗓 Capteurs de blocage",
-          "map_management": "🗺 Gestion des zones",
-          "presence_scheduling": "🗓 Planification selon la présence",
-          "demand_cleaning": "🗓 Nettoyage à la demande",
-          "rooms": "🗺 Pièces et zones"
+          "settings": "Paramètres de connexion",
+          "smart_zones_manual": "Saisir manuellement les zones Smart Map",
+          "cloud_credentials": "Identifiants cloud iRobot",
+          "blocking_sensors": "Capteurs de blocage",
+          "map_management": "Gestion des zones",
+          "presence_scheduling": "Planification selon la présence",
+          "demand_cleaning": "Nettoyage à la demande",
+          "rooms": "Pièces et zones"
         }
       },
       "zones": {

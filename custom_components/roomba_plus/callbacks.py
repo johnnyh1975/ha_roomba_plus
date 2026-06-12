@@ -206,7 +206,7 @@ async def async_record_mission(
     # Update L3 runtime error state.
     # Only update on error/stuck — do NOT clear on completed so the last
     # error remains visible until the next error occurs.
-    if result in ("error", "stuck"):
+    if result in ("error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"):
         data.last_error_code = error_code if error_code else None
         data.last_error_at   = now.isoformat()
         data.last_error_zone = zones[0] if zones else None

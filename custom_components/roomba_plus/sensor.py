@@ -85,6 +85,11 @@ class RoombaSensorDescription(SensorEntityDescription):
     filter_fn: Callable[[dict[str, Any]], bool] = field(
         default_factory=lambda: lambda _: True
     )
+    # When set, the entity reports unavailable (not unknown) when fn returns False.
+    # Use for sensors that only apply in a specific robot state (e.g. mid-mission
+    # recharge). "Unknown" implies a data error; "Unavailable" is cleaner for
+    # "not applicable right now".
+    available_fn: Callable[[IRobotEntity], bool] | None = field(default=None)
     # v1.7.0 L2 — when set, exposed as "threshold_hours" in extra_state_attributes
     # Used by the Lovelace card to compute remaining % without hard-coded thresholds.
     threshold_fn: Callable[[IRobotEntity], int | None] = field(
@@ -372,10 +377,8 @@ def _area_cleaned_today(store: Any) -> StateType:
         dt = dt_util.parse_datetime(r["started_at"])
         if dt is not None and dt_util.as_local(dt).date() == today:
             areas.append(r["area_sqft"])
-    if not areas:
-        return None
     # Convert sqft -> m² (consistent with all other area sensors)
-    return round(sum(areas) * SQFT_TO_M2, 1)
+    return round(sum(areas) * SQFT_TO_M2, 1) if areas else 0.0
 
 
 def _last_error_code_value(entity: "IRobotEntity") -> StateType:
@@ -401,7 +404,7 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     if not store:
         return None
     from collections import Counter
-    stuck_records = store.query(30, result="stuck")
+    stuck_records = store.query(30, result=store.STUCK_RESULTS)
     if not stuck_records:
         return None
     zone_counts: Counter = Counter()
@@ -606,11 +609,15 @@ def _mop_behavior(entity: "IRobotEntity") -> StateType:
 # ── F5d — Battery capacity retention ─────────────────────────────────────────
 
 def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
-    """F5d — battery capacity as % of OEM nominal (RF0 profile.battery_mah).
+    """F5d — battery capacity as % of learned initial capacity.
 
-    Uses _estcap_to_mah() to convert the raw BMS estCap to mAh before
-    comparison.  This gives a meaningful absolute percentage from day one
-    (e.g. 157% = aftermarket battery larger than OEM; 79% = degraded OEM pack).
+    Denominator: store.baseline_estcap (first observed mAh after install or
+    battery reset) so the sensor measures actual degradation of the installed
+    battery — 100% = full health, <100% = degraded — independent of whether
+    it is OEM or aftermarket.
+
+    Falls back to profile.battery_mah (OEM nominal) only on first boot before
+    the baseline is established, so the sensor has a value from day one.
 
     Also records the converted mAh value as the self-learning baseline so
     aftermarket detection can compare against profile.battery_mah × 1.15.
@@ -626,7 +633,9 @@ def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
         return None
     # Record converted mAh (not raw BMS value) as self-learning baseline
     store.record_estcap_if_needed(capacity_mah)
-    return round(capacity_mah / profile.battery_mah * 100, 1)
+    # Use learned baseline when available; OEM nominal only as cold-start fallback
+    denominator = store.baseline_estcap if store.baseline_estcap else float(profile.battery_mah)
+    return round(capacity_mah / denominator * 100, 1)
 
 
 # ── F5g — Estimated battery end-of-life ──────────────────────────────────────
@@ -714,16 +723,17 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
     if store is None or store.baseline_estcap is None:
         return None
 
-    est_cap = entity.battery_stats.get("estCap")
+    # Use converted mAh to match baseline_estcap units (set from _estcap_to_mah)
+    capacity_mah = _estcap_to_mah(entity)
     cycles = (
         entity.battery_stats.get("nLithChrg")
         or entity.battery_stats.get("nNimhChrg")
         or entity.battery_stats.get("nAvail")
     )
-    if est_cap is None or not cycles:
+    if capacity_mah is None or not cycles:
         return None
 
-    current_pct = float(est_cap) / store.baseline_estcap * 100
+    current_pct = capacity_mah / store.baseline_estcap * 100
     if current_pct <= _EOL_THRESHOLD:
         return 0
 
@@ -1008,6 +1018,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             if e.clean_mission_status.get("phase") in _ACTIVE_PHASES
             else None
         ),
+        available_fn=lambda e: e.clean_mission_status.get("phase") in _ACTIVE_PHASES,
     ),
 
     RoombaSensorDescription(
@@ -1019,6 +1030,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_mission_elapsed_value,
+        available_fn=lambda e: e.clean_mission_status.get("phase") in
+            ("run", "hmMidMsn", "evac", "charge", "hmPostMsn")
+            and e.clean_mission_status.get("cycle") not in (None, "none"),
     ),
 
     RoombaSensorDescription(
@@ -1059,6 +1073,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # leaves rechrgM=0. Fall back to computing remaining minutes from rechrgTm
         # so mid-mission recharge time is reported correctly on all robots.
         value_fn=lambda e: _recharge_minutes_remaining(e.clean_mission_status),
+        # Unavailable (not Unknown) when no mid-mission recharge is active.
+        available_fn=lambda e: bool(
+            e.clean_mission_status.get("rechrgTm")
+            or e.clean_mission_status.get("rechrgM")
+        ),
     ),
     RoombaSensorDescription(
         key="mission_expire_minutes",
@@ -1068,8 +1087,16 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         # expireM is pre-computed by 980/900-series firmware.
-        # lewis firmware sends expireTm (Unix timestamp) and leaves expireM=0.
+        # On 900-series (EPHEMERAL): expireTm == rechrgTm — mirrors the recharge
+        # countdown, does not represent a separate mission deadline.
+        # On i/s/j-series (SMART): expireTm can differ from rechrgTm.
+        # Disabled by default to avoid confusion; SMART users can enable it.
+        entity_registry_enabled_default=False,
         value_fn=lambda e: _expire_minutes_remaining(e.clean_mission_status),
+        available_fn=lambda e: bool(
+            e.clean_mission_status.get("expireTm")
+            or e.clean_mission_status.get("expireM")
+        ),
     ),
     RoombaSensorDescription(
         key="mission_id",
@@ -1320,6 +1347,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("result") if s.latest() else None
         ),
+        available_fn=lambda e: bool(
+            e._config_entry.runtime_data.mission_store
+            and e._config_entry.runtime_data.mission_store._records
+        ),
     ),
     RoombaSensorDescription(
         key="last_mission_duration",
@@ -1331,6 +1362,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("duration_min") if s.latest() else None
         ),
+        available_fn=lambda e: bool(
+            e._config_entry.runtime_data.mission_store
+            and e._config_entry.runtime_data.mission_store._records
+        ),
     ),
 
     # ── v1.8.0 L3 — Error Intelligence ───────────────────────────────────────
@@ -1341,6 +1376,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Error – Last code",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_code_value,
+        available_fn=lambda e: bool(
+            e.vacuum_state.get("cleanMissionStatus", {}).get("error", 0)
+            or e._config_entry.runtime_data.last_error_code is not None
+        ),
     ),
     RoombaSensorDescription(
         key="last_error_at",
@@ -1349,6 +1388,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_at_value,
+        available_fn=lambda e: bool(e._config_entry.runtime_data.last_error_at),
     ),
     RoombaSensorDescription(
         key="last_error_zone",
@@ -1356,10 +1396,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Error – Last zone",
         entity_category=EntityCategory.DIAGNOSTIC,
         # No filter_fn — created for all robots.
-        # Returns None for 600-series (no zone data) → correct HA "unknown" state.
         # SMART: resolved from lastCommand.regions at mission start.
         # EPHEMERAL: resolved from ZoneStore at mission start.
         value_fn=lambda e: e._config_entry.runtime_data.last_error_zone,
+        available_fn=lambda e: e._config_entry.runtime_data.last_error_zone is not None,
     ),
     RoombaSensorDescription(
         key="stuck_count_30d",
@@ -1368,7 +1408,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
-            e, lambda s: len(s.query(30, result="stuck"))
+            e, lambda s: len(s.query(30, result=s.STUCK_RESULTS))
         ),
     ),
     RoombaSensorDescription(
@@ -1378,6 +1418,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: has_pose(s),   # requires zone tracking — excludes 600-series
         value_fn=_problem_zone_value,
+        available_fn=lambda e: bool(
+            e._config_entry.runtime_data.mission_store
+            and e._config_entry.runtime_data.mission_store.query(30, result=e._config_entry.runtime_data.mission_store.STUCK_RESULTS)
+        ),
     ),
 
     # ── v1.8.0 L6 — Presence Analytics ───────────────────────────────────────
@@ -1546,6 +1590,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
         value_fn=_estimated_battery_eol,
+        # available_fn calls the function directly: covers all None conditions
+        # (no baseline, no cycles, no degradation yet).
+        available_fn=lambda e: _estimated_battery_eol(e) is not None,
     ),
 
     # F6g -- consecutive clean skips counter (diagnostic).
@@ -1706,6 +1753,14 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         state machine, which is what we need for the minute countdown.
         """
         self.schedule_update_ha_state(force_refresh=True)
+
+    @property
+    def available(self) -> bool:
+        """Return False when available_fn signals sensor not applicable right now."""
+        if self.entity_description.available_fn is not None:
+            if not self.entity_description.available_fn(self):
+                return False
+        return super().available
 
     @property
     def native_value(self) -> StateType:
@@ -2044,6 +2099,10 @@ class CloudRawSensorDescription(SensorEntityDescription):
     """Description for a sensor reading from the raw per-mission record list."""
     value_fn: Callable[[list[dict[str, Any]]], StateType]
     attributes_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] | None = None
+    # When set, entity is unavailable (not unknown) when fn returns False.
+    # Receives the CloudRawSensor entity so the lambda can access both
+    # coordinator.raw_records and runtime_data (e.g. mission_store).
+    available_fn: Callable[[Any], bool] | None = field(default=None)
 
 
 def _raw_completion_rate(records: list[dict[str, Any]]) -> StateType:
@@ -2312,7 +2371,13 @@ def _make_coverage_pct_fn(mission_store_ref: list) -> Callable:
         store = mission_store_ref[0] if mission_store_ref else None
         if store is None or not records:
             return None
-        recent_sqft = records[0].get("sqft")
+        # Use the most recent cloud record with a positive sqft value.
+        # records is newest-first; records[0] may be a cancelled/stuck mission
+        # with sqft=0 or absent, which would produce a misleading 0% result.
+        recent_sqft = next(
+            (r["sqft"] for r in records if r.get("sqft") and r["sqft"] > 0),
+            None,
+        )
         p75 = store.p75_area(60)
         if recent_sqft is None or p75 is None or p75 == 0:
             return None
@@ -2455,6 +2520,13 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda records: None,  # replaced in async_setup_entry
+        # Check both cloud records (sqft present) and local p75 baseline ready.
+        available_fn=lambda e: bool(
+            next((r for r in e._coordinator.raw_records
+                  if r.get("sqft") and r["sqft"] > 0), None)
+            and e._config_entry.runtime_data.mission_store is not None
+            and e._config_entry.runtime_data.mission_store.p75_area(60) is not None
+        ),
     ),
 )
 
@@ -2546,10 +2618,14 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
         # "cloud not configured" from "coordinator not yet updated".
         if not self._config_entry.runtime_data.has_cloud:
             return False
-        return (
-            self._coordinator.last_update_success
-            and self._coordinator.data is not None
-        )
+        if not (self._coordinator.last_update_success
+                and self._coordinator.data is not None):
+            return False
+        # available_fn: mark unavailable when insufficient data (not unknown).
+        if self.entity_description.available_fn is not None:
+            if not self.entity_description.available_fn(self):
+                return False
+        return True
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return False
@@ -2946,6 +3022,27 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     # ── Sensor state ──────────────────────────────────────────────────────────
 
     @property
+    async def async_added_to_hass(self) -> None:
+        """Register 30 s periodic refresh for smooth progress updates.
+
+        Lewis firmware sends cleanMissionStatus only on state changes, not
+        continuously. Gaps between messages can exceed the 120 s accumulation
+        clamp in MissionTimerStore, causing run_sec to stall.  The tick drives
+        schedule_update_ha_state() from the event loop so native_value() can
+        add the live delta directly, giving smooth updates regardless of MQTT
+        message frequency.
+        """
+        await super().async_added_to_hass()
+        import datetime as _dt
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass,
+                lambda _: self.schedule_update_ha_state(),
+                _dt.timedelta(seconds=30),
+            )
+        )
+
+    @property
     def native_value(self) -> StateType:
         """Return completion % (0–100) or None when inactive."""
         data = self._config_entry.runtime_data
@@ -2959,7 +3056,16 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         if mts is None or mts.mission_id is None:
             return None
 
+        # Live elapsed: add current in-progress delta to stored run_sec.
+        # This ensures smooth progress even when MQTT messages are infrequent
+        # (e.g. lewis firmware only sends cleanMissionStatus on state changes).
+        import time as _time_mod
         elapsed = mts.run_sec
+        if phase == "run" and mts._last_phase_ts > 0:
+            live_delta = int(_time_mod.monotonic() - mts._last_phase_ts)
+            if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
+                elapsed += live_delta
+
         planned_order: list[str] = _get_planned_room_order(data)
         if not planned_order:
             # No room sequence — use elapsed vs. rolling mean as fallback

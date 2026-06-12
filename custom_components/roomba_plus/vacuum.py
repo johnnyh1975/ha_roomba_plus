@@ -532,6 +532,21 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             if region.get("id")
         ]
 
+    async def async_clean_area(self, cleaning_area_ids: list[str]) -> None:
+        """Handle vacuum.clean_area — VacuumEntityFeature.CLEAN_AREA (HA 2026.3+).
+
+        HA resolves the user-configured area → segment mapping from device
+        settings and passes the matching vacuum segment IDs here in
+        ``{pmap_id}_{region_id}`` format.  Forward directly to
+        async_clean_segments() which applies the active-pmap filter and
+        sends the command to the robot.
+
+        Note: this method was missing in v2.6.0 / v2.6.1, causing the
+        "Start cleaning" button in HA's Clean Area UI to silently do nothing.
+        Reported by ronluna (GitHub issue #15).
+        """
+        await self.async_clean_segments(cleaning_area_ids)
+
     async def async_clean_segments(
         self, segment_ids: list[str], **kwargs: Any
     ) -> None:
@@ -547,6 +562,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             return
 
         active_pmap_id = data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
         region_ids: list[str] = []
         prefix = f"{active_pmap_id}_"
         for seg_id in segment_ids:
@@ -563,31 +583,42 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 translation_key="no_valid_segments",
             )
 
+        no_auto = bool(self.vacuum_state.get("noAutoPasses", False))
         two_pass = self._get_two_pass()
         regions = [
             {
                 "region_id": rid,
                 "type": "rid",
-                "params": {"noAutoPasses": False, "twoPass": two_pass},
+                "params": {"noAutoPasses": no_auto, "twoPass": two_pass},
             }
             for rid in region_ids
         ]
 
         from .services import _resolve_pmapv_id
         user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
+        if user_pmapv_id is None:
+            _LOGGER.warning(
+                "async_clean_segments: user_pmapv_id not found in state.pmaps "
+                "for pmap %s — sending command without version ID",
+                active_pmap_id,
+            )
+        params = {
+            "ordered": 1,
+            "pmap_id": active_pmap_id,
+            "user_pmapv_id": user_pmapv_id,
+            "regions": regions,
+        }
         await self.hass.async_add_executor_job(
-            self.vacuum.set_preference,
-            "cleanMissionStatus",
-            {
-                "command": "start",
-                "pmap_id": active_pmap_id,
-                "user_pmapv_id": user_pmapv_id,
-                "regions": regions,
-                "ordered": 1,
-            },
+            self.vacuum.send_command,
+            "start",
+            params,
         )
-        # F-RB-1: immediate state update after segment clean command
-        await data.cloud_coordinator.async_refresh()
+        # F-RB-1: best-effort state update after segment clean command.
+        # Cloud may not yet have the new state; failure is non-fatal.
+        try:
+            await data.cloud_coordinator.async_refresh()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("async_clean_segments: post-command cloud refresh failed (non-fatal)")
 
     def _get_two_pass(self) -> bool:
         """Read twoPass preference from live robot state.
@@ -617,6 +648,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             return  # never configured — suppress Repair Issue
 
         active_pmap = data.cloud_coordinator.active_pmap_id
+        if not active_pmap:
+            # Coordinator not yet fetched — avoid false positive Repair Issue
+            return
         current_ids = {
             f"{active_pmap}_{r['id']}"
             for r in data.cloud_coordinator.regions

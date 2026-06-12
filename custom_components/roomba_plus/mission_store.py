@@ -153,11 +153,32 @@ class MissionStore:
         """Return the most recent record, or None."""
         return self._records[-1] if self._records else None
 
-    def query(self, days: int, result: str | None = None) -> list[dict[str, Any]]:
+    # All result values that represent a stuck/failure event.
+    STUCK_RESULTS: frozenset[str] = frozenset({
+        "stuck", "stuck_and_resumed", "stuck_and_abandoned"
+    })
+    ERROR_RESULTS: frozenset[str] = frozenset({
+        "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
+    })
+
+    def query(
+        self,
+        days: int,
+        result: str | frozenset[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Return records from the last `days` days, optionally filtered by result.
+
+        ``result`` may be a single string for exact match or a frozenset of
+        strings for any-of matching.  Use ``MissionStore.STUCK_RESULTS`` to
+        query all stuck variants at once.
 
         Records are returned sorted ascending by started_at.
         """
+        result_set: frozenset[str] | None = (
+            None if result is None else
+            result if isinstance(result, frozenset) else
+            frozenset({result})
+        )
         cutoff = dt_util.now() - timedelta(days=days)
         out = []
         for r in self._records:
@@ -169,7 +190,7 @@ class MissionStore:
                 started = started.replace(tzinfo=timezone.utc)
             if started < cutoff:
                 continue
-            if result is not None and r.get("result") != result:
+            if result_set is not None and r.get("result") not in result_set:
                 continue
             out.append(r)
         return sorted(out, key=lambda r: r.get("started_at", ""))
@@ -481,15 +502,16 @@ class MissionStore:
         stabilises as a reliable proxy for a full-clean area, filtering out
         partial cleans (low end) and zero-area failures.
 
-        Returns None when fewer than 10 positive-area records exist (insufficient
-        history to establish a stable baseline).
+        Returns None when fewer than 5 positive-area records exist (insufficient
+        history to establish a stable baseline). Threshold lowered from 10 to 5
+        so the sensor activates within a week of first install.
         """
         areas = [
             r["area_sqft"]
             for r in self.query(days)
             if r.get("area_sqft") is not None and r["area_sqft"] > 0
         ]
-        if len(areas) < 10:
+        if len(areas) < 5:
             return None
         areas.sort()
         return areas[int(len(areas) * 0.75)]
