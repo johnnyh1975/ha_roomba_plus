@@ -272,8 +272,15 @@ class TestAsyncCleanSegments:
         payload = mock_hass.async_add_executor_job.call_args[0][2]
         assert payload["regions"][0]["params"]["twoPass"] is False
 
-    async def test_two_pass_true_when_state_set(self):
-        v = _make_vacuum_entity(state={"twoPass": True})
+    async def test_region_params_always_auto_mode(self):
+        """v2.6.5: async_clean_segments always sends noAutoPasses=False, twoPass=False.
+
+        vacuum.clean_area has no pass-mode UI in HA spec. Sending noAutoPasses=True
+        causes error 224 on some firmware versions. CleaningPassesSelect is honoured
+        in clean_room and SmartZoneButton, not in vacuum.clean_area.
+        """
+        # Even with One Pass or Two Pass selected in robot state
+        v = _make_vacuum_entity(state={"twoPass": True, "noAutoPasses": True})
         v._config_entry.runtime_data.cloud_coordinator.async_refresh = AsyncMock()
 
         with patch.object(v, 'hass') as mock_hass:
@@ -281,7 +288,8 @@ class TestAsyncCleanSegments:
             await v.async_clean_segments(["MAP001_19"])
 
         payload = mock_hass.async_add_executor_job.call_args[0][2]
-        assert payload["regions"][0]["params"]["twoPass"] is True
+        assert payload["regions"][0]["params"]["noAutoPasses"] is False
+        assert payload["regions"][0]["params"]["twoPass"] is False
 
     async def test_kwargs_silently_ignored(self):
         """repeat and other kwargs must not raise — removed from spec Oct 2025."""

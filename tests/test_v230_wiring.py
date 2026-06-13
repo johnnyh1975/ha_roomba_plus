@@ -143,7 +143,7 @@ class TestRoombaMapImageAttrs:
             "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
         }
         renderer = MagicMock()
-        renderer._mm_to_px.side_effect = lambda x, y: (int(x), int(y))
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
         entity = self._entity(aligner=aligner, renderer=renderer)
         attrs = entity.extra_state_attributes
         assert "rooms" in attrs

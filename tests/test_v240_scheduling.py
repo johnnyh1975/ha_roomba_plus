@@ -434,14 +434,14 @@ class TestRecordCleanEventWiring:
         )
 
     def test_record_clean_event_called_on_mission_start_path(self):
-        """record_clean_event is called inside the _CLEANING_PHASES transition block."""
+        """record_clean_event is called inside the mission-start detection block."""
         import inspect
         from custom_components.roomba_plus import callbacks
         src = inspect.getsource(callbacks)
-        # The call must be near the _CLEANING_PHASES transition, not elsewhere
-        phase_idx = src.find('_CLEANING_PHASES and last_phase not in _CLEANING_PHASES')
+        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag
+        phase_idx = src.find('_ACTIVE_CLEANING_PHASES and not had_cleaning_phase')
         record_idx = src.find('record_clean_event')
-        assert phase_idx != -1, "_CLEANING_PHASES transition not found in callbacks.py"
+        assert phase_idx != -1, "_ACTIVE_CLEANING_PHASES mission-start guard not found in callbacks.py"
         assert record_idx != -1, "record_clean_event not found in callbacks.py"
         # record_clean_event should come after the phase transition (within ~500 chars)
         assert record_idx > phase_idx, (
