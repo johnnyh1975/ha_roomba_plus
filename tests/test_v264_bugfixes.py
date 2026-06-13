@@ -405,41 +405,94 @@ class TestCloudPmapvId:
         assert cc.active_user_pmapv_id is None
 
 
-# ── Fix: stale region IDs filtered against current cc.regions ─────────────────
+# ── Fix: auto-heal stale region IDs via name-matching ─────────────────────────
 
-class TestStaleRegionIdValidation:
-    """async_clean_segments validates stored region IDs against cc.regions.
+class TestStaleRegionIdAutoHeal:
+    """async_clean_segments auto-heals stale region IDs by name-matching.
 
-    After map retraining region IDs can change. HA stores segment IDs at
-    setup time — clean_room always fetches cc.regions live (no staleness),
-    vacuum.clean_area must validate/filter stale IDs the same way.
+    After map retraining, region IDs can change. HA stores old segment IDs.
+    Auto-heal: stale_id → user label (smart_zone_labels) → current cc.regions
+    name match → current region_id. Transparent — no user action needed.
     """
 
-    def test_current_region_ids_pass_through(self):
-        """Region IDs present in cc.regions are sent unchanged."""
-        current = {"19", "21"}
-        stored = ["19", "21"]
-        valid = [rid for rid in stored if rid in current]
-        assert valid == ["19", "21"]
+    def _run_heal(self, stored_ids, current_regions, zone_labels):
+        """Simulate the auto-heal logic from async_clean_segments."""
+        current_region_ids = {str(r["id"]) for r in current_regions if r.get("id")}
+        if not current_region_ids:
+            return stored_ids  # skip validation when cc.regions empty
 
-    def test_stale_region_ids_filtered_out(self):
-        """Region IDs absent from cc.regions are filtered and a warning fires."""
-        current = {"23", "25"}   # new IDs after map retrain
-        stored = ["19", "21"]    # old IDs stored in HA
-        valid = [rid for rid in stored if rid in current]
-        assert valid == []       # all stale → raises ServiceValidationError
+        stale = [rid for rid in stored_ids if rid not in current_region_ids]
+        if not stale:
+            return stored_ids  # all current, no healing needed
 
-    def test_partial_stale_filtered(self):
-        """Valid IDs are kept; stale IDs are removed."""
-        current = {"19", "23"}
-        stored = ["19", "21"]    # 21 is stale, 19 is still current
-        valid = [rid for rid in stored if rid in current]
-        assert valid == ["19"]
+        name_to_current = {
+            r["name"].casefold(): str(r["id"])
+            for r in current_regions if r.get("name") and r.get("id")
+        }
+        healed = []
+        for stale_rid in stale:
+            label = zone_labels.get(stale_rid, "")
+            current_id = name_to_current.get(label.casefold()) if label else None
+            if current_id and current_id not in stored_ids:
+                healed.append(current_id)
+
+        return [r for r in stored_ids if r in current_region_ids] + healed
+
+    def test_auto_heal_by_name(self):
+        """Stale ID resolved to current ID via name label match."""
+        result = self._run_heal(
+            stored_ids=["19"],
+            current_regions=[{"id": "23", "name": "Kitchen"}],
+            zone_labels={"19": "Kitchen"},
+        )
+        assert result == ["23"]
+
+    def test_no_heal_needed_when_ids_current(self):
+        """Current IDs pass through unchanged."""
+        result = self._run_heal(
+            stored_ids=["23"],
+            current_regions=[{"id": "23", "name": "Kitchen"}],
+            zone_labels={"23": "Kitchen"},
+        )
+        assert result == ["23"]
+
+    def test_partial_heal_valid_kept_stale_healed(self):
+        """Valid IDs kept, stale IDs healed when label matches."""
+        result = self._run_heal(
+            stored_ids=["19", "21"],
+            current_regions=[
+                {"id": "23", "name": "Kitchen"},
+                {"id": "21", "name": "Hallway"},
+            ],
+            zone_labels={"19": "Kitchen", "21": "Hallway"},
+        )
+        assert "21" in result   # was already valid
+        assert "23" in result   # healed from stale "19"
+        assert "19" not in result
+
+    def test_unlabeled_stale_id_skipped(self):
+        """Stale ID with no label cannot be healed — skipped gracefully."""
+        result = self._run_heal(
+            stored_ids=["19"],
+            current_regions=[{"id": "23", "name": "Kitchen"}],
+            zone_labels={},  # no labels → can't match
+        )
+        assert result == []  # nothing healed → caller raises ServiceValidationError
 
     def test_empty_cc_regions_skips_validation(self):
-        """If cc.regions is empty (not yet fetched), validation is skipped."""
-        current: set[str] = set()
-        stored = ["19", "21"]
-        # validation only runs when current_region_ids is non-empty
-        valid = stored if not current else [r for r in stored if r in current]
-        assert valid == ["19", "21"]
+        """No cc.regions yet → skip validation, pass stored IDs unchanged."""
+        result = self._run_heal(
+            stored_ids=["19", "21"],
+            current_regions=[],
+            zone_labels={"19": "Kitchen"},
+        )
+        assert result == ["19", "21"]
+
+    def test_case_insensitive_name_match(self):
+        """Name matching is case-insensitive."""
+        result = self._run_heal(
+            stored_ids=["19"],
+            current_regions=[{"id": "23", "name": "KITCHEN"}],
+            zone_labels={"19": "kitchen"},
+        )
+        assert result == ["23"]
