@@ -584,33 +584,58 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
 
         # Validate stored region IDs against the current cloud map.
-        # Region IDs can change after map retraining. HA stores segment IDs
-        # at "Map vacuum segments to areas" setup time — if the map was retrained
+        # Region IDs can change after map retraining. HA stores segment IDs at
+        # "Map vacuum segments to areas" setup time — if the map was retrained
         # since then, stored IDs may no longer exist in cc.regions.
-        # clean_room always fetches cc.regions live (no staleness risk);
-        # vacuum.clean_area must do the same validation.
+        # clean_room always fetches cc.regions live; we must do the same here.
         #
-        # current_region_ids = set of IDs in the current cloud map
-        # If a stored region_id is not in this set → stale → filter it out
-        # and log a warning. If ALL are stale → raise so HA shows a clear error.
+        # Auto-heal: for stale IDs, try to find the matching current ID by room
+        # name. smart_zone_labels maps old_id → user_label; cc.regions maps
+        # current_id → name. If they match (case-insensitive), the command can
+        # proceed without any user action. This is transparent — no Repair Issue,
+        # no error message for the user.
+        current_regions = data.cloud_coordinator.regions
         current_region_ids: set[str] = {
-            str(r["id"]) for r in data.cloud_coordinator.regions if r.get("id")
+            str(r["id"]) for r in current_regions if r.get("id")
         }
         if current_region_ids:
             stale = [rid for rid in region_ids if rid not in current_region_ids]
             if stale:
-                _LOGGER.warning(
-                    "async_clean_segments: stored region IDs %s not in current "
-                    "cloud map (current: %s) — map may have been retrained. "
-                    "Re-map vacuum segments to areas in HA to fix this.",
-                    stale, sorted(current_region_ids),
+                # Build name → current_id lookup from live cloud data
+                name_to_current: dict[str, str] = {
+                    r["name"].casefold(): str(r["id"])
+                    for r in current_regions
+                    if r.get("name") and r.get("id")
+                }
+                zone_labels: dict[str, str] = (
+                    self._config_entry.options.get("smart_zone_labels", {})
+                    if self._config_entry else {}
                 )
-                region_ids = [rid for rid in region_ids if rid in current_region_ids]
-            if not region_ids:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="no_valid_segments",
-                )
+                healed: list[str] = []
+                for stale_rid in stale:
+                    label = zone_labels.get(stale_rid, "")
+                    current_id = name_to_current.get(label.casefold()) if label else None
+                    if current_id and current_id not in region_ids:
+                        healed.append(current_id)
+                        _LOGGER.info(
+                            "async_clean_segments: auto-healed stale region %s → %s "
+                            "('%s') — map retrained but room name matched current map",
+                            stale_rid, current_id, label,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "async_clean_segments: stale region %s could not be "
+                            "auto-healed (label=%r, not in current map) — skipping. "
+                            "Re-map vacuum segments to areas in HA to fix permanently.",
+                            stale_rid, label or "<unlabeled>",
+                        )
+                region_ids = [r for r in region_ids if r in current_region_ids] + healed
+
+        if not region_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
 
         no_auto = bool(self.vacuum_state.get("noAutoPasses", False))
         two_pass = self._get_two_pass()
