@@ -285,8 +285,11 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
 
 # v2.3.0 — Phases used by image.py (pose handling) and vacuum.py (live CR4 source).
 # Moved from image.py module-locals so vacuum.py can import without circular deps.
-CLEANING_PHASES: Final[frozenset[str]] = frozenset({"run", "hmMidMsn"})
-MISSION_END_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn", "stop", "evac"})
+# v2.6.3 B1 — evac moved to CLEANING_PHASES: robots with self-emptying bases
+# (i7+, s9+) go through evac mid-mission; treating it as MISSION_END would
+# prematurely trigger _handle_mission_end() and reset the map renderer.
+CLEANING_PHASES: Final[frozenset[str]] = frozenset({"run", "hmMidMsn", "evac"})
+MISSION_END_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn", "stop"})
 
 # Human-readable phase labels (from rest980 — extended)
 

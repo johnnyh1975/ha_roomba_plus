@@ -70,7 +70,7 @@ DOCK_HALF       = 6    # px half-side of dock square
 ROBOT_RADIUS    = 8    # px robot circle radius
 ARROW_LENGTH    = 16   # px direction arrow length
 STUCK_RADIUS    = 7    # px stuck triangle circumradius
-PATH_WIDTH      = 3    # px path line width
+PATH_WIDTH      = 6    # px path line width — v2.6.3 D2: increased 3→6 so the
 
 # ── Geometry layer constants ───────────────────────────────────────────────────
 WALL_WIDTH         = 6    # px user wall stroke width
@@ -165,10 +165,15 @@ class MapRenderer:
             return  # First point at dock — skip
 
         # Reject implausibly large jumps from the previous pose point.
+        # v2.6.3 B1 — use cfg constants (not _fit_scale/_fit_cx/cy) for the
+        # inverse transform.  _fit_* values change after every render() call;
+        # using them here caused the inverse to produce wildly wrong mm values
+        # after auto-fit activated, rejecting up to 99% of legitimate poses.
         if self._points:
             prev_px, prev_py = self._points[-1]
-            prev_x_mm = (prev_px - self._fit_cx) * self._fit_scale
-            prev_y_mm = (self._fit_cy - prev_py) * self._fit_scale
+            orig_cx = orig_cy = self._cfg.size_px // 2
+            prev_x_mm = (prev_px - orig_cx) * self._cfg.scale
+            prev_y_mm = (orig_cy - prev_py) * self._cfg.scale
             jump_mm = math.hypot(x_mm - prev_x_mm, y_mm - prev_y_mm)
             if jump_mm > self._MAX_POSE_JUMP_MM:
                 _LOGGER.debug(
@@ -378,6 +383,41 @@ class MapRenderer:
 
     # ── Read-only properties ──────────────────────────────────────────────────
 
+    def render_for_outline(self) -> bytes | None:
+        """Render cleaning path only — no canvas border or geometry overlays.
+
+        v2.6.3 B4 — the normal render() draws a FLOOR_BORDER rectangle around
+        the entire canvas.  extract_contour_from_png() detected this border as
+        the dominant edge (stronger than any cleaning-path edge), producing an
+        OutlineStore that stores the canvas perimeter instead of the room shape.
+
+        This method renders only the cleaned-area fill on a plain white canvas
+        so the only edges are the actual cleaning path boundaries.
+        Returns None when no pose points have been recorded yet.
+        """
+        if not self._points:
+            return None
+
+        import io as _io
+        fit_ratio, tx, ty, new_scale, fit_cx, fit_cy = self._compute_fit()
+        # Temporarily apply fit state so _draw_cleaned_area can use _fit_scale
+        old_scale, old_cx, old_cy = self._fit_scale, self._fit_cx, self._fit_cy
+        self._fit_scale, self._fit_cx, self._fit_cy = new_scale, fit_cx, fit_cy
+
+        try:
+            size = self._cfg.size_px
+            img = Image.new("RGBA", (size, size), BG_COLOUR)
+            draw = ImageDraw.Draw(img)
+            # NO FLOOR_BORDER — intentional, prevents false edge capture
+            def _fit_px(px: int, py: int) -> tuple[int, int]:
+                return (int(px * fit_ratio + tx), int(py * fit_ratio + ty))
+            self._draw_cleaned_area(draw, _fit_px)
+            buf = _io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        finally:
+            self._fit_scale, self._fit_cx, self._fit_cy = old_scale, old_cx, old_cy
+
     @property
     def has_data(self) -> bool:
         """Return True if any pose points have been recorded."""
@@ -489,12 +529,12 @@ class MapRenderer:
         # Zone outline rectangles (dashed)
         offset = self._geometry_store.wall_offset_mm if self._geometry_store else 200
         for zone in self._zone_store.zones:
-            x1, y1 = self._mm_to_px(zone.x_min - offset, zone.y_max + offset)
-            x2, y2 = self._mm_to_px(zone.x_max + offset, zone.y_min - offset)
+            x1, y1 = self._mm_to_px_fit(zone.x_min - offset, zone.y_max + offset)
+            x2, y2 = self._mm_to_px_fit(zone.x_max + offset, zone.y_min - offset)
             self._draw_dashed_rect(draw, x1, y1, x2, y2, SUGGEST_OUTLINE, SUGGEST_DASH)
             # Zone name label at bbox centroid
             if zone.name:
-                lx, ly = self._mm_to_px(
+                lx, ly = self._mm_to_px_fit(
                     (zone.x_min + zone.x_max) / 2,
                     (zone.y_min + zone.y_max) / 2,
                 )
@@ -505,7 +545,7 @@ class MapRenderer:
             for marker in self._geometry_store.door_markers:
                 if marker.mission_count < 2:
                     continue  # only show markers seen in ≥2 missions
-                mx, my = self._mm_to_px(marker.cx, marker.cy)
+                mx, my = self._mm_to_px_fit(marker.cx, marker.cy)
                 r = DOOR_MARKER_RADIUS
                 draw.ellipse(
                     [mx - r, my - r, mx + r, my + r],
@@ -527,8 +567,8 @@ class MapRenderer:
             return
 
         for wall in self._geometry_store.walls:
-            x1, y1 = self._mm_to_px(wall.x1, wall.y1)
-            x2, y2 = self._mm_to_px(wall.x2, wall.y2)
+            x1, y1 = self._mm_to_px_fit(wall.x1, wall.y1)
+            x2, y2 = self._mm_to_px_fit(wall.x2, wall.y2)
             draw.line([x1, y1, x2, y2], fill=WALL_FILL, width=WALL_WIDTH)
             draw.line([x1, y1, x2, y2], fill=WALL_CENTRE, width=WALL_CENTRE_WIDTH)
             if wall.label:
@@ -536,8 +576,8 @@ class MapRenderer:
                 draw.text((mx, my - 8), wall.label, fill=WALL_FILL, anchor="mm")
 
         for door in self._geometry_store.doors:
-            cx, cy = self._mm_to_px(door.cx, door.cy)
-            half_w_px = max(1, int(door.width_mm / 2 / self._cfg.scale))
+            cx, cy = self._mm_to_px_fit(door.cx, door.cy)
+            half_w_px = max(1, int(door.width_mm / 2 / self._fit_scale))
             theta_rad = math.radians(door.theta_deg)
             # Gap line (dashed) along door orientation
             dx = int(half_w_px * math.cos(theta_rad))
@@ -552,8 +592,8 @@ class MapRenderer:
                 draw.text((cx, cy - 10), door.label, fill=DOOR_FILL, anchor="mm")
 
         for obs in self._geometry_store.obstacles:
-            x1, y1 = self._mm_to_px(obs.x, obs.y + obs.h)   # top-left in image
-            x2, y2 = self._mm_to_px(obs.x + obs.w, obs.y)   # bottom-right in image
+            x1, y1 = self._mm_to_px_fit(obs.x, obs.y + obs.h)   # top-left in image
+            x2, y2 = self._mm_to_px_fit(obs.x + obs.w, obs.y)   # bottom-right in image
             # Clamp to canvas
             size = self._cfg.size_px
             x1, x2 = sorted([max(0, min(size - 1, x1)), max(0, min(size - 1, x2))])
@@ -665,11 +705,31 @@ class MapRenderer:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _mm_to_px(self, x_mm: float, y_mm: float) -> tuple[int, int]:
-        """Convert mm dock-relative coordinates to canvas pixel coordinates.
+        """Convert mm dock-relative coordinates to INITIAL canvas pixel space.
 
-        Uses _fit_scale and _fit_cx/cy which are set by _compute_fit() at
-        the start of each render() call. Outside of render() (e.g. in
-        add_pose()) the default cfg scale and centre are used.
+        v2.6.3 B1/B2 — always uses the fixed cfg.scale and canvas centre so
+        that all stored _points are in a CONSISTENT coordinate space regardless
+        of when render() was last called.  This eliminates the jump-detection
+        false-reject caused by the previous implementation using the fit-adjusted
+        _fit_scale/_fit_cx/cy which change after every render() call.
+
+        Geometry layers drawn inside render() call _mm_to_px_fit() instead,
+        which uses the fit-adjusted parameters so overlay elements stay aligned
+        with the auto-zoomed content.
+        """
+        cx = cy = self._cfg.size_px // 2
+        return (
+            int(cx + x_mm / self._cfg.scale),
+            int(cy - y_mm / self._cfg.scale),
+        )
+
+    def _mm_to_px_fit(self, x_mm: float, y_mm: float) -> tuple[int, int]:
+        """Convert mm to FIT-ADJUSTED canvas pixels.
+
+        Only valid inside render() after _compute_fit() has been called for the
+        current frame.  Used by geometry overlay layers (zones, walls, doors,
+        obstacles, door markers) so they stay spatially aligned with the
+        auto-zoomed cleaning path.
         """
         return (
             int(self._fit_cx + x_mm / self._fit_scale),

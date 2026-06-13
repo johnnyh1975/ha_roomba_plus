@@ -62,6 +62,11 @@ async def async_get_config_entry_diagnostics(
     }
     if data.renderer is not None:
         map_diag["renderer"] = data.renderer.diagnostic_info()
+        # Include raw trajectory in mm for gap-analysis and door-detection tuning.
+        # Uses the initial-scale inverse transform (cfg.scale / cfg.size_px centre).
+        # Kept at top-level map_diag so Claude/devs can paste the list directly.
+        if data.renderer.point_count > 0:
+            map_diag["last_mission_trajectory_mm"] = data.renderer.points_mm
     # F-EPHEMERAL: outline_store diagnostics
     _outline = getattr(data, "outline_store", None)
     if _outline is not None:

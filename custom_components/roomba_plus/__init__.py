@@ -2419,6 +2419,25 @@ async def async_setup_entry(
         mission_timer_store=mission_timer_store,
     )
 
+    # v2.6.3 B9 — the 980 may not include "sku" in the first MQTT state dump
+    # that arrives before async_setup_entry completes.  Register a one-time
+    # callback that fills in robot_profile when "sku" first appears.
+    if config_entry.runtime_data.robot_profile is None:
+        def _set_robot_profile_on_sku(json_data: dict) -> None:
+            if config_entry.runtime_data.robot_profile is not None:
+                return  # already resolved
+            reported = json_data.get("state", {}).get("reported", {})
+            sku = reported.get("sku")
+            if sku:
+                profile = get_robot_profile(sku, reported.get("batteryType"))
+                if profile is not None:
+                    config_entry.runtime_data.robot_profile = profile
+                    _LOGGER.debug(
+                        "RobotProfile resolved late for SKU %s → %s mAh %s",
+                        sku, profile.battery_mah, profile.battery_chemistry,
+                    )
+        roomba.register_on_message_callback(_set_robot_profile_on_sku)
+
     if presence_manager is not None:
         config_entry.runtime_data.presence_manager = presence_manager
         presence_manager.start()

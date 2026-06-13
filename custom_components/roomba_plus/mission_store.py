@@ -130,19 +130,40 @@ class MissionStore:
     async def async_append(self, record: dict[str, Any]) -> None:
         """Append a record and trim to MAX_RECORDS FIFO.
 
-        F4c — duplicate guard: silently drops records whose id matches any of
-        the last 5 stored records.  Prevents MQTT reconnect from inflating
-        mission counts when the broker re-delivers the end-of-mission message.
+        F4c — duplicate guard: drops records whose id matches a recent record
+        with the same ended_at (= true MQTT re-delivery of the same event).
+
+        v2.6.3 B3 — multi-recharge missions: the 980 firmware keeps the original
+        mssnStrtTm across all charging segments, so Segment 2 and Segment 3 of
+        a 3-segment mission would share the same record id as Segment 1 and be
+        silently dropped by the original guard.  The fix: only drop when BOTH
+        id AND ended_at match (true duplicate).  When only the id matches (same
+        start_ts, different end = subsequent segment), assign a unique id by
+        appending "_r<N>" before storing.
         """
         record_id = record.get("id")
         if record_id:
-            existing_ids = {r.get("id") for r in self._records[-5:]}
-            if record_id in existing_ids:
-                _LOGGER.debug(
-                    "MissionStore: duplicate record %s dropped (MQTT re-delivery)",
-                    record_id,
-                )
-                return
+            for existing in self._records[-5:]:
+                if existing.get("id") == record_id:
+                    if existing.get("ended_at") == record.get("ended_at"):
+                        # True MQTT re-delivery — same start AND same end
+                        _LOGGER.debug(
+                            "MissionStore: duplicate record %s dropped (MQTT re-delivery)",
+                            record_id,
+                        )
+                        return
+                    # Same start_ts, different end = subsequent recharge segment.
+                    # Give it a unique id so it is stored alongside segment 1.
+                    seg_n = sum(
+                        1 for r in self._records
+                        if r.get("id", "").startswith(record_id)
+                    )
+                    record = {**record, "id": f"{record_id}_r{seg_n}"}
+                    _LOGGER.debug(
+                        "MissionStore: multi-recharge segment stored as %s",
+                        record["id"],
+                    )
+                    break
         self._records.append(record)
         if len(self._records) > MAX_RECORDS:
             self._records = self._records[-MAX_RECORDS:]

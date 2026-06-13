@@ -59,6 +59,16 @@ PARALLEL_UPDATES = 0
 
 _MAP_STORAGE_VERSION = 1
 
+# v2.6.3 E — dispatcher signal fired by RoombaMapImage after GridStore update.
+# RoombaCoverageImage listens to bump image_last_updated so the frontend re-fetches.
+_SIGNAL_COVERAGE_UPDATED = "roomba_plus_coverage_updated_{}"
+
+
+async def _async_send_coverage_signal(hass: HomeAssistant, entry_id: str) -> None:
+    """Fire the coverage-updated dispatcher signal on the HA event loop."""
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+    async_dispatcher_send(hass, _SIGNAL_COVERAGE_UPDATED.format(entry_id))
+
 
 def _map_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_{entry_id}"
@@ -163,6 +173,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._last_stuck_count: int = 0
         self._mission_points: list[tuple[float, float]] = []
         self._stuck_mission_points: list[tuple[float, float]] = []
+        # v2.6.3 A+D — True once robot enters CLEANING_PHASES in this mission.
+        # Replaces last_phase-in-CLEANING_PHASES guard; fixes stuck-bypass and
+        # false mission-restart on stuck → run recovery.
+        self._had_cleaning_phase: bool = False
 
         # Initial timestamp so frontend knows an image exists from the start
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
@@ -203,7 +217,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         if not all(p is not None for p in poly_pose):
                             continue
                         polys_px.append(
-                            [self._renderer._mm_to_px(x, y) for x, y in poly_pose]
+                            [self._renderer._mm_to_px_fit(x, y) for x, y in poly_pose]
                         )
                     if polys_px:
                         overlay_png = await self.hass.async_add_executor_job(
@@ -249,7 +263,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             return attrs
 
         # calibration — three anchor point pairs for xiaomi-vacuum-map-card
-        cal = aligner.calibration_points(self._renderer._mm_to_px)
+        # v2.6.3 B1: _mm_to_px_fit gives fit-adjusted pixels matching displayed image
+        cal = aligner.calibration_points(self._renderer._mm_to_px_fit)
         if cal:
             attrs["calibration"] = cal
 
@@ -261,7 +276,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
             if not all(p is not None for p in poly_pose):
                 continue
-            poly_px   = [self._renderer._mm_to_px(x, y) for x, y in poly_pose]
+            poly_px   = [self._renderer._mm_to_px_fit(x, y) for x, y in poly_pose]
             room_name = rid_to_name.get(rid, rid)
             rooms.append({
                 "id":      room_name,
@@ -295,17 +310,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Phase transitions
         if current_phase != self._last_phase:
-            if (current_phase in CLEANING_PHASES
-                    and self._last_phase not in CLEANING_PHASES):
+            # v2.6.3 D — guard with _had_cleaning_phase so stuck → run (recovery)
+            # does NOT reset the renderer mid-mission.
+            if current_phase in CLEANING_PHASES and not self._had_cleaning_phase:
+                self._had_cleaning_phase = True
                 if self._renderer:
                     self._renderer.reset()
                     self._mission_points = []
                     self._stuck_mission_points = []
                     _LOGGER.debug("Map: mission started, renderer reset")
 
-            if (current_phase in MISSION_END_PHASES
-                    and self._last_phase in CLEANING_PHASES):
-                self._handle_mission_end()
+            # v2.6.3 A — use _had_cleaning_phase so stuck → stop/charge
+            # (stuck_and_abandoned) correctly triggers _handle_mission_end().
+            if current_phase in MISSION_END_PHASES and self._had_cleaning_phase:
+                self._had_cleaning_phase = False
+                self._handle_mission_end(current_phase)
 
             self._last_phase = current_phase
 
@@ -341,7 +360,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._mission_points.append((x, y))
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
-    def _handle_mission_end(self) -> None:
+    def _handle_mission_end(self, ending_phase: str = "") -> None:
         # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
         # hass.async_create_task() is not thread-safe and raises RuntimeError
         # on recent HA versions when called from a foreign thread.
@@ -351,11 +370,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         loop = self.hass.loop
 
+        # v2.6.3 B5 — only run drift detection when the robot actually returned
+        # to the dock.  For stuck-and-abandoned (ending_phase="stop") or user-
+        # abort missions, _mission_points[-1] is the stuck position, not the dock.
+        # Passing those coordinates to check_dock_drift() produced spurious large
+        # drift vectors and inflated cumulative_drift_mm to >900 mm.
+        _dock_return = ending_phase in {"charge", "hmPostMsn"}
+
         if (self._map_capability == MapCapability.EPHEMERAL
                 and self._zone_store
                 and len(self._mission_points) >= 20):
             # Compute drift once — used by both ZoneStore log and GeometryStore.
-            drift_vector = self._zone_store.check_dock_drift(self._mission_points[-1])
+            drift_vector = (0.0, 0.0)
+            if _dock_return:
+                drift_vector = self._zone_store.check_dock_drift(self._mission_points[-1])
             if drift_vector != (0.0, 0.0):
                 _LOGGER.info("Map: drift %.0f,%.0f mm", *drift_vector)
 
@@ -426,6 +454,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
 
         # F-EPHEMERAL — Extract and accumulate room outline
+        # v2.6.3 B4 — render_for_outline() renders without the FLOOR_BORDER
+        # rectangle that previously dominated contour extraction.
         if (
             self._renderer
             and self._renderer.has_data
@@ -435,13 +465,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._config_entry.runtime_data, "outline_store", None
             )
             if _outline_store is not None:
-                _png = self._renderer.render()
-                asyncio.run_coroutine_threadsafe(
-                    _outline_store.async_update_from_png(
-                        _png, self.hass, self._config_entry.entry_id
-                    ),
-                    loop,
-                )
+                _png = self._renderer.render_for_outline()
+                if _png is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        _outline_store.async_update_from_png(
+                            _png, self.hass, self._config_entry.entry_id
+                        ),
+                        loop,
+                    )
 
         # Update GridStore for coverage heatmap (all pose-capable robots)
         if self._config_entry is not None and self._mission_points:
@@ -460,6 +491,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 _LOGGER.debug(
                     "GridStore: updated from mission — %d pose pts, %d stuck pts",
                     len(self._mission_points), len(self._stuck_mission_points),
+                )
+                # v2.6.3 E — notify RoombaCoverageImage so it bumps its
+                # image_last_updated timestamp and the frontend re-fetches.
+                from homeassistant.helpers.dispatcher import async_dispatcher_send
+                _eid = self._config_entry.entry_id
+                asyncio.run_coroutine_threadsafe(
+                    _async_send_coverage_signal(self.hass, _eid),
+                    loop,
                 )
 
         self._mission_points = []
@@ -579,7 +618,6 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         self._grid_store = grid_store
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_coverage_map"
-        self._last_phase: str = ""
         self._attr_image_last_updated: dt_datetime = dt_util.now(
             datetime.timezone.utc
         )
@@ -587,6 +625,25 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
+        # v2.6.3 E — listen for GridStore update signal from RoombaMapImage.
+        # RoombaMapImage fires the signal after every successful mission end so
+        # the frontend knows to re-fetch the coverage image.
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
+        from homeassistant.core import callback
+
+        @callback
+        def _on_gridstore_updated() -> None:
+            self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+            self._cache = None
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                _SIGNAL_COVERAGE_UPDATED.format(self._config_entry.entry_id),
+                _on_gridstore_updated,
+            )
+        )
 
     async def async_image(self) -> bytes | None:
         rendered = await self.hass.async_add_executor_job(
@@ -618,54 +675,18 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         return "cleanMissionStatus" in new_state
 
     def on_message(self, json_data: dict[str, Any]) -> None:
-        """Detect mission end and trigger GridStore update."""
+        """React to MQTT state changes.
+
+        GridStore updates and image_last_updated bumps are handled via the
+        _SIGNAL_COVERAGE_UPDATED dispatcher signal (fired by RoombaMapImage
+        after each mission end). This callback only triggers HA state refresh
+        so the entity stays responsive to phase changes on the dashboard.
+        """
         state = json_data.get("state", {}).get("reported", {})
         if not self.new_state_filter(state):
             return
         self.vacuum_state = roomba_reported_state(self.vacuum)
-        phase = self.vacuum_state.get("cleanMissionStatus", {}).get("phase", "")
-        if (
-            phase in MISSION_END_PHASES
-            and self._last_phase in CLEANING_PHASES
-        ):
-            self._trigger_grid_update()
-        self._last_phase = phase
         self.schedule_update_ha_state()
-
-    def _trigger_grid_update(self) -> None:
-        """Pull mission pose points from the map image entity and update GridStore."""
-        # Access the co-registered RoombaMapImage to get accumulated pose points.
-        # They are on the same device (same blid) and share config_entry.
-        data = self._config_entry.runtime_data
-        if data.renderer is None:
-            return
-
-        pose_points = list(getattr(data.renderer, "_mission_points", []))
-        # Stuck positions: approximate from renderer stuck markers.
-        stuck_points = list(getattr(data.renderer, "_stuck_positions", []))
-
-        if not pose_points:
-            return
-
-        asyncio.run_coroutine_threadsafe(
-            self._async_update_and_save(pose_points, stuck_points),
-            self.hass.loop,
-        )
-
-    async def _async_update_and_save(
-        self,
-        pose_points: list[tuple[float, float]],
-        stuck_points: list[tuple[float, float]],
-    ) -> None:
-        await self.hass.async_add_executor_job(
-            self._grid_store.update_from_mission, pose_points, stuck_points
-        )
-        await self._grid_store.async_save(
-            self.hass, self._config_entry.entry_id
-        )
-        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
-        self._cache = None
-        self.async_write_ha_state()
 
     @staticmethod
     def _blank_image() -> bytes:

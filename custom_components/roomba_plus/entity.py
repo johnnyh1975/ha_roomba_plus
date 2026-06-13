@@ -184,11 +184,7 @@ class IRobotEntity(Entity):
             return
 
         if device.name_by_user:
-            # User has manually renamed the device in HA — respect that choice
-            _LOGGER.debug(
-                "IRobotEntity: device has a user-set name (%r), not overwriting",
-                device.name_by_user,
-            )
+            # User has manually renamed the device — respect their choice silently.
             return
 
         if device.name == name:

@@ -2932,16 +2932,22 @@ def _get_planned_room_order(data: Any) -> list[str]:
     MP1 helper — reads the live MQTT state so planned order is available
     immediately at mission start without waiting for a cloud refresh.
     Returns an empty list when no room-select command was issued (whole-home).
+
+    v2.6.3 — uses MissionStore._extract_rid() to handle all confirmed region
+    key formats: {"region_id": ...} (Roomba+ app), {"rid": ...} (iRobot app /
+    lewis 22.52.10+), and plain string (some firmware variants).
     """
     cc = getattr(data, "cloud_coordinator", None)
     if cc is None:
         return []
     reported = data.roomba.master_state.get("state", {}).get("reported", {})
     last_cmd = reported.get("lastCommand", {})
+
+    from .mission_store import MissionStore as _MS
     region_ids = [
-        r.get("region_id")
+        _MS._extract_rid(r)
         for r in (last_cmd.get("regions") or [])
-        if r.get("region_id")
+        if _MS._extract_rid(r)
     ]
     if not region_ids:
         return []
@@ -3021,7 +3027,6 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
 
     # ── Sensor state ──────────────────────────────────────────────────────────
 
-    @property
     async def async_added_to_hass(self) -> None:
         """Register 30 s periodic refresh for smooth progress updates.
 
@@ -3051,7 +3056,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         mts = data.mission_timer_store
 
         # Not in a cleaning phase → not active
-        if phase not in ("run", "hmMidMsn", "evac", "charge"):
+        if phase not in ("run", "hmMidMsn", "evac"):
             return None
         if mts is None or mts.mission_id is None:
             return None

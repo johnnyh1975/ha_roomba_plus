@@ -28,11 +28,17 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_CLEANING_PHASES: frozenset[str] = frozenset(
-    {"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "evac"}
-)
+# v2.6.3 A+D — phases used ONLY for mission start/stuck detection (not end).
+# Intentionally narrow: only phases where the robot is actively cleaning.
+# hmPostMsn/hmUsrDock/stuck are NOT included — using had_cleaning_phase flag
+# instead of last_phase guard eliminates the stuck-bypass bug (A) and the
+# false mission-restart bug (D) without needing those phases in either set.
+_ACTIVE_CLEANING_PHASES: frozenset[str] = frozenset({"run", "hmMidMsn", "evac"})
+
+# Aligned with const.py MISSION_END_PHASES plus completed/cancelled which
+# are valid end states in some firmware variants.
 _MISSION_END_PHASES: frozenset[str] = frozenset(
-    {"completed", "cancelled", "charge", "stop"}
+    {"charge", "hmPostMsn", "stop", "completed", "cancelled"}
 )
 
 
@@ -238,11 +244,16 @@ def make_mission_callback(
     # F6h — stuck recovery tracking
     had_stuck_event: bool = False
     stuck_cleared_ts: float = 0.0
+    # v2.6.3 A+D — True once robot enters an active cleaning phase in this mission.
+    # Replaces the last_phase-in-_CLEANING_PHASES guard so that:
+    #   A) stuck → stop/charge correctly triggers mission end (not bypassed)
+    #   D) stuck → run does NOT re-fire mission start (no false reset)
+    had_cleaning_phase: bool = False
 
     def _on_mission_message(json_data: dict[str, Any]) -> None:
         nonlocal last_phase, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
-        nonlocal had_stuck_event, stuck_cleared_ts
+        nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
 
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
@@ -254,7 +265,10 @@ def make_mission_callback(
         # lastCommand.regions is fresh at start — may be overwritten by end.
         # mssnStrtTm is cached here because 980/900-series firmware resets it
         # to 0 in the mission-end MQTT message.
-        if phase in _CLEANING_PHASES and last_phase not in _CLEANING_PHASES:
+        # v2.6.3 D — guard with had_cleaning_phase so stuck → run (recovery)
+        # does NOT re-fire this block and corrupt mission_start_ts/nstuck_at_start.
+        if phase in _ACTIVE_CLEANING_PHASES and not had_cleaning_phase:
+            had_cleaning_phase = True
             current_mission_zones = _capture_zone_names(entry, reported)
             mission_start_ts = mission.get("mssnStrtTm") or 0
             bbrun = reported.get("bbrun", {})
@@ -311,26 +325,29 @@ def make_mission_callback(
             recharge_min_accumulator += elapsed_min
             last_recharge_phase_ts = 0.0
 
-        # F6h — detect stuck event and track whether robot resumed cleaning.
-        # A stuck event is when nStuck increases. If the robot then re-enters
-        # a cleaning phase within 30 min, that's stuck_and_resumed.
-        # If it goes directly to end without resuming, that's stuck_and_abandoned.
-        if phase in _CLEANING_PHASES and last_phase in _CLEANING_PHASES:
-            bbrun_now = reported.get("bbrun", {})
+        # F6h — detect stuck event: nStuck increased during this mission.
+        # v2.6.3 A — check whenever mission is active (had_cleaning_phase=True),
+        # not just during specific phases. This catches nStuck increments that
+        # arrive while the robot is in the 'stuck' phase itself.
+        if had_cleaning_phase and "bbrun" in reported and not had_stuck_event:
+            bbrun_now = reported["bbrun"]
             current_nstuck = bbrun_now.get("nStuck", nstuck_at_start)
-            if current_nstuck > nstuck_at_start and not had_stuck_event:
+            if current_nstuck > nstuck_at_start:
                 had_stuck_event = True
                 stuck_cleared_ts = _time_mod.monotonic()
                 _LOGGER.debug("MissionStore: stuck event detected during mission")
 
         # F6h — if robot returned to cleaning after a stuck event, mark resumed
-        if had_stuck_event and phase in _CLEANING_PHASES and last_phase not in _CLEANING_PHASES:
-            # Robot re-entered cleaning after a non-cleaning phase following stuck
+        if had_stuck_event and phase in _ACTIVE_CLEANING_PHASES and last_phase not in _ACTIVE_CLEANING_PHASES:
+            # Robot re-entered active cleaning after a non-active phase (e.g. stuck)
             if stuck_cleared_ts > 0 and (_time_mod.monotonic() - stuck_cleared_ts) < 1800:
                 # Still within 30-min window — mark as resumed
                 stuck_cleared_ts = _time_mod.monotonic()  # reset timer for next end
 
-        if phase in _MISSION_END_PHASES and last_phase in _CLEANING_PHASES:
+        # v2.6.3 A — use had_cleaning_phase instead of last_phase guard so that
+        # stuck → stop/charge (stuck_and_abandoned) is correctly detected.
+        if phase in _MISSION_END_PHASES and had_cleaning_phase:
+            had_cleaning_phase = False
             bbrun_end = reported.get("bbrun", {})
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
 
@@ -377,6 +394,7 @@ def make_mission_callback(
             last_recharge_phase_ts = 0.0
             had_stuck_event = False
             stuck_cleared_ts = 0.0
+            # had_cleaning_phase already reset to False above
 
         # MP1 (v2.6.0): accumulate run-only seconds in MissionTimerStore
         _mts_upd = getattr(entry.runtime_data, "mission_timer_store", None)
@@ -401,16 +419,23 @@ def make_mission_complete_callback(
     F4b — fires async_request_refresh() when a mission-end phase transition
     is detected, eliminating the up-to-24h staleness in cloud sensors after
     a mission completes.  Parallel pattern to make_map_retrain_callback().
+
+    v2.6.3 A — uses had_cleaning_phase flag instead of last_phase guard so
+    stuck → stop/charge (stuck_and_abandoned missions) also trigger a refresh.
     """
     last_phase: str = ""
+    had_cleaning_phase: bool = False
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
-        nonlocal last_phase
+        nonlocal last_phase, had_cleaning_phase
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
             return
         phase = reported["cleanMissionStatus"].get("phase", "")
-        if phase in _MISSION_END_PHASES and last_phase in _CLEANING_PHASES:
+        if phase in _ACTIVE_CLEANING_PHASES:
+            had_cleaning_phase = True
+        elif phase in _MISSION_END_PHASES and had_cleaning_phase:
+            had_cleaning_phase = False
             _LOGGER.debug(
                 "Roomba+ cloud: mission ended (phase %s → %s) — requesting refresh",
                 last_phase, phase,
