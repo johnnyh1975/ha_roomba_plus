@@ -2311,6 +2311,13 @@ async def async_setup_entry(
                                 "observed_zones for %s",
                                 seeded, config_entry.data[CONF_BLID],
                             )
+        except exceptions.ConfigEntryAuthFailed:
+            _LOGGER.warning(
+                "Roomba+ cloud: authentication failed for %s — "
+                "check iRobot credentials in integration options",
+                config_entry.data[CONF_BLID],
+            )
+            raise
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Roomba+ cloud: initial fetch failed for %s — "
@@ -2582,11 +2589,23 @@ async def async_unload_entry(
 async def _async_reload_on_options_change(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> None:
-    """Reload only when connection-relevant options change."""
+    """Reload only when connection-relevant options change.
+
+    Compares current data against current options for CONF_CONTINUOUS / CONF_DELAY.
+    When they differ, syncs data first so subsequent option changes do NOT
+    re-trigger a reload (prevents false reconnect on every options edit after
+    the first connection-relevant change).
+    """
     _CONNECTION_KEYS = {CONF_CONTINUOUS, CONF_DELAY}
     old_vals = {k: config_entry.data.get(k) for k in _CONNECTION_KEYS}
     new_vals = {k: config_entry.options.get(k) for k in _CONNECTION_KEYS}
     if old_vals != new_vals:
+        # Sync data to match new options so the next options change starts from
+        # a clean baseline and does not re-trigger an unintended reload.
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={**config_entry.data, **new_vals},
+        )
         await hass.config_entries.async_reload(config_entry.entry_id)
 
 

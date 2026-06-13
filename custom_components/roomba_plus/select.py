@@ -25,6 +25,7 @@ from .const import (
     FAN_SPEED_ECO,
     FAN_SPEED_PERFORMANCE,
     FAN_SPEEDS,
+    extract_region_id,
     has_carpet_boost,
     has_smart_map,
 )
@@ -323,16 +324,16 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         for entry in self.vacuum_state.get("cleanSchedule2", []):
             cmd = entry.get("cmd", {})
             for region in cmd.get("regions", []):
-                rid = region.get("region_id")
-                if rid is not None:
-                    region_ids.add(str(rid))
+                rid = extract_region_id(region)
+                if rid:
+                    region_ids.add(rid)
 
         # From lastCommand
         last = self.vacuum_state.get("lastCommand", {})
         for region in (last.get("regions") or []):
-            rid = region.get("region_id")
-            if rid is not None:
-                region_ids.add(str(rid))
+            rid = extract_region_id(region)
+            if rid:
+                region_ids.add(rid)
 
         # From persisted discovered_zone_ids — survives MQTT disconnection.
         persisted = self._config_entry.options.get("discovered_zone_ids", [])
@@ -525,10 +526,12 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         if not unlabelled:
             return  # All remaining zones are hidden — no issue needed
 
+        # Issue ID includes entry_id so multi-robot setups open the correct fix flow.
+        issue_id = f"smart_zones_need_naming_{self._config_entry.entry_id}"
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            "smart_zones_need_naming",
+            issue_id,
             is_fixable=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key="smart_zones_need_naming",
@@ -546,7 +549,8 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         """Dismiss the smart_zones_need_naming issue once all IDs are labelled."""
         from homeassistant.helpers import issue_registry as ir
 
-        ir.async_delete_issue(self.hass, DOMAIN, "smart_zones_need_naming")
+        issue_id = f"smart_zones_need_naming_{self._config_entry.entry_id}"
+        ir.async_delete_issue(self.hass, DOMAIN, issue_id)
         _LOGGER.debug("SmartZoneSelect: repair issue dismissed — all zones labelled")
 
 

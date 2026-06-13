@@ -363,7 +363,11 @@ def _completion_rate_30d(store: Any) -> StateType:
     records = store.query(30)
     if not records:
         return None
-    completed = sum(1 for r in records if r["result"] == "completed")
+    # Per MISSIONSTORE_FIELD_REGISTRY: completed = "completed" OR "stuck_and_resumed"
+    completed = sum(
+        1 for r in records
+        if r["result"] in ("completed", "stuck_and_resumed")
+    )
     return round(completed / len(records) * 100, 1)
 
 
@@ -631,8 +635,14 @@ def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
     capacity_mah = _estcap_to_mah(entity)
     if capacity_mah is None:
         return None
-    # Record converted mAh (not raw BMS value) as self-learning baseline
-    store.record_estcap_if_needed(capacity_mah)
+    # Record converted mAh (not raw BMS value) as self-learning baseline.
+    # When the baseline is set for the first time, schedule a save so it
+    # survives an HA restart (baseline is only set once — idempotent).
+    if store.record_estcap_if_needed(capacity_mah):
+        entity.hass.async_create_task(
+            store.async_save(entity.hass, entity._config_entry.entry_id),
+            name="roomba_plus_estcap_baseline_save",
+        )
     # Use learned baseline when available; OEM nominal only as cold-start fallback
     denominator = store.baseline_estcap if store.baseline_estcap else float(profile.battery_mah)
     return round(capacity_mah / denominator * 100, 1)

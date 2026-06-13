@@ -310,10 +310,13 @@ class DirtThresholdManager:
         # Gate 2: presence (all away) — only when PresenceManager is active
         pm = getattr(data, "presence_manager", None)
         if pm is not None:
-            person_ids: list[str] = self._entry.options.get("presence_entities", [])
+            from .const import CONF_PRESENCE_ENTITIES
+            person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
             if person_ids:
+                _UNUSABLE = frozenset({"unavailable", "unknown"})
                 all_away = all(
                     (st := self._hass.states.get(eid)) is not None
+                    and st.state not in _UNUSABLE   # unusable → treat as "might be home"
                     and st.state not in ("home", "Home")
                     for eid in person_ids
                 )

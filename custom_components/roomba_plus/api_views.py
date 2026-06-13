@@ -113,7 +113,11 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     duration_min = int(record.get("durationM") or record.get("doneM") or 0)
     run_min      = record.get("runM")
     pause_id     = record.get("pauseId")
-    error_code   = int(pause_id) if pause_id and int(pause_id) > 0 else None
+    try:
+        pause_id_int = int(pause_id) if pause_id is not None else 0
+    except (TypeError, ValueError):
+        pause_id_int = 0
+    error_code = pause_id_int if pause_id_int > 0 else None
 
     return {
         "id":           f"c_{start_ts}" if start_ts else f"c_{end_ts}",

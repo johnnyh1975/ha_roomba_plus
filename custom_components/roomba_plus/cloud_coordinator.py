@@ -676,6 +676,39 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     @property
+    def active_user_pmapv_id(self) -> str | None:
+        """Return the user_pmapv_id (map version) for the active pmap.
+
+        This is the version token the robot requires in start commands that
+        target specific rooms (vacuum.clean_area, clean_room). Sourced from
+        cloud data which is always authoritative — local MQTT pmaps may be
+        stale for lewis firmware robots that do not broadcast pmaps updates.
+
+        Tries three cloud API variants in order (same logic as UMF fetch):
+          Variant A: active_pmapv_details.active_pmapv.active_pmapv_id
+          Variant B: active_pmapv_details.active_pmapv.last_user_pmapv_id
+                     (confirmed for lewis 22.52.10, veronoicc + Thonno)
+          Variant C: pmap root-level active_pmapv_id (ia74 fallback)
+        """
+        if not self.data:
+            return None
+        active_id = self.active_pmap_id
+        if not active_id:
+            return None
+        for pmap in self.data.get("pmaps", []):
+            details = pmap.get("active_pmapv_details", {})
+            pmapv = details.get("active_pmapv", {})
+            pmap_id_candidate = pmapv.get("pmap_id") or pmap.get("pmap_id")
+            if pmap_id_candidate != active_id:
+                continue
+            return (
+                pmapv.get("active_pmapv_id")       # Variant A
+                or pmapv.get("last_user_pmapv_id") # Variant B (lewis 22.52.10)
+                or pmap.get("active_pmapv_id")     # Variant C
+            ) or None
+        return None
+
+    @property
     def learning_percentage(self) -> int | None:
         """IA74-LP (v2.6.0): Return map learning_percentage from the active pmap.
 

@@ -47,6 +47,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # States that count as "home" — everything else is treated as "away"
 _HOME_STATES = frozenset({"home", "on", "true"})
+# States where the person entity is unreliable — treat as "might be home" (safe default)
+_PRESENCE_UNUSABLE = frozenset({"unavailable", "unknown"})
 # Mission phases that indicate an active clean in progress
 _ACTIVE_CLEANING_PHASES = frozenset({"run", "hmMidMsn", "evac"})
 
@@ -118,6 +120,7 @@ class PresenceManager:
             return  # safety guard: no entities configured
         all_away = all(
             (st := self._hass.states.get(eid)) is not None
+            and st.state not in _PRESENCE_UNUSABLE  # unusable → treat as "might be home"
             and st.state not in _HOME_STATES
             for eid in person_ids
         )
@@ -247,6 +250,7 @@ class PresenceManager:
             bool(person_ids)
             and all(
                 (st := self._hass.states.get(eid)) is not None
+                and st.state not in _PRESENCE_UNUSABLE
                 and st.state not in _HOME_STATES
                 for eid in person_ids
             )

@@ -583,23 +583,65 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 translation_key="no_valid_segments",
             )
 
+        # Validate stored region IDs against the current cloud map.
+        # Region IDs can change after map retraining. HA stores segment IDs
+        # at "Map vacuum segments to areas" setup time — if the map was retrained
+        # since then, stored IDs may no longer exist in cc.regions.
+        # clean_room always fetches cc.regions live (no staleness risk);
+        # vacuum.clean_area must do the same validation.
+        #
+        # current_region_ids = set of IDs in the current cloud map
+        # If a stored region_id is not in this set → stale → filter it out
+        # and log a warning. If ALL are stale → raise so HA shows a clear error.
+        current_region_ids: set[str] = {
+            str(r["id"]) for r in data.cloud_coordinator.regions if r.get("id")
+        }
+        if current_region_ids:
+            stale = [rid for rid in region_ids if rid not in current_region_ids]
+            if stale:
+                _LOGGER.warning(
+                    "async_clean_segments: stored region IDs %s not in current "
+                    "cloud map (current: %s) — map may have been retrained. "
+                    "Re-map vacuum segments to areas in HA to fix this.",
+                    stale, sorted(current_region_ids),
+                )
+                region_ids = [rid for rid in region_ids if rid in current_region_ids]
+            if not region_ids:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="no_valid_segments",
+                )
+
         no_auto = bool(self.vacuum_state.get("noAutoPasses", False))
         two_pass = self._get_two_pass()
+        # vacuum.clean_area (HA Area cleaning) has no pass-mode UI — the HA spec
+        # does not expose a repeat/pass parameter for async_clean_segments.
+        # Always send Auto mode here so firmware does not reject the command.
+        # The Cleaning Passes select is honoured in clean_room and SmartZoneButton
+        # where the user explicitly controls pass mode per room.
         regions = [
             {
                 "region_id": rid,
                 "type": "rid",
-                "params": {"noAutoPasses": no_auto, "twoPass": two_pass},
+                "params": {"noAutoPasses": False, "twoPass": False},
             }
             for rid in region_ids
         ]
 
         from .services import _resolve_pmapv_id
-        user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
+        # Primary: cloud coordinator — always authoritative, never stale.
+        # lewis firmware (22.52.10+) does not broadcast pmaps updates via local
+        # MQTT after map changes, so the local state value can be an old pmapv
+        # that the robot no longer recognises → causes error 224 (localization
+        # failed). Cloud has the current last_user_pmapv_id.
+        user_pmapv_id: str | None = data.cloud_coordinator.active_user_pmapv_id
+        if not user_pmapv_id:
+            # Fallback: local MQTT state (works for robots that do broadcast pmaps)
+            user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
         if user_pmapv_id is None:
             _LOGGER.warning(
-                "async_clean_segments: user_pmapv_id not found in state.pmaps "
-                "for pmap %s — sending command without version ID",
+                "async_clean_segments: user_pmapv_id not found in cloud or "
+                "state.pmaps for pmap %s — sending command without version ID",
                 active_pmap_id,
             )
         params = {

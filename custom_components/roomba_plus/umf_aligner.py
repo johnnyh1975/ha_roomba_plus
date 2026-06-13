@@ -379,29 +379,38 @@ class UmfAligner:
         return (rot, tx, ty)
 
     def _validate_transform(self) -> float:
-        """Validate transform via room centroid residuals.
+        """Validate transform by measuring how well door candidates align with GS markers.
 
-        Transforms each room polygon centroid from UMF to pose space and
-        measures mean distance from the GeometryStore's known door positions.
-        Returns mean residual error in mm. 0.0 when no room polygons.
+        Transforms each UMF door candidate to pose space using the just-estimated
+        transform and measures mean distance to the nearest GS marker. A small
+        residual means the UMF→pose alignment is accurate.
+
+        Returns mean residual error in mm. Returns 0.0 when inputs are absent
+        (caller interprets 0.0 as perfect alignment → confidence=1.0).
+
+        NOTE: applies self._transform directly (bypass umf_to_pose which requires
+        self._aligned=True, not yet set when this is called from align()).
+        Previous implementation (v2.6.3) compared room centroids to GS markers
+        which is geometrically incorrect — centroids are in the middle of rooms,
+        far from door markers — so all residuals were unreasonably large.
         """
-        if not self._room_polygons or self._transform is None:
+        if self._transform is None or not self._door_candidates:
             return 0.0
 
-        residuals: list[float] = []
         gs_markers = self._geometry_store.door_markers
         if not gs_markers:
             return _RESIDUAL_SCALE / 2  # moderate penalty when no markers
 
-        for poly in self._room_polygons.values():
-            cx_umf = sum(p[0] for p in poly) / len(poly)
-            cy_umf = sum(p[1] for p in poly) / len(poly)
-            pt_pose = self.umf_to_pose(cx_umf, cy_umf)
-            if pt_pose is None:
-                continue
-            # Distance from nearest GS marker
+        rot, tx, ty = self._transform
+        cos_r, sin_r = math.cos(rot), math.sin(rot)
+
+        residuals: list[float] = []
+        for cx_umf, cy_umf in self._door_candidates:
+            # Apply transform directly — same math as umf_to_pose without _aligned gate
+            x_pose = cos_r * cx_umf - sin_r * cy_umf + tx
+            y_pose = sin_r * cx_umf + cos_r * cy_umf + ty
             nearest = min(
-                math.dist(pt_pose, (m.cx, m.cy))
+                math.dist((x_pose, y_pose), (m.cx, m.cy))
                 for m in gs_markers
             )
             residuals.append(nearest)

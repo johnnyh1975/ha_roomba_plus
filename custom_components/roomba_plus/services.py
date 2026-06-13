@@ -331,6 +331,10 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 translation_key="pmap_not_found",
             )
 
+        # Read cleaning pass mode from live robot state (same source as CleaningPassesSelect)
+        no_auto = bool(state.get("noAutoPasses", False))
+        two_pass = bool(state.get("twoPass", False))
+
         params = {
             "ordered": 1 if ordered else 0,
             "pmap_id": pmap_id,
@@ -339,14 +343,14 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 {
                     "region_id": rid,
                     "type": "rid",
-                    "params": {"noAutoPasses": False, "twoPass": False},
+                    "params": {"noAutoPasses": no_auto, "twoPass": two_pass},
                 }
                 for rid, _ in resolved
             ],
         }
 
         _LOGGER.info(
-            "clean_room: %s → regions=%s pmap=%s pmapv=%s (not sent)",
+            "clean_room: %s → regions=%s pmap=%s pmapv=%s",
             entity_id,
             [rid for rid, _ in resolved],
             pmap_id[:12],

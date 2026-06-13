@@ -621,3 +621,20 @@ ZONE_TYPE_ICONS: Final[dict[str, str]] = {
     "default":   "mdi:map-marker",
     "furniture": "mdi:sofa-single",
 }
+
+
+# ── Region ID extraction ───────────────────────────────────────────────────────
+
+def extract_region_id(item: object) -> str:
+    """Extract a region ID from an MQTT region entry or plan.upcoming item.
+
+    Handles two confirmed formats from both local MQTT and the iRobot app:
+    - String (some firmware):   "23"
+    - Object sent by Roomba+:   {"region_id": "23", "type": "rid"}
+    - Object sent by iRobot app: {"rid": "23", "type": "rid"}
+
+    Returns an empty string when neither format is recognisable.
+    """
+    if isinstance(item, dict):
+        return str(item.get("rid") or item.get("region_id") or "")
+    return str(item) if item is not None else ""

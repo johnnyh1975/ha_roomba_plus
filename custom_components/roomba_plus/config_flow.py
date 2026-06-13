@@ -52,6 +52,7 @@ from .const import (
     DEFAULT_PRESENCE_MODE,
     DOMAIN,
     ROOMBA_SESSION,
+    extract_region_id,
     has_smart_map,
 )
 from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
@@ -948,12 +949,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         region_ids: set[str] = set()
         for entry in state.get("cleanSchedule2", []):
             for region in entry.get("cmd", {}).get("regions", []):
-                rid = region.get("region_id")
+                rid = extract_region_id(region)
                 if rid:
                     region_ids.add(rid)
         last = state.get("lastCommand", {})
         for region in (last.get("regions") or []):
-            rid = region.get("region_id")
+            rid = extract_region_id(region)
             if rid:
                 region_ids.add(rid)
 
@@ -1099,6 +1100,22 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 if rid and name:
                     parsed[rid] = name
 
+            # Resolve pmap_id FIRST — used by both the validation check and the save.
+            # Priority: lastCommand → cleanSchedule2 → pmaps[0]
+            current_pmap_id = ""
+            last = state.get("lastCommand", {})
+            if last.get("pmap_id"):
+                current_pmap_id = last["pmap_id"]
+            else:
+                for entry in state.get("cleanSchedule2", []):
+                    if entry.get("cmd", {}).get("pmap_id"):
+                        current_pmap_id = entry["cmd"]["pmap_id"]
+                        break
+            if not current_pmap_id:
+                pmaps: list[dict] = state.get("pmaps", [])
+                if pmaps:
+                    current_pmap_id = next(iter(pmaps[0]), "")
+
             if not parsed:
                 errors["zone_names"] = "no_valid_ids"
                 pending = getattr(self, "_pending_zone_ids", [])
@@ -1118,21 +1135,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     errors=errors,
                     last_step=True,
                 )
-
-            # Resolve pmap_id with priority: lastCommand → cleanSchedule2 → pmaps[0]
-            current_pmap_id = ""
-            last = state.get("lastCommand", {})
-            if last.get("pmap_id"):
-                current_pmap_id = last["pmap_id"]
-            else:
-                for entry in state.get("cleanSchedule2", []):
-                    if entry.get("cmd", {}).get("pmap_id"):
-                        current_pmap_id = entry["cmd"]["pmap_id"]
-                        break
-            if not current_pmap_id:
-                pmaps: list[dict] = state.get("pmaps", [])
-                if pmaps:
-                    current_pmap_id = next(iter(pmaps[0]), "")
 
             new_labels = dict(existing_labels)
             new_zone_data = dict(existing_zone_data)

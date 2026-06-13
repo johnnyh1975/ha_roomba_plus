@@ -505,7 +505,8 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             if not region_id:
                 regions = last.get("regions", [])
                 if regions:
-                    region_id = str(regions[0].get("region_id", "")) or None
+                    from .const import extract_region_id
+                    region_id = extract_region_id(regions[0]) or None
 
         if not region_id or not pmap_id:
             _LOGGER.warning(
@@ -536,6 +537,10 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             )
             return
 
+        # Read cleaning pass mode from live robot state (same source as CleaningPassesSelect)
+        _no_auto = bool(self.vacuum_state.get("noAutoPasses", False))
+        _two_pass = bool(self.vacuum_state.get("twoPass", False))
+
         # user_pmapv_id intentionally omitted — see clean_room handler comment.
         params = {
             "pmap_id": pmap_id,
@@ -543,7 +548,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
                 {
                     "region_id": str(region_id),
                     "type": "rid",
-                    "params": {"noAutoPasses": False, "twoPass": False},
+                    "params": {"noAutoPasses": _no_auto, "twoPass": _two_pass},
                 }
             ],
             "ordered": 1,

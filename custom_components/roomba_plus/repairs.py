@@ -33,11 +33,20 @@ async def async_create_fix_flow(
     data: dict[str, Any] | None,
 ) -> RepairsFlow:
     """Return the correct fix flow for a given issue_id."""
+    _NAMING_PREFIX = "smart_zones_need_naming_"
+    if issue_id.startswith(_NAMING_PREFIX):
+        # Issue ID encodes the entry_id so multi-robot setups open the correct
+        # fix flow. Format: "smart_zones_need_naming_{entry_id}"
+        entry_id = issue_id[len(_NAMING_PREFIX):]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            # Fallback for legacy issues created before v2.6.4 (no entry_id suffix)
+            entries = hass.config_entries.async_entries(DOMAIN)
+            entry = entries[0] if entries else None
+        return SmartZoneNamingRepairFlow(entry)
+
     if issue_id == "smart_zones_need_naming":
-        # Always use the first DOMAIN entry — single-robot setups only
-        # have one. Do NOT filter on discovered_zone_ids here: that key
-        # may not yet be written when the user clicks Fix (race between
-        # async_update_entry and the repair dialog opening).
+        # Legacy issue ID created before v2.6.4 — fall back to first entry
         entries = hass.config_entries.async_entries(DOMAIN)
         entry = entries[0] if entries else None
         return SmartZoneNamingRepairFlow(entry)
@@ -237,20 +246,21 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         region_ids: set[str] = set()
         try:
             from . import roomba_reported_state
+            from .const import extract_region_id
             runtime = self._config_entry.runtime_data
             if not (runtime and runtime.roomba):
                 return []
             state = roomba_reported_state(runtime.roomba)
             for entry in state.get("cleanSchedule2", []):
                 for region in (entry.get("cmd", {}).get("regions") or []):
-                    rid = region.get("region_id")
-                    if rid is not None:
-                        region_ids.add(str(rid))
+                    rid = extract_region_id(region)
+                    if rid:
+                        region_ids.add(rid)
             last = state.get("lastCommand", {})
             for region in (last.get("regions") or []):
-                rid = region.get("region_id")
-                if rid is not None:
-                    region_ids.add(str(rid))
+                rid = extract_region_id(region)
+                if rid:
+                    region_ids.add(rid)
         except Exception:  # noqa: BLE001
             pass
         return sorted(region_ids)

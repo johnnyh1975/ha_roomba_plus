@@ -266,6 +266,11 @@ class BlockingManager:
                     "BlockingManager: consecutive_skips now %d",
                     store.consecutive_skips,
                 )
+                # Persist immediately so the counter survives HA restarts.
+                self._hass.async_create_task(
+                    store.async_save(self._hass, self._entry.entry_id),
+                    name="roomba_plus_consecutive_skips_save",
+                )
                 from .repairs import async_check_consecutive_skips
                 self._hass.async_create_task(
                     async_check_consecutive_skips(self._hass, self._entry),

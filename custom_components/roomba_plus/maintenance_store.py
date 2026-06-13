@@ -167,14 +167,16 @@ class MaintenanceStore:
 
     # ── F5d — Battery capacity baseline ──────────────────────────────────────
 
-    def record_estcap_if_needed(self, estcap_mah: float) -> None:
+    def record_estcap_if_needed(self, estcap_mah: float) -> bool:
         """Record converted mAh capacity as baseline on first valid observation.
 
         F5d — called by battery_capacity_retention sensor on every MQTT update.
         Receives the *converted* mAh value (raw estCap ÷ chemistry scale),
         NOT the raw BMS value.  Only sets the baseline once; subsequent calls
         are no-ops so the baseline never drifts once established.
-        Persisted via async_save after the call.
+
+        Returns True when the baseline was just set for the first time so the
+        caller can schedule async_save() to persist the value immediately.
         """
         if self.baseline_estcap is None and estcap_mah > 0:
             self.baseline_estcap = float(estcap_mah)
@@ -182,6 +184,8 @@ class MaintenanceStore:
                 "MaintenanceStore: baseline_estcap set to %.0f mAh "
                 "(converted from raw BMS value)", estcap_mah
             )
+            return True
+        return False
 
     # ── L2 — Self-calibrating lifespan ───────────────────────────────────────
 
