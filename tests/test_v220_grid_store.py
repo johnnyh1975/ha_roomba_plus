@@ -108,14 +108,14 @@ class TestEmaUpdate:
         gs = GridStore()
         gs.update_from_mission([], [(75, 75)])
         cell = _mm_to_cell(75, 75)
-        assert gs._stuck[cell] == 1
+        assert gs._stuck[cell]["count"] == 1
 
     def test_stuck_accumulates_across_missions(self):
         gs = GridStore()
         for _ in range(3):
             gs.update_from_mission([], [(75, 75)])
         cell = _mm_to_cell(75, 75)
-        assert gs._stuck[cell] == 3
+        assert gs._stuck[cell]["count"] == 3
 
     def test_multiple_pose_points_in_one_mission(self):
         gs = GridStore()
@@ -136,13 +136,13 @@ class TestHotspots:
     def test_below_threshold_not_returned(self):
         gs = GridStore()
         cell = _mm_to_cell(75, 75)
-        gs._stuck[cell] = STUCK_HOTSPOT_THRESHOLD - 1
+        gs._stuck[cell] = {"count": STUCK_HOTSPOT_THRESHOLD - 1, "times": []}
         assert gs.hotspots() == []
 
     def test_at_threshold_returned(self):
         gs = GridStore()
         cell = _mm_to_cell(750, 750)
-        gs._stuck[cell] = STUCK_HOTSPOT_THRESHOLD
+        gs._stuck[cell] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
         result = gs.hotspots()
         assert len(result) == 1
         assert result[0]["stuck_count"] == STUCK_HOTSPOT_THRESHOLD
@@ -151,8 +151,8 @@ class TestHotspots:
 
     def test_sorted_by_count_descending(self):
         gs = GridStore()
-        gs._stuck[_mm_to_cell(75, 75)]   = 5
-        gs._stuck[_mm_to_cell(750, 750)] = 10
+        gs._stuck[_mm_to_cell(75, 75)]   = {"count": 5, "times": []}
+        gs._stuck[_mm_to_cell(750, 750)] = {"count": 10, "times": []}
         result = gs.hotspots()
         assert result[0]["stuck_count"] == 10
         assert result[1]["stuck_count"] == 5
@@ -160,7 +160,7 @@ class TestHotspots:
     def test_bearing_and_distance_present(self):
         gs = GridStore()
         cell = _mm_to_cell(300, 400)
-        gs._stuck[cell] = STUCK_HOTSPOT_THRESHOLD
+        gs._stuck[cell] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
         result = gs.hotspots()
         assert "bearing_deg" in result[0]
         assert "distance_mm" in result[0]
@@ -168,7 +168,7 @@ class TestHotspots:
     def test_gx_gy_in_result(self):
         gs = GridStore()
         cell = _mm_to_cell(300, 0)
-        gs._stuck[cell] = STUCK_HOTSPOT_THRESHOLD
+        gs._stuck[cell] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
         result = gs.hotspots()
         assert result[0]["gx"] == cell[0]
         assert result[0]["gy"] == cell[1]
@@ -176,7 +176,7 @@ class TestHotspots:
     def test_custom_threshold(self):
         gs = GridStore()
         cell = _mm_to_cell(75, 75)
-        gs._stuck[cell] = 2
+        gs._stuck[cell] = {"count": 2, "times": []}
         assert gs.hotspots(threshold=2) != []
         assert gs.hotspots(threshold=3) == []
 
@@ -189,14 +189,14 @@ class TestSeedFromObservedZones:
         n = gs.seed_from_observed_zones([{"x": 750.0, "y": 750.0}])
         assert n == 1
         cell = _mm_to_cell(750.0, 750.0)
-        assert gs._stuck[cell] == STUCK_HOTSPOT_THRESHOLD
+        assert gs._stuck[cell]["count"] == STUCK_HOTSPOT_THRESHOLD
 
     def test_does_not_overwrite_existing(self):
         gs = GridStore()
         cell = _mm_to_cell(750.0, 750.0)
-        gs._stuck[cell] = 99
+        gs._stuck[cell] = {"count": 99, "times": []}
         gs.seed_from_observed_zones([{"x": 750.0, "y": 750.0}])
-        assert gs._stuck[cell] == 99
+        assert gs._stuck[cell]["count"] == 99
 
     def test_skips_missing_x(self):
         gs = GridStore()
@@ -220,7 +220,7 @@ class TestSeedFromObservedZones:
         gs = GridStore()
         # One new, one already present
         cell = _mm_to_cell(150.0, 150.0)
-        gs._stuck[cell] = 5
+        gs._stuck[cell] = {"count": 5, "times": []}
         n = gs.seed_from_observed_zones([
             {"x": 150.0, "y": 150.0},
             {"x": 450.0, "y": 450.0},
@@ -239,8 +239,8 @@ class TestDiagnosticProperties:
 
     def test_stuck_event_count(self):
         gs = GridStore()
-        gs._stuck[(0, 0)] = 3
-        gs._stuck[(1, 1)] = 7
+        gs._stuck[(0, 0)] = {"count": 3, "times": []}
+        gs._stuck[(1, 1)] = {"count": 7, "times": []}
         assert gs.stuck_event_count == 10
 
     def test_cell_count_zero_initial(self):
@@ -281,7 +281,7 @@ class TestPersistence:
     async def test_save_and_load_roundtrip(self):
         gs = GridStore()
         gs._cells[(1, 2)] = 0.6
-        gs._stuck[(3, 4)] = 5
+        gs._stuck[(3, 4)] = {"count": 5, "times": []}
 
         saved_data: dict = {}
         hass = MagicMock()
@@ -302,7 +302,7 @@ class TestPersistence:
             await gs2.async_load(hass, "test_entry")
 
         assert gs2._cells == {(1, 2): pytest.approx(0.6)}
-        assert gs2._stuck == {(3, 4): 5}
+        assert gs2._stuck == {(3, 4): {"count": 5, "times": []}}
 
     @pytest.mark.asyncio
     async def test_load_empty_starts_blank(self):

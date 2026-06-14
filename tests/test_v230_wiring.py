@@ -145,15 +145,25 @@ class TestRoombaMapImageAttrs:
         renderer = MagicMock()
         renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
         entity = self._entity(aligner=aligner, renderer=renderer)
+        # Mock cloud_coordinator.regions for icon lookup
+        entity._config_entry.runtime_data.cloud_coordinator.regions = [
+            {"id": "r1", "region_type": "kitchen"}
+        ]
         attrs = entity.extra_state_attributes
         assert "rooms" in attrs
         rooms = attrs["rooms"]
-        # rooms is now a list of {id, label, outline} for xiaomi-vacuum-map-card
-        assert isinstance(rooms, list)
-        assert len(rooms) == 1
-        assert rooms[0]["id"] == "Kitchen"
-        assert rooms[0]["label"] == "Kitchen"
-        assert "outline" in rooms[0]
+        # XVMC (v2.7.0): rooms is a dict keyed by display name
+        assert isinstance(rooms, dict)
+        assert "Kitchen" in rooms
+        room = rooms["Kitchen"]
+        assert room["name"] == "Kitchen"
+        assert isinstance(room["outline"], list)
+        assert isinstance(room["outline"][0], list)  # [x, y] arrays not {x, y} dicts
+        assert "icon" in room
+        assert "x" in room and "y" in room
+        # calibration_points key (renamed from "calibration" for XVMC compat)
+        assert "calibration_points" in attrs
+        assert "calibration" not in attrs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

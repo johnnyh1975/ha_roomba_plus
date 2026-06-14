@@ -145,7 +145,7 @@ class TestF22aObservedZonesConditions:
     def test_issue_dismissed_when_stuck_events_exist(self):
         from custom_components.roomba_plus.grid_store import GridStore
         gs = GridStore()
-        gs._stuck[(0, 0)] = 5
+        gs._stuck[(0, 0)] = {"count": 5, "times": []}
         assert gs.stuck_event_count > 0
         # Condition: delete issue
 

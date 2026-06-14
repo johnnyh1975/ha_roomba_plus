@@ -24,7 +24,7 @@ def _make_entity(cell_count: int = 5, stuck_count: int = 2):
 
     gs = GridStore()
     gs._cells = {(i, 0): 0.5 for i in range(cell_count)}
-    gs._stuck = {(0, 0): stuck_count}
+    gs._stuck = {(0, 0): {"count": stuck_count, "times": []}}
 
     roomba = MagicMock()
     roomba.master_state = {"state": {"reported": {}}}

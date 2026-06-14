@@ -147,13 +147,37 @@ class TestNoHardcodedNonEnglishNames:
         )
 
     def test_sensor_description_translation_keys_exist_in_strings(self):
-        """Every translation_key used in sensor.py must have an entry in en.json."""
-        from custom_components.roomba_plus.sensor import SENSORS as SENSOR_DESCRIPTIONS
+        """Every translation_key in SENSORS + CLOUD_RAW_SENSORS must be in en.json."""
+        from custom_components.roomba_plus.sensor import (
+            SENSORS as SENSOR_DESCRIPTIONS,
+            CLOUD_RAW_SENSORS,
+        )
         translations = _load_translations()
         en_sensor = translations.get("en", {}).get("entity", {}).get("sensor", {})
         bad = []
-        for desc in SENSOR_DESCRIPTIONS:
+        for desc in list(SENSOR_DESCRIPTIONS) + list(CLOUD_RAW_SENSORS):
             tk = getattr(desc, "translation_key", None)
             if tk and tk not in en_sensor:
                 bad.append(f"  sensor/{tk!r} used in code but missing from en.json")
         assert not bad, "Missing translation entries:\n" + "\n".join(bad)
+
+    def test_strings_json_matches_en_json_for_sensors(self):
+        """strings.json entity.sensor must be a superset of en.json entity.sensor.
+
+        TRN6 (v2.7.0): strings.json is the HA-facing contract; en.json is the
+        English translation. Any key present in en.json must also be present in
+        strings.json to ensure the card editor and translation tools see it.
+        """
+        import json
+        from pathlib import Path
+        root = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+        strings = json.loads((root / "strings.json").read_text())
+        en = json.loads((root / "translations" / "en.json").read_text())
+
+        strings_keys = set(strings.get("entity", {}).get("sensor", {}).keys())
+        en_keys = set(en.get("entity", {}).get("sensor", {}).keys())
+        missing = sorted(en_keys - strings_keys)
+        assert not missing, (
+            f"Keys in en.json but missing from strings.json: {missing}\n"
+            "Add them to strings.json entity.sensor."
+        )
