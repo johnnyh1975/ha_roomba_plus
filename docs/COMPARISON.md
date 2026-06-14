@@ -18,7 +18,7 @@
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, mission log | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 1884 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 1996 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -56,7 +56,7 @@
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6 ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ 1884 tests ★ | ✅ | ❌ |
+| Unit tests | ✅ 1996 tests ★ | ✅ | ❌ |
 | Quality Scale | **Gold ★** | Silver | **Bronze** |
 | Translations | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only | ⚠️ EN only |
 
@@ -80,6 +80,7 @@
 | Mission recharge / expire time | ✅ all firmware families ★ | ❌ | ✅ |
 | Mission log (persistent, 365 entries) | ✅ hass.storage, `query_by_day()` ★ | ❌ | ❌ |
 | Maintenance — filter / brushes | ✅ hours remaining + wear rate + reset buttons ★ | ❌ | ❌ |
+| Maintenance — wheel / contacts / bin | ✅ last-cleaned timestamp + reset service (v2.7+) ★ | ❌ | ❌ |
 | Navigation quality (`l_squal`) | ✅ opt-in, VSLAM robots ★ | ❌ | ❌ |
 | Wi-Fi — RSSI / SNR / Noise | ✅ all three, opt-in | ❌ | ✅ all three, enabled by default ★ |
 | IP address | ✅ opt-in | ❌ | ✅ |
@@ -88,7 +89,7 @@
 | Edge cleaning (readable) | ✅ | ❌ | ✅ |
 | Clean Base status | ✅ | ❌ | ✅ 12 state codes |
 | Mop sensors — Braava m6 | ✅ 5 sensors: clean mode, tank status, ARS behavior, pad type, tank level ★ | ❌ | ✅ 5 sensors ★ |
-| Cloud diagnostics | ✅ 6 sensors: completion rate, recharges, evacuations, dirt events, error code + time ★ | ❌ | ❌ |
+| Cloud diagnostics | ✅ 4 consolidated sensors: performance, analytics 30d, Wi-Fi health, event counts (v2.7+) ★ | ❌ | ❌ |
 | Cloud lifetime stats | ✅ area, time, mission count ★ | ❌ | ❌ |
 | Map learning / completeness | ✅ v2.6+, SMART + cloud ★ | ❌ | ❌ |
 | Zone summary (clean / keepout / observed) | ✅ v2.6+, SMART + cloud ★ | ❌ | ❌ |
@@ -134,7 +135,7 @@
 | HA area mapping (`vacuum.clean_area`) | ✅ v2.4+, HA 2026.3+, SMART + cloud | ❌ | ❌ |
 | Automatic room detection (900-series) | ✅ gap segmentation + EMA confidence ★ | ❌ | ❌ |
 | Door-width calibration | ✅ ★ | ❌ | ❌ |
-| xiaomi-vacuum-map-card support | ✅ `calibration` + `rooms` on both map entities (v2.3+) ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
+| xiaomi-vacuum-map-card support | ✅ `calibration_points` + `rooms` on both map entities, auto-detected by card (v2.7+) ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
 
 ---
 
@@ -148,6 +149,8 @@
 | Weekday-aware dirt baseline | ✅ v2.5+ ★ | ❌ | ❌ |
 | Optimal clean window sensor | ✅ v2.4+ ★ | ❌ | ❌ |
 | Mission anomaly detection | ✅ v2.5+ ★ | ❌ | ❌ |
+| Stuck pattern time-correlation | ✅ v2.7+ — Repair Issue when same spot/time recurs ★ | ❌ | ❌ |
+| Robot health score (0–100) | ✅ v2.7+ — composite battery/nav/trend/anomaly/stuck ★ | ❌ | ❌ |
 | Self-calibrating maintenance thresholds | ✅ v2.5+ ★ | ❌ | ❌ |
 | Performance sensors (speed, dirt density, coverage) | ✅ cloud, opt-in ★ | ❌ | ❌ |
 | Wear rate anomaly detection | ✅ ★ | ❌ | ❌ |
@@ -168,17 +171,17 @@
 | `stale-devices` | ✅ ★ | ✅ | ❌ |
 | `strict-typing` | ✅ ★ | ✅ | ❌ |
 | Device triggers | ✅ 6 triggers ★ | ❌ | ❌ |
-| Repair Issues | ✅ 9 issue types ★ | ❌ | ❌ |
+| Repair Issues | ✅ 10 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
-| Integration tests | ✅ 1884 pytest tests ★ | ✅ | ❌ |
+| Integration tests | ✅ 1996 pytest tests ★ | ✅ | ❌ |
 | GitHub Actions CI | ✅ ★ | ❌ | ✅ push + PR + nightly hassfest + HACS validation |
 
 ---
 
 ## Notes
 
-**¹ Roomba+ map approach** renders entirely in-process using the local MQTT `pose` stream with no external container. It stopped working on firmware 3.20+ for robots where iRobot removed local `pose` reporting. For robots on older firmware the live cleaning path renders accurately and persists across HA restarts via `hass.storage`. Smart Map robots gain UMF room polygon overlays from v2.3+.
+**¹ Roomba+ map approach** renders entirely in-process using the local MQTT `pose` stream with no external container. From v2.7.0, robots on lewis firmware (i7+/i8+ on 22.x) that do not broadcast local pose data are now bootstrapped automatically from cloud traversal events.  It stopped working on firmware 3.20+ for robots where iRobot removed local `pose` reporting entirely. For robots on older firmware the live cleaning path renders accurately and persists across HA restarts via `hass.storage`. Smart Map robots gain UMF room polygon overlays from v2.3+.
 
 **² roomba_rest980 controls:** Cleaning passes are exposed as a staging `CleanRoomPasses` Select entity — one per room and one per zone. Selecting "One Pass" or "Two Passes" stages the value locally but does NOT send a command to the robot; cleaning only begins when the user presses Start. Edge cleaning, always finish, and carpet boost have no HA entity at all — REST API only.
 
