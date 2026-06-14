@@ -283,17 +283,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             # Bug 6 fix: guard against empty polygon (vacuous all() on [])
             if not poly_pose or not all(p is not None for p in poly_pose):
                 continue
-            poly_px   = [self._renderer._mm_to_px_fit(x, y) for x, y in poly_pose]
-            if not poly_px:
-                continue
             room_name = rid_to_name.get(rid, rid)
-            cx = sum(px for px, _ in poly_px) / len(poly_px)
-            cy = sum(py for _, py in poly_px) / len(poly_px)
+            # XVMC-COORDS: outline and centroid in pose-space mm (not pixels).
+            # XVMC applies calibration (pose mm → display px) itself.
+            cx = sum(x for x, _ in poly_pose) / len(poly_pose)
+            cy = sum(y for _, y in poly_pose) / len(poly_pose)
             icon = REGION_TYPE_ICONS.get(
                 rid_to_type.get(rid, "default"), REGION_TYPE_ICONS["default"]
             )
             rooms[room_name] = {
-                "outline": [[px, py] for px, py in poly_px],
+                "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
                 "icon":    icon,
                 "x":       cx,
@@ -838,7 +837,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             # Fallback: render directly in UMF-space coordinates
             _LOGGER.debug(
                 "RoombaRoomsImage: aligner not yet aligned — rendering in UMF space "
-                "(alignment pending, calibration/rooms attributes withheld)"
+                "(alignment_pending=True, fallback calibration active)"
             )
             all_coords = [
                 pt for poly in polygons_umf.values() for pt in poly
@@ -1003,17 +1002,18 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                     continue
             else:
                 poly_coords = poly_umf  # type: ignore[assignment]
-            poly_px   = [self._to_px_last(x, y) for x, y in poly_coords]
-            if not poly_px:  # Bug 6 fix: guard against empty polygon
+            if not poly_coords:  # Bug 6 fix: guard against empty polygon
                 continue
             room_name = rid_to_name.get(rid, rid)
-            cx = sum(px for px, _ in poly_px) / len(poly_px)
-            cy = sum(py for _, py in poly_px) / len(poly_px)
+            # XVMC-COORDS: outline and centroid in vacuum mm (pose or UMF space).
+            # XVMC applies calibration (vacuum mm → display px) itself.
+            cx = sum(x for x, _ in poly_coords) / len(poly_coords)
+            cy = sum(y for _, y in poly_coords) / len(poly_coords)
             icon = REGION_TYPE_ICONS.get(
                 rid_to_type.get(rid, "default"), REGION_TYPE_ICONS["default"]
             )
             rooms[room_name] = {
-                "outline": [[px, py] for px, py in poly_px],
+                "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
                 "icon":    icon,
                 "x":       cx,

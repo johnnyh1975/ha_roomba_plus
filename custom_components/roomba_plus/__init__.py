@@ -2080,6 +2080,13 @@ def _extract_traversal_umf_positions(
         if missions_with_traversals >= min_missions:
             return list(door_candidates)
 
+    # GS-LOG: explicit log so users can see why bootstrap hasn't fired
+    _LOGGER.info(
+        "GS-SMART-UMF: %d/%d missions with traversal events in last %d cloud records "
+        "— need %d more complete room-specific cleans for bootstrap",
+        missions_with_traversals, min_missions, len(records),
+        max(0, min_missions - missions_with_traversals),
+    )
     return []
 
 
@@ -2125,6 +2132,30 @@ async def _async_bootstrap_umf_aligner(
     positions = _extract_traversal_umf_positions(
         coordinator.raw_records, aligner
     )
+
+    # GS-QUICK (v2.7.1): when last 100 records lack enough traversal missions
+    # (e.g. recent error 224 floods), paginate further back in history.
+    if not positions:
+        blid = entry.data.get(CONF_BLID, "")
+        oldest_ts = min(
+            (r.get("startTime") for r in coordinator.raw_records if r.get("startTime")),
+            default=None,
+        )
+        if blid and oldest_ts:
+            _LOGGER.info(
+                "GS-SMART-UMF: fetching older cloud records for %s (before ts=%s)",
+                blid, oldest_ts,
+            )
+            try:
+                cloud_api = coordinator.api
+                older = await cloud_api.get_mission_history(
+                    blid, count=500, before_ts=oldest_ts
+                )
+                if older:
+                    positions = _extract_traversal_umf_positions(older, aligner)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug("GS-SMART-UMF: paginated fetch failed — %s", exc)
+
     if not positions:
         return
 
@@ -2621,6 +2652,12 @@ async def async_setup_entry(
                     async_check_stuck_pattern(hass, config_entry),
                     name="roomba_plus_l7_stuck_pattern_check",
                 )
+            # v2.7.1 SMBERR — SMBus battery communication error check
+            from .repairs import async_check_smberr
+            hass.async_create_task(
+                async_check_smberr(hass, config_entry),
+                name="roomba_plus_smberr_check",
+            )
             # v2.7.0 GS-SMART-UMF — bootstrap alignment for robots without local pose
             if (
                 config_entry.runtime_data.map_capability == MapCapability.SMART

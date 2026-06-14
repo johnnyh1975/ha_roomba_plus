@@ -552,6 +552,15 @@
       },
       "robot_health_score": {
         "name": "Robot health score"
+      },
+      "lifetime_completion_rate": {
+        "name": "Lifetime completion rate"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Battery BMS cycle count"
+      },
+      "battery_age_days": {
+        "name": "Battery age"
       }
     },
     "binary_sensor": {
@@ -815,6 +824,10 @@
     "stuck_pattern": {
       "title": "Stuck pattern detected",
       "description": "Your Roomba gets stuck near {room} most often on {time}. Consider clearing the area before those cleans or adjusting your cleaning schedule."
+    },
+    "smberr_high": {
+      "title": "High battery SMBus errors detected",
+      "description": "The robot has logged {count} SMBus communication errors between the main board and the battery chip. This often indicates worn dock contacts or an aging battery.\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. If errors remain high after cleaning, the battery may need replacement."
     }
   },
   "device_automation": {

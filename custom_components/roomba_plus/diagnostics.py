@@ -11,7 +11,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import roomba_reported_state
-from .const import DIAG_REDACT_KEYS, DOMAIN
+from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODES
 from .models import MapCapability, RoombaConfigEntry
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
@@ -102,7 +102,11 @@ async def async_get_config_entry_diagnostics(
         # Error state
         "error": {
             "error_code": roomba.error_code,
-            "error_message": roomba.error_message,
+            "error_message": (
+                ERROR_CODES[roomba.error_code]["label"]
+                if roomba.error_code and roomba.error_code in ERROR_CODES
+                else roomba.error_message
+            ),
         },
 
         # Device identity (non-sensitive capability / version info)

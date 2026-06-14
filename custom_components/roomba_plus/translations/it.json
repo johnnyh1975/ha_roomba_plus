@@ -538,6 +538,15 @@
       },
       "robot_health_score": {
         "name": "Punteggio di salute del robot"
+      },
+      "lifetime_completion_rate": {
+        "name": "Tasso di completamento (vita)"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Cicli batteria (BMS)"
+      },
+      "battery_age_days": {
+        "name": "Età batteria"
       }
     },
     "binary_sensor": {
@@ -801,6 +810,10 @@
     "stuck_pattern": {
       "title": "Rilevato schema di incastro",
       "description": "Il tuo Roomba si blocca vicino a {room} più spesso {time}. Valuta di liberare l'area prima di quelle pulizie o di modificare la programmazione."
+    },
+    "smberr_high": {
+      "title": "Rilevati molti errori SMBus della batteria",
+      "description": "Il robot ha registrato {count} errori di comunicazione SMBus. Pulire i contatti di ricarica. Se gli errori persistono, potrebbe essere necessario sostituire la batteria."
     }
   },
   "device_automation": {

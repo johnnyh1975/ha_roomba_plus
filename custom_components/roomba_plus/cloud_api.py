@@ -346,14 +346,31 @@ class IrobotCloudApi:
         )
         return await self._aws_get(url, {"activeDetails": "2"})
 
-    async def get_mission_history(self, blid: str) -> dict[str, Any]:
-        """Return mission history (lifetime stats) for a robot."""
+    async def get_mission_history(
+        self,
+        blid: str,
+        count: int = 100,
+        before_ts: int | None = None,
+    ) -> dict[str, Any]:
+        """Return mission history for a robot.
+
+        Args:
+            blid:      Robot BLID.
+            count:     Maximum number of records to return (default 100).
+            before_ts: If set, return only records with startTime < before_ts.
+                       Used by GS-QUICK to paginate deeper into history when
+                       the last 100 records lack enough traversal missions.
+        """
         url = f"{self._deployment['httpBaseAuth']}/v1/{blid}/missionhistory"
-        return await self._aws_get(url, {
+        params: dict[str, Any] = {
             "app_id": f"IOS-{self._app_id}",
             "filterType": "omit_quickly_canceled_not_scheduled",
             "supportedDoneCodes": "dndEnd,returnHomeEnd",
-        })
+            "count": str(count),
+        }
+        if before_ts is not None:
+            params["before"] = str(before_ts)
+        return await self._aws_get(url, params)
 
     async def get_favorites(self) -> list[dict[str, Any]]:
         """Return user-defined favorite cleaning routines."""

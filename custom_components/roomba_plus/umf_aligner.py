@@ -268,9 +268,14 @@ class UmfAligner:
 
         xs = [p[0] for p in all_pose]
         ys = [p[1] for p in all_pose]
+        # Three bounding-box corners — all guaranteed to map inside the
+        # rendered 600×600 image regardless of dock position.
+        # Previously used (0, 0) as first anchor (dock origin) which maps
+        # outside the image for corner-docked robots (S9+/i7+ against a wall),
+        # corrupting XVMC's affine calibration transform.  (v2.7.2 fix)
         anchors_mm: list[tuple[float, float]] = [
-            (0.0,    0.0),
             (min(xs), min(ys)),
+            (max(xs), min(ys)),
             (max(xs), max(ys)),
         ]
         result = []

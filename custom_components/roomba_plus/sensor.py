@@ -98,6 +98,11 @@ class RoombaSensorDescription(SensorEntityDescription):
     threshold_fn: Callable[[IRobotEntity], int | None] = field(
         default_factory=lambda: lambda _: None
     )
+    # v2.7.1 — optional extra attributes beyond what RoombaSensor.extra_state_attributes
+    # provides by default. Merged into the default attributes dict when set.
+    extra_attributes_fn: Callable[[IRobotEntity], dict[str, Any]] | None = field(
+        default=None
+    )
 
 
 def _carpet_boost_mode(entity: IRobotEntity) -> str:
@@ -656,6 +661,25 @@ def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
 _EOL_THRESHOLD = 65.0  # % — typical lithium end-of-life
 
 
+def _battery_age_days(entity: "IRobotEntity") -> StateType:
+    """Return battery age in days from batInfo.mDate (i/s-series only).
+
+    mDate format: 'YYYY-M-D' (e.g. '2019-5-17' or '2022-10-24').
+    Returns None when mDate is absent or unparseable.
+    """
+    bat_info = entity.vacuum_state.get("batInfo") or {}
+    mdate_str = bat_info.get("mDate")
+    if not mdate_str:
+        return None
+    try:
+        from datetime import date
+        parts = [int(p) for p in mdate_str.split("-")]
+        manufacture_date = date(parts[0], parts[1], parts[2])
+        return (dt_util.now().date() - manufacture_date).days
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
 def _estcap_to_mah(entity: "IRobotEntity") -> float | None:
     """Return the robot's current estimated capacity in mAh, applying the
     9-series BMS scale when the profile requires it.
@@ -844,14 +868,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,  # F7h: was MEASUREMENT; lifetime counter
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: (
-            # nLithChrg / nNimhChrg: 900-series and some older firmware.
-            # nAvail: i/s/j-series (lewis firmware) — the correct cycle counter
-            # for these models. All three map to the same concept: total charge
-            # cycles completed. nAvail is tried last so explicit lithium/NiMH
-            # counters take precedence when present.
-            e.battery_stats.get("nLithChrg")
-            or e.battery_stats.get("nNimhChrg")
-            or e.battery_stats.get("nAvail")
+            # 9-series (v2.4.x firmware): nLithChrg + nNimhChrg present in bbchg3.
+            # Sum both because mixed chemistry replacements accumulate in each field.
+            (e.battery_stats.get("nLithChrg") or 0) + (e.battery_stats.get("nNimhChrg") or 0)
+            if "nLithChrg" in e.battery_stats
+            # i/s-series (lewis/soho firmware): nLithChrg/nNimhChrg absent from bbchg3.
+            # batInfo.cCount is the definitive BMS chip cycle counter (confirmed June 2026:
+            # i7+ cCount=779 vs i8+ cCount=276 — correlates correctly with mission count).
+            # nAvail on i/s-series has different semantics and is NOT a cycle counter.
+            else e.vacuum_state.get("batInfo", {}).get("cCount")
         ),
     ),
 
@@ -922,6 +947,66 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: e.mission_stats.get("aMssnM"),
+    ),
+
+    # LOCAL-RATE — lifetime completion rate from bbmssn (no cloud required, all robots)
+    RoombaSensorDescription(
+        key="lifetime_completion_rate",
+        translation_key="lifetime_completion_rate",
+        name="Missions – Lifetime completion rate",
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        available_fn=lambda e: bool(e.mission_stats.get("nMssn")),
+        value_fn=lambda e: (
+            round(
+                e.mission_stats.get("nMssnOk", 0)
+                / max(e.mission_stats.get("nMssn", 1), 1)
+                * 100,
+                1,
+            )
+            if e.mission_stats.get("nMssn")
+            else None
+        ),
+        extra_attributes_fn=lambda e: {
+            "ok":             e.mission_stats.get("nMssnOk"),
+            "cancelled":      e.mission_stats.get("nMssnC"),
+            "failed":         e.mission_stats.get("nMssnF"),
+            "total":          e.mission_stats.get("nMssn"),
+            "avg_mission_min": e.mission_stats.get("aMssnM"),
+            "avg_cycle_min":   e.mission_stats.get("aCycleM"),
+        },
+    ),
+
+    # BAT-INFO sensors (i/s-series only — batInfo absent on 9-series firmware)
+
+    RoombaSensorDescription(
+        key="battery_cycle_count_bms",
+        translation_key="battery_cycle_count_bms",
+        name="Battery – BMS cycle count",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        available_fn=lambda e: e.vacuum_state.get("batInfo") is not None,
+        value_fn=lambda e: e.vacuum_state.get("batInfo", {}).get("cCount"),
+        extra_attributes_fn=lambda e: {
+            "manufacturer": e.vacuum_state.get("batInfo", {}).get("mName"),
+            "is_oem":       e.vacuum_state.get("batInfo", {}).get("mName") == "PanasonicEnergy",
+        },
+    ),
+
+    RoombaSensorDescription(
+        key="battery_age_days",
+        translation_key="battery_age_days",
+        name="Battery – Age",
+        native_unit_of_measurement="d",
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        available_fn=lambda e: bool(
+            (e.vacuum_state.get("batInfo") or {}).get("mDate")
+        ),
+        value_fn=lambda e: _battery_age_days(e),
     ),
 
     # GROUP 5 — Opt-in (DIAGNOSTIC, disabled by default)
@@ -1909,6 +1994,10 @@ class RoombaSensor(IRobotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose sensor-specific attributes used by the Lovelace card."""
         key = self.entity_description.key
+        # v2.7.1: extra_attributes_fn takes priority over generic attribute logic
+        extra_fn = self.entity_description.extra_attributes_fn
+        if extra_fn is not None:
+            return extra_fn(self)
         # v1.7.0 L2: threshold_hours for consumable remaining sensors
         threshold = self.entity_description.threshold_fn(self)
         if threshold is not None:
@@ -3175,6 +3264,25 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                 result.append(est.get(pass_key))
         return result
 
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _elapsed_sec(mts: Any, phase: str) -> float:
+        """Return elapsed run seconds including current in-progress live delta.
+
+        v2.7.2 (MP-ELAPSED-FIX): previously only native_value added the live
+        delta; extra_state_attributes used mts.run_sec only, causing
+        elapsed_run_min to freeze and current_room/next_room to lag on lewis
+        firmware that sends cleanMissionStatus only on state changes.
+        """
+        import time as _time_mod
+        elapsed = mts.run_sec
+        if phase == "run" and mts._last_phase_ts > 0:
+            live_delta = int(_time_mod.monotonic() - mts._last_phase_ts)
+            if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
+                elapsed += live_delta
+        return elapsed
+
     # ── Sensor state ──────────────────────────────────────────────────────────
 
     async def async_added_to_hass(self) -> None:
@@ -3211,15 +3319,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         if mts is None or mts.mission_id is None:
             return None
 
-        # Live elapsed: add current in-progress delta to stored run_sec.
-        # This ensures smooth progress even when MQTT messages are infrequent
-        # (e.g. lewis firmware only sends cleanMissionStatus on state changes).
-        import time as _time_mod
-        elapsed = mts.run_sec
-        if phase == "run" and mts._last_phase_ts > 0:
-            live_delta = int(_time_mod.monotonic() - mts._last_phase_ts)
-            if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
-                elapsed += live_delta
+        # Live elapsed via shared helper — same calculation used by extra_state_attributes.
+        elapsed = self._elapsed_sec(mts, phase)
 
         planned_order: list[str] = _get_planned_room_order(data)
         if not planned_order:
@@ -3260,7 +3361,9 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             return {}
 
         planned_order: list[str] = _get_planned_room_order(data)
-        elapsed = mts.run_sec
+        # v2.7.2 (MP-ELAPSED-FIX): use live-delta elapsed so elapsed_run_min
+        # and current_room/next_room stay smooth between MQTT messages.
+        elapsed = self._elapsed_sec(mts, phase)
         estimates = self._room_estimates(planned_order) if planned_order else []
 
         # Determine current and next room from elapsed
@@ -3287,9 +3390,12 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                 current_room = planned_order[-1]
 
         return {
-            "current_room": current_room,
-            "next_room": next_room,
-            "elapsed_run_min": round(elapsed / 60) if elapsed else 0,
+            # v2.7.2 (MP-ELAPSED-FIX): prefer estimate-based room when the
+            # calculation succeeded (all estimates available and elapsed > 0).
+            # MTS value is the fallback for when no per-room estimates exist.
+            "current_room": current_room if current_room is not None else mts.current_room,
+            "next_room":    next_room    if current_room is not None else mts.next_room,
+            "elapsed_run_min": round(elapsed / 60, 1),
             "estimated_remaining_min": estimated_remaining_min,
             "room_sequence": planned_order,
         }

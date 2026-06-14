@@ -295,14 +295,25 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
         state = roomba_reported_state(data.roomba)
 
-        cloud_pmap_id: str | None = None
-        if data.has_cloud:
+        # v2.7.2 (PMAP-MULTI): For robots with multiple Smart Maps the cloud
+        # coordinator iterates pmaps[] and returns the first pmap_id found,
+        # which may be an old/inactive map.  Local MQTT state.pmaps always
+        # contains only the currently active map — prefer it at call time.
+        local_pmaps: list = state.get("pmaps", [])
+        local_active_pmap_id: str | None = (
+            next(iter(local_pmaps[0]), None) if local_pmaps else None
+        )
+
+        cloud_pmap_id: str | None = local_active_pmap_id
+        if not cloud_pmap_id and data.has_cloud:
             cloud_pmap_id = data.cloud_coordinator.active_pmap_id
-            if cloud_pmap_id:
-                _LOGGER.debug(
-                    "clean_room: using cloud pmap_id %s for %s",
-                    cloud_pmap_id[:12], entity_id,
-                )
+        if cloud_pmap_id:
+            _LOGGER.debug(
+                "clean_room: active pmap_id=%s (source=%s) for %s",
+                cloud_pmap_id[:12],
+                "local_mqtt" if local_active_pmap_id else "cloud",
+                entity_id,
+            )
 
         not_ready: int = state.get("cleanMissionStatus", {}).get("notReady", 0)
         if not_ready & 64:

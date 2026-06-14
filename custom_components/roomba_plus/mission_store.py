@@ -597,9 +597,24 @@ class MissionStore:
         """Copy missing analytics fields from a cloud record into a local record.
 
         Only copies when the local field is absent or None — never overwrites.
+        Exception: error 224 (map localisation failure) — when the cloud record
+        reveals pauseId=224 and the local result is 'stuck', correct the result
+        to 'error'. Error 224 is not a physical stuck: the robot aborts in
+        under a second and returns to dock (runM=0, sqft=0). The MQTT mission
+        end packet may not carry the error code reliably on lewis firmware.
+
         Returns True if any field was written.
         """
         wrote = False
+
+        # B1 — error 224 result correction (before generic scalar merge).
+        pause_id = cloud.get("pauseId", 0) or 0
+        if pause_id == 224 and local.get("result") == "stuck":
+            local["result"] = "error"
+            if local.get("error_code") is None:
+                local["error_code"] = 224
+            wrote = True
+
         for field in _CLOUD_MERGE_SCALAR:
             if local.get(field) is None and cloud.get(field) is not None:
                 local[field] = cloud[field]

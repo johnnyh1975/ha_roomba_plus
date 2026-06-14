@@ -892,3 +892,52 @@ async def async_check_mission_anomaly(
         ir.async_delete_issue(
             hass, DOMAIN, f"mission_anomaly_{config_entry.entry_id}"
         )
+
+
+async def async_check_smberr(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """SMBERR — Fire or clear the smberr_high Repair Issue.
+
+    bbchg.smberr counts SMBus communication errors between the main board and
+    the battery BMS chip. High counts correlate with dock contact degradation
+    or an aging battery pack. Threshold: >10 000 errors.
+
+    Confirmed field data (June 2026):
+      i7+ (7-year battery, nLithF=30): smberr=50 432  → issue fires
+      i8+ (3.5-year battery, nLithF=0): smberr=0      → no issue
+
+    Gate: bbchg.smberr key present (i/s-series and 9-series bbchg variants both
+    checked — 9-series bbchg has a different schema without smberr, so the key
+    presence check is the natural gate).
+    """
+    data = config_entry.runtime_data
+    vacuum_state = data.vacuum.master_state.get("state", {}).get("reported", {})
+    bbchg = vacuum_state.get("bbchg", {}) or {}
+
+    if "smberr" not in bbchg:
+        return  # Field absent — old firmware / 9-series without smberr
+
+    smberr: int = bbchg.get("smberr", 0) or 0
+    issue_id = f"smberr_high_{config_entry.entry_id}"
+    _SMBERR_THRESHOLD = 10_000
+
+    _LOGGER.debug(
+        "smberr check: smberr=%d (threshold=%d) for %s",
+        smberr, _SMBERR_THRESHOLD, config_entry.entry_id,
+    )
+
+    if smberr > _SMBERR_THRESHOLD:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="smberr_high",
+            translation_placeholders={"count": f"{smberr:,}"},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)

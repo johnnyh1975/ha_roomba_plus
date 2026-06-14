@@ -538,6 +538,15 @@
       },
       "robot_health_score": {
         "name": "Puntuación de salud del robot"
+      },
+      "lifetime_completion_rate": {
+        "name": "Tasa de finalización (vida)"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Ciclos batería (BMS)"
+      },
+      "battery_age_days": {
+        "name": "Edad batería"
       }
     },
     "binary_sensor": {
@@ -801,6 +810,10 @@
     "stuck_pattern": {
       "title": "Patrón de atasco detectado",
       "description": "Su Roomba se atasca cerca de {room} con mayor frecuencia {time}. Considere despejar el área antes de esas limpiezas o ajustar su programación."
+    },
+    "smberr_high": {
+      "title": "Muchos errores SMBus de batería detectados",
+      "description": "El robot ha registrado {count} errores de comunicación SMBus. Limpie los contactos de carga. Si los errores persisten, puede que sea necesario reemplazar la batería."
     }
   },
   "device_automation": {

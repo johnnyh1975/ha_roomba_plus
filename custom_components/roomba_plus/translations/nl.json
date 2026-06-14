@@ -538,6 +538,15 @@
       },
       "robot_health_score": {
         "name": "Gezondheidsscore robot"
+      },
+      "lifetime_completion_rate": {
+        "name": "Voltooiingspercentage (leven)"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Batterijcycli (BMS)"
+      },
+      "battery_age_days": {
+        "name": "Batterijleeftijd"
       }
     },
     "binary_sensor": {
@@ -801,6 +810,10 @@
     "stuck_pattern": {
       "title": "Vastlooppatroon gedetecteerd",
       "description": "Uw Roomba loopt het vaakst vast bij {room}, meestal {time}. Overweeg het gebied vrij te maken voor die schoonmaakbeurten of uw schema aan te passen."
+    },
+    "smberr_high": {
+      "title": "Veel SMBus-accufouten gedetecteerd",
+      "description": "De robot heeft {count} SMBus-communicatiefouten geregistreerd. Reinig de laadcontacten. Als de fouten aanhouden, moet de accu mogelijk worden vervangen."
     }
   },
   "device_automation": {

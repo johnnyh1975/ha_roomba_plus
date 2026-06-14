@@ -534,6 +534,15 @@
       },
       "robot_health_score": {
         "name": "Roboter-Gesundheitsscore"
+      },
+      "lifetime_completion_rate": {
+        "name": "Abschlussrate (Lebenszeit)"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Akkuzyklen (BMS-Chip)"
+      },
+      "battery_age_days": {
+        "name": "Akkualter"
       }
     },
     "binary_sensor": {
@@ -797,6 +806,10 @@
     "stuck_pattern": {
       "title": "Steckenbleib-Muster erkannt",
       "description": "Ihr Roomba bleibt am häufigsten {time} in der Nähe von {room} stecken. Erwägen Sie, den Bereich vor diesen Reinigungen freizuräumen oder den Reinigungsplan anzupassen."
+    },
+    "smberr_high": {
+      "title": "Hohe Anzahl an SMBus-Akkufehlern erkannt",
+      "description": "Der Roboter hat {count} SMBus-Kommunikationsfehler zwischen der Hauptplatine und dem Akkuchip aufgezeichnet. Dies deutet oft auf verschlissene Ladekontakte oder einen alternden Akku hin.\n\n**Empfohlene Maßnahmen:**\n1. Reinigen Sie die Ladekontakte am Roboter und der Ladestation mit einem trockenen Tuch.\n2. Wenn die Fehler nach der Reinigung hoch bleiben, muss der Akku möglicherweise ersetzt werden."
     }
   },
   "device_automation": {
