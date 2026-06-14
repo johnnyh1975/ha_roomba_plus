@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.6.4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.7.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 1884 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 1996 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -165,6 +165,10 @@ Each robot is a separate integration entry with its own device, entities, and st
 | `roomba_plus.reset_filter` | All | Record filter replacement |
 | `roomba_plus.reset_brush` | All | Record brush / pad replacement |
 | `roomba_plus.reset_battery` | All | Record battery replacement |
+| `roomba_plus.reset_wheel_cleaning` | All | Record wheel module cleaning (v2.7+) |
+| `roomba_plus.reset_contact_cleaning` | All | Record charging contact cleaning (v2.7+) |
+| `roomba_plus.reset_bin_cleaning` | All | Record bin cleaning (v2.7+) |
+| `roomba_plus.reset_robot_profile` | All | Wipe learned calibration data (v2.7+) |
 | `roomba_plus.clean_sequence` | All | Start robot B when robot A finishes |
 
 **Device triggers** for automations:
@@ -278,21 +282,30 @@ show_state: false
 
 #### Rooms map — Smart Map robots (v2.3+)
 
-`image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). Both map entities expose `calibration` and `rooms` attributes for xiaomi-vacuum-map-card integration.
+`image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). On robots without local pose data (lewis firmware 22.52.10+), alignment now bootstraps automatically from cloud traversal events — no action required.
+
+Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[docs/xiaomi-vacuum-map-card.md](docs/xiaomi-vacuum-map-card.md)** for the full setup guide.
 
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
 map_source:
-  camera: image.roomba_rooms_map
+  camera: image.roomba_rooms_map    # or image.roomba_cleaning_map
 calibration_source:
-  camera: true                 # reads calibration attribute automatically
+  camera: true                      # reads calibration_points automatically
 map_modes:
   - template: vacuum_clean_segment
     service_call_schema:
       service: roomba_plus.clean_room
       service_data:
         entity_id: "[[entity_id]]"
+        room_name: "[[selection]]"
+        ordered: true
+    predefined_selections:
+      - id: Kitchen             # must match the room name exactly (case-insensitive)
+        label:
+          text: Kitchen
+```
         room_name: "[[selection]]"
         ordered: true
     predefined_selections:
@@ -329,6 +342,13 @@ map_modes:
 | `brush_last_replaced` | `reset_brush` | Vacuums |
 | `pad_last_replaced` | `reset_pad` | Braava |
 | `battery_last_replaced` | `reset_battery` | All |
+| `wheel_last_cleaned` | `reset_wheel_cleaning` | All (v2.7+) |
+| `contact_last_cleaned` | `reset_contact_cleaning` | All (v2.7+) |
+| `bin_last_cleaned` | `reset_bin_cleaning` | All (v2.7+) |
+
+**Calendar-based inspect tracking (v2.7+):** wheel module, charging contacts, and bin are cleaned on a calendar cadence rather than hours-of-use. Three new timestamp sensors and services track when each was last cleaned so you can build reminders from them.
+
+**Reset learned profile:** `roomba_plus.reset_robot_profile` wipes all self-calibrated baselines (dirt thresholds, maintenance intervals, coverage baseline) so the robot starts learning fresh after a move or major layout change. Mission history is unaffected.
 
 #### Maintenance due binary sensor
 
@@ -408,21 +428,28 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 
 Monitors each mission against the last 30 days of your robot's personal history. A Repair Issue is raised after two consecutive statistically unusual missions. Activates after 20 missions of history and clears automatically once missions return to normal.
 
+#### Stuck pattern time-correlation (v2.7+)
+
+Tracks the weekday and hour of every stuck event per grid cell. When a cell accumulates ≥ 8 stucks with more than 60 % concentrated in the same time slot, a **Repair Issue** is raised: *"Your Roomba gets stuck near Kitchen most often on Tuesday mornings."* Auto-clears when the pattern changes. Existing stuck data from v2.6.x migrates automatically.
+
 #### Performance sensors
 
 > ☁️ Requires cloud credentials
 
-| Sensor | Notes |
-|---|---|
-| Cleaning speed (sqft/min) | Median across recent missions |
-| Cleaning speed trend | `improving` / `stable` / `declining` |
-| Dirt density (events/m²) | `cause` attribute (`brush_wear` / `floor_dirty`); `by_room` attribute (v2.6) |
-| Recharge fraction (%) | Share of mission time spent recharging |
-| Coverage (%) | % of home baseline area cleaned, self-calibrating |
-| Edge coverage ratio | Fraction of cells near walls vs interior; `coverage_vs_baseline` attribute (v2.6) |
-| Total energy consumed (kWh) | State class `TOTAL_INCREASING` — eligible for HA Energy dashboard |
-| Wi-Fi signal floor (%) | Minimum signal seen during a mission |
-| Wi-Fi signal stability (%) | Variance across the mission — high = dead zone |
+**Consolidated analytics sensors (v2.7+, enabled by default):**
+
+| Sensor | State | Key attributes |
+|---|---|---|
+| `sensor.{name}_cleaning_performance` | Completion rate (%) | speed, trend, coverage_pct, clean_streak |
+| `sensor.{name}_cleaning_analytics_30d` | Cleaned area (m²) | time_h, dirt_density, recharge_pct |
+| `sensor.{name}_wifi_health` | Signal floor (%) | stability_pct |
+| `sensor.{name}_event_counts_30d` | Last error code | recharges, evacuations, dirt_events, error_time |
+
+The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt_density`) are now **disabled by default** on fresh installs. They remain active for existing users and will be removed in v3.0. A one-time warning is logged when they are read to guide migration.
+
+**Robot health score (v2.7+):**
+
+`sensor.{name}_robot_health_score` — composite 0–100 score combining battery retention, navigation efficiency, cleaning speed trend, anomaly rate, and stuck rate. Visible in the main sensor list (not diagnostic). Shows Unknown until 20 missions of history have accumulated.
 
 #### Map intelligence — Smart Map robots (v2.6+)
 
@@ -704,6 +731,7 @@ cards:
 |---|---|
 | [Feature comparison →](docs/COMPARISON.md) | Roomba+ vs HA Core vs roomba_rest980 |
 | [REST API →](docs/API.md) | Full endpoint reference with response shapes and examples |
+| [xiaomi-vacuum-map-card →](docs/xiaomi-vacuum-map-card.md) | Interactive room map card integration guide (v2.7+) |
 | [Troubleshooting →](docs/TROUBLESHOOTING.md) | Common problems grouped by topic |
 | [GitHub Releases →](https://github.com/johnnyh1975/ha_roomba_plus/releases) | Changelogs and release notes |
 

@@ -522,7 +522,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             self._config_entry.options.get(CONF_FLOOR) or None
             if self._config_entry else None
         )
-        return [
+        # Room segments (rid)
+        segments = [
             Segment(
                 id=f"{active_pmap_id}_{region['id']}",
                 name=region.get("name", region["id"]),
@@ -531,6 +532,22 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             for region in data.cloud_coordinator.regions
             if region.get("id")
         ]
+        # IA74-ZONE full (v2.7.0): zone segments (zid).
+        # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
+        # async_clean_segments can distinguish them from room segments.
+        # Zone type is surfaced as the group label for HA's mapping UI.
+        for zone in data.cloud_coordinator.zones:
+            zid = zone.get("id")
+            if not zid:
+                continue
+            zone_type = zone.get("zone_type", "zone")
+            zone_name = zone.get("name") or f"Zone {zid}"
+            segments.append(Segment(
+                id=f"{active_pmap_id}_zid_{zid}",
+                name=zone_name,
+                group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
+            ))
+        return segments
 
     async def async_clean_area(self, cleaning_area_ids: list[str]) -> None:
         """Handle vacuum.clean_area — VacuumEntityFeature.CLEAN_AREA (HA 2026.3+).
@@ -583,23 +600,24 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 translation_key="no_valid_segments",
             )
 
-        # Validate stored region IDs against the current cloud map.
-        # Region IDs can change after map retraining. HA stores segment IDs at
-        # "Map vacuum segments to areas" setup time — if the map was retrained
-        # since then, stored IDs may no longer exist in cc.regions.
-        # clean_room always fetches cc.regions live; we must do the same here.
-        #
-        # Auto-heal: for stale IDs, try to find the matching current ID by room
-        # name. smart_zone_labels maps old_id → user_label; cc.regions maps
-        # current_id → name. If they match (case-insensitive), the command can
-        # proceed without any user action. This is transparent — no Repair Issue,
-        # no error message for the user.
+        # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
+        # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping
+        # in async_get_segments().  Rooms are plain integers (e.g. "19").
+        _ZONE_PREFIX = "zid_"
+        raw_zone_ids = [r for r in region_ids if r.startswith(_ZONE_PREFIX)]
+        raw_room_ids = [r for r in region_ids if not r.startswith(_ZONE_PREFIX)]
+        # Extract the bare zone_id (strip "zid_" prefix)
+        bare_zone_ids = [z[len(_ZONE_PREFIX):] for z in raw_zone_ids]
+
+        # Validate + auto-heal room IDs against the current cloud map (zone IDs
+        # are stable across map retrains — no validation needed for them).
         current_regions = data.cloud_coordinator.regions
         current_region_ids: set[str] = {
             str(r["id"]) for r in current_regions if r.get("id")
         }
-        if current_region_ids:
-            stale = [rid for rid in region_ids if rid not in current_region_ids]
+        validated_room_ids = list(raw_room_ids)
+        if current_region_ids and raw_room_ids:
+            stale = [rid for rid in raw_room_ids if rid not in current_region_ids]
             if stale:
                 # Build name → current_id lookup from live cloud data
                 name_to_current: dict[str, str] = {
@@ -615,7 +633,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 for stale_rid in stale:
                     label = zone_labels.get(stale_rid, "")
                     current_id = name_to_current.get(label.casefold()) if label else None
-                    if current_id and current_id not in region_ids:
+                    if current_id and current_id not in raw_room_ids:
                         healed.append(current_id)
                         _LOGGER.info(
                             "async_clean_segments: auto-healed stale region %s → %s "
@@ -629,39 +647,37 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                             "Re-map vacuum segments to areas in HA to fix permanently.",
                             stale_rid, label or "<unlabeled>",
                         )
-                region_ids = [r for r in region_ids if r in current_region_ids] + healed
+                validated_room_ids = (
+                    [r for r in raw_room_ids if r in current_region_ids] + healed
+                )
 
-        if not region_ids:
+        if not validated_room_ids and not bare_zone_ids:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="no_valid_segments",
             )
 
-        no_auto = bool(self.vacuum_state.get("noAutoPasses", False))
-        two_pass = self._get_two_pass()
-        # vacuum.clean_area (HA Area cleaning) has no pass-mode UI — the HA spec
-        # does not expose a repeat/pass parameter for async_clean_segments.
-        # Always send Auto mode here so firmware does not reject the command.
-        # The Cleaning Passes select is honoured in clean_room and SmartZoneButton
-        # where the user explicitly controls pass mode per room.
         regions = [
             {
                 "region_id": rid,
                 "type": "rid",
                 "params": {"noAutoPasses": False, "twoPass": False},
             }
-            for rid in region_ids
+            for rid in validated_room_ids
+        ] + [
+            # IA74-ZONE full (v2.7.0): zones use type "zid" with bare zone_id
+            {
+                "region_id": zid,
+                "type": "zid",
+                "params": {"noAutoPasses": False, "twoPass": False},
+            }
+            for zid in bare_zone_ids
         ]
 
         from .services import _resolve_pmapv_id
         # Primary: cloud coordinator — always authoritative, never stale.
-        # lewis firmware (22.52.10+) does not broadcast pmaps updates via local
-        # MQTT after map changes, so the local state value can be an old pmapv
-        # that the robot no longer recognises → causes error 224 (localization
-        # failed). Cloud has the current last_user_pmapv_id.
         user_pmapv_id: str | None = data.cloud_coordinator.active_user_pmapv_id
         if not user_pmapv_id:
-            # Fallback: local MQTT state (works for robots that do broadcast pmaps)
             user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
         if user_pmapv_id is None:
             _LOGGER.warning(
@@ -669,12 +685,19 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 "state.pmaps for pmap %s — sending command without version ID",
                 active_pmap_id,
             )
-        params = {
+
+        # Bug 5 fix (v2.7.0): per field logs, including user_pmapv_id in pure
+        # zone (zid) commands causes error 224. Omit it when no room regions
+        # are present. Mixed room+zone commands retain it for room-ID validation.
+        include_pmapv = bool(validated_room_ids)
+
+        params: dict[str, Any] = {
             "ordered": 1,
             "pmap_id": active_pmap_id,
-            "user_pmapv_id": user_pmapv_id,
             "regions": regions,
         }
+        if include_pmapv and user_pmapv_id is not None:
+            params["user_pmapv_id"] = user_pmapv_id
         await self.hass.async_add_executor_job(
             self.vacuum.send_command,
             "start",

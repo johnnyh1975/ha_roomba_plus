@@ -72,7 +72,11 @@ class GridStore:
 
     def __init__(self) -> None:
         self._cells: dict[tuple[int, int], float] = {}   # (gx, gy) → EMA weight
-        self._stuck: dict[tuple[int, int], int]   = {}   # (gx, gy) → stuck count
+        # L7 (v2.7.0): _stuck extended from plain count to structured dict.
+        # Format: {(gx, gy): {"count": int, "times": [(weekday, hour), ...]}}
+        # "times" accumulates (weekday, hour) of each stuck event for pattern detection.
+        # Backward-compatible: async_load migrates plain-int v1 values to {"count": N, "times": []}.
+        self._stuck: dict[tuple[int, int], dict] = {}
         # P3: edge_coverage_ratio cache keyed by edge_depth_mm — invalidated when
         # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
         # can coexist safely if future callers use non-default parameters.
@@ -95,10 +99,17 @@ class GridStore:
                 for k, v in raw_cells.items()
             }
             raw_stuck = data.get("stuck", {})
-            self._stuck = {
-                (int(k.split(",")[0]), int(k.split(",")[1])): int(v)
-                for k, v in raw_stuck.items()
-            }
+            for k, v in raw_stuck.items():
+                cell = (int(k.split(",")[0]), int(k.split(",")[1]))
+                if isinstance(v, (int, float)):
+                    # v1 format: plain integer count — migrate to v2 struct
+                    self._stuck[cell] = {"count": int(v), "times": []}
+                elif isinstance(v, dict):
+                    # v2 format: structured dict with count + times list
+                    self._stuck[cell] = {
+                        "count": int(v.get("count", 0)),
+                        "times": [list(t) for t in v.get("times", [])],
+                    }
             _LOGGER.debug(
                 "GridStore: loaded %d cell(s), %d stuck cell(s) for %s",
                 len(self._cells), len(self._stuck), entry_id,
@@ -114,7 +125,10 @@ class GridStore:
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "cells": {f"{gx},{gy}": w for (gx, gy), w in self._cells.items()},
-            "stuck": {f"{gx},{gy}": c for (gx, gy), c in self._stuck.items()},
+            "stuck": {
+                f"{gx},{gy}": {"count": v["count"], "times": v["times"]}
+                for (gx, gy), v in self._stuck.items()
+            },
         })
 
     # ── Write ──────────────────────────────────────────────────────────────────
@@ -123,12 +137,16 @@ class GridStore:
         self,
         pose_points: list[tuple[float, float]],
         stuck_points: list[tuple[float, float]],
+        stuck_wh: tuple[int, int] | None = None,
     ) -> None:
         """Apply EMA decay to all cells, then add visit increments for this mission.
 
         Args:
             pose_points:  List of (x_mm, y_mm) robot positions during the mission.
             stuck_points: List of (x_mm, y_mm) positions where robot was stuck.
+            stuck_wh:     Optional (weekday, hour) of mission start in HA local time.
+                          Passed by the caller (image.py) which already has dt_util;
+                          grid_store.py remains HA-free per its design contract.
         """
         # 1. Decay all existing cells; prune below threshold
         # P3: cells are about to change — invalidate the edge ratio cache
@@ -147,10 +165,18 @@ class GridStore:
             cell = _mm_to_cell(x_mm, y_mm)
             self._cells[cell] = min(1.0, self._cells.get(cell, 0.0) + VISIT_INCREMENT)
 
-        # 3. Record stuck events
+        # 3. Record stuck events with optional time context
         for x_mm, y_mm in stuck_points:
             cell = _mm_to_cell(x_mm, y_mm)
-            self._stuck[cell] = self._stuck.get(cell, 0) + 1
+            if cell not in self._stuck:
+                self._stuck[cell] = {"count": 0, "times": []}
+            self._stuck[cell]["count"] += 1
+            if stuck_wh is not None:
+                times_list = self._stuck[cell]["times"]
+                times_list.append(list(stuck_wh))
+                # Cap times list at 200 entries to prevent unbounded growth
+                if len(times_list) > 200:
+                    self._stuck[cell]["times"] = times_list[-200:]
 
         _LOGGER.debug(
             "GridStore: update complete — %d cell(s), %d stuck cell(s)",
@@ -185,7 +211,7 @@ class GridStore:
             except (TypeError, ValueError):
                 continue
             if cell not in self._stuck:
-                self._stuck[cell] = STUCK_HOTSPOT_THRESHOLD
+                self._stuck[cell] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
                 seeded += 1
         return seeded
 
@@ -199,7 +225,7 @@ class GridStore:
     @property
     def stuck_event_count(self) -> int:
         """Total stuck events recorded."""
-        return sum(self._stuck.values())
+        return sum(v["count"] for v in self._stuck.values())
 
     def bounding_box_mm(self) -> tuple[float, float, float, float] | None:
         """Return (x_min, x_max, y_min, y_max) in mm, or None if no cells."""
@@ -257,7 +283,8 @@ class GridStore:
         distance_mm. room_name is always None — populated by UmfAligner in v2.3.
         """
         result = []
-        for (gx, gy), count in self._stuck.items():
+        for (gx, gy), v in self._stuck.items():
+            count = v["count"]
             if count < threshold:
                 continue
             x_mm, y_mm = _cell_to_mm(gx, gy)
@@ -273,6 +300,39 @@ class GridStore:
                 "source":      "stuck_events",
             })
         return sorted(result, key=lambda h: h["stuck_count"], reverse=True)
+
+    def stuck_pattern(
+        self,
+        threshold: int = 8,
+        dominant_pct: float = 0.60,
+    ) -> dict[tuple[int, int], tuple[int, int]] | None:
+        """L7 — return cells with a dominant (weekday, hour) stuck pattern.
+
+        Returns {cell: (weekday, hour)} for cells where:
+          - count >= threshold (default 8 stucks)
+          - ≥ dominant_pct (default 60%) of time entries share the same slot
+
+        Returns None when no such pattern exists.
+        Cells with no time data (migrated from v1 or seeded) are skipped.
+        """
+        from collections import Counter
+
+        patterns: dict[tuple[int, int], tuple[int, int]] = {}
+        for cell, v in self._stuck.items():
+            if v["count"] < threshold:
+                continue
+            times = v.get("times", [])
+            if not times:
+                continue  # no time data — cannot determine pattern
+            slot_counts: Counter = Counter(tuple(t) for t in times)
+            (most_common_slot, most_common_count) = slot_counts.most_common(1)[0]
+            # Use count (not len(times)) as denominator so seeded/migrated
+            # entries with sparse time data don't inflate the percentage.
+            denom = max(len(times), v["count"])
+            if most_common_count / denom >= dominant_pct:
+                patterns[cell] = most_common_slot
+
+        return patterns if patterns else None
 
     def coverage_by_polygon(
         self,
@@ -348,8 +408,8 @@ class GridStore:
         draw = ImageDraw.Draw(img)
 
         hotspot_cells = {
-            cell for cell, c in self._stuck.items()
-            if c >= STUCK_HOTSPOT_THRESHOLD
+            cell for cell, v in self._stuck.items()
+            if v["count"] >= STUCK_HOTSPOT_THRESHOLD
         }
 
         for (gx, gy), weight in self._cells.items():

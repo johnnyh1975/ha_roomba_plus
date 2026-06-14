@@ -54,7 +54,8 @@
       "invalid_auth": "Ungültige Zugangsdaten. BLID und Passwort überprüfen.",
       "unknown": "Unerwarteter Fehler. Die Home Assistant-Protokolle für Details prüfen.",
       "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
-      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
+      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.",
+      "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort."
     },
     "abort": {
       "already_configured": "Dieser Roboter ist bereits eingerichtet.",
@@ -175,6 +176,10 @@
           "demand_cleaning_enabled": "Enable demand cleaning",
           "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
         }
+      },
+      "test_cloud_connection": {
+        "title": "Verbindung testen",
+        "description": "Ihre iRobot-Cloud-Zugangsdaten werden überprüft…"
       }
     },
     "errors": {
@@ -182,7 +187,9 @@
     },
     "error": {
       "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
-      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung."
+      "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung.",
+      "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
+      "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -475,7 +482,7 @@
         "name": "Wartung – Akkukapazität"
       },
       "estimated_battery_eol": {
-        "name": "Wartung – Gesch. Akkuende"
+        "name": "Wartung – Akkulaufzeitschätzung"
       },
       "consecutive_clean_skips": {
         "name": "Leistung – Aufeinanderfolgende Ausfälle"
@@ -503,6 +510,30 @@
       },
       "zone_summary": {
         "name": "Zonenübersicht"
+      },
+      "wheel_last_cleaned": {
+        "name": "Wartung – Rad zuletzt gereinigt"
+      },
+      "contact_last_cleaned": {
+        "name": "Wartung – Kontakte zuletzt gereinigt"
+      },
+      "bin_last_cleaned": {
+        "name": "Wartung – Behälter zuletzt gereinigt"
+      },
+      "cleaning_performance": {
+        "name": "Reinigungsleistung"
+      },
+      "cleaning_analytics_30d": {
+        "name": "Reinigungsanalyse (30 T)"
+      },
+      "wifi_health": {
+        "name": "WLAN-Qualität"
+      },
+      "event_counts_30d": {
+        "name": "Ereignisanzahl (30 T)"
+      },
+      "robot_health_score": {
+        "name": "Roboter-Gesundheitsscore"
       }
     },
     "binary_sensor": {
@@ -762,6 +793,10 @@
     "mission_anomaly": {
       "title": "Unusual cleaning patterns detected",
       "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
+    },
+    "stuck_pattern": {
+      "title": "Steckenbleib-Muster erkannt",
+      "description": "Ihr Roomba bleibt am häufigsten {time} in der Nähe von {room} stecken. Erwägen Sie, den Bereich vor diesen Reinigungen freizuräumen oder den Reinigungsplan anzupassen."
     }
   },
   "device_automation": {

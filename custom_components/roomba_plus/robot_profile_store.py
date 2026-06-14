@@ -284,3 +284,65 @@ class RobotProfileStore:
         if avg <= 0:
             return {}
         return {rid: val / avg for rid, val in self.room_dirt_index.items()}
+
+    # ── L8 (v2.7.0) — Composite robot health score ────────────────────────────
+
+    def compute_health_score(
+        self,
+        battery_retention_pct: float | None,
+        nav_efficiency_ratio: float | None,
+        cleaning_speed_trend: str | None,
+        consecutive_anomalous: int,
+        stuck_rate_30d: float | None,
+    ) -> float | None:
+        """L8 — weighted composite health score 0–100.
+
+        Weights:
+          Battery retention    25%  — measures physical degradation
+          Nav efficiency       20%  — measures spatial coverage quality
+          Cleaning speed trend 20%  — measures throughput trend
+          Anomaly rate         20%  — measures mission consistency
+          Stuck rate           15%  — measures obstacle avoidance
+
+        Returns None when fewer than 3 signals are available (insufficient data
+        to form a meaningful score).  Each missing signal is skipped and the
+        remaining weights are renormalised.
+        """
+        components: list[tuple[float, float]] = []   # (score, weight)
+
+        # 1. Battery retention (25%): 50% retention → 0 pts, 100% → 100 pts
+        if battery_retention_pct is not None:
+            s = max(0.0, min(100.0, (float(battery_retention_pct) - 50.0) * 2.0))
+            components.append((s, 0.25))
+
+        # 2. Navigation efficiency (20%): current/baseline ratio
+        #    ratio ≥ 1.0 → 100; ratio ≤ 0.5 → 0 (linear between)
+        if self.coverage_baseline_ready and nav_efficiency_ratio is not None:
+            s = max(0.0, min(100.0, (float(nav_efficiency_ratio) - 0.5) * 200.0))
+            components.append((s, 0.20))
+
+        # 3. Cleaning speed trend (20%)
+        _trend_pts = {"improving": 100.0, "stable": 80.0, "declining": 40.0}
+        if cleaning_speed_trend in _trend_pts:
+            components.append((_trend_pts[cleaning_speed_trend], 0.20))
+
+        # 4. Mission anomaly rate (20%): consecutive anomalous missions
+        #    0 → 100, 1 → 70, 2 → 40, 3+ → 10
+        _anomaly_pts = {0: 100.0, 1: 70.0, 2: 40.0}
+        anomaly_score = _anomaly_pts.get(consecutive_anomalous, 10.0)
+        components.append((anomaly_score, 0.20))  # always available
+
+        # 5. Stuck rate (15%): rate < 5% → 100; rate ≥ 30% → 0 (linear)
+        if stuck_rate_30d is not None:
+            s = max(0.0, min(100.0, (0.30 - float(stuck_rate_30d)) / 0.25 * 100.0))
+            components.append((s, 0.15))
+
+        if len(components) < 3:
+            return None
+
+        total_weight = sum(w for _, w in components)
+        if total_weight == 0:
+            return None
+
+        score = sum(s * w for s, w in components) / total_weight
+        return round(min(100.0, max(0.0, score)), 1)

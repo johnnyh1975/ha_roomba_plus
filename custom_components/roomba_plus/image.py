@@ -45,7 +45,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
-from .const import CLEANING_PHASES, DOMAIN, MISSION_END_PHASES
+from .const import CLEANING_PHASES, DOMAIN, MISSION_END_PHASES, REGION_TYPE_ICONS
 from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
@@ -264,25 +264,41 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # calibration — three anchor point pairs for xiaomi-vacuum-map-card
         # v2.6.3 B1: _mm_to_px_fit gives fit-adjusted pixels matching displayed image
+        # XVMC (v2.7.0): calibration_points key enables calibration_source: { camera: true }
         cal = aligner.calibration_points(self._renderer._mm_to_px_fit)
         if cal:
-            attrs["calibration"] = cal
+            attrs["calibration_points"] = cal
 
-        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card
-        # predefined_selections. Must be a list — the card calls .filter() on it.
+        # rooms — dict {name: {outline:[[x,y],...], name, icon, x, y}}
+        # XVMC (v2.7.0): dict keyed by display name; outline uses [x,y] arrays.
+        cc = data.cloud_coordinator
+        rid_to_type = (
+            {r["id"]: r.get("region_type", "default") for r in cc.regions}
+            if cc is not None else {}
+        )
         rid_to_name = aligner.rid_to_name()
-        rooms: list[dict[str, Any]] = []
+        rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in aligner.room_polygons_umf.items():
             poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-            if not all(p is not None for p in poly_pose):
+            # Bug 6 fix: guard against empty polygon (vacuous all() on [])
+            if not poly_pose or not all(p is not None for p in poly_pose):
                 continue
             poly_px   = [self._renderer._mm_to_px_fit(x, y) for x, y in poly_pose]
+            if not poly_px:
+                continue
             room_name = rid_to_name.get(rid, rid)
-            rooms.append({
-                "id":      room_name,
-                "label":   room_name,
-                "outline": [{"x": px, "y": py} for px, py in poly_px],
-            })
+            cx = sum(px for px, _ in poly_px) / len(poly_px)
+            cy = sum(py for _, py in poly_px) / len(poly_px)
+            icon = REGION_TYPE_ICONS.get(
+                rid_to_type.get(rid, "default"), REGION_TYPE_ICONS["default"]
+            )
+            rooms[room_name] = {
+                "outline": [[px, py] for px, py in poly_px],
+                "name":    room_name,
+                "icon":    icon,
+                "x":       cx,
+                "y":       cy,
+            }
         if rooms:
             attrs["rooms"] = rooms
 
@@ -318,6 +334,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._renderer.reset()
                     self._mission_points = []
                     self._stuck_mission_points = []
+                    self._mission_start_ts: str | None = dt_util.now().isoformat()
                     _LOGGER.debug("Map: mission started, renderer reset")
 
             # v2.6.3 A — use _had_cleaning_phase so stuck → stop/charge
@@ -478,9 +495,22 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if self._config_entry is not None and self._mission_points:
             _gdata = self._config_entry.runtime_data
             if _gdata.grid_store is not None:
+                # L7 (v2.7.0): compute local (weekday, hour) from mission start here
+                # so grid_store.py stays HA-free (no homeassistant imports).
+                _stuck_wh: tuple[int, int] | None = None
+                _start_ts = getattr(self, "_mission_start_ts", None)
+                if _start_ts:
+                    try:
+                        _parsed = dt_util.parse_datetime(_start_ts)
+                        if _parsed is not None:
+                            _local = dt_util.as_local(_parsed)
+                            _stuck_wh = (_local.weekday(), _local.hour)
+                    except Exception:  # noqa: BLE001
+                        pass
                 _gdata.grid_store.update_from_mission(
                     self._mission_points,
                     self._stuck_mission_points,
+                    stuck_wh=_stuck_wh,
                 )
                 asyncio.run_coroutine_threadsafe(
                     _gdata.grid_store.async_save(
@@ -503,6 +533,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         self._mission_points = []
         self._stuck_mission_points = []
+        self._mission_start_ts = None
 
     async def _async_save_map_state(self) -> None:
         """Write renderer state to hass.storage after mission end."""
@@ -935,7 +966,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 # Pose-space anchors via aligner transform
                 cal = aligner.calibration_points(self._to_px_last)
                 if cal:
-                    attrs["calibration"] = cal
+                    attrs["calibration_points"] = cal  # XVMC (v2.7.0): renamed
             else:
                 # UMF-space anchors — three corners of polygon bounding box.
                 # Use actual min/max corners so all three points are within the
@@ -945,7 +976,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                     (max(xs), min(ys)),
                     (min(xs), max(ys)),
                 ]
-                attrs["calibration"] = [
+                attrs["calibration_points"] = [  # XVMC (v2.7.0): renamed
                     {
                         "vacuum": {"x": x, "y": y},
                         "map":    {"x": px, "y": py},
@@ -954,11 +985,17 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                     for px, py in [self._to_px_last(x, y)]
                 ]
 
-        # rooms — list of {id, label, outline} for xiaomi-vacuum-map-card.
+        # rooms — dict {name: {outline:[[x,y],...], name, icon, x, y}}
+        # XVMC (v2.7.0): dict keyed by display name; outline uses [x,y] arrays.
         # In fallback mode polygon vertices are in UMF-space — consistent with
         # the fallback calibration so the card overlays them correctly.
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        rid_to_type = (
+            {r["id"]: r.get("region_type", "default") for r in cc.regions}
+            if cc is not None else {}
+        )
         rid_to_name = aligner.rid_to_name()
-        rooms: list[dict[str, Any]] = []
+        rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in polygons_umf.items():
             if aligned:
                 poly_coords = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
@@ -967,12 +1004,21 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             else:
                 poly_coords = poly_umf  # type: ignore[assignment]
             poly_px   = [self._to_px_last(x, y) for x, y in poly_coords]
+            if not poly_px:  # Bug 6 fix: guard against empty polygon
+                continue
             room_name = rid_to_name.get(rid, rid)
-            rooms.append({
-                "id":      room_name,
-                "label":   room_name,
-                "outline": [{"x": px, "y": py} for px, py in poly_px],
-            })
+            cx = sum(px for px, _ in poly_px) / len(poly_px)
+            cy = sum(py for _, py in poly_px) / len(poly_px)
+            icon = REGION_TYPE_ICONS.get(
+                rid_to_type.get(rid, "default"), REGION_TYPE_ICONS["default"]
+            )
+            rooms[room_name] = {
+                "outline": [[px, py] for px, py in poly_px],
+                "name":    room_name,
+                "icon":    icon,
+                "x":       cx,
+                "y":       cy,
+            }
         if rooms:
             attrs["rooms"] = rooms
 

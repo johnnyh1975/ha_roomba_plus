@@ -780,6 +780,83 @@ async def async_check_schedule_optimisation(
     ir.async_delete_issue(hass, DOMAIN, "schedule_suboptimal")
 
 
+# ── L7 (v2.7.0) — Stuck pattern time-correlation ─────────────────────────────
+
+_WEEKDAY_NAMES = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+]
+
+
+async def async_check_stuck_pattern(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """L7 — fire Repair Issue when a stuck cell has a dominant time pattern.
+
+    Fires when GridStore.stuck_pattern() identifies ≥1 cell where the robot
+    gets stuck more than 60% of the time in the same (weekday, hour) slot,
+    with ≥8 total stucks in that cell.
+
+    Issue is per config-entry so multi-robot households surface each robot
+    independently. Auto-clears when no pattern is detected.
+    """
+    data = config_entry.runtime_data
+    gs = data.grid_store
+    if gs is None:
+        ir.async_delete_issue(hass, DOMAIN, f"stuck_pattern_{config_entry.entry_id}")
+        return
+
+    patterns = gs.stuck_pattern()
+    if not patterns:
+        ir.async_delete_issue(hass, DOMAIN, f"stuck_pattern_{config_entry.entry_id}")
+        return
+
+    # Find the cell with the most stuck events that has a pattern
+    worst_cell = max(patterns.keys(), key=lambda c: gs._stuck[c]["count"])
+    weekday, hour = patterns[worst_cell]
+
+    # Resolve room name from UmfAligner when aligned
+    room_name = "an unknown location"
+    aligner = data.umf_aligner
+    if aligner is not None and aligner.aligned:
+        from .grid_store import _cell_to_mm
+        x_mm, y_mm = _cell_to_mm(*worst_cell)
+        pt_umf = aligner.pose_to_umf(x_mm, y_mm)
+        if pt_umf is not None:
+            rn = aligner.room_name_at(*pt_umf)
+            if rn:
+                room_name = rn
+
+    # Build human-readable time description
+    weekday_name = _WEEKDAY_NAMES[weekday % 7]
+    if 5 <= hour < 12:
+        time_desc = f"{weekday_name} mornings"
+    elif 12 <= hour < 17:
+        time_desc = f"{weekday_name} afternoons"
+    elif 17 <= hour < 21:
+        time_desc = f"{weekday_name} evenings"
+    else:
+        time_desc = f"{weekday_name}s around {hour:02d}:00"
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"stuck_pattern_{config_entry.entry_id}",
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="stuck_pattern",
+        translation_placeholders={
+            "room": room_name,
+            "time": time_desc,
+        },
+    )
+    _LOGGER.debug(
+        "L7: stuck pattern detected at cell %s — %s",
+        worst_cell, time_desc,
+    )
+
+
 async def async_check_mission_anomaly(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",

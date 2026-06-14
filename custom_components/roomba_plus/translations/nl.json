@@ -58,7 +58,8 @@
       "invalid_auth": "Ongeldige inloggegevens. Controleer je BLID en wachtwoord.",
       "unknown": "Onverwachte fout. Bekijk de Home Assistant-logboeken voor meer informatie.",
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
-      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw."
+      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
+      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd.",
@@ -179,6 +180,10 @@
           "demand_cleaning_enabled": "Enable demand cleaning",
           "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
         }
+      },
+      "test_cloud_connection": {
+        "title": "Verbinding testen",
+        "description": "Uw iRobot cloud-gegevens worden geverifieerd…"
       }
     },
     "errors": {
@@ -186,7 +191,9 @@
     },
     "error": {
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
-      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw."
+      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
+      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
+      "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -479,7 +486,7 @@
         "name": "Onderhoud – Accucapaciteitsbehoud"
       },
       "estimated_battery_eol": {
-        "name": "Onderhoud – Gesch. einde acculevensduur"
+        "name": "Onderhoud – Schatting levensduur accu"
       },
       "consecutive_clean_skips": {
         "name": "Prestaties – Opeenvolgende reinigingsoversiagen"
@@ -507,6 +514,30 @@
       },
       "zone_summary": {
         "name": "Zonesamenvatting"
+      },
+      "wheel_last_cleaned": {
+        "name": "Onderhoud – Wiel laatst gereinigd"
+      },
+      "contact_last_cleaned": {
+        "name": "Onderhoud – Contacten laatst gereinigd"
+      },
+      "bin_last_cleaned": {
+        "name": "Onderhoud – Bak laatst gereinigd"
+      },
+      "cleaning_performance": {
+        "name": "Schoonmaakprestaties"
+      },
+      "cleaning_analytics_30d": {
+        "name": "Schoonmaakanalyse (30 d)"
+      },
+      "wifi_health": {
+        "name": "Wi-Fi kwaliteit"
+      },
+      "event_counts_30d": {
+        "name": "Gebeurtenistelling (30 d)"
+      },
+      "robot_health_score": {
+        "name": "Gezondheidsscore robot"
       }
     },
     "binary_sensor": {
@@ -766,6 +797,10 @@
     "mission_anomaly": {
       "title": "Unusual cleaning patterns detected",
       "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
+    },
+    "stuck_pattern": {
+      "title": "Vastlooppatroon gedetecteerd",
+      "description": "Uw Roomba loopt het vaakst vast bij {room}, meestal {time}. Overweeg het gebied vrij te maken voor die schoonmaakbeurten of uw schema aan te passen."
     }
   },
   "device_automation": {

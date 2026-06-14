@@ -165,6 +165,27 @@ class MaintenanceStore:
         self.brush_reset_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
 
+    # ── IA74-MAINT (v2.7.0) — calendar-based inspect resets ──────────────────
+    # These components have no bbrun.hr lifecycle — they are cleaned on a
+    # calendar cadence, not an hours-of-use basis.  Only the wall-clock
+    # timestamp is recorded so the sensor can show "last cleaned" and users
+    # can build reminders from it.
+
+    def reset_wheel_cleaning(self) -> None:
+        """Record wall-clock time as the wheel-module last-cleaned timestamp."""
+        self.wheel_cleaned_at = dt_util.now().isoformat()
+        _LOGGER.info("MaintenanceStore: wheel cleaning reset at %s", self.wheel_cleaned_at)
+
+    def reset_contact_cleaning(self) -> None:
+        """Record wall-clock time as the charging-contact last-cleaned timestamp."""
+        self.contact_cleaned_at = dt_util.now().isoformat()
+        _LOGGER.info("MaintenanceStore: contact cleaning reset at %s", self.contact_cleaned_at)
+
+    def reset_bin_cleaning(self) -> None:
+        """Record wall-clock time as the bin last-cleaned timestamp."""
+        self.bin_cleaned_at = dt_util.now().isoformat()
+        _LOGGER.info("MaintenanceStore: bin cleaning reset at %s", self.bin_cleaned_at)
+
     # ── F5d — Battery capacity baseline ──────────────────────────────────────
 
     def record_estcap_if_needed(self, estcap_mah: float) -> bool:

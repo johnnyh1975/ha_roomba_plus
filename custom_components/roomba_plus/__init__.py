@@ -2052,6 +2052,90 @@ async def _async_update_robot_profile_store(
         await robot_profile_store.async_save(hass, entry.entry_id)
 
 
+# ── GS-SMART-UMF (v2.7.0) — Bootstrap UmfAligner from cloud traversal events ──
+
+def _extract_traversal_umf_positions(
+    records: list[dict],
+    aligner: Any,
+    min_missions: int = 3,
+) -> list[tuple[float, float]]:
+    """Return UMF door candidate positions confirmed by ≥min_missions traversal missions.
+
+    Traversal events in cloud timeline confirm the robot crossed room boundaries.
+    A mission is counted when it has ≥1 traversal event in its finEvents.
+    After min_missions of confirmed crossings, all UMF door candidates are returned
+    (the geometric analysis already filters real doors; traversal confirms the robot
+    actually navigated through them).
+    """
+    door_candidates = getattr(aligner, "_door_candidates", [])
+    if len(door_candidates) < 2:
+        return []
+
+    missions_with_traversals = 0
+    for record in records:
+        timeline = record.get("timeline") or {}
+        fin_events = timeline.get("finEvents", [])
+        if any(e.get("type") == "traversal" for e in fin_events):
+            missions_with_traversals += 1
+        if missions_with_traversals >= min_missions:
+            return list(door_candidates)
+
+    return []
+
+
+async def _async_bootstrap_umf_aligner(
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    coordinator: Any,
+) -> None:
+    """GS-SMART-UMF — align without local pose data using cloud traversal evidence.
+
+    Called from _on_cloud_refresh_complete when:
+    - SMART robot with cloud credentials
+    - GeometryStore has < 2 confirmed markers (no local pose data arrived)
+    - UmfAligner not yet aligned
+    - ≥3 cloud missions with traversal events confirm room crossings
+
+    Sets synthetic markers on UmfAligner (UMF-space, identity transform) so
+    room coverage maps and calibration attributes become available even when
+    lewis firmware suppresses local MQTT pose broadcasts.
+    """
+    data = entry.runtime_data
+    aligner = data.umf_aligner
+    gs = data.geometry_store
+
+    if aligner is None or aligner.aligned:
+        return  # Already aligned (normal or previous bootstrap) — nothing to do
+
+    if gs is not None and sum(
+        1 for m in gs.door_markers if m.mission_count >= 2
+    ) >= 2:
+        return  # Local GS markers exist — normal alignment path is running
+
+    if not coordinator.last_update_success:
+        return
+
+    # Bug 4 fix (v2.7.0): _door_candidates is only populated after align() runs.
+    # On the first call the aligner has never run, so candidates would be empty
+    # and _extract_traversal_umf_positions would silently return [].
+    # Run align() once (returns 0.0 without markers) to populate _door_candidates.
+    if not getattr(aligner, "_door_candidates", []):
+        await hass.async_add_executor_job(aligner.align)
+
+    positions = _extract_traversal_umf_positions(
+        coordinator.raw_records, aligner
+    )
+    if not positions:
+        return
+
+    aligner.set_bootstrap_markers(positions)
+    conf = await hass.async_add_executor_job(aligner.align)
+    _LOGGER.info(
+        "GS-SMART-UMF: bootstrap alignment confidence=%.2f aligned=%s for %s",
+        conf, aligner.aligned, entry.data.get(CONF_BLID, "unknown"),
+    )
+
+
 def _umf_version_changed(
     coordinator: Any,
     entry: RoombaConfigEntry,
@@ -2529,6 +2613,24 @@ async def async_setup_entry(
                 hass.async_create_task(
                     _async_update_robot_profile_store(hass, config_entry, ms, _rps),
                     name="roomba_plus_profile_store_update",
+                )
+            # v2.7.0 L7 — stuck pattern time-correlation check
+            if config_entry.runtime_data.grid_store is not None:
+                from .repairs import async_check_stuck_pattern
+                hass.async_create_task(
+                    async_check_stuck_pattern(hass, config_entry),
+                    name="roomba_plus_l7_stuck_pattern_check",
+                )
+            # v2.7.0 GS-SMART-UMF — bootstrap alignment for robots without local pose
+            if (
+                config_entry.runtime_data.map_capability == MapCapability.SMART
+                and config_entry.runtime_data.umf_aligner is not None
+            ):
+                hass.async_create_task(
+                    _async_bootstrap_umf_aligner(
+                        hass, config_entry, cloud_coordinator
+                    ),
+                    name="roomba_plus_gs_smart_umf_bootstrap",
                 )
         config_entry.async_on_unload(
             cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)

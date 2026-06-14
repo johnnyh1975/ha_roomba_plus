@@ -851,6 +851,15 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     @property
+    def zone_id_set(self) -> set[str]:
+        """IA74-ZONE full (v2.7.0) — return set of clean zone IDs from active pmap.
+
+        Used by async_clean_segments to distinguish zone segments (zid type)
+        from room segments (rid type) when processing CLEAN_AREA segment IDs.
+        """
+        return {z["id"] for z in self.zones if z.get("id")}
+
+    @property
     def umf_data(self) -> dict[str, Any]:
         """Return the most recently fetched UMF data, or empty dict."""
         if not self.data:

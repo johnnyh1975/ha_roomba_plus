@@ -359,9 +359,9 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 try:
                     await api.authenticate()
                 except AuthenticationError:
-                    errors["base"] = "cloud_auth_failed"
+                    errors["base"] = "invalid_cloud_credentials"
                 except CloudApiError:
-                    errors["base"] = "cloud_unavailable"
+                    errors["base"] = "cannot_connect"
                 else:
                     config[CONF_IROBOT_USERNAME] = username
                     config[CONF_IROBOT_PASSWORD] = password
@@ -1213,44 +1213,27 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Add or update iRobot cloud credentials.
 
+        CF2-FULL (v2.7.0): form collects credentials only; connection test
+        runs in async_step_test_cloud_connection before saving so the user
+        gets a specific error (invalid_cloud_credentials / cannot_connect)
+        rather than a silent post-reload failure.
+
         Saves credentials to config_entry.data (not options), then triggers a
         reload so the cloud coordinator is re-initialised with the new values.
         Clearing both fields removes the credentials and disables cloud features.
         """
-
-        errors: dict[str, str] = {}
+        errors: dict[str, str] = getattr(self, "_cloud_cred_errors", {})
+        self._cloud_cred_errors = {}
         current_user = self.config_entry.data.get(CONF_IROBOT_USERNAME, "")
 
         if user_input is not None:
-            username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
-            password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
-
-            new_data = dict(self.config_entry.data)
-
-            if username and password:
-                # Validate before storing
-                from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
-                try:
-                    await api.authenticate()
-                except AuthenticationError:
-                    errors["base"] = "cloud_auth_failed"
-                except CloudApiError:
-                    errors["base"] = "cloud_unavailable"
-                else:
-                    new_data[CONF_IROBOT_USERNAME] = username
-                    new_data[CONF_IROBOT_PASSWORD] = password
-            else:
-                # Clear credentials — disables cloud
-                new_data.pop(CONF_IROBOT_USERNAME, None)
-                new_data.pop(CONF_IROBOT_PASSWORD, None)
-
-            if not errors:
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry, data=new_data
-                )
-                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
-                return self.async_create_entry(title="", data=self.config_entry.options)
+            # Store pending credentials and route to the test step.
+            # Clearing both fields skips the test and goes straight to save.
+            self._pending_cloud_creds = {
+                "username": user_input.get(CONF_IROBOT_USERNAME, "").strip(),
+                "password": user_input.get(CONF_IROBOT_PASSWORD, "").strip(),
+            }
+            return await self.async_step_test_cloud_connection()
 
         return self.async_show_form(
             step_id="cloud_credentials",
@@ -1271,6 +1254,47 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ),
             },
         )
+
+    async def async_step_test_cloud_connection(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """CF2-FULL (v2.7.0) — test cloud connection before saving credentials.
+
+        Validates the pending credentials stored by async_step_cloud_credentials.
+        Returns to the credentials form with a specific error on failure:
+          invalid_cloud_credentials — wrong email/password
+          cannot_connect           — network or cloud service error
+        On success (or when credentials were cleared): saves and reloads.
+        """
+        pending = getattr(self, "_pending_cloud_creds", {})
+        username = pending.get("username", "")
+        password = pending.get("password", "")
+
+        new_data = dict(self.config_entry.data)
+
+        if username and password:
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+            api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+            try:
+                await api.authenticate()
+            except AuthenticationError:
+                self._cloud_cred_errors = {"base": "invalid_cloud_credentials"}
+                return await self.async_step_cloud_credentials()
+            except CloudApiError:
+                self._cloud_cred_errors = {"base": "cannot_connect"}
+                return await self.async_step_cloud_credentials()
+            new_data[CONF_IROBOT_USERNAME] = username
+            new_data[CONF_IROBOT_PASSWORD] = password
+        else:
+            # Credentials cleared — disable cloud without testing
+            new_data.pop(CONF_IROBOT_USERNAME, None)
+            new_data.pop(CONF_IROBOT_PASSWORD, None)
+
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data=new_data
+        )
+        await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        return self.async_create_entry(title="", data=self.config_entry.options)
 
     # ── F13 / F11 — Demand cleaning configuration ─────────────────────────────
 

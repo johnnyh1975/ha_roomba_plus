@@ -58,7 +58,8 @@
       "invalid_auth": "Identifiants invalides. Vérifiez votre BLID et votre mot de passe.",
       "unknown": "Erreur inattendue. Consultez les journaux de Home Assistant pour plus de détails.",
       "cloud_auth_failed": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot.",
-      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez."
+      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez.",
+      "invalid_cloud_credentials": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot."
     },
     "abort": {
       "already_configured": "Ce robot est déjà configuré.",
@@ -179,6 +180,10 @@
           "demand_cleaning_enabled": "Enable demand cleaning",
           "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
         }
+      },
+      "test_cloud_connection": {
+        "title": "Test de connexion",
+        "description": "Vérification de vos identifiants iRobot cloud…"
       }
     },
     "errors": {
@@ -186,7 +191,9 @@
     },
     "error": {
       "cloud_auth_failed": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot.",
-      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez."
+      "cloud_unavailable": "Impossible d'atteindre le cloud iRobot. Vérifiez votre connexion Internet et réessayez.",
+      "invalid_cloud_credentials": "Échec de l'authentification cloud. Vérifiez votre e-mail et mot de passe iRobot.",
+      "cannot_connect": "Connexion impossible. Vérifiez votre connexion internet et réessayez."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -479,7 +486,7 @@
         "name": "Maintenance – Rétention capacité batterie"
       },
       "estimated_battery_eol": {
-        "name": "Maintenance – Fin de vie estimée"
+        "name": "Maintenance – Estimation de durée de vie de la batterie"
       },
       "consecutive_clean_skips": {
         "name": "Performance – Nettoyages ignorés consécutifs"
@@ -507,6 +514,30 @@
       },
       "zone_summary": {
         "name": "Récapitulatif des zones"
+      },
+      "wheel_last_cleaned": {
+        "name": "Maintenance – Roue nettoyée en dernier"
+      },
+      "contact_last_cleaned": {
+        "name": "Maintenance – Contacts nettoyés en dernier"
+      },
+      "bin_last_cleaned": {
+        "name": "Maintenance – Bac nettoyé en dernier"
+      },
+      "cleaning_performance": {
+        "name": "Performance de nettoyage"
+      },
+      "cleaning_analytics_30d": {
+        "name": "Analyse de nettoyage (30 j)"
+      },
+      "wifi_health": {
+        "name": "Qualité Wi-Fi"
+      },
+      "event_counts_30d": {
+        "name": "Comptage d'événements (30 j)"
+      },
+      "robot_health_score": {
+        "name": "Score de santé du robot"
       }
     },
     "binary_sensor": {
@@ -766,6 +797,10 @@
     "mission_anomaly": {
       "title": "Unusual cleaning patterns detected",
       "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
+    },
+    "stuck_pattern": {
+      "title": "Schéma de blocage détecté",
+      "description": "Votre Roomba reste bloqué près de {room} le plus souvent {time}. Pensez à dégager la zone avant ces nettoyages ou à ajuster votre planning."
     }
   },
   "device_automation": {

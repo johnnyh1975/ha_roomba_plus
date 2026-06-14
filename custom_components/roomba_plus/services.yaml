@@ -143,3 +143,45 @@ clean_sequence:
           max: 60
           step: 1
           unit_of_measurement: min
+
+reset_wheel_cleaning:
+  name: Reset wheel cleaning
+  description: >
+    Record the current time as the wheel module last-cleaned date.
+    Use after cleaning the wheel module and front caster.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_contact_cleaning:
+  name: Reset contact cleaning
+  description: >
+    Record the current time as the charging contacts last-cleaned date.
+    Use after cleaning the dock and robot charging contacts.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_bin_cleaning:
+  name: Reset bin cleaning
+  description: >
+    Record the current time as the bin last-cleaned date.
+    Use after washing or wiping out the dust bin.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+
+reset_robot_profile:
+  name: Reset robot profile
+  description: >
+    Wipe all self-calibrated learned state (dirt baselines, navigation
+    efficiency, maintenance intervals) so the robot starts learning fresh.
+    Use after moving house, a major layout change, or replacing the robot.
+    Mission history is not affected.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum

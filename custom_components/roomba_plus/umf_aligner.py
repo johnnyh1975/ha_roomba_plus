@@ -66,6 +66,10 @@ class UmfAligner:
         self._transform:      tuple[float, float, float] | None = None  # (rot_rad, tx, ty)
         self._confidence:     float = 0.0
         self._aligned:        bool  = False
+        # GS-SMART-UMF (v2.7.0): synthetic DoorMarker objects seeded from cloud
+        # traversal data when local pose is unavailable (lewis firmware).
+        # Set via set_bootstrap_markers(); used by align() when GS is empty.
+        self._bootstrap_markers: list = []
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -78,6 +82,36 @@ class UmfAligner:
     def confidence(self) -> float:
         """Alignment confidence score 0.0–1.0."""
         return self._confidence
+
+    def set_bootstrap_markers(
+        self, umf_positions: list[tuple[float, float]]
+    ) -> None:
+        """GS-SMART-UMF (v2.7.0) — seed synthetic markers from UMF-space positions.
+
+        Used when local pose data is unavailable (lewis firmware 22.52.10+).
+        Each position is a UMF-space (x_mm, y_mm) door location derived from
+        cloud traversal events confirming the robot crossed known room boundaries.
+
+        Requires ≥2 positions. The synthetic DoorMarkers have mission_count=3
+        so they pass the ``mission_count >= 2`` filter in align().
+        When these markers are set and GeometryStore is empty, align() performs
+        UMF-space alignment (identity transform: UMF coords == pose coords).
+        """
+        if len(umf_positions) < 2:
+            _LOGGER.debug(
+                "UmfAligner.set_bootstrap_markers: need ≥2 positions, got %d — ignored",
+                len(umf_positions),
+            )
+            return
+        from .geometry_store import DoorMarker
+        self._bootstrap_markers = [
+            DoorMarker(id=f"bootstrap_{i}", cx=x, cy=y, mission_count=3)
+            for i, (x, y) in enumerate(umf_positions)
+        ]
+        _LOGGER.info(
+            "UmfAligner: %d bootstrap marker(s) set for pose-free alignment",
+            len(self._bootstrap_markers),
+        )
 
     @property
     def room_polygons_umf(self) -> dict[str, list[tuple[float, float]]]:
@@ -108,6 +142,14 @@ class UmfAligner:
             m for m in self._geometry_store.door_markers
             if m.mission_count >= 2
         ]
+        # GS-SMART-UMF (v2.7.0): fall back to bootstrap markers when GeometryStore
+        # is empty — happens on lewis firmware where local MQTT pose data is absent.
+        if not gs_markers and self._bootstrap_markers:
+            gs_markers = self._bootstrap_markers
+            _LOGGER.debug(
+                "UmfAligner: using %d bootstrap marker(s) (no local GS data)",
+                len(gs_markers),
+            )
         if len(gs_markers) < 2 or len(self._door_candidates) < 2:
             _LOGGER.debug(
                 "UmfAligner: insufficient data — %d GS markers, %d door candidates",
@@ -125,7 +167,7 @@ class UmfAligner:
             return 0.0
 
         self._transform  = self._estimate_rigid_body(pairs)
-        residual         = self._validate_transform()
+        residual         = self._validate_transform(gs_markers)
         self._confidence = max(0.0, 1.0 - residual / _RESIDUAL_SCALE)
         self._aligned    = self._confidence >= _MIN_CONFIDENCE
         _LOGGER.info(
@@ -378,7 +420,7 @@ class UmfAligner:
         ty = cy_pose - (sin_r * cx_umf + cos_r * cy_umf)
         return (rot, tx, ty)
 
-    def _validate_transform(self) -> float:
+    def _validate_transform(self, gs_markers: list | None = None) -> float:
         """Validate transform by measuring how well door candidates align with GS markers.
 
         Transforms each UMF door candidate to pose space using the just-estimated
@@ -393,11 +435,15 @@ class UmfAligner:
         Previous implementation (v2.6.3) compared room centroids to GS markers
         which is geometrically incorrect — centroids are in the middle of rooms,
         far from door markers — so all residuals were unreasonably large.
+
+        GS-SMART-UMF (v2.7.0): accepts optional gs_markers parameter so bootstrap
+        markers (UMF-space) can be passed directly from align() without re-reading
+        from GeometryStore (which may be empty on lewis firmware).
         """
+        if gs_markers is None:
+            gs_markers = self._geometry_store.door_markers
         if self._transform is None or not self._door_candidates:
             return 0.0
-
-        gs_markers = self._geometry_store.door_markers
         if not gs_markers:
             return _RESIDUAL_SCALE / 2  # moderate penalty when no markers
 

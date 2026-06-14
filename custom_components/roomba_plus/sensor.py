@@ -26,7 +26,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -1045,21 +1048,23 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             and e.clean_mission_status.get("cycle") not in (None, "none"),
     ),
 
+    # SC2 (v2.7.0): TIMESTAMP is the preferred variant — enabled by default.
+    # mission_recharge_minutes (numeric) is disabled below.
     RoombaSensorDescription(
         key="mission_recharge_time",
         translation_key="mission_recharge_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         value_fn=lambda e: _ts_or_none(e.clean_mission_status.get("rechrgTm")),
     ),
 
+    # SC2 (v2.7.0): TIMESTAMP is the preferred variant — enabled by default.
+    # mission_expire_minutes (numeric) was already disabled in v2.6.2.
     RoombaSensorDescription(
         key="mission_expire_time",
         translation_key="mission_expire_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         value_fn=lambda e: _ts_or_none(e.clean_mission_status.get("expireTm")),
     ),
 
@@ -1078,6 +1083,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC2 (v2.7.0): disabled by default — use mission_recharge_time (TIMESTAMP)
+        # which HA renders natively as a countdown. Kept for users with existing
+        # automations; will be removed in v3.0.
+        entity_registry_enabled_default=False,
         # rechrgM is pre-computed by 980/900-series firmware.
         # lewis firmware (i/s/j-series) sends rechrgTm (Unix timestamp) and
         # leaves rechrgM=0. Fall back to computing remaining minutes from rechrgTm
@@ -1305,6 +1314,75 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
                 and e._config_entry.runtime_data.maintenance_store.battery_reset_at
             )
             else None
+        ),
+    ),
+
+    # ── IA74-MAINT (v2.7.0) — calendar-based inspect timestamps ──────────────
+    # Wheel module, charging contacts, and bin are cleaned on a calendar cadence
+    # rather than an hours-of-use basis.  These sensors expose the last-cleaned
+    # wall-clock timestamp so dashboards and reminders can be built from them.
+
+    RoombaSensorDescription(
+        key="wheel_last_cleaned",
+        translation_key="wheel_last_cleaned",
+        name="Maintenance – Wheel last cleaned",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.wheel_cleaned_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.wheel_cleaned_at
+            )
+            else None
+        ),
+        available_fn=lambda e: (
+            e._config_entry.runtime_data.maintenance_store is not None
+            and e._config_entry.runtime_data.maintenance_store.wheel_cleaned_at is not None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="contact_last_cleaned",
+        translation_key="contact_last_cleaned",
+        name="Maintenance – Contacts last cleaned",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.contact_cleaned_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.contact_cleaned_at
+            )
+            else None
+        ),
+        available_fn=lambda e: (
+            e._config_entry.runtime_data.maintenance_store is not None
+            and e._config_entry.runtime_data.maintenance_store.contact_cleaned_at is not None
+        ),
+    ),
+    RoombaSensorDescription(
+        key="bin_last_cleaned",
+        translation_key="bin_last_cleaned",
+        name="Maintenance – Bin last cleaned",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: (
+            dt_util.parse_datetime(
+                e._config_entry.runtime_data.maintenance_store.bin_cleaned_at
+            )
+            if (
+                e._config_entry.runtime_data.maintenance_store
+                and e._config_entry.runtime_data.maintenance_store.bin_cleaned_at
+            )
+            else None
+        ),
+        available_fn=lambda e: (
+            e._config_entry.runtime_data.maintenance_store is not None
+            and e._config_entry.runtime_data.maintenance_store.bin_cleaned_at is not None
         ),
     ),
 
@@ -1590,13 +1668,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
 
     # F5g -- estimated battery end-of-life (days remaining until 65% threshold)
+    # SEN2 (v2.7.0): state_class removed — this is a heuristic prediction, not
+    # a physical measurement. HA should not build long-term statistics from it.
     RoombaSensorDescription(
         key="estimated_battery_eol",
         translation_key="estimated_battery_eol",
         name="Maintenance – Est. battery end of life",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.DAYS,
-        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
         value_fn=_estimated_battery_eol,
@@ -1701,6 +1780,22 @@ async def async_setup_entry(
         and data.mission_timer_store is not None
     ):
         entities.append(RoombaMissionProgress(roomba, blid, config_entry))
+
+    # SC1 (v2.7.0) — consolidated analytics sensors (cloud credentials required)
+    if data.has_cloud:
+        cc = data.cloud_coordinator  # type: ignore[union-attr]
+        entities.extend([
+            RoombaCleaningPerformanceSensor(roomba, blid, cc, config_entry),
+            RoombaCleaningAnalytics30dSensor(roomba, blid, cc, config_entry),
+            RoombaWifiHealthSensor(roomba, blid, cc, config_entry),
+            RoombaEventCounts30dSensor(roomba, blid, cc, config_entry),
+        ])
+
+    # L8 (v2.7.0) — composite robot health score (cloud credentials required)
+    if data.has_cloud and data.cloud_coordinator is not None:
+        entities.append(
+            RoombaRobotHealthSensor(roomba, blid, data.cloud_coordinator, config_entry)
+        )
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
@@ -2072,6 +2167,8 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
         device_class=SensorDeviceClass.AREA,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by cleaning_analytics_30d.
+        entity_registry_enabled_default=False,
         value_fn=_mh_sqft_to_m2,
     ),
     CloudHistorySensorDescription(
@@ -2082,6 +2179,8 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by cleaning_analytics_30d.
+        entity_registry_enabled_default=False,
         value_fn=_mh_total_minutes,
     ),
     CloudHistorySensorDescription(
@@ -2407,6 +2506,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_completion_rate,
     ),
     CloudRawSensorDescription(
@@ -2416,6 +2517,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="recharges",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_recharges,
     ),
     CloudRawSensorDescription(
@@ -2425,6 +2528,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="evacuations",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_evacuations,
     ),
     CloudRawSensorDescription(
@@ -2434,6 +2539,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="events",
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_dirt_events,
     ),
     CloudRawSensorDescription(
@@ -2441,6 +2548,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         translation_key="recent_error_code",
         name="Recent error code (cloud)",
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_cloud_last_error_code,
         attributes_fn=_raw_cloud_last_error_attrs,
     ),
@@ -2450,6 +2559,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         name="Recent error time (cloud)",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_cloud_last_error_time,
     ),
 
@@ -2483,6 +2594,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="m²/min",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_cleaning_speed,
     ),
 
@@ -2494,6 +2607,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement="events/m²",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_dirt_density,
         attributes_fn=_raw_dirt_density_attrs,
     ),
@@ -2506,6 +2621,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_recharge_fraction,
     ),
 
@@ -2517,6 +2634,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=["improving", "stable", "declining", "unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=_raw_cleaning_speed_trend,
     ),
 
@@ -2529,6 +2648,8 @@ CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
+        entity_registry_enabled_default=False,
         value_fn=lambda records: None,  # replaced in async_setup_entry
         # Check both cloud records (sqft present) and local p75 baseline ready.
         available_fn=lambda e: bool(
@@ -2548,9 +2669,18 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
     Updates whenever the coordinator refreshes (daily poll or map-retrain trigger).
 
     Available for all robots with cloud credentials (EPHEMERAL + SMART).
+
+    SC1 (v2.7.0): these individual sensors are deprecated and disabled by default
+    on fresh installs. Use the consolidated sensors instead:
+      sensor.*_cleaning_performance, *_cleaning_analytics_30d,
+      *_wifi_health, *_event_counts_30d.
+    They will be removed in v3.0.
     """
 
     entity_description: CloudRawSensorDescription
+    # SC1 (v2.7.0): tracks which keys have already logged a deprecation warning
+    # this session. Class-level so it persists across sensor instances.
+    _sc1_warned: ClassVar[set[str]] = set()
 
     def __init__(
         self,
@@ -2569,9 +2699,19 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
 
     @property
     def native_value(self) -> StateType:
+        # SC1 (v2.7.0): log a one-shot deprecation warning per key per session.
+        key = self.entity_description.key
+        if key not in CloudRawSensor._sc1_warned:
+            _LOGGER.warning(
+                "Roomba+ sensor '%s' is deprecated (SC1, v2.7.0) and will be "
+                "removed in v3.0. Use sensor.*_cleaning_performance, "
+                "*_cleaning_analytics_30d, *_wifi_health, or *_event_counts_30d "
+                "instead. Disable this sensor in HA to suppress this warning.",
+                key,
+            )
+            CloudRawSensor._sc1_warned.add(key)
         value = self.entity_description.value_fn(self._coordinator.raw_records)
         # F6a/F6b — cache values to RoombaData for repair check functions
-        key = self.entity_description.key
         data = self._config_entry.runtime_data
         if key == "cleaning_speed_trend":
             data.cleaning_speed_trend_value = str(value) if value else None
@@ -3268,3 +3408,330 @@ class RoombaZoneSummarySensor(IRobotEntity, SensorEntity):
             self.async_write_ha_state()
 
         self.async_on_remove(cc.async_add_listener(_on_coordinator_update))
+
+
+# ── SC1 (v2.7.0) — Consolidated analytics sensors ─────────────────────────────
+#
+# These four sensors consolidate the 15 deprecated recent_* / cleaning_speed_trend
+# CloudRawSensor entities into a compact set. Each exposes one primary metric as
+# the state and groups related values as extra_state_attributes.
+#
+# Gate: cloud credentials required (same as CLOUD_RAW_SENSORS).
+# Registered in async_setup_entry when data.has_cloud is True.
+
+
+class _ConsolidatedCloudSensor(IRobotEntity, SensorEntity):
+    """Base for SC1 consolidated sensors — wires coordinator listener."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        coordinator: IrobotCloudCoordinator,
+        config_entry: RoombaConfigEntry,
+    ) -> None:
+        super().__init__(roomba, blid)
+        self._coordinator = coordinator
+        self._config_entry = config_entry
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # updated by cloud coordinator only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(self._coordinator.async_add_listener(_on_coordinator_update))
+
+    @property
+    def available(self) -> bool:
+        return (
+            self._config_entry.runtime_data.has_cloud
+            and self._coordinator.last_update_success
+            and self._coordinator.data is not None
+        )
+
+
+class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
+    """SC1 — Cleaning performance: completion rate + speed + trend + streak.
+
+    State: completion rate (%) over the cloud API window.
+    Attributes: speed_m2_per_min, coverage_pct, trend, clean_streak.
+
+    Replaces: recent_completion_rate, recent_cleaning_speed,
+              recent_coverage_pct, cleaning_speed_trend.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="cleaning_performance",
+        name="Cleaning performance",
+        translation_key="cleaning_performance",
+    )
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_cleaning_performance"
+
+    @property
+    def native_value(self) -> StateType:
+        return _raw_completion_rate(self._coordinator.raw_records)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        records = self._coordinator.raw_records
+        attrs: dict[str, Any] = {}
+        if records:
+            speed = _raw_cleaning_speed(records)
+            if speed is not None:
+                attrs["speed_m2_per_min"] = speed
+            trend = _raw_cleaning_speed_trend(records)
+            if trend is not None:
+                attrs["trend"] = trend
+            # Coverage: most-recent sqft vs 60-day p75 baseline
+            ms = self._config_entry.runtime_data.mission_store
+            if ms is not None:
+                recent_sqft = next(
+                    (r["sqft"] for r in records if r.get("sqft") and r["sqft"] > 0), None
+                )
+                p75 = ms.p75_area(60)
+                if recent_sqft is not None and p75 and p75 > 0:
+                    attrs["coverage_pct"] = round(float(recent_sqft) / p75 * 100, 1)
+            # Clean streak from local MissionStore
+            if ms is not None:
+                streak = ms.clean_streak()
+                if streak is not None:
+                    attrs["clean_streak"] = streak
+        return attrs
+
+
+class RoombaCleaningAnalytics30dSensor(_ConsolidatedCloudSensor):
+    """SC1 — Cleaning analytics: area + time + dirt density + recharge fraction.
+
+    State: cleaned area in m² over the cloud API window (~30 missions).
+    Attributes: time_h, dirt_density, recharge_pct.
+
+    Replaces: recent_area_30d, recent_time_30d, recent_dirt_density,
+              recent_recharge_fraction.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="cleaning_analytics_30d",
+        name="Cleaning analytics (30 d)",
+        translation_key="cleaning_analytics_30d",
+    )
+    _attr_native_unit_of_measurement = "m²"
+    _attr_device_class = SensorDeviceClass.AREA
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_cleaning_analytics_30d"
+
+    @property
+    def native_value(self) -> StateType:
+        sqft = (self._coordinator.data.get("runtimeStats") or {}).get("sqft")
+        if sqft is None:
+            return None
+        return round(float(sqft) * SQFT_TO_M2, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        stats = (self._coordinator.data.get("runtimeStats") or {})
+        hr = stats.get("hr")
+        mn = stats.get("min")
+        if hr is not None and mn is not None:
+            attrs["time_h"] = round((hr * 60 + mn) / 60, 1)
+        records = self._coordinator.raw_records
+        if records:
+            dd = _raw_dirt_density(records)
+            if dd is not None:
+                attrs["dirt_density"] = dd
+            rf = _raw_recharge_fraction(records)
+            if rf is not None:
+                attrs["recharge_pct"] = rf
+        return attrs
+
+
+class RoombaWifiHealthSensor(_ConsolidatedCloudSensor):
+    """SC1 — Wi-Fi health: signal floor + stability.
+
+    State: signal floor (% of missions with acceptable floor signal).
+    Attributes: stability_pct.
+
+    Replaces: recent_wifi_floor, recent_wifi_stability.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="wifi_health",
+        name="Wi-Fi health",
+        translation_key="wifi_health",
+    )
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_wifi_health"
+
+    @property
+    def native_value(self) -> StateType:
+        return _raw_wifi_floor(self._coordinator.raw_records)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        stab = _raw_wifi_stability(self._coordinator.raw_records)
+        if stab is not None:
+            attrs["stability_pct"] = stab
+        return attrs
+
+
+class RoombaEventCounts30dSensor(_ConsolidatedCloudSensor):
+    """SC1 — Event counts: recharges + evacuations + dirt events + last error.
+
+    State: most recent error code (int | None).
+    Attributes: recharges, evacuations, dirt_events, error_time, error_label.
+
+    Replaces: recent_recharges, recent_evacuations, recent_dirt_events,
+              recent_error_code, recent_error_time.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="event_counts_30d",
+        name="Event counts (30 d)",
+        translation_key="event_counts_30d",
+    )
+
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_event_counts_30d"
+
+    @property
+    def native_value(self) -> StateType:
+        return _raw_cloud_last_error_code(self._coordinator.raw_records)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        records = self._coordinator.raw_records
+        attrs: dict[str, Any] = {}
+        if not records:
+            return attrs
+        recharges = _raw_recharges(records)
+        if recharges is not None:
+            attrs["recharges"] = recharges
+        evacs = _raw_evacuations(records)
+        if evacs is not None:
+            attrs["evacuations"] = evacs
+        dirt = _raw_dirt_events(records)
+        if dirt is not None:
+            attrs["dirt_events"] = dirt
+        err_time = _raw_cloud_last_error_time(records)
+        if err_time is not None:
+            attrs["error_time"] = err_time.isoformat()
+        err_attrs = _raw_cloud_last_error_attrs(records)
+        if err_attrs.get("label"):
+            attrs["error_label"] = err_attrs["label"]
+        return attrs
+
+
+# ── L8 (v2.7.0) — Composite robot health score ────────────────────────────────
+
+class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
+    """L8 — single 0–100 health score combining all learned robot signals.
+
+    Not DIAGNOSTIC — this is the number a non-technical user checks first.
+    State is None (Unknown) until ≥20 missions have been recorded and at
+    least 3 of the 5 component signals are available.
+
+    Updates on cloud coordinator refresh (which triggers after every mission
+    end via the F4b cloud-refresh hook).
+    """
+
+    entity_description = SensorEntityDescription(
+        key="robot_health_score",
+        name="Robot health score",
+        translation_key="robot_health_score",
+    )
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = None   # Main entity — deliberate per L8 spec
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        coordinator: IrobotCloudCoordinator,
+        config_entry: RoombaConfigEntry,
+    ) -> None:
+        super().__init__(roomba, blid)
+        self._coordinator = coordinator
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_robot_health_score"
+
+    @property
+    def native_value(self) -> StateType:
+        data = self._config_entry.runtime_data
+        ms  = data.mission_store
+        rps = getattr(data, "robot_profile_store", None)
+
+        if ms is None or rps is None:
+            return None
+
+        # Calibration gate: ≥20 missions needed for meaningful statistics
+        records_30d = ms.query(30)
+        if len(records_30d) < 20:
+            return None
+
+        # Signal 1: battery retention (cached from battery retention sensor)
+        bat_retention = data.battery_retention_value
+
+        # Signal 2: navigation efficiency — current edge ratio vs stored baseline
+        nav_ratio: float | None = None
+        gs = data.grid_store
+        if rps.coverage_baseline_ready and rps.coverage_baseline and gs is not None:
+            current_ratio = gs.edge_coverage_ratio()
+            if current_ratio is not None and rps.coverage_baseline > 0:
+                nav_ratio = current_ratio / rps.coverage_baseline
+
+        # Signal 3: cleaning speed trend (cached from CloudRawSensor)
+        trend = data.cleaning_speed_trend_value
+
+        # Signal 4: consecutive anomalous missions (L3)
+        consecutive_anom = ms.consecutive_anomalous
+
+        # Signal 5: stuck rate in last 30d — all three stuck variants count
+        from .mission_store import MissionStore as _MS
+        stuck_count = sum(
+            1 for r in records_30d
+            if r.get("result") in _MS.STUCK_RESULTS
+        )
+        stuck_rate = stuck_count / len(records_30d) if records_30d else None
+
+        return rps.compute_health_score(
+            battery_retention_pct=bat_retention,
+            nav_efficiency_ratio=nav_ratio,
+            cleaning_speed_trend=trend,
+            consecutive_anomalous=consecutive_anom,
+            stuck_rate_30d=stuck_rate,
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # updated by cloud coordinator only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            self._coordinator.async_add_listener(_on_coordinator_update)
+        )

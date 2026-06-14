@@ -462,6 +462,79 @@ async def _handle_reset_service(
         _LOGGER.info("reset_%s: executed for %s at %dh", part, eid, current_hr)
 
 
+# ── IA74-MAINT (v2.7.0) — calendar-based inspect reset services ───────────────
+
+async def _handle_inspect_reset_service(
+    hass: HomeAssistant, call: ServiceCall, component: str
+) -> None:
+    """Handle roomba_plus.reset_{wheel|contact|bin}_cleaning."""
+    entity_ids: list[str] = call.data.get("entity_id", [])
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+
+    ent_reg = er.async_get(hass)
+
+    for eid in entity_ids:
+        entry_reg = ent_reg.async_get(eid)
+        if entry_reg is None:
+            _LOGGER.warning("reset_%s_cleaning: entity not found: %s", component, eid)
+            continue
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        if config_entry is None:
+            _LOGGER.warning("reset_%s_cleaning: config entry not found for %s", component, eid)
+            continue
+
+        data: RoombaData = config_entry.runtime_data
+        if data.maintenance_store is None:
+            raise ServiceValidationError(
+                f"Maintenance store not available for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="maintenance_store_unavailable",
+            )
+
+        getattr(data.maintenance_store, f"reset_{component}_cleaning")()
+        await data.maintenance_store.async_save(hass, config_entry.entry_id)
+        _async_signal_entities(hass, config_entry.entry_id, [
+            "wheel_last_cleaned",
+            "contact_last_cleaned",
+            "bin_last_cleaned",
+        ])
+        _LOGGER.info("reset_%s_cleaning: executed for %s", component, eid)
+
+
+async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
+    """Handle roomba_plus.reset_robot_profile.
+
+    Wipes all self-calibrated learned state in RobotProfileStore so the robot
+    starts fresh — useful after moving house, a major layout change, or
+    replacing the robot entirely.  Mission history is unaffected.
+    """
+    entity_ids: list[str] = call.data.get("entity_id", [])
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+
+    ent_reg = er.async_get(call.hass)
+
+    for eid in entity_ids:
+        entry_reg = ent_reg.async_get(eid)
+        if entry_reg is None:
+            _LOGGER.warning("reset_robot_profile: entity not found: %s", eid)
+            continue
+        config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        if config_entry is None:
+            _LOGGER.warning("reset_robot_profile: config entry not found for %s", eid)
+            continue
+
+        data: RoombaData = config_entry.runtime_data
+        rps = getattr(data, "robot_profile_store", None)
+        if rps is None:
+            _LOGGER.warning("reset_robot_profile: RobotProfileStore not available for %s", eid)
+            continue
+
+        await rps.async_reset(call.hass, config_entry.entry_id)
+        _LOGGER.info("reset_robot_profile: executed for %s", eid)
+
+
 # ── F10d — clean_sequence ─────────────────────────────────────────────────────
 
 _CLEAN_SEQUENCE_SCHEMA = vol.Schema({
@@ -615,6 +688,32 @@ def async_register_services(hass: HomeAssistant) -> None:
                 schema=_RESET_SCHEMA,
             )
 
+    # ── IA74-MAINT (v2.7.0) — calendar-based inspect resets ──────────────────
+    for _component in ("wheel", "contact", "bin"):
+        svc = f"reset_{_component}_cleaning"
+        if not hass.services.has_service(DOMAIN, svc):
+            _c = _component
+
+            async def _make_inspect_handler(
+                call: ServiceCall, c: str = _c
+            ) -> None:
+                await _handle_inspect_reset_service(call.hass, call, c)
+
+            hass.services.async_register(
+                DOMAIN,
+                svc,
+                _make_inspect_handler,
+                schema=_RESET_SCHEMA,
+            )
+
+    if not hass.services.has_service(DOMAIN, "reset_robot_profile"):
+        hass.services.async_register(
+            DOMAIN,
+            "reset_robot_profile",
+            async_handle_reset_robot_profile,
+            schema=_RESET_SCHEMA,
+        )
+
     # ── F10d — clean_sequence ─────────────────────────────────────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_SEQUENCE):
         hass.services.async_register(
@@ -636,6 +735,10 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "reset_brush",
         "reset_battery",
         "reset_pad",
+        "reset_wheel_cleaning",
+        "reset_contact_cleaning",
+        "reset_bin_cleaning",
+        "reset_robot_profile",
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
