@@ -30,6 +30,7 @@ from .const import (
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
     ATTR_ROOMS,
+    ATTR_TWO_PASS,
     CONF_SMART_ZONE_DATA,
     DOMAIN,
     SERVICE_CLEAN_ROOM,
@@ -117,8 +118,36 @@ def _resolve_rooms(
     resolved: list[tuple[str, str]] = []
     unknown: list[str] = []
 
+    # v2.7.3 (ROOM-SLUG): XVMC sends room_id (ASCII slug) as [[selection]].
+    # Build a secondary slug index so "kuche" resolves to "Küche".
+    import unicodedata as _ud
+    import re as _re
+
+    def _slug(s: str) -> str:
+        nfd = _ud.normalize("NFD", s)
+        a = "".join(c for c in nfd if _ud.category(c) != "Mn")
+        slug = _re.sub(r"[^a-zA-Z0-9]+", "_", a).strip("_").lower()
+        return _re.sub(r"_+", "_", slug) or "room"
+
+    slug_index: dict[str, tuple[str, str]] = {
+        _slug(meta["name"]): val
+        for val in [index[k] for k in index]
+        for meta in zone_data.values()
+        if meta.get("name") and index.get(meta["name"].casefold()) == val
+    }
+    # Simpler rebuild: slug → (rid, pmap_id) from the name index
+    slug_index = {
+        _slug(display_name): match_val
+        for display_name, match_val in (
+            (meta["name"], index.get(meta["name"].casefold()))
+            for meta in zone_data.values()
+            if meta.get("name") and index.get(meta["name"].casefold())
+        )
+        if match_val is not None
+    }
+
     for name in room_names:
-        match = index.get(name.casefold())
+        match = index.get(name.casefold()) or slug_index.get(_slug(name))
         if match is None:
             unknown.append(name)
         else:
@@ -344,7 +373,13 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
         # Read cleaning pass mode from live robot state (same source as CleaningPassesSelect)
         no_auto = bool(state.get("noAutoPasses", False))
-        two_pass = bool(state.get("twoPass", False))
+        # v2.7.3: optional two_pass parameter overrides the robot's current state.
+        # None = inherit from robot state (default); True/False = explicit override.
+        caller_two_pass: bool | None = call.data.get(ATTR_TWO_PASS)
+        two_pass = (
+            caller_two_pass if caller_two_pass is not None
+            else bool(state.get("twoPass", False))
+        )
 
         params = {
             "ordered": 1 if ordered else 0,

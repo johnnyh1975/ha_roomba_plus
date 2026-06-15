@@ -74,6 +74,28 @@ def _map_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_{entry_id}"
 
 
+def _room_slug(name: str) -> str:
+    """Return an ASCII-safe slug suitable for use as an XVMC predefined_selection id.
+
+    XVMC validates id values and rejects non-ASCII characters (e.g. German umlauts,
+    Italian accents).  This helper performs NFD decomposition to strip combining
+    diacritics, then replaces any remaining non-alphanumeric characters with
+    underscores and collapses runs.
+
+    Examples:
+        "Küche"        → "kuche"
+        "Büro"         → "buro"
+        "Bad & Küche"  → "bad_kuche"
+        "Living Room"  → "living_room"
+    """
+    import unicodedata
+    import re as _re
+    nfd = unicodedata.normalize("NFD", name)
+    ascii_only = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
+    return _re.sub(r"_+", "_", slug) or "room"
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
@@ -294,6 +316,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
+                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -836,8 +859,8 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         else:
             # Fallback: render directly in UMF-space coordinates
             _LOGGER.debug(
-                "RoombaRoomsImage: aligner not yet aligned — rendering in UMF space "
-                "(alignment_pending=True, fallback calibration active)"
+                "RoombaRoomsImage: pose alignment pending — rendering in UMF space "
+                "(alignment_pending=True, fallback calibration active and accurate)"
             )
             all_coords = [
                 pt for poly in polygons_umf.values() for pt in poly
@@ -890,12 +913,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 continue
             poly_px = [to_px(x, y) for x, y in resolved]
             draw.polygon(poly_px, outline=(100, 149, 237), fill=(45, 55, 72))
-            cx = int(sum(p[0] for p in poly_px) / len(poly_px))
-            cy = int(sum(p[1] for p in poly_px) / len(poly_px))
-            label = rid_to_name.get(rid, rid)
-            if not aligned:
-                label = f"{label} *"  # asterisk signals fallback mode to user
-            draw.text((cx, cy), label, fill=(200, 200, 200))
+            # v2.7.3: labels removed from PNG — XVMC card renders its own
+            # labels from predefined_selections.label.text; drawing them here
+            # produced duplicate overlapping labels in the card (veronoicc #2).
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -1015,6 +1035,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
+                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,

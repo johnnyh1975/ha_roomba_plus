@@ -152,7 +152,9 @@ class UmfAligner:
             )
         if len(gs_markers) < 2 or len(self._door_candidates) < 2:
             _LOGGER.debug(
-                "UmfAligner: insufficient data — %d GS markers, %d door candidates",
+                "UmfAligner: pose alignment deferred — %d GS markers, %d door "
+                "candidates (need ≥2 each); fallback UMF-space calibration is "
+                "active and coordinates are accurate for XVMC",
                 len(gs_markers), len(self._door_candidates),
             )
             self._confidence = 0.0

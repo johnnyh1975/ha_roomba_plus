@@ -31,6 +31,15 @@ clean_room:
       default: true
       selector:
         boolean:
+    two_pass:
+      name: Two-pass cleaning
+      description: >
+        When true, the robot makes two cleaning passes over each room.
+        When omitted (default), the robot's current two-pass setting is
+        inherited. Overrides the global setting for this job only.
+      required: false
+      selector:
+        boolean:
 
 reset_filter:
   name: Reset filter
