@@ -658,22 +658,39 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def active_pmap_id(self) -> str | None:
-        """Return the pmap_id of the first active pmap, or None.
+        """Return the pmap_id of the currently active Smart Map.
 
-        IA74-PMAP: falls back to _seeded_pmap_id (set from local MQTT pmaps
-        field on startup) when cloud data has not yet been fetched. This reduces
-        the window where vacuum.clean_area raises no_valid_segments on fresh
-        installs or immediately after adding cloud credentials.
+        v2.7.4 (PMAP-NEWEST): selects the pmap whose user_pmapv_id timestamp
+        is most recent — that is the map the robot has been actively using and
+        updating after each cleaning run.  The cloud API returns all maps for
+        an account without a guaranteed ordering; for robots with multiple Smart
+        Maps (e.g. two-storey homes or after a map retrain), returning the first
+        entry silently picks the wrong map.
+
+        Lexicographic comparison of YYMMDDTHHMMSS strings is sufficient since
+        the format is fixed-width and zero-padded.
+
+        Falls back to _seeded_pmap_id (set from local MQTT) when no cloud data
+        is available (pre-first-fetch window).
         """
         if not self.data:
             return getattr(self, "_seeded_pmap_id", None)
+        best_pid: str | None = None
+        best_ts: str = ""
         for pmap in self.data.get("pmaps", []):
             details = pmap.get("active_pmapv_details", {})
             pmapv = details.get("active_pmapv", {})
             pid = pmapv.get("pmap_id")
-            if pid:
-                return pid
-        return None
+            if not pid:
+                continue
+            ts: str = (
+                pmapv.get("last_user_pmapv_id", "")   # Variant B — lewis 22.52.x
+                or pmapv.get("active_pmapv_id", "")   # Variant A
+            )
+            if ts > best_ts:
+                best_pid = pid
+                best_ts = ts
+        return best_pid or None
 
     @property
     def active_user_pmapv_id(self) -> str | None:

@@ -52,12 +52,21 @@ _LOGGER = logging.getLogger(__name__)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
-    """Return the current user_pmapv_id for pmap_id from live MQTT state.
+    """Return user_pmapv_id for pmap_id from local MQTT state.
 
-    Always reads state.pmaps at call time so the value is never stale.
-    iRobot updates user_pmapv_id whenever the map is edited or retrained;
-    a cached value silently causes the robot to reject the command.
+    v2.7.4 (PMAP-PMAPV): prefers lastCommand.user_pmapv_id over state.pmaps.
+
+    rest980 protocol: get user_pmapv_id from lastCommand (the stable committed
+    version the robot last accepted).  state.pmaps reflects the live value that
+    the robot writes to MQTT immediately after updating its map — this version
+    is not yet committed for command use and will cause error 224 if sent.
+
+    Fallback to state.pmaps when lastCommand has a different pmap_id (e.g. the
+    robot was last commanded on a different map) or when cloud data is absent.
     """
+    last = state.get("lastCommand", {})
+    if last.get("pmap_id") == pmap_id and last.get("user_pmapv_id"):
+        return last["user_pmapv_id"]
     for pmap in state.get("pmaps", []):
         if pmap_id in pmap:
             return pmap[pmap_id]
@@ -324,25 +333,14 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
         state = roomba_reported_state(data.roomba)
 
-        # v2.7.2 (PMAP-MULTI): For robots with multiple Smart Maps the cloud
-        # coordinator iterates pmaps[] and returns the first pmap_id found,
-        # which may be an old/inactive map.  Local MQTT state.pmaps always
-        # contains only the currently active map — prefer it at call time.
-        local_pmaps: list = state.get("pmaps", [])
-        local_active_pmap_id: str | None = (
-            next(iter(local_pmaps[0]), None) if local_pmaps else None
-        )
-
-        cloud_pmap_id: str | None = local_active_pmap_id
-        if not cloud_pmap_id and data.has_cloud:
+        cloud_pmap_id: str | None = None
+        if data.has_cloud:
             cloud_pmap_id = data.cloud_coordinator.active_pmap_id
-        if cloud_pmap_id:
-            _LOGGER.debug(
-                "clean_room: active pmap_id=%s (source=%s) for %s",
-                cloud_pmap_id[:12],
-                "local_mqtt" if local_active_pmap_id else "cloud",
-                entity_id,
-            )
+            if cloud_pmap_id:
+                _LOGGER.debug(
+                    "clean_room: active pmap_id=%s (source=cloud) for %s",
+                    cloud_pmap_id[:12], entity_id,
+                )
 
         not_ready: int = state.get("cleanMissionStatus", {}).get("notReady", 0)
         if not_ready & 64:
@@ -357,19 +355,17 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         resolved = _resolve_rooms(zone_data, room_names, state, cloud_pmap_id)
         pmap_id = resolved[0][1]
 
-        user_pmapv_id = _resolve_pmapv_id(state, pmap_id)
-        if user_pmapv_id is None:
-            _LOGGER.warning(
-                "clean_room: pmap_id %s not found in live state for %s. "
-                "The map may have been retrained. Re-run a mission via the app.",
-                pmap_id, entity_id,
-            )
-            raise ServiceValidationError(
-                f"Map {pmap_id} not found in robot state. "
-                "The map may have been retrained — re-run a room mission via the app.",
-                translation_domain=DOMAIN,
-                translation_key="pmap_not_found",
-            )
+        # v2.7.4 (PMAP-PMAPV): cloud coordinator is authoritative for lewis
+        # firmware — lewis 22.52.10 does not broadcast pmaps updates via local
+        # MQTT after map changes, so state.pmaps holds a stale/in-flux version.
+        # Cloud last_user_pmapv_id is the stable committed token the robot
+        # accepts. _resolve_pmapv_id provides lastCommand/state.pmaps fallback
+        # for robots without cloud credentials.
+        user_pmapv_id: str = (
+            (data.cloud_coordinator.active_user_pmapv_id if data.has_cloud else None)
+            or _resolve_pmapv_id(state, pmap_id)
+            or ""
+        )
 
         # Read cleaning pass mode from live robot state (same source as CleaningPassesSelect)
         no_auto = bool(state.get("noAutoPasses", False))
