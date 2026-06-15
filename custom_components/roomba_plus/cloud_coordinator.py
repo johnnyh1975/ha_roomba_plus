@@ -690,7 +690,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if ts > best_ts:
                 best_pid = pid
                 best_ts = ts
-        return best_pid or None
+        return best_pid or getattr(self, "_seeded_pmap_id", None)
 
     @property
     def active_user_pmapv_id(self) -> str | None:

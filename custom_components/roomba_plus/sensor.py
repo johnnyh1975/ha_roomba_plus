@@ -3175,6 +3175,15 @@ def _get_planned_room_order(data: Any) -> list[str]:
     v2.6.3 — uses MissionStore._extract_rid() to handle all confirmed region
     key formats: {"region_id": ...} (Roomba+ app), {"rid": ...} (iRobot app /
     lewis 22.52.10+), and plain string (some firmware variants).
+
+    v2.7.5 — falls back to mts.planned_rooms (set at mission start by
+    set_mission_plan) when lastCommand.regions is temporarily empty or when
+    cc.regions is unavailable mid-mission:
+      * Lewis firmware can send cleanMissionStatus with a transitional
+        lastCommand that has no regions field at inter-room boundaries.
+      * The F4b cloud refresh triggered by a transient end-phase can leave
+        active_pmap_id returning None, making cc.regions return [].
+    Either path previously caused all tracker values to flip to unknown.
     """
     cc = getattr(data, "cloud_coordinator", None)
     if cc is None:
@@ -3189,9 +3198,20 @@ def _get_planned_room_order(data: Any) -> list[str]:
         if _MS._extract_rid(r)
     ]
     if not region_ids:
+        # lastCommand.regions temporarily empty — fall back to MTS snapshot.
+        mts = getattr(data, "mission_timer_store", None)
+        if mts is not None and mts.planned_rooms:
+            return list(mts.planned_rooms)
         return []
+
     id_to_name = {r["id"]: r["name"] for r in cc.regions if r.get("id")}
-    return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
+    result = [id_to_name[rid] for rid in region_ids if rid in id_to_name]
+    if not result:
+        # cc.regions temporarily empty (cloud mid-refresh) — fall back.
+        mts = getattr(data, "mission_timer_store", None)
+        if mts is not None and mts.planned_rooms:
+            return list(mts.planned_rooms)
+    return result
 
 
 # ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
