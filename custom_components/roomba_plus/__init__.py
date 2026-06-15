@@ -69,10 +69,6 @@ from .robot_profile_store import RobotProfileStore  # v2.6 L4
 from .mission_timer_store import MissionTimerStore  # v2.6 MP1
 from .map_renderer import MapRenderer, RendererConfig
 from .models import MapCapability, RoombaConfigEntry, RoombaData
-
-# Pre-import diagnostics platform so HA 2026.x does not detect a blocking
-# import when the user first triggers "Download diagnostics" in the event loop.
-from . import diagnostics as _diagnostics_preload  # noqa: F401
 from .services import async_register_services, async_remove_services
 from .zone_store import ZoneStore
 from .geometry_store import GeometryStore

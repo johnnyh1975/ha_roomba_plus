@@ -10,7 +10,6 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from . import roomba_reported_state
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODES
 from .models import MapCapability, RoombaConfigEntry
 
@@ -45,6 +44,11 @@ async def async_get_config_entry_diagnostics(
     Sensitive keys (BLID, password, credentials) are redacted.
     The output is structured for easy triage of connectivity, map, and zone issues.
     """
+    # Lazy import avoids circular dependency: diagnostics.py is imported by HA's
+    # platform loader while __init__.py is still initialising.  By the time this
+    # function is actually called, __init__.py is fully loaded.
+    from . import roomba_reported_state  # noqa: PLC0415
+
     data = config_entry.runtime_data
     roomba = data.roomba
     state = roomba_reported_state(roomba)
