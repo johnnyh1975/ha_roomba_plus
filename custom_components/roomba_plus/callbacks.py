@@ -424,7 +424,9 @@ def make_mission_callback(
                         and (r.get("region_name") or r.get("region_id"))
                     ]
                     if _names:
-                        _mts_upd.set_mission_plan(_mission_id, _names, 0)
+                        _mts_upd.set_mission_plan(
+                            _mission_id, _names, 0, hass, entry.entry_id
+                        )
             else:
                 # v2.7.5: pass hass/entry_id so on_phase_other can save
                 # the flushed delta without waiting for next on_phase_run.

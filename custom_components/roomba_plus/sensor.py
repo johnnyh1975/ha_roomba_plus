@@ -3255,18 +3255,37 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         if cc is None:
             return [None] * len(planned_order)
 
-        # Determine pass mode from select entity state
-        pass_key = "two_pass_sec"
+        # v2.7.5 (TP-EST-FIX): per-room params in lastCommand.regions take
+        # priority over cleanMissionStatus global fields.  cleanMissionStatus
+        # reflects the robot's global default, which stays at the device-level
+        # setting even when a room-clean mission is started with explicit per-
+        # region twoPass/noAutoPasses params.  Reading from the wrong source
+        # caused two-pass missions to be estimated at one-pass durations.
         reported = self._config_entry.runtime_data.roomba_reported_state()
-        noap = reported.get("cleanMissionStatus", {}).get("noAutoPasses", True)
-        two_pass = reported.get("cleanMissionStatus", {}).get("twoPass", False)
-        if not noap:
-            # Auto mode — no reliable per-room estimate
-            pass_key = None
-        elif two_pass:
-            pass_key = "two_pass_sec"
+        last_cmd = reported.get("lastCommand", {})
+        last_regions = [
+            r for r in (last_cmd.get("regions") or [])
+            if isinstance(r, dict) and r.get("params")
+        ]
+        if last_regions:
+            has_no_auto = any(r["params"].get("noAutoPasses") for r in last_regions)
+            has_two_pass = any(r["params"].get("twoPass") for r in last_regions)
+            if not has_no_auto:
+                pass_key = None          # Auto — no reliable per-room estimate
+            elif has_two_pass:
+                pass_key = "two_pass_sec"
+            else:
+                pass_key = "one_pass_sec"
         else:
-            pass_key = "one_pass_sec"
+            # Fallback: read from cleanMissionStatus global fields
+            noap = reported.get("cleanMissionStatus", {}).get("noAutoPasses", True)
+            two_pass = reported.get("cleanMissionStatus", {}).get("twoPass", False)
+            if not noap:
+                pass_key = None
+            elif two_pass:
+                pass_key = "two_pass_sec"
+            else:
+                pass_key = "one_pass_sec"
 
         # Build name→estimates map from coordinator
         region_map: dict[str, dict] = {}
