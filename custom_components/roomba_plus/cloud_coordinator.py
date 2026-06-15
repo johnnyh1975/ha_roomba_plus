@@ -748,11 +748,15 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def seed_pmap_id_from_local(self, reported_state: dict) -> None:
         """IA74-PMAP — Seed active_pmap_id from local MQTT pmaps field on startup.
 
-        Local robot state includes pmaps: [{"PMAP_ID": "PMAPV_ID"}].
-        next(iter(pmaps[0])) yields the active pmap_id locally without a
-        cloud fetch. Called once in async_setup_entry after the robot connects.
-        Only seeds when coordinator data is None (before first cloud fetch) so
-        it never overrides real cloud data.
+        Called once in async_setup_entry after the robot connects, before the
+        first cloud fetch.  Only seeds when coordinator data is None so it
+        never overrides real cloud data.
+
+        v2.7.5 (SEED-FIX): iterates all pmaps and picks the one with the
+        newest pmapv timestamp, mirroring the cloud-side active_pmap_id logic.
+        Previously took pmaps[0] unconditionally; on multi-map robots the list
+        is ordered oldest-first, so the inactive map was seeded and used until
+        the first cloud fetch completed.
 
         Args:
             reported_state: the reported section of the robot's MQTT state.
@@ -760,14 +764,24 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.data is not None:
             return   # cloud data already present — don't override
         pmaps: list[dict] = reported_state.get("pmaps", [])
-        if not pmaps or not isinstance(pmaps[0], dict):
+        if not pmaps:
             return
-        local_pmap_id = next(iter(pmaps[0]), None)
-        if local_pmap_id:
-            self._seeded_pmap_id = local_pmap_id
+        best_pid: str | None = None
+        best_ts: str = ""
+        for p in pmaps:
+            if not isinstance(p, dict):
+                continue
+            pid = next(iter(p), None)
+            ts  = p.get(pid, "") if pid else ""
+            if pid and ts > best_ts:
+                best_pid = pid
+                best_ts  = ts
+        if best_pid:
+            self._seeded_pmap_id = best_pid
             _LOGGER.debug(
-                "iRobot cloud: seeded active_pmap_id=%s from local MQTT for %s",
-                local_pmap_id, self.blid,
+                "iRobot cloud: seeded active_pmap_id=%s from local MQTT "
+                "(pmapv=%s, %d map(s)) for %s",
+                best_pid, best_ts, len(pmaps), self.blid,
             )
 
     @property

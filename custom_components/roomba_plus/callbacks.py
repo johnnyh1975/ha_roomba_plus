@@ -19,6 +19,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
+
+from .const import CONF_SMART_ZONE_DATA
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -401,9 +403,32 @@ def make_mission_callback(
         if _mts_upd is not None and mission_start_ts:
             _mission_id = f"{entry.data.get('blid', '')}_{mission_start_ts}"
             if phase == "run":
+                _is_new_mission = _mts_upd.mission_id != _mission_id
                 _mts_upd.on_phase_run(_mission_id, hass, entry.entry_id)
+                if _is_new_mission:
+                    # v2.7.5: wire set_mission_plan on mission start so
+                    # planned_rooms is populated for current_room fallback
+                    # and for MTS persistence across HA restarts.
+                    _master = (
+                        getattr(entry.runtime_data.roomba, "master_state", None) or {}
+                    )
+                    _rep = _master.get("state", {}).get("reported", {})
+                    _regions = _rep.get("lastCommand", {}).get("regions", [])
+                    _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
+                    _names = [
+                        r.get("region_name")
+                        or _zone.get(str(r.get("region_id", "")), {}).get("name")
+                        or str(r.get("region_id", ""))
+                        for r in _regions
+                        if isinstance(r, dict)
+                        and (r.get("region_name") or r.get("region_id"))
+                    ]
+                    if _names:
+                        _mts_upd.set_mission_plan(_mission_id, _names, 0)
             else:
-                _mts_upd.on_phase_other()
+                # v2.7.5: pass hass/entry_id so on_phase_other can save
+                # the flushed delta without waiting for next on_phase_run.
+                _mts_upd.on_phase_other(hass, entry.entry_id)
 
         last_phase = phase
 

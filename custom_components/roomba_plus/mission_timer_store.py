@@ -143,18 +143,6 @@ class MissionTimerStore:
         self.total_estimated_sec = total_estimated_sec
         self._schedule_save(hass, entry_id)
 
-    def advance_room(self, hass: HomeAssistant, entry_id: str) -> None:
-        """Called when a traversal event indicates the robot entered the next room.
-
-        Increments current_room_idx and saves so that after an HA restart,
-        current_room/next_room are restored to the last known values rather
-        than reverting to the start of the sequence.
-        """
-        if self.current_room_idx < max(0, len(self.planned_rooms) - 1):
-            self.current_room_idx += 1
-        self.snapshot_ts = time.time()
-        self._schedule_save(hass, entry_id)
-
     def on_recharge(self, hass: HomeAssistant, entry_id: str) -> None:
         """Called when a recharge event is detected mid-mission.
 
@@ -193,8 +181,34 @@ class MissionTimerStore:
                 self._schedule_save(hass, entry_id)
         self._last_phase_ts = now
 
-    def on_phase_other(self) -> None:
-        """Called when phase is not "run" — resets the phase timestamp."""
+    def on_phase_other(
+        self,
+        hass: HomeAssistant | None = None,
+        entry_id: str | None = None,
+    ) -> None:
+        """Flush pending live delta into run_sec then reset the phase timestamp.
+
+        v2.7.5 (MP-TRANSITION-FIX): previously discarded the delta accumulated
+        since the last phase=run message.  Lewis firmware sends a non-run
+        cleanMissionStatus at every inter-room boundary, so each room transition
+        caused elapsed_run_min and progress to jump backwards to the bare
+        run_sec value, then recover once phase=run resumed in the next room.
+
+        The flush uses the same 120 s cap as on_phase_run to exclude genuine
+        long pauses (recharges, stuck events) where the gap is intentionally
+        not counted as run time.
+
+        hass and entry_id are optional so callers that cannot provide them
+        (e.g. tests) still work; without them the flushed value is persisted
+        on the next on_phase_run call instead.
+        """
+        now = time.monotonic()
+        if self._last_phase_ts > 0:
+            delta = now - self._last_phase_ts
+            if 0 < delta < 120:
+                self.run_sec += delta
+                if hass is not None and entry_id is not None:
+                    self._schedule_save(hass, entry_id)
         self._last_phase_ts = 0.0
 
     def clear(self, hass: HomeAssistant, entry_id: str) -> None:
