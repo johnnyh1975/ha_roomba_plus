@@ -43,6 +43,68 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
     {"charge", "hmPostMsn", "stop", "completed", "cancelled"}
 )
 
+# v2.8.0 AUTO-ADVANCE-ROOM — phases that may represent an inter-room transition
+# on lewis firmware (i7+/s9+) rather than a genuine mission end or recharge.
+# Restricted to "charge" and "hmPostMsn": these are the two phases observed
+# (per community report) appearing briefly between rooms. "stop", "completed",
+# "cancelled" are excluded — those are unambiguous deliberate/terminal states
+# and should never trigger an automatic room advance. "pause" and "stuck" are
+# excluded by design (handled by the error/cycle guard below, but kept out of
+# the candidate set entirely as a second layer of defence).
+_ROOM_TRANSITION_CANDIDATE_PHASES: frozenset[str] = frozenset({"charge", "hmPostMsn"})
+
+# AUTO-ADVANCE-ROOM time-confidence threshold: time spent in the current room
+# must be at least this fraction of the heuristic expected-per-room duration
+# before a transient non-run phase is trusted as a genuine room completion.
+# Conservative (0.5) since expected_room_sec is a uniform-split heuristic, not
+# a true per-room estimate — large rooms legitimately take longer than average.
+_ROOM_TRANSITION_MIN_ELAPSED_RATIO: float = 0.5
+
+
+def _room_transition_confidence_ok(
+    mission: dict[str, Any],
+    mts: Any,
+) -> bool:
+    """AUTO-ADVANCE-ROOM (v2.8.0) confidence check.
+
+    Combines four signals (per community feature request from Thonno) to
+    decide whether a transient non-run cleanMissionStatus phase represents a
+    genuine inter-room transition, as opposed to an error, a user pause, or a
+    genuine low-battery recharge that happens to pass through the same phase
+    string ("charge").
+
+    Conditions (ALL must hold):
+      1. No active error on the mission (mission.error == 0).
+      2. cycle is still "clean" or "quick" — robot has not reported mission end.
+      3. expected_room_sec is available (total_estimated_sec wired in) AND
+         time_in_current_room_sec is at least _ROOM_TRANSITION_MIN_ELAPSED_RATIO
+         of the expected per-room duration.
+
+    KNOWN LIMITATION (as of v2.8.0): total_estimated_sec is currently always
+    passed as 0 by the only call site (set_mission_plan in this module), so
+    expected_room_sec is always None and condition 3 always fails. This means
+    AUTO-ADVANCE-ROOM is architecturally complete but DORMANT until a real
+    mission time estimate is wired in (tracked as a v2.9.0+ backlog item).
+    This is a deliberate conservative choice: without genuine timing data we
+    cannot distinguish "robot finished this room" from "robot is recharging
+    mid-room", and firing incorrectly would silently corrupt current_room/
+    next_room tracking — worse than not firing at all.
+    """
+    error_code = mission.get("error", 0) or 0
+    if error_code:
+        return False
+
+    cycle = mission.get("cycle", "")
+    if cycle not in ("clean", "quick"):
+        return False
+
+    expected = mts.expected_room_sec
+    if expected is None or expected <= 0:
+        return False  # cannot confirm timing — conservative refusal (see docstring)
+
+    elapsed = mts.time_in_current_room_sec
+    return elapsed >= expected * _ROOM_TRANSITION_MIN_ELAPSED_RATIO
+
 
 # ── Zone-name capture ─────────────────────────────────────────────────────────
 
@@ -348,7 +410,26 @@ def make_mission_callback(
 
         # v2.6.3 A — use had_cleaning_phase instead of last_phase guard so that
         # stuck → stop/charge (stuck_and_abandoned) is correctly detected.
-        if phase in _MISSION_END_PHASES and had_cleaning_phase:
+        #
+        # v2.8.0 INTER-ROOM-TRANSITION guard: on lewis firmware (i7+/s9+),
+        # the robot briefly shows mission-end phases (charge, hmPostMsn) between
+        # rooms in a multi-room mission.  Each room segment ends with a non-run
+        # phase before the next room begins.
+        #
+        # Reliable discriminator: cleanMissionStatus.cycle
+        #   "clean" / "quick" → robot is still in an active mission (inter-room)
+        #   "none"  / absent  → robot truly finished, heading to dock
+        #
+        # Without this guard, _mts.clear() fires at every room transition,
+        # resetting run_sec=0, mission_id=None → progress resets to 0% each room.
+        # (Thonno regression reported for v2.7.6.)
+        #
+        # NOTE: this guard is a best-effort heuristic until we have confirmed
+        # MQTT phase sequences from Thonno's i7+ logs.  If cycle is unreliable
+        # on some firmware variants, we may need to fall back to nMssn tracking.
+        _cycle = mission.get("cycle", "")
+        _is_inter_room_transition = _cycle in ("clean", "quick")
+        if phase in _MISSION_END_PHASES and had_cleaning_phase and not _is_inter_room_transition:
             had_cleaning_phase = False
             bbrun_end = reported.get("bbrun", {})
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
@@ -412,25 +493,93 @@ def make_mission_callback(
                     _master = (
                         getattr(entry.runtime_data.roomba, "master_state", None) or {}
                     )
-                    _rep = _master.get("state", {}).get("reported", {})
-                    _regions = _rep.get("lastCommand", {}).get("regions", [])
+                    _rep = (_master.get("state") or {}).get("reported") or {}
+                    _regions = (_rep.get("lastCommand") or {}).get("regions") or []
                     _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
                     _names = [
                         r.get("region_name")
-                        or _zone.get(str(r.get("region_id", "")), {}).get("name")
+                        or (_zone.get(str(r.get("region_id", ""))) or {}).get("name")
                         or str(r.get("region_id", ""))
                         for r in _regions
                         if isinstance(r, dict)
                         and (r.get("region_name") or r.get("region_id"))
                     ]
                     if _names:
+                        # v2.8.0 AUTO-ADVANCE-ROOM (live wiring): use the real
+                        # cloud TE1 per-room time estimates instead of the
+                        # previous hardcoded 0. total_estimated_sec is the sum
+                        # of available per-room estimates (None entries are
+                        # excluded from the sum, not treated as 0 seconds).
+                        # Deferred import: sensor.py imports from this package's
+                        # __init__.py (roomba_reported_state), and __init__.py
+                        # imports this module at load time — a top-level import
+                        # here would be circular. Safe at call time since both
+                        # modules are fully loaded by then.
+                        #
+                        # Bug-hunt: this entire block is wrapped because
+                        # _compute_room_time_estimates() reads cloud_coordinator
+                        # and roomba_reported_state() — an unexpected None or a
+                        # malformed cloud payload there must not crash this
+                        # whole MQTT callback (which would also break mission
+                        # tracking, stuck detection, etc. for this message).
+                        # Falls back to the pre-v2.8.0 behaviour (no estimate)
+                        # on any failure, same as if cloud data were absent.
+                        _room_secs: list[float | None] = [None] * len(_names)
+                        _total_est: float | None = None
+                        try:
+                            from .sensor import _compute_room_time_estimates
+                            _room_secs = _compute_room_time_estimates(entry, _names)
+                            _known_secs: list[float] = []
+                            for _s in _room_secs:
+                                if _s is None:
+                                    continue
+                                try:
+                                    _sf = float(_s)
+                                except (TypeError, ValueError):
+                                    continue
+                                if _sf > 0:
+                                    _known_secs.append(_sf)
+                            _total_est = sum(_known_secs) if _known_secs else None
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug(
+                                "AUTO-ADVANCE-ROOM: room time estimate lookup "
+                                "failed — continuing without estimates",
+                                exc_info=True,
+                            )
                         _mts_upd.set_mission_plan(
-                            _mission_id, _names, 0, hass, entry.entry_id
+                            _mission_id,
+                            _names,
+                            _total_est,
+                            hass,
+                            entry.entry_id,
+                            room_estimates_sec=_room_secs,
                         )
             else:
                 # v2.7.5: pass hass/entry_id so on_phase_other can save
                 # the flushed delta without waiting for next on_phase_run.
                 _mts_upd.on_phase_other(hass, entry.entry_id)
+
+                # v2.8.0 AUTO-ADVANCE-ROOM — automatic confidence-based room
+                # advancement, per community feature request (Thonno).
+                # Edge-triggered (last_phase != phase) so a phase that stays
+                # e.g. "charge" across multiple consecutive MQTT messages only
+                # attempts the advance once — prevents repeatedly advancing
+                # current_room_idx during a single genuine recharge dwell.
+                if (
+                    last_phase != phase
+                    and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
+                    and _room_transition_confidence_ok(mission, _mts_upd)
+                ):
+                    _advanced = _mts_upd.advance_room(hass, entry.entry_id)
+                    if _advanced:
+                        _LOGGER.info(
+                            "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
+                            "on phase=%s confidence signal",
+                            _mts_upd.current_room_idx + 1,
+                            len(_mts_upd.planned_rooms),
+                            _mts_upd.current_room,
+                            phase,
+                        )
 
         last_phase = phase
 
@@ -458,18 +607,33 @@ def make_mission_complete_callback(
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
             return
-        phase = reported["cleanMissionStatus"].get("phase", "")
+        mission = reported["cleanMissionStatus"]
+        phase = mission.get("phase", "")
         if phase in _ACTIVE_CLEANING_PHASES:
             had_cleaning_phase = True
-        elif phase in _MISSION_END_PHASES and had_cleaning_phase:
-            had_cleaning_phase = False
-            _LOGGER.debug(
-                "Roomba+ cloud: mission ended (phase %s → %s) — requesting refresh",
-                last_phase, phase,
-            )
-            asyncio.run_coroutine_threadsafe(
-                cloud_coordinator.async_request_refresh(), hass.loop
-            )
+        else:
+            # v2.8.0 INTER-ROOM-TRANSITION guard (same discriminator as
+            # _on_mission_message): lewis firmware briefly shows a
+            # mission-end-looking phase (charge/hmPostMsn) between rooms
+            # during a multi-room mission. Without this guard, this callback
+            # fired a cloud async_request_refresh() at every room transition
+            # instead of only at genuine mission end — wasted cloud API
+            # calls and rate-limit risk on multi-room lewis-firmware missions.
+            _cycle = mission.get("cycle", "")
+            _is_inter_room_transition = _cycle in ("clean", "quick")
+            if (
+                phase in _MISSION_END_PHASES
+                and had_cleaning_phase
+                and not _is_inter_room_transition
+            ):
+                had_cleaning_phase = False
+                _LOGGER.debug(
+                    "Roomba+ cloud: mission ended (phase %s → %s) — requesting refresh",
+                    last_phase, phase,
+                )
+                asyncio.run_coroutine_threadsafe(
+                    cloud_coordinator.async_request_refresh(), hass.loop
+                )
         last_phase = phase
 
     return _on_roomba_message

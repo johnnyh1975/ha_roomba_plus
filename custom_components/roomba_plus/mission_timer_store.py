@@ -38,6 +38,23 @@ from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _safe_float(val: Any) -> float | None:
+    """Convert val to float, returning None on TypeError/ValueError.
+
+    v2.8.0 bug-hunt: room_estimates_sec entries originate from the cloud TE1
+    API (cloud_coordinator.regions[*].time_estimates). A malformed or
+    unexpectedly-typed cloud value (e.g. a string) must not crash
+    expected_room_sec or any downstream confidence-check comparison.
+    """
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 STORAGE_VERSION = 1
 _STORAGE_KEY_PREFIX = "roomba_plus_mission_timer"
 _STALE_THRESHOLD_SEC = 7200  # 2 hours — if snapshot is older, timer is stale
@@ -65,6 +82,15 @@ class MissionTimerStore:
         self.recharge_positions: list[int] = []
         self.snapshot_ts: float = 0.0
         self._last_phase_ts: float = 0.0
+        # v2.8.0 AUTO-ADVANCE-ROOM — run_sec value when current_room_idx last
+        # changed.  Used to compute time_in_current_room_sec for the confidence
+        # check (elapsed time in room vs. expected per-room duration).
+        self.room_entered_run_sec: float = 0.0
+        # v2.8.0 AUTO-ADVANCE-ROOM (live wiring) — per-room time estimates in
+        # planned_rooms order, from cloud TE1 data (sensor.py _room_estimates).
+        # Entry is None where no GOOD_CONFIDENCE estimate exists (e.g. Auto
+        # pass mode, or new/uncalibrated room) — falls back to uniform split.
+        self.room_estimates_sec: list[float | None] = []
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -89,6 +115,8 @@ class MissionTimerStore:
             self.planned_rooms        = data.get("planned_rooms") or []
             self.current_room_idx     = int(data.get("current_room_idx", 0))
             self.recharge_positions   = data.get("recharge_positions") or []
+            self.room_entered_run_sec = float(data.get("room_entered_run_sec", 0))
+            self.room_estimates_sec  = data.get("room_estimates_sec") or []
             self.snapshot_ts          = snapshot_ts
             _LOGGER.debug(
                 "MissionTimerStore: resumed mission=%s run_sec=%.0f rooms=%s idx=%d",
@@ -108,6 +136,8 @@ class MissionTimerStore:
             "planned_rooms":       self.planned_rooms,
             "current_room_idx":    self.current_room_idx,
             "recharge_positions":  self.recharge_positions,
+            "room_entered_run_sec": self.room_entered_run_sec,
+            "room_estimates_sec":  self.room_estimates_sec,
             "snapshot_ts":         time.time(),
         })
 
@@ -127,11 +157,17 @@ class MissionTimerStore:
         total_estimated_sec: float | None,
         hass: HomeAssistant,
         entry_id: str,
+        room_estimates_sec: list[float | None] | None = None,
     ) -> None:
         """Called at mission start with the planned room sequence and time estimate.
 
         MP-PERSIST: persisting these values means that after an HA restart,
         current_room/next_room remain correct and progress ratio stays stable.
+
+        room_estimates_sec (v2.8.0 AUTO-ADVANCE-ROOM): optional per-room time
+        estimates in the same order as planned_rooms, from cloud TE1 data.
+        When provided, expected_room_sec uses the specific room's estimate
+        instead of a uniform total_estimated_sec / room_count split.
         """
         if self.mission_id != mission_id:
             self.mission_id          = mission_id
@@ -139,8 +175,10 @@ class MissionTimerStore:
             self.current_room_idx    = 0
             self.recharge_positions  = []
             self._last_phase_ts      = 0.0
+            self.room_entered_run_sec = 0.0
         self.planned_rooms       = planned_rooms
         self.total_estimated_sec = total_estimated_sec
+        self.room_estimates_sec  = room_estimates_sec or []
         self._schedule_save(hass, entry_id)
 
     def on_recharge(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -211,6 +249,32 @@ class MissionTimerStore:
                     self._schedule_save(hass, entry_id)
         self._last_phase_ts = 0.0
 
+    def advance_room(self, hass: HomeAssistant, entry_id: str) -> bool:
+        """Advance current_room_idx by one and persist.
+
+        ADVANCE-ROOM-V2 (v2.8.0) — Manual override for lewis firmware robots
+        when the room progress sensor gets stuck. Called from the
+        roomba_plus.advance_room service with non-run-phase guard.
+
+        Returns True when advanced, False when already at last room or no
+        active mission (guards enforced in the service handler, not here).
+        """
+        if not self.planned_rooms:
+            return False
+        if self.current_room_idx >= len(self.planned_rooms) - 1:
+            return False  # already at last room
+        self.current_room_idx += 1
+        self.room_entered_run_sec = self.run_sec
+        self._schedule_save(hass, entry_id)
+        _LOGGER.debug(
+            "MissionTimerStore: advance_room → idx=%d (%s)",
+            self.current_room_idx,
+            self.planned_rooms[self.current_room_idx]
+            if self.current_room_idx < len(self.planned_rooms)
+            else "?",
+        )
+        return True
+
     def clear(self, hass: HomeAssistant, entry_id: str) -> None:
         """Reset the timer at mission end. Saves asynchronously."""
         self.mission_id          = None
@@ -219,6 +283,8 @@ class MissionTimerStore:
         self.planned_rooms       = []
         self.current_room_idx    = 0
         self.recharge_positions  = []
+        self.room_entered_run_sec = 0.0
+        self.room_estimates_sec  = []
         self.snapshot_ts         = 0.0
         self._last_phase_ts      = 0.0
         self._schedule_save(hass, entry_id)
@@ -253,3 +319,47 @@ class MissionTimerStore:
         if next_idx >= len(self.planned_rooms):
             return None
         return self.planned_rooms[next_idx]
+
+    @property
+    def time_in_current_room_sec(self) -> float:
+        """Elapsed run-seconds since the robot entered the current room.
+
+        AUTO-ADVANCE-ROOM (v2.8.0) — used as a confidence signal: if this
+        value is close to expected_room_sec, the robot has likely finished
+        the room and a non-run transient phase is a genuine room transition
+        rather than a pause/error/recharge.
+        """
+        return max(0.0, self.run_sec - self.room_entered_run_sec)
+
+    @property
+    def expected_room_sec(self) -> float | None:
+        """Expected duration for the current room.
+
+        AUTO-ADVANCE-ROOM (v2.8.0) — prefers the real per-room cloud TE1
+        estimate (room_estimates_sec[current_room_idx]) when available, since
+        it reflects that specific room's size and configured pass mode.
+
+        Falls back to a uniform split (total_estimated_sec / room count) when
+        no per-room estimate exists for the current room (e.g. Auto pass mode,
+        or a newly-added room with no cloud confidence data yet) — a coarser
+        heuristic, since large rooms legitimately take longer than average.
+
+        Returns None when neither source is available.
+        """
+        if (
+            self.room_estimates_sec
+            and 0 <= self.current_room_idx < len(self.room_estimates_sec)
+            and self.room_estimates_sec[self.current_room_idx] is not None
+        ):
+            _safe = _safe_float(self.room_estimates_sec[self.current_room_idx])
+            if _safe is not None and _safe > 0:
+                return _safe
+            # Malformed/non-numeric/non-positive cloud value — fall through
+            # to the uniform-split heuristic below rather than propagating
+            # a bad type into the confidence-check comparison.
+        if not self.total_estimated_sec or not self.planned_rooms:
+            return None
+        _total = _safe_float(self.total_estimated_sec)
+        if _total is None or _total <= 0:
+            return None
+        return _total / len(self.planned_rooms)

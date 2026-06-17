@@ -547,6 +547,39 @@
       },
       "battery_age_days": {
         "name": "Batterijleeftijd"
+      },
+      "wifi_last_channel": {
+        "name": "Wi-Fi laatste kanaal"
+      },
+      "wifi_channel_stability": {
+        "name": "Wi-Fi kanaalstabiliteit"
+      },
+      "missions_per_charge": {
+        "name": "Missies per lading"
+      },
+      "nav_landmark_quality": {
+        "name": "Navigatie referentiekwaliteit"
+      },
+      "nav_good_landmarks": {
+        "name": "Goede navigatiereferenties"
+      },
+      "optical_dirt_detections": {
+        "name": "Optische vuildetecties"
+      },
+      "piezo_dirt_detections": {
+        "name": "Piezo vuildetecties"
+      },
+      "nav_orientations": {
+        "name": "Navigatieoriëntaties"
+      },
+      "dock_contact_chatters": {
+        "name": "Dock contactproblemen"
+      },
+      "dock_knockoffs": {
+        "name": "Dock loskoppelingen"
+      },
+      "dock_charge_aborts": {
+        "name": "Dock laadonderbrekingen"
       }
     },
     "binary_sensor": {
@@ -814,6 +847,10 @@
     "smberr_high": {
       "title": "Veel SMBus-accufouten gedetecteerd",
       "description": "De robot heeft {count} SMBus-communicatiefouten geregistreerd. Reinig de laadcontacten. Als de fouten aanhouden, moet de accu mogelijk worden vervangen."
+    },
+    "dock_contact_health": {
+      "title": "Dock contact health issue detected",
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     }
   },
   "device_automation": {
@@ -854,9 +891,6 @@
     },
     "no_rooms_configured": {
       "message": "Nog geen kamers geconfigureerd. Om deze actie te gebruiken: (1) Open de iRobot-app, (2) Start een kamergerichte schoonmaak voor elke kamer, (3) Ga terug naar Home Assistant — de kamers verschijnen automatisch in Roomba+-opties waar je namen kunt toewijzen."
-    },
-    "pmap_not_found": {
-      "message": "Kaart niet gevonden in robotstatus. De kaart is mogelijk opnieuw getraind — voer een kammissie uit via de iRobot-app om te vernieuwen."
     },
     "pmap_not_resolved": {
       "message": "Kan kaart-ID niet oplossen voor een of meer kamers. Zorg ervoor dat de robot zijn kaartstatus via MQTT heeft gerapporteerd."

@@ -66,6 +66,12 @@ If you don't use `vacuum.clean_area`, dismiss the repair — `roomba_plus.clean_
 
 ---
 
+**Mission progress gets stuck reporting a completed room as still in progress**
+
+On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-cleaning phase between rooms that can confuse the progress sensor. As of v2.8.0, Roomba+ detects these transitions automatically using your robot's real per-room cloud time estimates, so this should self-correct within the next room change. If it doesn't, call `roomba_plus.advance_room` to manually move to the next room — it's a no-op if the robot is actively cleaning or already at the last planned room, so it's safe to call speculatively.
+
+---
+
 ## Sensors showing Unknown
 
 **`filter_last_replaced` / `brush_last_replaced` shows Unknown**
@@ -107,6 +113,12 @@ Expected — v2.5 corrects the energy calculation for 900-series robots. The 980
 **Recent cleaned area / cleaning time show lower values than expected**
 
 These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time — the `source: recent_mission_window` attribute documents this. The **total missions** sensor is different: it reads the lifetime counter embedded in every cloud record.
+
+---
+
+**Dock contact / Wi-Fi channel / optical dirt detection sensors aren't showing up at all**
+
+These (and most other diagnostic-category sensors) are disabled by default to keep the entity list manageable — they don't show as `Unknown`, they simply aren't enabled. Go to the device page → entity list → filter by "Diagnostic" → enable the ones you want. Availability also depends on your robot's series: navigation landmark quality is 9-series only, optical/piezo dirt detection and dock contact counters are i/s-series only.
 
 ---
 

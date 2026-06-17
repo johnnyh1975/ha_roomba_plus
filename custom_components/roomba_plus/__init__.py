@@ -59,6 +59,7 @@ from .const import (
 from .api_views import MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
 from .grid_store import GridStore
 from .mission_store import MissionStore
+from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
 from .blocking_manager import BlockingManager
@@ -1995,6 +1996,110 @@ async def async_migrate_entry(
 
 # v2.3.0 F8 — UmfAligner re-alignment helpers ─────────────────────────────────
 
+async def _async_seed_l5_from_archive(
+    hass: Any,
+    entry_id: str,
+    mission_archive: "MissionArchive",
+    robot_profile_store: "RobotProfileStore",
+) -> None:
+    """Seed per-room dirt index (L5) from full ARC1 archive history.
+
+    L5-ARC (v2.8.0) — One-time bootstrap of room_dirt_index EMA over the
+    complete cloud mission history, replacing the cold-start behaviour where
+    L5 converges slowly from zero after a fresh install.
+
+    Processes records oldest-to-newest so the EMA weights recent missions most
+    heavily (same update rule as the incremental path).
+
+    Guards:
+      - Skips when room_dirt_index is already populated (avoid re-seeding).
+      - Skips when archive initial load is not yet complete.
+      - Skips when archive is empty.
+    """
+    if robot_profile_store.room_dirt_index:
+        return  # already seeded — incremental path handles new missions
+    if not mission_archive.initial_load_done:
+        return  # archive back-fill still running; will be seeded next restart
+    if mission_archive.record_count == 0:
+        return
+
+    from .const import SQFT_TO_M2
+
+    seeded_count = 0
+    for record in mission_archive.all_derived_oldest_first():
+        rooms_completed: dict = record.get("rooms_completed") or {}
+        for rid, data in rooms_completed.items():
+            # Bug-hunt (v2.8.0): this function is awaited directly inside
+            # async_setup_entry (not via hass.async_create_task) — an
+            # uncaught exception here fails integration setup entirely,
+            # not just this one feature. A corrupted/hand-edited persisted
+            # archive record could have a non-dict value for a room entry
+            # even though mission_archive.py's own writer always produces
+            # dicts; defend at the read boundary rather than trusting the
+            # storage file's shape forever.
+            if not isinstance(data, dict):
+                continue
+            passes = int(data.get("passes") or 0)
+            area_sqft = float(data.get("area") or 0)   # 'or 0' handles area=None
+            area_m2 = area_sqft * SQFT_TO_M2
+            if rid and passes > 0 and area_m2 > 0:
+                robot_profile_store.update_room_dirt_index(rid, passes, area_m2)
+                seeded_count += 1
+
+    if robot_profile_store.room_dirt_index:
+        await robot_profile_store.async_save(hass, entry_id)
+        _LOGGER.info(
+            "L5-ARC: seeded room_dirt_index for %d room(s) from %d archive "
+            "mission(s) for entry %s",
+            len(robot_profile_store.room_dirt_index),
+            mission_archive.record_count,
+            entry_id,
+        )
+
+
+async def _async_seed_l3_from_archive(
+    mission_archive: "MissionArchive",
+    mission_store: "MissionStore",
+) -> None:
+    """Seed MissionStore.archive_baseline from ARC1 full history.
+
+    L3-ARC (v2.8.0) — Computes the statistical anomaly-detection baseline
+    (duration mean/std, area mean/std, dirt p75) from the complete cloud
+    mission history and injects it into MissionStore.archive_baseline.
+
+    This allows consecutive_anomalous to detect anomalies even during the
+    first weeks of use when the local MQTT store has < 20 missions.
+
+    Guards:
+      - Skips when archive initial load is not complete.
+      - Skips when archive has < 20 completed missions (compute_archive_stats
+        returns None).
+
+    Not persisted — recomputed at each startup to reflect latest archive.
+    """
+    if not mission_archive.initial_load_done:
+        return
+    if mission_archive.record_count < 20:
+        return
+
+    from .mission_store import MissionStore
+
+    baseline = MissionStore.compute_archive_stats(
+        mission_archive.all_derived_oldest_first()
+    )
+    if baseline is not None:
+        mission_store.archive_baseline = baseline
+        _LOGGER.info(
+            "L3-ARC: archive baseline set from %d record(s) — "
+            "duration_mean=%.1f std=%.1f area_mean=%s dirt_p75=%s",
+            mission_archive.record_count,
+            baseline["duration_mean"],
+            baseline["duration_std"],
+            f"{baseline['area_mean']:.1f}" if baseline["area_mean"] else "n/a",
+            f"{baseline['dirt_p75']:.1f}" if baseline["dirt_p75"] else "n/a",
+        )
+
+
 async def _async_update_robot_profile_store(
     hass: Any,
     entry: "RoombaConfigEntry",
@@ -2379,6 +2484,16 @@ async def async_setup_entry(
     irobot_username = config_entry.data.get(CONF_IROBOT_USERNAME)
     irobot_password = config_entry.data.get(CONF_IROBOT_PASSWORD)
 
+    # v2.8.0 ARC1 — MissionArchive (requires cloud credentials; same gate as coordinator)
+    mission_archive: MissionArchive | None = None
+    if map_capability != MapCapability.NONE and irobot_username and irobot_password:
+        mission_archive = MissionArchive()
+        await mission_archive.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "MissionArchive: loaded %d record(s) for %s",
+            mission_archive.record_count, config_entry.data[CONF_BLID],
+        )
+
     if map_capability != MapCapability.NONE and irobot_username and irobot_password:
         has_pmaps = map_capability == MapCapability.SMART
         cloud_coordinator = IrobotCloudCoordinator(
@@ -2389,6 +2504,7 @@ async def async_setup_entry(
             password=irobot_password,
             has_pmaps=has_pmaps,
             mission_store=mission_store,   # CR3 — fallback source
+            mission_archive=mission_archive,  # ARC1 — v2.8.0
         )
         # IA74-PMAP: seed active_pmap_id from local MQTT before first cloud fetch
         # so vacuum.clean_area is not blocked during the initial coordinator refresh.
@@ -2469,6 +2585,31 @@ async def async_setup_entry(
     await robot_profile_store.async_load(hass, config_entry.entry_id)
     _LOGGER.debug("RobotProfileStore: loaded for %s", config_entry.data[CONF_BLID])
 
+    # v2.8.0 L5-ARC — seed room_dirt_index from archive if already complete
+    # (archive.initial_load_done=True = loaded from storage, not first run).
+    #
+    # Bug-hunt: both seeding calls are awaited directly here, not via
+    # hass.async_create_task — an uncaught exception would fail
+    # async_setup_entry entirely, blocking the whole integration from
+    # loading after a restart until storage is manually cleared. Wrapped
+    # as defense-in-depth on top of the type-guard inside the function
+    # itself, since a corrupted/hand-edited persisted archive file could
+    # be malformed in ways beyond the one shape this session's bug hunt
+    # specifically enumerated.
+    if mission_archive is not None and mission_archive.initial_load_done:
+        try:
+            await _async_seed_l5_from_archive(
+                hass, config_entry.entry_id, mission_archive, robot_profile_store
+            )
+            # L3-ARC — seed anomaly detection baseline from same archive
+            await _async_seed_l3_from_archive(mission_archive, mission_store)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "L5-ARC/L3-ARC: archive seeding failed — continuing setup "
+                "without archive-based baselines (will retry next restart)",
+                exc_info=True,
+            )
+
     # v2.6.0 MP1 — MissionTimerStore (SMART + cloud only)
     mission_timer_store: MissionTimerStore | None = None
     if map_capability == MapCapability.SMART and cloud_coordinator is not None:
@@ -2539,7 +2680,27 @@ async def async_setup_entry(
         ),
         robot_profile_store=robot_profile_store,
         mission_timer_store=mission_timer_store,
+        mission_archive=mission_archive,
     )
+
+    # v2.8.0 ARC1 — start one-time paginated back-fill as background task.
+    # Runs after runtime_data is set so any concurrent delta updates (from the
+    # first coordinator refresh) are already in the archive and will be skipped
+    # via _archived_nmssns.
+    if (
+        mission_archive is not None
+        and cloud_coordinator is not None
+        and not mission_archive.initial_load_done
+    ):
+        hass.async_create_task(
+            mission_archive.async_initial_load(
+                cloud_coordinator.api,
+                config_entry.data[CONF_BLID],
+                hass,
+                config_entry.entry_id,
+            ),
+            name=f"roomba_plus_arc1_initial_load_{config_entry.entry_id}",
+        )
 
     # v2.6.3 B9 — the 980 may not include "sku" in the first MQTT state dump
     # that arrives before async_setup_entry completes.  Register a one-time
@@ -2657,6 +2818,12 @@ async def async_setup_entry(
             hass.async_create_task(
                 async_check_smberr(hass, config_entry),
                 name="roomba_plus_smberr_check",
+            )
+            # v2.8.0 DOCK-HEALTH — dock contact health check
+            from .repairs import async_check_dock_health
+            hass.async_create_task(
+                async_check_dock_health(hass, config_entry),
+                name="roomba_plus_dock_health_check",
             )
             # v2.7.0 GS-SMART-UMF — bootstrap alignment for robots without local pose
             if (

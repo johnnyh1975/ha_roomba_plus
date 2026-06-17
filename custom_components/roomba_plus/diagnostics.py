@@ -10,7 +10,7 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODES
+from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
 from .models import MapCapability, RoombaConfigEntry
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
@@ -107,8 +107,8 @@ async def async_get_config_entry_diagnostics(
         "error": {
             "error_code": roomba.error_code,
             "error_message": (
-                ERROR_CODES[roomba.error_code]["label"]
-                if roomba.error_code and roomba.error_code in ERROR_CODES
+                ERROR_CODE_LABELS[roomba.error_code]
+                if roomba.error_code and roomba.error_code in ERROR_CODE_LABELS
                 else roomba.error_message
             ),
         },
@@ -120,6 +120,10 @@ async def async_get_config_entry_diagnostics(
             "hardware_revision": state.get("hardwareRev"),
             "battery_type": state.get("batteryType"),
             "capabilities": state.get("cap", {}),
+            # v2.8.0 FIRMWARE-VER — per-module firmware versions (i/s/j-series only).
+            # subModSwVer contains navigation, connectivity, motion module versions.
+            # Absent on 9-series (980/960/900) firmware.
+            "sub_module_sw_versions": state.get("subModSwVer"),
         },
 
         # Current mission status
@@ -166,9 +170,11 @@ async def async_get_config_entry_diagnostics(
 
         # Lifetime statistics (useful for maintenance sensor debugging)
         "lifetime_stats": {
-            "bbrun": state.get("bbrun", {}),
-            "bbmssn": state.get("bbmssn", {}),
-            "bbchg3": state.get("bbchg3", {}),
+            "bbrun": state.get("bbrun") or {},
+            "bbmssn": state.get("bbmssn") or {},
+            "bbchg3": state.get("bbchg3") or {},
+            # v2.8.0 DOCK-HEALTH — dock contact counters (nChatters/nKnockoffs/nAborts)
+            "bbchg": state.get("bbchg") or {},
         },
 
         # RF0 — robot profile (confirms which profile was matched at startup)

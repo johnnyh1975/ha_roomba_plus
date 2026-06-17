@@ -547,6 +547,39 @@
       },
       "battery_age_days": {
         "name": "Età batteria"
+      },
+      "wifi_last_channel": {
+        "name": "Ultimo canale Wi-Fi"
+      },
+      "wifi_channel_stability": {
+        "name": "Stabilità canale Wi-Fi"
+      },
+      "missions_per_charge": {
+        "name": "Missioni per carica"
+      },
+      "nav_landmark_quality": {
+        "name": "Qualità punti di riferimento navigazione"
+      },
+      "nav_good_landmarks": {
+        "name": "Buoni punti di riferimento"
+      },
+      "optical_dirt_detections": {
+        "name": "Rilevamenti ottici sporco"
+      },
+      "piezo_dirt_detections": {
+        "name": "Rilevamenti piezo sporco"
+      },
+      "nav_orientations": {
+        "name": "Orientamenti navigazione"
+      },
+      "dock_contact_chatters": {
+        "name": "Rimbalzi contatto base"
+      },
+      "dock_knockoffs": {
+        "name": "Sganciamenti dalla base"
+      },
+      "dock_charge_aborts": {
+        "name": "Interruzioni carica base"
       }
     },
     "binary_sensor": {
@@ -814,6 +847,10 @@
     "smberr_high": {
       "title": "Rilevati molti errori SMBus della batteria",
       "description": "Il robot ha registrato {count} errori di comunicazione SMBus. Pulire i contatti di ricarica. Se gli errori persistono, potrebbe essere necessario sostituire la batteria."
+    },
+    "dock_contact_health": {
+      "title": "Dock contact health issue detected",
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     }
   },
   "device_automation": {
@@ -854,9 +891,6 @@
     },
     "no_rooms_configured": {
       "message": "Nessuna stanza configurata. Per usare questa azione: (1) Apri l'app iRobot, (2) Avvia una pulizia per stanza per ogni stanza, (3) Torna in Home Assistant — le stanze appariranno automaticamente nelle opzioni Roomba+ dove potrai assegnare i nomi."
-    },
-    "pmap_not_found": {
-      "message": "Mappa non trovata nello stato del robot. La mappa potrebbe essere stata riaddestrata — avvia una missione per stanza dall'app iRobot per aggiornare."
     },
     "pmap_not_resolved": {
       "message": "Impossibile risolvere l'ID mappa per una o più stanze. Assicurati che il robot abbia trasmesso lo stato della mappa via MQTT."

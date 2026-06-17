@@ -33,6 +33,7 @@ from .const import SQFT_TO_M2
 
 if TYPE_CHECKING:
     from .mission_store import MissionStore
+    from .mission_archive import MissionArchive
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -353,6 +354,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         password: str,
         has_pmaps: bool = False,
         mission_store: "MissionStore | None" = None,
+        mission_archive: "MissionArchive | None" = None,
     ) -> None:
         super().__init__(
             hass,
@@ -364,6 +366,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.blid = blid
         self._has_pmaps = has_pmaps
         self._mission_store = mission_store   # CR3 — fallback source
+        self._mission_archive = mission_archive  # ARC1 — v2.8.0
         country_code = (hass.config.country or "US").upper()
         self.api = IrobotCloudApi(
             username=username,
@@ -530,6 +533,14 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for r in raw_history
                     if isinstance(r, dict)
                 ]
+                # ARC1 (v2.8.0) — delta-update the persistent mission archive.
+                # Process reversed (oldest first) so _last_nMssn advances correctly.
+                # async_delta_update skips duplicates via _archived_nmssns.
+                if self._mission_archive is not None:
+                    for _r in reversed(result["mission_history_raw"]):
+                        await self._mission_archive.async_delta_update(
+                            _r, self.hass, self.config_entry.entry_id
+                        )
                 # Aggregate ALL records for lifetime totals.
                 result["mission_history"] = _aggregate_history(raw_history)
                 _LOGGER.debug(
@@ -686,6 +697,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ts: str = (
                 pmapv.get("last_user_pmapv_id", "")   # Variant B — lewis 22.52.x
                 or pmapv.get("active_pmapv_id", "")   # Variant A
+                or pmap.get("active_pmapv_id", "")    # Variant C — root level (ia74 / older fw)
             )
             if ts > best_ts:
                 best_pid = pid

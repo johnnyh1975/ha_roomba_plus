@@ -1,16 +1,6 @@
 {
   "name": "Roomba+",
-  "content_in_root": false,
-  "render_readme": true,
-  "country": [
-    "DE",
-    "AT",
-    "CH",
-    "US",
-    "GB",
-    "CA",
-    "AU"
-  ],
   "homeassistant": "2024.11.0",
+  "documentation": "https://github.com/johnnyh1975/ha_roomba_plus",
   "iot_class": "local_push"
 }

@@ -24,6 +24,7 @@ DEVICE-SPECIFIC (capability-gated)
 """
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -415,7 +416,6 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     store = entity._config_entry.runtime_data.mission_store
     if not store:
         return None
-    from collections import Counter
     stuck_records = store.query(30, result=store.STUCK_RESULTS)
     if not stuck_records:
         return None
@@ -458,7 +458,6 @@ def _presence_utilisation(entity: "IRobotEntity", days: int) -> StateType:
 
 
 def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
-    from collections import Counter
     store = entity._config_entry.runtime_data.mission_store
     if store is None:
         return None
@@ -481,6 +480,29 @@ def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
 
 
 # ── F1 — WiFi floor / stability (CloudRawSensor value functions) ──────────────
+
+def _parse_netinfo_addr(addr: object) -> str | None:
+    """Parse netinfo.addr to a dotted-decimal IP string.
+
+    NETINFO-FMT (v2.8.0) — netinfo.addr has two formats across firmware families:
+      - i/s/j-series (lewis/soho): dotted string, e.g. "192.168.1.5" → return as-is.
+      - 9-series (980/900): uint32 big-endian, e.g. 3232235777 → "192.168.1.1".
+
+    Returns None for missing or unparsable values.
+    """
+    if addr is None:
+        return None
+    if isinstance(addr, str):
+        return addr if addr else None
+    if isinstance(addr, (int, float)) and not isinstance(addr, bool):
+        import socket
+        import struct
+        try:
+            return socket.inet_ntoa(struct.pack(">I", int(addr)))
+        except (struct.error, OSError, OverflowError, ValueError):
+            return None
+    return None
+
 
 def _raw_wifi_floor(records: list[dict]) -> StateType:
     """Return the weakest WiFi signal bucket present in the most recent mission.
@@ -896,7 +918,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
+        filter_fn=lambda s: "estCap" in (s.get("bbchg3") or {}),
         value_fn=_total_energy_consumed_kwh,
     ),
 
@@ -1086,7 +1108,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="IP address",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda e: e.vacuum_state.get("netinfo", {}).get("addr"),
+        value_fn=lambda e: _parse_netinfo_addr(
+            (e.vacuum_state.get("netinfo") or {}).get("addr")
+        ),
     ),
 
 
@@ -1210,7 +1234,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_registry_enabled_default=False,
         # missionId: stable string across all recharge cycles of one mission.
         # Populated only on i/s/j-series (older firmware may not send it).
-        filter_fn=lambda s: "missionId" in s.get("cleanMissionStatus", {}),
+        filter_fn=lambda s: "missionId" in (s.get("cleanMissionStatus") or {}),
         value_fn=lambda e: e.clean_mission_status.get("missionId") or None,
     ),
     # Schedule sensor (all models with cleanSchedule2 or cleanSchedule)
@@ -1234,7 +1258,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_clean_base,
         value_fn=lambda e: CLEAN_BASE_LABELS.get(
-            e.vacuum_state.get("dock", {}).get("state", -2), "Unknown"
+            (e.vacuum_state.get("dock") or {}).get("state", -2), "Unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -1243,7 +1267,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Dock tank level",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "tankLvl" in s.get("dock", {}),
+        filter_fn=lambda s: "tankLvl" in (s.get("dock") or {}),
         value_fn=lambda e: e.dock_tank_level,
     ),
 
@@ -1707,7 +1731,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
+        filter_fn=lambda s: "estCap" in (s.get("bbchg3") or {}),
         value_fn=_estcap_to_mah,   # RF0: divides by BMS scale for 9-series
     ),
     RoombaSensorDescription(
@@ -1717,7 +1741,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=lambda s: "nPanics" in s.get("bbrun", {}),
+        filter_fn=lambda s: "nPanics" in (s.get("bbrun") or {}),
         value_fn=lambda e: e.run_stats.get("nPanics"),
     ),
     RoombaSensorDescription(
@@ -1727,7 +1751,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=lambda s: "nCliffsF" in s.get("bbrun", {}),
+        filter_fn=lambda s: "nCliffsF" in (s.get("bbrun") or {}),
         value_fn=lambda e: e.run_stats.get("nCliffsF"),
     ),
     RoombaSensorDescription(
@@ -1737,8 +1761,108 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=lambda s: "nCliffsR" in s.get("bbrun", {}),
+        filter_fn=lambda s: "nCliffsR" in (s.get("bbrun") or {}),
         value_fn=lambda e: e.run_stats.get("nCliffsR"),
+    ),
+
+    # FIELD-SENSORS (v2.8.0) — 5 additional diagnostic sensors from 3-robot
+    # MQTT field analysis (nCliffsF / nCliffsR / nPanics already above).
+    #
+    # Navigation subsystem (bbnav) — 9-series only, absent on i/s/j-series:
+    RoombaSensorDescription(
+        key="nav_landmark_quality",
+        translation_key="nav_landmark_quality",
+        name="Navigation landmark quality",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: "aMtrack" in (s.get("bbnav") or {}),
+        value_fn=lambda e: e.nav_stats.get("aMtrack"),
+    ),
+    RoombaSensorDescription(
+        key="nav_good_landmarks",
+        translation_key="nav_good_landmarks",
+        name="Navigation good landmarks",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: "nGoodLmrks" in (s.get("bbnav") or {}),
+        value_fn=lambda e: e.nav_stats.get("nGoodLmrks"),
+    ),
+    # Run statistics (bbrun / runtimeStats) — i/s-series only, absent on 9-series:
+    RoombaSensorDescription(
+        key="optical_dirt_detections",
+        translation_key="optical_dirt_detections",
+        name="Optical dirt detections",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: (
+            "nOpticalDD" in (s.get("bbrun") or {})
+            or "nOpticalDD" in (s.get("runtimeStats") or {})
+        ),
+        value_fn=lambda e: e.run_stats.get("nOpticalDD"),
+    ),
+    RoombaSensorDescription(
+        key="piezo_dirt_detections",
+        translation_key="piezo_dirt_detections",
+        name="Piezo dirt detections",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: (
+            "nPiezoDD" in (s.get("bbrun") or {})
+            or "nPiezoDD" in (s.get("runtimeStats") or {})
+        ),
+        value_fn=lambda e: e.run_stats.get("nPiezoDD"),
+    ),
+    RoombaSensorDescription(
+        key="nav_orientations",
+        translation_key="nav_orientations",
+        name="Navigation orientations",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: (
+            "nOrients" in (s.get("bbrun") or {})
+            or "nOrients" in (s.get("runtimeStats") or {})
+        ),
+        value_fn=lambda e: e.run_stats.get("nOrients"),
+    ),
+
+    # DOCK-HEALTH (v2.8.0) — dock contact health counters from bbchg.
+    # Field confirmed present on i/s-series (lewis/soho firmware) and
+    # some 9-series firmware variants.  Thresholds are conservative heuristics
+    # pending community field data calibration (see COMM-A roadmap).
+    RoombaSensorDescription(
+        key="dock_contact_chatters",
+        translation_key="dock_contact_chatters",
+        name="Dock contact chatters",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: "nChatters" in (s.get("bbchg") or {}),
+        value_fn=lambda e: e.dock_stats.get("nChatters"),
+    ),
+    RoombaSensorDescription(
+        key="dock_knockoffs",
+        translation_key="dock_knockoffs",
+        name="Dock knockoffs",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: "nKnockoffs" in (s.get("bbchg") or {}),
+        value_fn=lambda e: e.dock_stats.get("nKnockoffs"),
+    ),
+    RoombaSensorDescription(
+        key="dock_charge_aborts",
+        translation_key="dock_charge_aborts",
+        name="Dock charge aborts",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        filter_fn=lambda s: "nAborts" in (s.get("bbchg") or {}),
+        value_fn=lambda e: e.dock_stats.get("nAborts"),
     ),
 
     # F5d -- battery capacity retention (% of baseline estCap)
@@ -1748,7 +1872,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
+        filter_fn=lambda s: "estCap" in (s.get("bbchg3") or {}),
         value_fn=_battery_capacity_retention,
     ),
 
@@ -1762,7 +1886,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.DAYS,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: "estCap" in s.get("bbchg3", {}),
+        filter_fn=lambda s: "estCap" in (s.get("bbchg3") or {}),
         value_fn=_estimated_battery_eol,
         # available_fn calls the function directly: covers all None conditions
         # (no baseline, no cycles, no degradation yet).
@@ -1874,6 +1998,12 @@ async def async_setup_entry(
             RoombaCleaningAnalytics30dSensor(roomba, blid, cc, config_entry),
             RoombaWifiHealthSensor(roomba, blid, cc, config_entry),
             RoombaEventCounts30dSensor(roomba, blid, cc, config_entry),
+        ])
+        # BAT-ARCH (v2.8.0) — archive-sourced WiFi + charge sensors
+        entities.extend([
+            RoombaWifiLastChannelSensor(roomba, blid, cc, config_entry),
+            RoombaWifiChannelStabilitySensor(roomba, blid, cc, config_entry),
+            RoombaMissionsPerChargeSensor(roomba, blid, cc, config_entry),
         ])
 
     # L8 (v2.7.0) — composite robot health score (cloud credentials required)
@@ -3214,6 +3344,78 @@ def _get_planned_room_order(data: Any) -> list[str]:
     return result
 
 
+def _compute_room_time_estimates(
+    config_entry: Any, planned_order: list[str]
+) -> list[int | None]:
+    """Return per-room time estimates (seconds) in planned order.
+
+    Reads from cloud_coordinator.regions[*].time_estimates (TE1). Returns
+    None for any room where confidence < GOOD_CONFIDENCE or pass mode is
+    Auto (no estimate available at runtime for Auto).
+
+    Module-level (not class-bound) so it can be called from callbacks.py at
+    mission start to wire MissionTimerStore.room_estimates_sec — see v2.8.0
+    AUTO-ADVANCE-ROOM. Originally a method on RoombaMissionProgress only.
+    """
+    cc = config_entry.runtime_data.cloud_coordinator
+    if cc is None:
+        return [None] * len(planned_order)
+
+    # v2.7.5 (TP-EST-FIX): per-room params in lastCommand.regions take
+    # priority over cleanMissionStatus global fields. cleanMissionStatus
+    # reflects the robot's global default, which stays at the device-level
+    # setting even when a room-clean mission is started with explicit per-
+    # region twoPass/noAutoPasses params. Reading from the wrong source
+    # caused two-pass missions to be estimated at one-pass durations.
+    reported = config_entry.runtime_data.roomba_reported_state()
+    last_cmd = reported.get("lastCommand") or {}
+    last_regions = [
+        r for r in (last_cmd.get("regions") or [])
+        if isinstance(r, dict) and r.get("params")
+    ]
+    if last_regions:
+        has_no_auto = any(r["params"].get("noAutoPasses") for r in last_regions)
+        has_two_pass = any(r["params"].get("twoPass") for r in last_regions)
+        if not has_no_auto:
+            pass_key = None          # Auto — no reliable per-room estimate
+        elif has_two_pass:
+            pass_key = "two_pass_sec"
+        else:
+            pass_key = "one_pass_sec"
+    else:
+        # Fallback: read from cleanMissionStatus global fields
+        _cms = reported.get("cleanMissionStatus") or {}
+        noap = _cms.get("noAutoPasses", True)
+        two_pass = _cms.get("twoPass", False)
+        if not noap:
+            pass_key = None
+        elif two_pass:
+            pass_key = "two_pass_sec"
+        else:
+            pass_key = "one_pass_sec"
+
+    # Build name→estimates map from coordinator
+    region_map: dict[str, dict] = {}
+    for region in cc.regions:
+        name = region.get("name", "")
+        if name:
+            region_map[name.lower()] = region.get("time_estimates") or {}
+
+    result: list[int | None] = []
+    for room_name in planned_order:
+        # Bug-hunt: room_name can theoretically be None/empty if a future
+        # caller builds planned_order differently than callbacks.py's
+        # current name-resolution chain (which always falls back to a
+        # string). (room_name or "") avoids an AttributeError crash on
+        # .lower() rather than relying on that invariant holding forever.
+        est = region_map.get((room_name or "").lower(), {})
+        if pass_key is None:
+            result.append(None)
+        else:
+            result.append(est.get(pass_key))
+    return result
+
+
 # ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
 
 class RoombaMissionProgress(IRobotEntity, SensorEntity):
@@ -3247,61 +3449,10 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     def _room_estimates(self, planned_order: list[str]) -> list[int | None]:
         """Return per-room time estimates (seconds) in planned order.
 
-        Reads from cloud_coordinator.regions[*].time_estimates (TE1).
-        Returns None for any room where confidence < GOOD_CONFIDENCE or
-        pass mode is Auto (no estimate available at runtime for Auto).
+        Delegates to the module-level _compute_room_time_estimates (extracted
+        in v2.8.0 so callbacks.py can reuse this logic for AUTO-ADVANCE-ROOM).
         """
-        cc = self._config_entry.runtime_data.cloud_coordinator
-        if cc is None:
-            return [None] * len(planned_order)
-
-        # v2.7.5 (TP-EST-FIX): per-room params in lastCommand.regions take
-        # priority over cleanMissionStatus global fields.  cleanMissionStatus
-        # reflects the robot's global default, which stays at the device-level
-        # setting even when a room-clean mission is started with explicit per-
-        # region twoPass/noAutoPasses params.  Reading from the wrong source
-        # caused two-pass missions to be estimated at one-pass durations.
-        reported = self._config_entry.runtime_data.roomba_reported_state()
-        last_cmd = reported.get("lastCommand", {})
-        last_regions = [
-            r for r in (last_cmd.get("regions") or [])
-            if isinstance(r, dict) and r.get("params")
-        ]
-        if last_regions:
-            has_no_auto = any(r["params"].get("noAutoPasses") for r in last_regions)
-            has_two_pass = any(r["params"].get("twoPass") for r in last_regions)
-            if not has_no_auto:
-                pass_key = None          # Auto — no reliable per-room estimate
-            elif has_two_pass:
-                pass_key = "two_pass_sec"
-            else:
-                pass_key = "one_pass_sec"
-        else:
-            # Fallback: read from cleanMissionStatus global fields
-            noap = reported.get("cleanMissionStatus", {}).get("noAutoPasses", True)
-            two_pass = reported.get("cleanMissionStatus", {}).get("twoPass", False)
-            if not noap:
-                pass_key = None
-            elif two_pass:
-                pass_key = "two_pass_sec"
-            else:
-                pass_key = "one_pass_sec"
-
-        # Build name→estimates map from coordinator
-        region_map: dict[str, dict] = {}
-        for region in cc.regions:
-            name = region.get("name", "")
-            if name:
-                region_map[name.lower()] = region.get("time_estimates", {})
-
-        result: list[int | None] = []
-        for room_name in planned_order:
-            est = region_map.get(room_name.lower(), {})
-            if pass_key is None:
-                result.append(None)
-            else:
-                result.append(est.get(pass_key))
-        return result
+        return _compute_room_time_estimates(self._config_entry, planned_order)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -3880,3 +4031,163 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
         self.async_on_remove(
             self._coordinator.async_add_listener(_on_coordinator_update)
         )
+
+
+# ── BAT-ARCH (v2.8.0) — Archive-sourced WiFi + charge sensors ─────────────────
+
+def _channel_to_band(channel: int | None) -> str | None:
+    """Derive WiFi band string from 802.11 channel number."""
+    if channel is None:
+        return None
+    if 1 <= channel <= 13:
+        return "2.4 GHz"
+    if 36 <= channel <= 177:
+        return "5 GHz"
+    return None
+
+
+class _ArchiveSensor(_ConsolidatedCloudSensor):
+    """Base for sensors reading from MissionArchive (BAT-ARCH v2.8.0).
+
+    Available when the archive has >=5 records and cloud coordinator is live.
+    """
+
+    @property
+    def _archive(self):
+        return getattr(self._config_entry.runtime_data, "mission_archive", None)
+
+    @property
+    def available(self) -> bool:
+        arc = self._archive
+        return (
+            super().available
+            and arc is not None
+            and arc.record_count >= 5
+        )
+
+
+class RoombaWifiLastChannelSensor(_ArchiveSensor):
+    """BAT-ARCH -- Most recent WiFi channel from archive Layer 1."""
+
+    entity_description = SensorEntityDescription(
+        key="wifi_last_channel",
+        name="Wi-Fi last channel",
+        translation_key="wifi_last_channel",
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba, blid, coordinator, config_entry):
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_wifi_last_channel"
+
+    @property
+    def native_value(self):
+        arc = self._archive
+        if arc is None:
+            return None
+        latest = arc.latest_derived(1)
+        return latest[0].get("wifi_channel") if latest else None
+
+    @property
+    def extra_state_attributes(self):
+        arc = self._archive
+        if arc is None:
+            return {}
+        latest = arc.latest_derived(1)
+        if not latest:
+            return {}
+        band = _channel_to_band(latest[0].get("wifi_channel"))
+        return {"band": band} if band else {}
+
+
+class RoombaWifiChannelStabilitySensor(_ArchiveSensor):
+    """BAT-ARCH -- % of last 30 missions on dominant WiFi channel."""
+
+    entity_description = SensorEntityDescription(
+        key="wifi_channel_stability",
+        name="Wi-Fi channel stability",
+        translation_key="wifi_channel_stability",
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba, blid, coordinator, config_entry):
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_wifi_channel_stability"
+
+    @property
+    def native_value(self):
+        arc = self._archive
+        if arc is None:
+            return None
+        series = arc.wifi_channel_series(30)
+        if not series:
+            return None
+        dominant_count = Counter(series).most_common(1)[0][1]
+        return round(dominant_count / len(series) * 100, 1)
+
+    @property
+    def extra_state_attributes(self):
+        arc = self._archive
+        if arc is None:
+            return {}
+        series = arc.wifi_channel_series(30)
+        if not series:
+            return {}
+        dominant_ch, dominant_count = Counter(series).most_common(1)[0]
+        return {
+            "dominant_channel": dominant_ch,
+            "dominant_channel_band": _channel_to_band(dominant_ch),
+            "sample_count": len(series),
+        }
+
+
+class RoombaMissionsPerChargeSensor(_ArchiveSensor):
+    """BAT-ARCH -- Avg missions per charge cycle (last 30 days).
+
+    State: total_missions / (1 + total_mid_mission_recharges). Higher = healthier.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="missions_per_charge",
+        name="Missions per charge",
+        translation_key="missions_per_charge",
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba, blid, coordinator, config_entry):
+        super().__init__(roomba, blid, coordinator, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_missions_per_charge"
+
+    @property
+    def native_value(self):
+        arc = self._archive
+        if arc is None:
+            return None
+        recent = arc.recent_derived(30)
+        if not recent:
+            return None
+        total_recharges = sum(int(r.get("recharge_count") or 0) for r in recent)
+        return round(len(recent) / max(1, 1 + total_recharges), 2)
+
+    @property
+    def extra_state_attributes(self):
+        arc = self._archive
+        if arc is None:
+            return {}
+        recent = arc.recent_derived(30)
+        if not recent:
+            return {}
+        total = len(recent)
+        total_recharges = sum(int(r.get("recharge_count") or 0) for r in recent)
+        no_recharge = sum(1 for r in recent if not r.get("recharge_count"))
+        return {
+            "missions_30d": total,
+            "mid_mission_recharges_30d": total_recharges,
+            "single_charge_pct": round(no_recharge / total * 100, 1) if total else None,
+        }

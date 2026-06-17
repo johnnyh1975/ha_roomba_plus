@@ -547,6 +547,39 @@
       },
       "battery_age_days": {
         "name": "Âge batterie"
+      },
+      "wifi_last_channel": {
+        "name": "Dernier canal Wi-Fi"
+      },
+      "wifi_channel_stability": {
+        "name": "Stabilité du canal Wi-Fi"
+      },
+      "missions_per_charge": {
+        "name": "Missions par charge"
+      },
+      "nav_landmark_quality": {
+        "name": "Qualité des repères de navigation"
+      },
+      "nav_good_landmarks": {
+        "name": "Bons repères de navigation"
+      },
+      "optical_dirt_detections": {
+        "name": "Détections optiques de saleté"
+      },
+      "piezo_dirt_detections": {
+        "name": "Détections piézo de saleté"
+      },
+      "nav_orientations": {
+        "name": "Orientations de navigation"
+      },
+      "dock_contact_chatters": {
+        "name": "Rebonds du contact de base"
+      },
+      "dock_knockoffs": {
+        "name": "Décrochages de base"
+      },
+      "dock_charge_aborts": {
+        "name": "Abandons de charge de base"
       }
     },
     "binary_sensor": {
@@ -814,6 +847,10 @@
     "smberr_high": {
       "title": "Nombreuses erreurs SMBus batterie détectées",
       "description": "Le robot a enregistré {count} erreurs de communication SMBus. Nettoyez les contacts de charge. Si les erreurs persistent, la batterie doit peut-être être remplacée."
+    },
+    "dock_contact_health": {
+      "title": "Dock contact health issue detected",
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     }
   },
   "device_automation": {
@@ -854,9 +891,6 @@
     },
     "no_rooms_configured": {
       "message": "Aucune pièce configurée pour l'instant. Pour utiliser cette action : (1) Ouvrez l'application iRobot, (2) Démarrez un nettoyage ciblé par pièce pour chaque pièce, (3) Revenez dans Home Assistant — les pièces apparaîtront automatiquement dans les options Roomba+ où vous pourrez leur attribuer des noms."
-    },
-    "pmap_not_found": {
-      "message": "Carte introuvable dans l'état du robot. La carte a peut-être été réentraînée — lancez une mission par pièce via l'application iRobot pour actualiser."
     },
     "pmap_not_resolved": {
       "message": "Impossible de résoudre l'ID de carte pour une ou plusieurs pièces. Assurez-vous que le robot a transmis son état de carte via MQTT."

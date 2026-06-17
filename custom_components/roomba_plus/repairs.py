@@ -913,13 +913,17 @@ async def async_check_smberr(
     presence check is the natural gate).
     """
     data = config_entry.runtime_data
-    vacuum_state = data.vacuum.master_state.get("state", {}).get("reported", {})
+    vacuum_state = (data.vacuum.master_state.get("state") or {}).get("reported") or {}
     bbchg = vacuum_state.get("bbchg", {}) or {}
 
     if "smberr" not in bbchg:
         return  # Field absent — old firmware / 9-series without smberr
 
-    smberr: int = bbchg.get("smberr", 0) or 0
+    # Bug-hunt: bare value used directly in a numeric comparison below
+    # crashed with TypeError on a non-numeric firmware value (the same
+    # class of bug fixed for DOCK-HEALTH's nChatters/nKnockoffs/nAborts —
+    # this function predates that fix, v2.7.1, and was missed at the time).
+    smberr: int = _safe_int_repairs(bbchg.get("smberr"))
     issue_id = f"smberr_high_{config_entry.entry_id}"
     _SMBERR_THRESHOLD = 10_000
 
@@ -938,6 +942,90 @@ async def async_check_smberr(
             severity=ir.IssueSeverity.WARNING,
             translation_key="smberr_high",
             translation_placeholders={"count": f"{smberr:,}"},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+def _safe_int_repairs(val: Any, default: int = 0) -> int:
+    """Convert val to int, returning default on TypeError/ValueError.
+
+    Bug-hunt (v2.8.0): bbchg.nChatters/nKnockoffs/nAborts have been observed
+    arriving as non-numeric strings on some firmware variants — bare int()
+    crashed async_check_dock_health, silently disabling the dock-health
+    Repair Issue for affected robots (hass.async_create_task swallows the
+    exception into the HA log, so the failure was invisible to the user).
+    """
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+# DOCK-HEALTH thresholds (v2.8.0) — conservative heuristics pending COMM-A calibration.
+_DOCK_CHATTERS_THRESHOLD = 100   # contact bounce events
+_DOCK_KNOCKOFFS_THRESHOLD = 10   # unintended undocking events
+_DOCK_ABORTS_THRESHOLD = 20      # aborted charging sessions
+
+
+async def async_check_dock_health(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """DOCK-HEALTH (v2.8.0) — Fire or clear the dock_contact_health Repair Issue.
+
+    bbchg contains three dock-contact health counters:
+      nChatters  — contact bounce events (threshold: > 100)
+      nKnockoffs — unintended undocking (threshold: > 10)
+      nAborts    — aborted charging sessions (threshold: > 20)
+
+    The issue fires when ANY counter exceeds its threshold and reports all
+    affected metrics.  Auto-resolves when all counters drop below thresholds.
+
+    Gate: at least one of the three fields must be present in bbchg.
+    This is distinct from smberr (SMBus errors) which indicates battery chip
+    communication faults rather than physical dock contact wear.
+    """
+    data = config_entry.runtime_data
+    vacuum_state = (data.vacuum.master_state.get("state") or {}).get("reported") or {}
+    bbchg = vacuum_state.get("bbchg", {}) or {}
+
+    # Gate: at least one dock health field present
+    if not any(k in bbchg for k in ("nChatters", "nKnockoffs", "nAborts")):
+        return
+
+    chatters: int = _safe_int_repairs(bbchg.get("nChatters"))
+    knockoffs: int = _safe_int_repairs(bbchg.get("nKnockoffs"))
+    aborts: int = _safe_int_repairs(bbchg.get("nAborts"))
+    issue_id = f"dock_contact_health_{config_entry.entry_id}"
+
+    _LOGGER.debug(
+        "dock_health check: chatters=%d knockoffs=%d aborts=%d for %s",
+        chatters, knockoffs, aborts, config_entry.entry_id,
+    )
+
+    exceeded = (
+        chatters > _DOCK_CHATTERS_THRESHOLD
+        or knockoffs > _DOCK_KNOCKOFFS_THRESHOLD
+        or aborts > _DOCK_ABORTS_THRESHOLD
+    )
+
+    if exceeded:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="dock_contact_health",
+            translation_placeholders={
+                "chatters": str(chatters),
+                "knockoffs": str(knockoffs),
+                "aborts": str(aborts),
+            },
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, issue_id)

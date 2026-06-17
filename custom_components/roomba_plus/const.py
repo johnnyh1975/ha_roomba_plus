@@ -191,7 +191,13 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
     ),
     "i": RobotProfile(
         name="i-series",
-        battery_mah=1800, battery_chemistry="lipo", battery_voltage=14.8,
+        # v2.8.0 RF0-IMAH: corrected from manufacturer spec (1800 mAh) to
+        # field-validated value from 3 community robots (Thonno i7+, veronoicc
+        # i7+ / i8+): estCap median ≈ 2488 mAh on lewis firmware (directly in
+        # mAh, no BMS scale factor needed unlike 9-series).
+        # Previous value (1800) caused battery_capacity_retention to read
+        # ~138% for a healthy battery, making the sensor meaningless.
+        battery_mah=2488, battery_chemistry="lipo", battery_voltage=14.8,
         battery_cycles_eol=400,
         filter_hours=60, main_brush_hours=150, side_brush_hours=150,
         typical_coverage_sqft=1200, map_capability="smart",
@@ -545,7 +551,7 @@ DIAG_REDACT_KEYS: Final[set[str]] = {
 # ── Capability detection ───────────────────────────────────────────────────────
 def has_carpet_boost(state: dict) -> bool:
     """Return True if this robot supports carpet boost / fan speed control."""
-    cap = state.get("cap", {})
+    cap = state.get("cap") or {}
     if cap.get("carpetBoost") == 1:
         return True
     return (
@@ -557,7 +563,7 @@ def has_carpet_boost(state: dict) -> bool:
 
 def has_pose(state: dict) -> bool:
     """Return True if this robot reports pose (position) data."""
-    return state.get("cap", {}).get("pose", 0) >= 1
+    return (state.get("cap") or {}).get("pose", 0) >= 1
 
 
 def has_smart_map(state: dict) -> bool:
@@ -572,7 +578,7 @@ def is_mop(state: dict) -> bool:
 
 def has_clean_base(state: dict) -> bool:
     """Return True if a Clean Base dock is present and communicating."""
-    dock = state.get("dock", {})
+    dock = state.get("dock") or {}
     return "fwVer" in dock or isinstance(dock.get("state"), int)
 
 # ── F7g — Region type icons ───────────────────────────────────────────────────

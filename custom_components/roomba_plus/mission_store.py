@@ -103,6 +103,11 @@ class MissionStore:
 
     def __init__(self) -> None:
         self._records: list[dict[str, Any]] = []
+        # v2.8.0 L3-ARC — archive-computed stats dict injected at startup.
+        # Provides a stable baseline for consecutive_anomalous when local
+        # records are insufficient (< 20 missions).  Not persisted — computed
+        # fresh from MissionArchive each time async_setup_entry runs.
+        self.archive_baseline: dict | None = None
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -674,6 +679,79 @@ class MissionStore:
             "dirt_p75":      dirt_p75,
         }
 
+    @staticmethod
+    def compute_archive_stats(derived_records: list[dict]) -> dict | None:
+        """Compute anomaly-detection baseline from ARC1 archive derived records.
+
+        L3-ARC (v2.8.0) — identical contract to compute_rolling_stats() but
+        consumes MissionArchive.all_derived_oldest_first() rather than local
+        MissionStore records.  Used as a fallback baseline when the local store
+        has < 20 missions.
+
+        Field mapping from archive derived → stats dict:
+          duration_min  → duration stats        (same field name)
+          sqft          → area stats            (archive uses sqft, store uses area_sqft)
+          dirt          → dirt percentile       (same field name)
+          recharge_mean → 0.0                  (recharge_count not in minutes; skipped)
+
+        Returns None when fewer than 20 completed-mission records are available.
+        """
+        completed = [
+            r for r in derived_records
+            if r.get("result") in ("completed", "cancelled_by_user")
+        ]
+        if len(completed) < 20:
+            return None
+
+        durations = []
+        for r in completed:
+            if r.get("duration_min") is None:
+                continue
+            try:
+                durations.append(float(r["duration_min"]))
+            except (TypeError, ValueError):
+                continue
+        areas = []
+        for r in completed:
+            if r.get("sqft") is None:
+                continue
+            try:
+                _sqft = float(r["sqft"])
+            except (TypeError, ValueError):
+                continue
+            if _sqft > 0:
+                areas.append(_sqft)
+        dirts = []
+        for r in completed:
+            if r.get("dirt") is None:
+                continue
+            try:
+                dirts.append(float(r["dirt"]))
+            except (TypeError, ValueError):
+                continue
+
+        if len(durations) < 20:
+            return None
+
+        dur_mean = statistics.mean(durations)
+        dur_std  = statistics.stdev(durations) if len(durations) > 1 else 0.0
+        area_mean = statistics.mean(areas) if areas else None
+        area_std  = statistics.stdev(areas) if len(areas) > 1 else 0.0
+
+        dirt_p75: float | None = None
+        if dirts:
+            dirts_sorted = sorted(dirts)
+            dirt_p75 = dirts_sorted[int(len(dirts_sorted) * 0.75)]
+
+        return {
+            "duration_mean": dur_mean,
+            "duration_std":  dur_std,
+            "area_mean":     area_mean,
+            "area_std":      area_std,
+            "recharge_mean": 0.0,   # not available in ARC1 derived records
+            "dirt_p75":      dirt_p75,
+        }
+
     def is_anomalous(
         self,
         record: dict,
@@ -750,9 +828,13 @@ class MissionStore:
         """Count of consecutive most-recent missions that are anomalous.
 
         L3 — evaluated lazily when accessed; always reads fresh from _records.
-        Returns 0 when stats are unavailable (< 20 missions) or no anomalies.
+        Falls back to archive_baseline (L3-ARC v2.8.0) when local stats are
+        unavailable (< 20 local missions).
+        Returns 0 when neither local stats nor archive baseline are available.
         """
         stats = self.compute_rolling_stats()
+        if stats is None:
+            stats = self.archive_baseline   # L3-ARC fallback
         if stats is None:
             return 0
         count = 0

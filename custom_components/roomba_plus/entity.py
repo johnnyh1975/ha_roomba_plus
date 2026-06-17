@@ -97,9 +97,32 @@ class IRobotEntity(Entity):
         return self.vacuum_state.get("bbmssn", {})
 
     @property
+    def nav_stats(self) -> dict[str, Any]:
+        """Navigation subsystem statistics (bbnav).
+
+        Available on 9-series (980/960/900) firmware. Contains map tracking
+        quality (aMtrack) and landmark counts (nGoodLmrks) used by L9-MAP.
+        Returns empty dict on i/s/j-series firmware where bbnav is absent.
+        """
+        return self.vacuum_state.get("bbnav") or {}
+
+    @property
     def battery_stats(self) -> dict[str, Any]:
         """Battery charge cycle statistics (bbchg3)."""
         return self.vacuum_state.get("bbchg3", {})
+
+    @property
+    def dock_stats(self) -> dict[str, Any]:
+        """Dock charging session statistics (bbchg).
+
+        Distinct from bbchg3 (battery cycle statistics).
+        Contains dock contact health counters:
+          nChatters  — contact bounce events (worn contacts)
+          nKnockoffs — unintended undocking events
+          nAborts    — aborted charging sessions
+          smberr     — SMBus communication errors (already used by SMBERR repair)
+        """
+        return self.vacuum_state.get("bbchg") or {}
 
     @property
     def clean_mission_status(self) -> dict[str, Any]:

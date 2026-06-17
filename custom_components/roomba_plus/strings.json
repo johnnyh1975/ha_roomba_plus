@@ -561,6 +561,39 @@
       },
       "battery_age_days": {
         "name": "Battery age"
+      },
+      "wifi_last_channel": {
+        "name": "Wi-Fi last channel"
+      },
+      "wifi_channel_stability": {
+        "name": "Wi-Fi channel stability"
+      },
+      "missions_per_charge": {
+        "name": "Missions per charge"
+      },
+      "nav_landmark_quality": {
+        "name": "Navigation landmark quality"
+      },
+      "nav_good_landmarks": {
+        "name": "Navigation good landmarks"
+      },
+      "optical_dirt_detections": {
+        "name": "Optical dirt detections"
+      },
+      "piezo_dirt_detections": {
+        "name": "Piezo dirt detections"
+      },
+      "nav_orientations": {
+        "name": "Navigation orientations"
+      },
+      "dock_contact_chatters": {
+        "name": "Dock contact chatters"
+      },
+      "dock_knockoffs": {
+        "name": "Dock knockoffs"
+      },
+      "dock_charge_aborts": {
+        "name": "Dock charge aborts"
       }
     },
     "binary_sensor": {
@@ -828,6 +861,10 @@
     "smberr_high": {
       "title": "High battery SMBus errors detected",
       "description": "The robot has logged {count} SMBus communication errors between the main board and the battery chip. This often indicates worn dock contacts or an aging battery.\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. If errors remain high after cleaning, the battery may need replacement."
+    },
+    "dock_contact_health": {
+      "title": "Dock contact health issue detected",
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     }
   },
   "device_automation": {
@@ -910,9 +947,6 @@
     },
     "no_rooms_configured": {
       "message": "No rooms configured yet. To use this action: (1) Open the iRobot app, (2) Start a room-targeted clean for each room, (3) Return to Home Assistant — the rooms will appear automatically in the Roomba+ options where you can assign names."
-    },
-    "pmap_not_found": {
-      "message": "Map not found in robot state. The map may have been retrained — run a room mission via the iRobot app to refresh."
     },
     "pmap_not_resolved": {
       "message": "Could not resolve map ID for one or more rooms. Ensure the robot has reported its map state via MQTT."

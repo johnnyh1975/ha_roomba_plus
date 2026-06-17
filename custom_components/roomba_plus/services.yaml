@@ -194,3 +194,15 @@ reset_robot_profile:
     entity:
       integration: roomba_plus
       domain: vacuum
+
+advance_room:
+  name: Advance room progress
+  description: >
+    Manually advances the room progress indicator by one step. Use when the
+    current room or next room sensor is stuck on a completed room on lewis
+    firmware robots (i7/s9/j-series). Only takes effect when the robot is
+    not actively cleaning (between rooms). Requires an active mission.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum

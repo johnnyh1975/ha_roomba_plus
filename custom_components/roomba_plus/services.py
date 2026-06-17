@@ -263,8 +263,6 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
     Only works for MapCapability.SMART robots (i7 / s9 / j-series).
     """
-    from . import roomba_reported_state
-
     hass = call.hass
     entity_ids: list[str] = call.data["entity_id"]
     room_names: list[str] = (
@@ -331,7 +329,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 translation_key="no_rooms_configured",
             )
 
-        state = roomba_reported_state(data.roomba)
+        state = data.roomba_reported_state()
 
         cloud_pmap_id: str | None = None
         if data.has_cloud:
@@ -342,7 +340,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                     cloud_pmap_id[:12], entity_id,
                 )
 
-        not_ready: int = state.get("cleanMissionStatus", {}).get("notReady", 0)
+        not_ready: int = (state.get("cleanMissionStatus") or {}).get("notReady", 0)
         if not_ready & 64:
             raise ServiceValidationError(
                 "The robot is currently updating its Smart Map. "
@@ -766,6 +764,100 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_SEQUENCE)
 
+    # ── ADVANCE-ROOM-V2 (v2.8.0) — manual room-progress override ─────────────
+    if not hass.services.has_service(DOMAIN, "advance_room"):
+        hass.services.async_register(
+            DOMAIN,
+            "advance_room",
+            async_handle_advance_room,
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_ids}),
+        )
+        _LOGGER.debug("Registered %s.advance_room action", DOMAIN)
+
+
+async def async_handle_advance_room(call: ServiceCall) -> None:
+    """Handle roomba_plus.advance_room — manual room-progress override.
+
+    ADVANCE-ROOM-V2 (v2.8.0) — Lewis firmware robots send a non-run phase
+    event at every inter-room boundary. Occasionally the progress sensor gets
+    stuck on a completed room. This service lets the user manually advance
+    current_room_idx by one step.
+
+    Guards:
+      1. MissionTimerStore must exist (SMART + cloud robots only).
+      2. An active mission must be in progress (mission_id not None).
+      3. Robot must NOT be in phase=run (only advance during transitions).
+      4. current_room_idx must be < len(planned_rooms) - 1.
+    """
+    hass = call.hass
+    ent_reg = er.async_get(hass)
+
+    for entity_id in call.data["entity_id"]:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None:
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
+
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
+            entry.config_entry_id
+        )
+        if config_entry is None:
+            raise ServiceValidationError(
+                f"No config entry for {entity_id}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
+
+        data: RoombaData = config_entry.runtime_data
+        mts = data.mission_timer_store
+
+        # Guard 1: MissionTimerStore only exists for SMART + cloud robots
+        if mts is None:
+            raise ServiceValidationError(
+                f"{entity_id}: advance_room requires a SMART map robot with "
+                "cloud credentials (i7/s9/j-series + iRobot account).",
+                translation_domain=DOMAIN,
+                translation_key="not_smart_map",
+            )
+
+        # Guard 2: active mission
+        if mts.mission_id is None:
+            _LOGGER.debug(
+                "advance_room: no active mission for %s — ignored", entity_id
+            )
+            continue
+
+        # Guard 3: non-run phase (don't advance while actively cleaning)
+        state = data.roomba_reported_state()
+        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+        if phase == "run":
+            _LOGGER.debug(
+                "advance_room: robot in phase=run for %s — ignored (advance "
+                "during transition phase only)",
+                entity_id,
+            )
+            continue
+
+        # Guard 4 + actual advance (returns False if already at last room)
+        advanced = mts.advance_room(hass, config_entry.entry_id)
+        if advanced:
+            _LOGGER.info(
+                "advance_room: advanced to room %d/%d (%s) for %s",
+                mts.current_room_idx + 1,
+                len(mts.planned_rooms),
+                mts.current_room,
+                entity_id,
+            )
+        else:
+            _LOGGER.debug(
+                "advance_room: already at last room for %s — ignored", entity_id
+            )
+
 
 def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
@@ -781,6 +873,7 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "reset_contact_cleaning",
         "reset_bin_cleaning",
         "reset_robot_profile",
+        "advance_room",
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

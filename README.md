@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.7.6-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.8.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 1996 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,372 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -170,6 +170,7 @@ Each robot is a separate integration entry with its own device, entities, and st
 | `roomba_plus.reset_bin_cleaning` | All | Record bin cleaning (v2.7+) |
 | `roomba_plus.reset_robot_profile` | All | Wipe learned calibration data (v2.7+) |
 | `roomba_plus.clean_sequence` | All | Start robot B when robot A finishes |
+| `roomba_plus.advance_room` | SMART + cloud | Manually advance mission progress to the next room when it gets stuck on a completed one (v2.8.0) |
 
 **Device triggers** for automations:
 
@@ -354,6 +355,12 @@ map_modes:
 
 `binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable).
 
+#### Dock contact health (v2.8.0)
+
+> i/s-series (lewis/soho firmware); some 9-series variants
+
+Monitors three dock-contact counters (`nChatters`, `nKnockoffs`, `nAborts`) and raises a **Repair Issue** when any exceeds its threshold — an early signal of dock-contact wear, separate from the SMBus battery-communication check (`smberr`). Auto-resolves once counters drop back below threshold.
+
 #### Wear Intelligence
 
 | Sensor | Notes |
@@ -366,7 +373,7 @@ map_modes:
 
 #### Device diagnostics (opt-in)
 
-Battery capacity (mAh) · Navigation panic events · Cliff events front / rear
+Battery capacity (mAh) · Navigation panic events · Cliff events front / rear · Navigation landmark quality (9-series) · Optical / piezo dirt detections, navigation orientations (i/s-series) · Dock contact chatters / knockoffs / charge aborts (v2.8.0) · Wi-Fi last channel, channel stability, missions per charge (v2.8.0)
 
 ---
 
@@ -392,6 +399,8 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 `sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and elapsed run-only seconds. The timer persists across HA restarts.
 
 Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` (null in Auto pass mode) · `room_sequence`
+
+**Automatic room advancement (v2.8.0):** on lewis-firmware robots (i7+/s9+), the progress sensor can occasionally get stuck reporting a completed room as still in progress. Roomba+ now detects room transitions automatically using your robot's real per-room cloud time estimates — no setup required. If it ever needs a manual nudge, use the `roomba_plus.advance_room` action.
 
 #### Mission phase sensors
 
@@ -427,6 +436,8 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 #### Mission anomaly detection (v2.5+)
 
 Monitors each mission against the last 30 days of your robot's personal history. A Repair Issue is raised after two consecutive statistically unusual missions. Activates after 20 missions of history and clears automatically once missions return to normal.
+
+> **v2.8.0:** if you have cloud credentials and prior mission history in the iRobot app, the anomaly baseline and per-room dirt index are bootstrapped from that full cloud history at first setup — both features can activate within days instead of needing several weeks of fresh local history.
 
 #### Stuck pattern time-correlation (v2.7+)
 
@@ -557,7 +568,7 @@ Settings → Devices → Roomba+ → Configure
 
 #### Diagnostics download
 
-Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zone subsystem, geometry subsystem, cloud subsystem, `robot_profile` (v2.5+: confirmed profile, chemistry, BMS scale factors), and `learned_maintenance` (v2.5+: learned filter and brush lifespan hours).
+Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zone subsystem, geometry subsystem, cloud subsystem, `robot_profile` (v2.5+: confirmed profile, chemistry, BMS scale factors), `learned_maintenance` (v2.5+: learned filter and brush lifespan hours), and `sub_module_sw_versions` (v2.8.0: per-component firmware build hashes — useful for spotting differences between otherwise-identical firmware versions).
 
 ---
 

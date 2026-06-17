@@ -547,6 +547,39 @@
       },
       "battery_age_days": {
         "name": "Idade bateria"
+      },
+      "wifi_last_channel": {
+        "name": "Último canal Wi-Fi"
+      },
+      "wifi_channel_stability": {
+        "name": "Estabilidade do canal Wi-Fi"
+      },
+      "missions_per_charge": {
+        "name": "Missões por carga"
+      },
+      "nav_landmark_quality": {
+        "name": "Qualidade de referência de navegação"
+      },
+      "nav_good_landmarks": {
+        "name": "Boas referências de navegação"
+      },
+      "optical_dirt_detections": {
+        "name": "Deteções óticas de sujidade"
+      },
+      "piezo_dirt_detections": {
+        "name": "Deteções piezo de sujidade"
+      },
+      "nav_orientations": {
+        "name": "Orientações de navegação"
+      },
+      "dock_contact_chatters": {
+        "name": "Ressaltos de contacto da base"
+      },
+      "dock_knockoffs": {
+        "name": "Desconexões da base"
+      },
+      "dock_charge_aborts": {
+        "name": "Interrupções de carga da base"
       }
     },
     "binary_sensor": {
@@ -814,6 +847,10 @@
     "smberr_high": {
       "title": "Muitos erros SMBus de bateria detetados",
       "description": "O robô registou {count} erros de comunicação SMBus. Limpe os contactos de carregamento. Se os erros persistirem, pode ser necessário substituir a bateria."
+    },
+    "dock_contact_health": {
+      "title": "Dock contact health issue detected",
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     }
   },
   "device_automation": {
@@ -854,9 +891,6 @@
     },
     "no_rooms_configured": {
       "message": "Nenhuma divisão configurada ainda. Para usar esta ação: (1) Abre a app iRobot, (2) Inicia uma limpeza por divisão para cada divisão, (3) Regressa ao Home Assistant — as divisões aparecerão automaticamente nas opções do Roomba+ onde podes atribuir nomes."
-    },
-    "pmap_not_found": {
-      "message": "Mapa não encontrado no estado do robô. O mapa pode ter sido retreinado — executa uma missão por divisão a partir da app iRobot para atualizar."
     },
     "pmap_not_resolved": {
       "message": "Não foi possível resolver o ID do mapa para uma ou mais divisões. Garante que o robô transmitiu o estado do mapa via MQTT."

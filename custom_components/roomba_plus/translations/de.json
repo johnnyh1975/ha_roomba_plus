@@ -543,6 +543,39 @@
       },
       "battery_age_days": {
         "name": "Akkualter"
+      },
+      "wifi_last_channel": {
+        "name": "WLAN letzter Kanal"
+      },
+      "wifi_channel_stability": {
+        "name": "WLAN-Kanal-Stabilität"
+      },
+      "missions_per_charge": {
+        "name": "Missionen pro Ladung"
+      },
+      "nav_landmark_quality": {
+        "name": "Navigations-Landmarken-Qualität"
+      },
+      "nav_good_landmarks": {
+        "name": "Gute Navigations-Landmarken"
+      },
+      "optical_dirt_detections": {
+        "name": "Optische Schmutzerkennung"
+      },
+      "piezo_dirt_detections": {
+        "name": "Piezo-Schmutzerkennung"
+      },
+      "nav_orientations": {
+        "name": "Navigations-Orientierungen"
+      },
+      "dock_contact_chatters": {
+        "name": "Dock-Kontakt-Prellungen"
+      },
+      "dock_knockoffs": {
+        "name": "Dock-Abdock-Ereignisse"
+      },
+      "dock_charge_aborts": {
+        "name": "Dock-Ladeabbrüche"
       }
     },
     "binary_sensor": {
@@ -810,6 +843,10 @@
     "smberr_high": {
       "title": "Hohe Anzahl an SMBus-Akkufehlern erkannt",
       "description": "Der Roboter hat {count} SMBus-Kommunikationsfehler zwischen der Hauptplatine und dem Akkuchip aufgezeichnet. Dies deutet oft auf verschlissene Ladekontakte oder einen alternden Akku hin.\n\n**Empfohlene Maßnahmen:**\n1. Reinigen Sie die Ladekontakte am Roboter und der Ladestation mit einem trockenen Tuch.\n2. Wenn die Fehler nach der Reinigung hoch bleiben, muss der Akku möglicherweise ersetzt werden."
+    },
+    "dock_contact_health": {
+      "title": "Problem mit Dock-Kontaktgesundheit erkannt",
+      "description": "Der Roboter meldet Dock-Kontaktprobleme:\n\n- Kontakt-Prellungen: {chatters}\n- Unbeabsichtigte Abdockungen: {knockoffs}\n- Ladeabbrüche: {aborts}\n\n**Empfohlene Maßnahmen:**\n1. Ladekontakte an Roboter und Dock mit einem trockenen Tuch reinigen.\n2. Sicherstellen dass die Dockingstation auf einem flachen, stabilen Untergrund steht.\n3. Bei vielen Abdockungen: Hindernisse in der Nähe der Station prüfen."
     }
   },
   "device_automation": {
@@ -850,9 +887,6 @@
     },
     "no_rooms_configured": {
       "message": "Noch keine Räume konfiguriert. Vorgehensweise: (1) iRobot-App öffnen, (2) Für jeden Raum eine raumbasierte Reinigung starten, (3) In Home Assistant öffnen sich die Roomba+-Optionen automatisch, wo die Räume benannt werden können."
-    },
-    "pmap_not_found": {
-      "message": "Karte nicht im Roboterstatus gefunden. Die Karte wurde möglicherweise neu trainiert — bitte eine Raumreinigung über die iRobot-App starten."
     },
     "pmap_not_resolved": {
       "message": "Karten-ID konnte für einen oder mehrere Räume nicht aufgelöst werden. Bitte sicherstellen, dass der Roboter seinen Kartenstatus via MQTT übermittelt hat."
