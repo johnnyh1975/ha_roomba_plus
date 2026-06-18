@@ -467,6 +467,7 @@ def _make_map_entity():
     entity._stuck_mission_points = []
     entity._had_cleaning_phase = False
     entity._end_signal_streak = 0
+    entity._end_signal_first_ts = 0.0
     entity._mission_start_ts = None
     entity._mission_checkpoint_mssn_strt_tm = 0
     entity._pending_checkpoint = None
@@ -530,13 +531,51 @@ class TestImageEndDebounceV281:
         entity._handle_mission_end.assert_not_called()
 
     def test_two_consecutive_charge_messages_confirm_genuine_end(self):
+        """Two consecutive charge+cycle-misreport messages with sufficient
+        time between them DO confirm a genuine end.  Time is mocked so
+        the second message appears 3 s after the first (> 2.0 s hold)."""
         entity = _make_map_entity()
-        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
-        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
-        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        with patch("custom_components.roomba_plus.image._time_mod") as tmock:
+            tmock.monotonic.side_effect = [
+                1.0,   # end_signal_first_ts on first charge
+                4.0,   # time_held check on second charge
+                4.0,   # fire condition time check on second charge
+            ]
+            _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
 
         entity._handle_mission_end.assert_called_once_with("charge")
         assert entity._had_cleaning_phase is False
+
+    def test_rapid_burst_of_two_end_looking_messages_does_not_trigger_mission_end(self):
+        """v2.8.3 regression — same burst scenario as test_mission_timer_store.py:
+        lewis firmware sends two cleanMissionStatus messages ~21 ms apart
+        during an inter-room transition.  image.py's independent mission-end
+        detection must apply the same time gate and not call
+        _handle_mission_end() mid-mission."""
+        entity = _make_map_entity()
+
+        with patch("custom_components.roomba_plus.image._time_mod") as tmock:
+            tmock.monotonic.side_effect = [
+                1.000,  # end_signal_first_ts on first charge
+                1.021,  # time_held check on second charge (0.021 s < 2.0 s → burst)
+                1.021,  # fire condition time check on second charge (also < 2.0 s)
+            ]
+            _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+            # Set mission_points AFTER the run message — run triggers new-mission
+            # detection which resets _mission_points, so points must be set here
+            # to simulate accumulated pose data from an ongoing mission.
+            entity._mission_points = [(0.0, 0.0), (100.0, 0.0)]
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+            _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+
+        entity._handle_mission_end.assert_not_called()
+        assert entity._had_cleaning_phase is True
+        assert entity._mission_points == [(0.0, 0.0), (100.0, 0.0)], (
+            "A rapid burst must not fragment _mission_points"
+        )
 
     def test_stop_phase_still_confirms_immediately_no_debounce(self):
         entity = _make_map_entity()

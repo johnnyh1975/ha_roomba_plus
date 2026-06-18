@@ -12,6 +12,8 @@ Entities:
 """
 from __future__ import annotations
 
+import datetime as _dt
+import time as _time_mod
 from typing import Any
 
 from homeassistant.components.binary_sensor import (
@@ -20,8 +22,10 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 
 from . import roomba_reported_state
 from .const import (
@@ -30,6 +34,8 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
+    DOMAIN,
+    MQTT_WATCHDOG_SECONDS,
     has_smart_map,
     is_mop,
 )
@@ -107,6 +113,17 @@ async def async_setup_entry(
         and data.has_cloud
     ):
         entities.append(RoombaDemandCleanBlocked(roomba, blid, config_entry))
+
+    # v2.8.3 — WIFI-CLOUD-HEALTH: robot-side cloud connectivity (always created;
+    # returns None when wifistat absent from MQTT state).
+    entities.append(RoombaCloudConnected(roomba, blid))
+
+    # v2.8.3 — MQTT-WATCHDOG: silence detection during phase=run (always created).
+    entities.append(RoombaMqttStale(roomba, blid, config_entry))
+
+    # v2.8.3 — FW-SENSOR: firmware update indicator (always created; ON for
+    # 24 h after softwareVer changes, then auto-resets to OFF).
+    entities.append(RoombaFirmwareUpdated(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -756,3 +773,188 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
+
+
+# ── v2.8.3 ────────────────────────────────────────────────────────────────────
+
+class RoombaCloudConnected(IRobotEntity, BinarySensorEntity):
+    """WIFI-CLOUD-HEALTH (v2.8.3) — robot-side iRobot cloud connectivity.
+
+    ON when the robot reports wifistat.cloud != 0, meaning the robot itself
+    can reach iRobot cloud servers.
+
+    Distinct from:
+      - RoombaConnectionStatus (MQTT between HA and robot)
+      - CLOUD-STALE Repair Issue (HA fetching data from iRobot API)
+
+    Returns None (Unknown) when wifistat is absent from MQTT state — older
+    9-series firmware does not send this field.
+    """
+
+    entity_description = BinarySensorEntityDescription(
+        key="cloud_connected",
+        name="Cloud connected",
+        translation_key="cloud_connected",
+    )
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_cloud_connected"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True when robot reports cloud connectivity."""
+        wifistat = roomba_reported_state(self.vacuum).get("wifistat")
+        if wifistat is None:
+            return None  # Field absent on 9-series — report Unknown
+        cloud_val = wifistat.get("cloud") if isinstance(wifistat, dict) else None
+        if cloud_val is None:
+            return None
+        return bool(cloud_val)
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "wifistat" in new_state
+
+
+_MQTT_WATCHDOG_TICK = _dt.timedelta(seconds=60)
+_FIRMWARE_UPDATED_WINDOW_SECONDS: float = 86400.0  # 24 h
+
+
+class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
+    """MQTT-WATCHDOG (v2.8.3) — silence detection during active cleaning.
+
+    ON when phase==run is active AND no MQTT message has been received for
+    MQTT_WATCHDOG_SECONDS (5 min).  Checked on a 60-second periodic tick.
+
+    When ON:
+      - Entity state turns ON (visible in the UI)
+      - mqtt_watchdog Repair Issue fires
+
+    When OFF (new message received):
+      - Entity turns OFF
+      - Repair Issue auto-resolves
+
+    Returns False when no messages have been received at all since HA startup
+    (last_mqtt_message_ts == 0.0) — avoids false positives on first boot.
+    """
+
+    entity_description = BinarySensorEntityDescription(
+        key="mqtt_stale",
+        name="MQTT stale",
+        translation_key="mqtt_stale",
+    )
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_mqtt_stale"
+        self._unsub_tick: Any | None = None
+        self._was_stale: bool = False
+
+    async def async_added_to_hass(self) -> None:
+        """Start 60-second watchdog tick."""
+        await super().async_added_to_hass()
+        self._unsub_tick = async_track_time_interval(
+            self.hass,
+            self._async_watchdog_tick,
+            _MQTT_WATCHDOG_TICK,
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel watchdog tick and clear any stale issue."""
+        if self._unsub_tick is not None:
+            self._unsub_tick()
+            self._unsub_tick = None
+        ir.async_delete_issue(
+            self.hass, DOMAIN, f"mqtt_watchdog_{self._entry.entry_id}"
+        )
+
+    @callback
+    def _async_watchdog_tick(self, _now: _dt.datetime) -> None:
+        """Re-evaluate watchdog state and fire/clear Repair Issue on transition."""
+        now_stale = bool(self.is_on)
+        if now_stale and not self._was_stale:
+            # Transition OFF → ON: MQTT went silent during an active mission.
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"mqtt_watchdog_{self._entry.entry_id}",
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key="mqtt_watchdog",
+            )
+        elif not now_stale and self._was_stale:
+            # Transition ON → OFF: MQTT traffic resumed.
+            ir.async_delete_issue(
+                self.hass, DOMAIN, f"mqtt_watchdog_{self._entry.entry_id}"
+            )
+        self._was_stale = now_stale
+        self.schedule_update_ha_state(force_refresh=True)
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when MQTT is silent during phase=run."""
+        data = self._entry.runtime_data
+        ts = data.last_mqtt_message_ts
+        if ts == 0.0:
+            return False  # No message received yet since HA startup
+        phase = (
+            roomba_reported_state(self.vacuum)
+            .get("cleanMissionStatus", {})
+            .get("phase", "")
+        )
+        if phase != "run":
+            return False
+        return (_time_mod.time() - ts) > MQTT_WATCHDOG_SECONDS
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+
+class RoombaFirmwareUpdated(IRobotEntity, BinarySensorEntity):
+    """FW-SENSOR (v2.8.3) — firmware update indicator.
+
+    ON for 24 h after softwareVer changes (detected by callbacks.py comparing
+    successive softwareVer values).  Resets to OFF automatically after 24 h.
+
+    OFF = firmware is at the same version as when last seen.
+    ON  = firmware was updated within the past 24 hours.
+    None = no firmware version seen yet.
+
+    Use with blueprint: 'Notify me when firmware updates.'
+    Pairs with sensor.*_firmware_version which shows the current version string.
+    """
+
+    entity_description = BinarySensorEntityDescription(
+        key="firmware_updated",
+        name="Firmware updated",
+        translation_key="firmware_updated",
+    )
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_firmware_updated"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True when a firmware update was detected within the past 24 h."""
+        data = self._entry.runtime_data
+        if data.last_firmware_version is None:
+            return None  # No firmware version seen yet
+        updated_at = data.firmware_updated_at
+        if updated_at is None:
+            return False
+        return (_time_mod.time() - updated_at) < _FIRMWARE_UPDATED_WINDOW_SECONDS
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "softwareVer" in new_state

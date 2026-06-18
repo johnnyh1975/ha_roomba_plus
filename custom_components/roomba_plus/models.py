@@ -102,6 +102,21 @@ class RoombaData:
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 
+    # v2.8.3 — MQTT-watchdog: wall-clock timestamp of the last received MQTT
+    # message.  Written by the paho-MQTT thread in callbacks.py; read by the
+    # RoombaMqttStale binary sensor on its 60-second tick.  Python's GIL makes
+    # float reads/writes atomic so no explicit locking is needed.
+    # 0.0 = no message received yet (watchdog must not fire until first message).
+    last_mqtt_message_ts: float = 0.0
+
+    # v2.8.3 — FW-SENSOR: firmware version tracking.
+    # last_firmware_version: most recent non-None softwareVer seen from MQTT.
+    # firmware_updated_at: wall-clock timestamp when softwareVer last changed
+    #   (None until a change is detected; stays set for 24 h to keep the
+    #   firmware_updated binary sensor ON).
+    last_firmware_version: str | None = None
+    firmware_updated_at: float | None = None
+
     def roomba_reported_state(self) -> dict[str, Any]:
         """Return the reported state dict from master_state."""
         return self.roomba.master_state.get("state", {}).get("reported", {})

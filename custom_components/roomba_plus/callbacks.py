@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, ROOM_TRANSITION_CANDIDATE_PHASES
+from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, ROOM_TRANSITION_CANDIDATE_PHASES
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
 # second, silently-diverging copy.
 _ROOM_TRANSITION_CANDIDATE_PHASES = ROOM_TRANSITION_CANDIDATE_PHASES
 _END_SIGNAL_DEBOUNCE_COUNT = END_SIGNAL_DEBOUNCE_COUNT
+_END_SIGNAL_MIN_HOLD_SECONDS = END_SIGNAL_MIN_HOLD_SECONDS
 
 # AUTO-ADVANCE-ROOM time-confidence threshold: time spent in the current room
 # must be at least this fraction of the heuristic expected-per-room duration
@@ -325,6 +326,15 @@ def make_mission_callback(
     # debounce below. Resets to 0 whenever a message does not look like a
     # genuine end (cycle still active, or phase back in an active phase).
     end_signal_streak: int = 0
+    # v2.8.3 — monotonic timestamp of when the current end_signal_streak
+    # first started (i.e. when streak went from 0 → 1 on an ambiguous phase).
+    # Used together with END_SIGNAL_MIN_HOLD_SECONDS to reject rapid-burst
+    # transitions: lewis firmware 22.52.10 sends exactly two consecutive
+    # end-looking messages within ~21 ms during an inter-room transition —
+    # the count-only gate (END_SIGNAL_DEBOUNCE_COUNT=2) fires on the burst.
+    # The time gate ensures the signal must have been present for at least
+    # 2 s, which a burst cannot satisfy but a genuinely-docked robot can.
+    end_signal_first_ts: float = 0.0
     # F4e — accumulate recharge minutes across mid-mission recharge phases
     recharge_min_accumulator: int = 0
     last_recharge_phase_ts: float = 0.0
@@ -341,9 +351,31 @@ def make_mission_callback(
         nonlocal last_phase, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
-        nonlocal end_signal_streak
+        nonlocal end_signal_streak, end_signal_first_ts
 
         reported = json_data.get("state", {}).get("reported", {})
+        if "cleanMissionStatus" not in reported:
+            return
+
+        # v2.8.3 — MQTT-watchdog: stamp every message so RoombaMqttStale
+        # binary sensor can detect silence during phase=run.
+        entry.runtime_data.last_mqtt_message_ts = _time_mod.time()
+
+        # v2.8.3 — FW-SENSOR: track softwareVer changes for binary_sensor.*_firmware_updated.
+        # Only fires once per actual firmware upgrade (not on every message).
+        _fw_ver = reported.get("softwareVer")
+        if _fw_ver is not None:
+            _data = entry.runtime_data
+            if (
+                _data.last_firmware_version is not None
+                and _fw_ver != _data.last_firmware_version
+            ):
+                _data.firmware_updated_at = _time_mod.time()
+                _LOGGER.info(
+                    "Roomba+: firmware updated %s → %s",
+                    _data.last_firmware_version, _fw_ver,
+                )
+            _data.last_firmware_version = _fw_ver
         if "cleanMissionStatus" not in reported:
             return
         mission = reported["cleanMissionStatus"]
@@ -487,28 +519,56 @@ def make_mission_callback(
         if had_cleaning_phase:
             if not _looks_like_end:
                 end_signal_streak = 0
+                end_signal_first_ts = 0.0
             elif _ambiguous_end_phase:
+                if end_signal_streak == 0:
+                    # Record when the current streak started — used by the
+                    # v2.8.3 time gate to reject rapid inter-room bursts.
+                    end_signal_first_ts = _time_mod.monotonic()
                 end_signal_streak += 1
             else:
                 # Unambiguous terminal phase — confirm immediately.
                 end_signal_streak = _END_SIGNAL_DEBOUNCE_COUNT
 
         if phase in _MISSION_END_PHASES and had_cleaning_phase:
+            _time_held = (
+                _time_mod.monotonic() - end_signal_first_ts
+                if end_signal_first_ts > 0
+                else 0.0
+            )
             _LOGGER.debug(
                 "MissionStore: end-phase check phase=%s cycle=%s ambiguous=%s "
-                "is_inter_room=%s end_signal_streak=%d",
+                "is_inter_room=%s end_signal_streak=%d time_held=%.3fs",
                 phase, _cycle, _ambiguous_end_phase,
-                _is_inter_room_transition, end_signal_streak,
+                _is_inter_room_transition, end_signal_streak, _time_held,
             )
+            if (
+                _ambiguous_end_phase
+                and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
+                and _time_held < _END_SIGNAL_MIN_HOLD_SECONDS
+            ):
+                _LOGGER.info(
+                    "MissionStore: end-phase burst rejected "
+                    "(time_held=%.3fs < %.1fs) — mission still active",
+                    _time_held, _END_SIGNAL_MIN_HOLD_SECONDS,
+                )
 
         if (
             phase in _MISSION_END_PHASES
             and had_cleaning_phase
             and _looks_like_end
             and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
+            and (
+                not _ambiguous_end_phase
+                or (
+                    _time_mod.monotonic() - end_signal_first_ts
+                    >= _END_SIGNAL_MIN_HOLD_SECONDS
+                )
+            )
         ):
             had_cleaning_phase = False
             end_signal_streak = 0
+            end_signal_first_ts = 0.0
             bbrun_end = reported.get("bbrun", {})
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
 

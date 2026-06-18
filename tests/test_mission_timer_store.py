@@ -17,7 +17,9 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
+import itertools
 import pytest
+from contextlib import contextmanager
 import tests.conftest
 from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
 from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
@@ -27,6 +29,20 @@ from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_CANDIDATE_P
 from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_MIN_ELAPSED_RATIO
 from custom_components.roomba_plus.callbacks import _room_transition_confidence_ok
 from custom_components.roomba_plus.callbacks import make_mission_callback
+
+
+@contextmanager
+def _patch_callbacks_time():
+    """Patch callbacks._time_mod so that monotonic() returns increasing values.
+
+    Each call returns a value 10 s larger than the previous — ensures that the
+    END_SIGNAL_MIN_HOLD_SECONDS (2.0 s) time gate is always satisfied.
+    """
+    _c = itertools.count(1)
+    with patch("custom_components.roomba_plus.callbacks._time_mod") as tmock:
+        tmock.monotonic.side_effect = lambda: float(next(_c)) * 10.0
+        tmock.time.return_value = 1000.0
+        yield tmock
 
 
 def _utcnow() -> datetime:
@@ -1354,6 +1370,8 @@ class TestGenuineMissionEndClearsMTS:
 
         v2.8.1: charge is debounced (ambiguous with inter-room transitions) —
         two consecutive charge messages confirm a genuine end.
+        v2.8.3: also requires END_SIGNAL_MIN_HOLD_SECONDS gap — provided by
+        _patch_callbacks_time() which makes each monotonic() call 10 s later.
         """
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
@@ -1363,7 +1381,7 @@ class TestGenuineMissionEndClearsMTS:
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: None,
-        ):
+        ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
             assert mts.mission_id is not None
@@ -1380,6 +1398,7 @@ class TestGenuineMissionEndClearsMTS:
         """phase=hmPostMsn clears MTS once confirmed.
 
         v2.8.1: hmPostMsn is debounced (ambiguous with inter-room transitions).
+        v2.8.3: also requires END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch).
         """
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
@@ -1389,7 +1408,7 @@ class TestGenuineMissionEndClearsMTS:
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: None,
-        ):
+        ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
             assert mts.mission_id is not None
@@ -1438,11 +1457,12 @@ class TestGenuineMissionEndClearsMTS:
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: None,
-        ):
+        ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_no_cycle("run"))
             assert mts.mission_id is not None
             # v2.8.1: charge is debounced — needs 2 consecutive messages
+            # v2.8.3: also needs END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch)
             _run_callback(cb, _msg_no_cycle("charge"))
             _run_callback(cb, _msg_no_cycle("charge"))
 
@@ -1517,8 +1537,11 @@ class TestEndDebounceV281:
         )
 
     def test_two_consecutive_charge_messages_confirm_genuine_end(self):
-        """Two consecutive charge+cycle-misreport messages DO confirm a
-        genuine end (the actual debounce threshold being satisfied)."""
+        """Two consecutive charge+cycle-misreport messages with sufficient
+        time between them (≥ END_SIGNAL_MIN_HOLD_SECONDS) DO confirm a
+        genuine end — the debounce threshold is satisfied AND the time gate
+        is cleared.  Time is mocked so the second message appears 3 s after
+        the first, which is well above the 2 s hold threshold."""
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
@@ -1527,14 +1550,76 @@ class TestEndDebounceV281:
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: None,
-        ):
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            # Monotonic call sequence for run(cycle=clean) → charge(cycle=none) × 2:
+            #   call 1: end_signal_first_ts = 1.0  (set when streak 0→1 on first charge)
+            #   call 2: time_held on first charge  = 4.0 → held = 3.0 s (just logged; streak=1<2)
+            #   call 3: time_held on second charge = 4.0 → held = 3.0 s (no burst: 3.0 ≥ 2.0)
+            #   call 4: fire-condition check       = 4.0 → 4.0−1.0=3.0 ≥ 2.0 → FIRE ✓
+            # Note: first value must be > 0; if 0.0 the `end_signal_first_ts > 0` guard
+            # short-circuits all time_held checks, giving time_held=0.0 always → burst reject.
+            tmock.monotonic.side_effect = [
+                1.0,   # end_signal_first_ts recorded on first charge
+                4.0,   # time_held check on first charge (logged; streak=1, no action)
+                4.0,   # time_held check on second charge (streak=2, 3.0 s ≥ 2.0 → no burst)
+                4.0,   # fire condition check on second charge → 3.0 s ≥ 2.0 → FIRE
+            ]
+            tmock.time.return_value = 1000.0
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
             _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
             _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
 
         assert mts.mission_id is None, (
-            "Two consecutive genuine-end-look messages must confirm the end"
+            "Two consecutive genuine-end-look messages with sufficient time "
+            "gap must confirm the end"
+        )
+
+    def test_rapid_burst_of_two_end_looking_messages_does_not_clear_mts(self):
+        """v2.8.3 regression — lewis firmware 22.52.10 sends exactly two
+        cleanMissionStatus messages ~21 ms apart during an inter-room
+        transition, both with cycle outside {'clean','quick'} and phase in
+        {'charge','hmPostMsn'}.  The v2.8.1 count-only debounce
+        (END_SIGNAL_DEBOUNCE_COUNT=2) was exactly satisfied by this burst,
+        causing MissionTimerStore.clear() to fire and progress to reset to 0%.
+        The v2.8.3 time gate must block the burst: time_held < 2.0 s."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: None,
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            # Burst: first charge at T=1.000, second at T=1.021 (21 ms apart)
+            tmock.monotonic.side_effect = [
+                0.0,   # mission start bookkeeping
+                1.000, # end_signal_first_ts recorded on first charge
+                1.021, # time_held check in the debug/info log block (second charge)
+                1.021, # time_held check in the fire condition (second charge)
+            ]
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            mission_id_before = mts.mission_id
+            run_sec_before = mts.run_sec
+
+            # Rapid burst — both end-looking, but only 21 ms apart
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            # Mission resumes — robot sends run again
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+        assert mts.mission_id == mission_id_before, (
+            "A rapid burst of two end-looking messages must NOT clear "
+            "mission_id — this is the Thonno v2.8.2 progress-reset regression"
+        )
+        assert mts.run_sec >= run_sec_before, (
+            "run_sec must not have been reset by the rapid burst"
         )
 
     def test_stop_phase_still_confirms_immediately_no_debounce(self):

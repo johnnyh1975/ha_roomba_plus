@@ -11,6 +11,7 @@ import sys, datetime
 sys.path.insert(0, "/tmp/roomba_plus_package")
 
 import pytest
+from unittest.mock import MagicMock
 
 
 # ── Load helpers via conftest stubs ──────────────────────────────────────────
@@ -187,3 +188,40 @@ class TestSignalSensors:
     def test_ip_missing_returns_none(self):
         e = _FakeEntity({})
         assert e.vacuum_state.get("netinfo", {}).get("addr") is None
+
+
+# ── v2.8.3 — FW-SENSOR ────────────────────────────────────────────────────────
+
+class TestRoombaFirmwareVersionSensor:
+    """FW-SENSOR (v2.8.3) — RoombaFirmwareVersionSensor reads softwareVer."""
+
+    def _make_sensor(self, software_ver=None):
+        from custom_components.roomba_plus.sensor import RoombaFirmwareVersionSensor
+        reported = {}
+        if software_ver is not None:
+            reported["softwareVer"] = software_ver
+        s = RoombaFirmwareVersionSensor.__new__(RoombaFirmwareVersionSensor)
+        # Set vacuum_state directly — the cached dict set by IRobotEntity.__init__
+        s.vacuum_state = reported
+        # vacuum attribute needed for new_state_filter (via roomba_reported_state)
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": reported}}
+        s.vacuum = roomba
+        return s
+
+    def test_returns_version_string(self):
+        s = self._make_sensor("3.20.11")
+        assert s.native_value == "3.20.11"
+
+    def test_returns_none_when_absent(self):
+        s = self._make_sensor(None)
+        assert s.native_value is None
+
+    def test_state_filter_gates_on_softwarever(self):
+        s = self._make_sensor()
+        assert s.new_state_filter({"softwareVer": "3.20.11"}) is True
+        assert s.new_state_filter({"signal": {}}) is False
+
+    def test_translation_key(self):
+        from custom_components.roomba_plus.sensor import RoombaFirmwareVersionSensor
+        assert RoombaFirmwareVersionSensor.entity_description.translation_key == "firmware_version"

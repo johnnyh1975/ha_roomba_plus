@@ -34,6 +34,7 @@ import datetime
 import io
 import logging
 import math
+import time as _time_mod
 from datetime import datetime as dt_datetime
 from typing import Any
 
@@ -49,6 +50,7 @@ from .const import (
     CLEANING_PHASES,
     DOMAIN,
     END_SIGNAL_DEBOUNCE_COUNT,
+    END_SIGNAL_MIN_HOLD_SECONDS,
     MISSION_END_PHASES,
     REGION_TYPE_ICONS,
     ROOM_TRANSITION_CANDIDATE_PHASES,
@@ -223,6 +225,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # v2.8.1 (END-DEBOUNCE) — consecutive-message counter, mirrors the
         # same mechanism in callbacks.py. See _on_message for details.
         self._end_signal_streak: int = 0
+        # v2.8.3 — monotonic timestamp when the current streak started.
+        # Mirrors callbacks.py end_signal_first_ts — see that module for the
+        # full rationale.  Required in both places because image.py's
+        # mission-end detection is independent of callbacks.py (it feeds
+        # ZoneStore/GeometryStore/GridStore/OutlineStore).
+        self._end_signal_first_ts: float = 0.0
         # v2.8.2 — mission-in-progress checkpoint state. mssn_strt_tm
         # identifies "is this still the same mission" across an HA restart
         # (same field callbacks.py already uses for this purpose — robust
@@ -451,7 +459,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             if self._had_cleaning_phase:
                 if not _looks_like_end:
                     self._end_signal_streak = 0
+                    self._end_signal_first_ts = 0.0
                 elif _ambiguous_end_phase:
+                    if self._end_signal_streak == 0:
+                        self._end_signal_first_ts = _time_mod.monotonic()
                     self._end_signal_streak += 1
                 else:
                     # Unambiguous terminal phase (stop) — confirm immediately.
@@ -464,9 +475,17 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 and self._had_cleaning_phase
                 and _looks_like_end
                 and self._end_signal_streak >= END_SIGNAL_DEBOUNCE_COUNT
+                and (
+                    not _ambiguous_end_phase
+                    or (
+                        _time_mod.monotonic() - self._end_signal_first_ts
+                        >= END_SIGNAL_MIN_HOLD_SECONDS
+                    )
+                )
             ):
                 self._had_cleaning_phase = False
                 self._end_signal_streak = 0
+                self._end_signal_first_ts = 0.0
                 self._handle_mission_end(current_phase)
 
         # Pose update — process regardless of phase so the map and direction

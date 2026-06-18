@@ -2770,6 +2770,15 @@ async def async_setup_entry(
         # dirt, chrgM, and wlBars are persisted across restarts.
         @callback
         def _on_cloud_refresh_complete() -> None:
+            # v2.8.3 CLOUD-STALE — check before the success gate so the Repair
+            # Issue fires even during a streak of failed refreshes (which is
+            # exactly when it's most actionable) and clears immediately on the
+            # first successful one.
+            from .repairs import async_check_cloud_stale
+            hass.async_create_task(
+                async_check_cloud_stale(hass, config_entry, cloud_coordinator),
+                name="roomba_plus_cloud_stale_check",
+            )
             if not cloud_coordinator.last_update_success:
                 return
             ms = config_entry.runtime_data.mission_store

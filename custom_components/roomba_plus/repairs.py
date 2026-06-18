@@ -1143,3 +1143,57 @@ async def async_check_dock_health(
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+# ── v2.8.3 — Connectivity & Monitoring Repair Issues ─────────────────────────
+
+async def async_check_cloud_stale(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+    cloud_coordinator: Any,
+) -> None:
+    """CLOUD-STALE (v2.8.3) — fire or clear the cloud_stale Repair Issue.
+
+    Fires when the cloud coordinator has not had a successful refresh for
+    CLOUD_STALE_MINUTES (60 min) — i.e. at least two consecutive coordinator
+    intervals have failed.  Auto-resolves on the next successful refresh.
+
+    Called from _on_cloud_refresh_complete in __init__.py, which fires after
+    every coordinator update regardless of success, so this check runs both
+    when updates succeed (to clear the issue) and when they fail (to raise it).
+
+    Distinct from WIFI-CLOUD-HEALTH (robot-side cloud disconnect) — this
+    issue represents HA failing to fetch data, regardless of whether the robot
+    itself can still reach iRobot servers.
+    """
+    from datetime import timedelta
+    from .const import CLOUD_STALE_MINUTES
+
+    issue_id = f"cloud_stale_{config_entry.entry_id}"
+    last_success = getattr(cloud_coordinator, "last_success_time", None)
+
+    if last_success is None:
+        # No successful fetch yet in this HA session — not an error (startup).
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+
+    age_minutes = (dt_util.utcnow() - last_success).total_seconds() / 60.0
+
+    if age_minutes > CLOUD_STALE_MINUTES:
+        _LOGGER.warning(
+            "Roomba+: cloud coordinator for %s has not refreshed successfully "
+            "for %.0f min (threshold %d min) — raising cloud_stale issue",
+            config_entry.entry_id, age_minutes, CLOUD_STALE_MINUTES,
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="cloud_stale",
+            translation_placeholders={"minutes": str(int(age_minutes))},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)

@@ -580,6 +580,9 @@
       },
       "dock_charge_aborts": {
         "name": "Dock charge aborts"
+      },
+      "firmware_version": {
+        "name": "Firmware version"
       }
     },
     "binary_sensor": {
@@ -644,6 +647,15 @@
       },
       "demand_clean_blocked": {
         "name": "Demand clean blocked"
+      },
+      "cloud_connected": {
+        "name": "Cloud connected"
+      },
+      "mqtt_stale": {
+        "name": "MQTT stale"
+      },
+      "firmware_updated": {
+        "name": "Firmware updated"
       }
     },
     "button": {
@@ -855,6 +867,14 @@
     "dock_contact_health": {
       "title": "Dock contact health issue detected",
       "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
+    },
+    "cloud_stale": {
+      "title": "Cloud data is stale",
+      "description": "Roomba+ has not received a successful cloud update for {minutes} minutes. Check your iRobot account credentials and internet connection. Local MQTT data is still available."
+    },
+    "mqtt_watchdog": {
+      "title": "Robot MQTT connection lost during mission",
+      "description": "Roomba+ has not received any MQTT messages from the robot for over 5 minutes while a cleaning mission was active. The displayed robot state may be stale. Check your local network connection between Home Assistant and the robot."
     }
   },
   "device_automation": {

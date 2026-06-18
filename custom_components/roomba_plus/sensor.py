@@ -2014,6 +2014,10 @@ async def async_setup_entry(
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
+
+    # v2.8.3 FW-SENSOR — firmware version, always created (universal across all robot families).
+    entities.append(RoombaFirmwareVersionSensor(roomba, blid))
+
     async_add_entities(entities)
 
 
@@ -4191,3 +4195,37 @@ class RoombaMissionsPerChargeSensor(_ArchiveSensor):
             "mid_mission_recharges_30d": total_recharges,
             "single_charge_pct": round(no_recharge / total * 100, 1) if total else None,
         }
+
+
+# ── v2.8.3 — FW-SENSOR ────────────────────────────────────────────────────────
+
+class RoombaFirmwareVersionSensor(IRobotEntity, SensorEntity):
+    """FW-SENSOR (v2.8.3) — robot firmware version string.
+
+    Reads `softwareVer` from the live MQTT state.  Present on all robot
+    families (9-series, i/s/j-series, Braava m6).  Stays at its last-known
+    value when offline — sensor is available whenever MQTT is connected.
+
+    Paired with RoombaFirmwareUpdated (binary_sensor.*_firmware_updated) which
+    turns ON for 24 h after a version change is detected.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="firmware_version",
+        name="Firmware version",
+        translation_key="firmware_version",
+    )
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_firmware_version"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the firmware version string from softwareVer."""
+        return self.vacuum_state.get("softwareVer")
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "softwareVer" in new_state

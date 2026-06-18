@@ -653,6 +653,16 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Helpers used by platforms ─────────────────────────────────────────────
 
     @property
+    def last_success_time(self) -> "datetime | None":
+        """Return the timestamp of the last successful cloud refresh.
+
+        v2.8.3 (CLOUD-STALE) — exposed so repairs.async_check_cloud_stale()
+        can determine how long ago the coordinator last fetched live data.
+        None when no successful refresh has occurred yet in this HA session.
+        """
+        return self._last_success_time
+
+    @property
     def raw_records(self) -> list[dict[str, Any]]:
         """Return the raw per-mission records from the last /missionhistory fetch.
 

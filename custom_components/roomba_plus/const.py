@@ -310,6 +310,33 @@ ROOM_TRANSITION_CANDIDATE_PHASES: Final[frozenset[str]] = frozenset({"charge", "
 # Number of consecutive "looks like a genuine end" messages required on an
 # ambiguous phase before committing to end-of-mission processing.
 END_SIGNAL_DEBOUNCE_COUNT: Final[int] = 2
+# v2.8.3 — minimum wall-clock seconds the end signal must have been active
+# before committing to a mission end on an ambiguous phase (charge/hmPostMsn).
+# Lewis firmware 22.52.10 sends exactly END_SIGNAL_DEBOUNCE_COUNT rapid
+# cleanMissionStatus messages (~21 ms apart) during an inter-room transition,
+# both with cycle outside {"clean","quick"} — this exactly satisfies the
+# count-only gate, causing a false MissionTimerStore.clear().  A genuine
+# mission end (robot docked) holds the "end-looking" signal for many seconds
+# between MQTT updates; a burst resolves in milliseconds.  Requiring the
+# signal to persist for at least this many seconds defeats the burst case
+# without meaningfully delaying genuine end detection.
+# Applies only to ROOM_TRANSITION_CANDIDATE_PHASES (ambiguous phases).
+# Unambiguous terminal phases (stop/completed/cancelled) are unaffected.
+END_SIGNAL_MIN_HOLD_SECONDS: Final[float] = 2.0
+
+# v2.8.3 — Cloud-staleness threshold (CLOUD-STALE Repair Issue).
+# A cloud coordinator that has not successfully refreshed for this many minutes
+# fires the cloud_stale Repair Issue.  Chosen to be comfortably larger than
+# the coordinator's default 30-minute update interval — two consecutive missed
+# refreshes before alerting.
+CLOUD_STALE_MINUTES: Final[int] = 60
+
+# v2.8.3 — MQTT-watchdog silence threshold (MQTT-WATCHDOG Repair Issue).
+# If no MQTT message arrives for this many seconds while phase==run is active,
+# the mqtt_stale binary sensor turns ON and the mqtt_watchdog Repair Issue fires.
+# 300 s (5 min) is conservative — the robot normally sends multiple messages
+# per minute while cleaning.
+MQTT_WATCHDOG_SECONDS: Final[int] = 300
 
 # Human-readable phase labels (from rest980 — extended)
 

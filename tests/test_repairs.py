@@ -937,3 +937,137 @@ class TestDockHealthRepairIssue:
         with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
             await async_check_dock_health(hass, entry)
         mock_ir.async_create_issue.assert_not_called()
+
+
+# ── v2.8.3 — CLOUD-STALE repair issue tests ───────────────────────────────────
+
+class TestCloudStaleRepairIssue:
+    """CLOUD-STALE (v2.8.3) — async_check_cloud_stale fires/clears correctly."""
+
+    def _make_coordinator(self, last_success_offset_minutes: float | None):
+        """Return a mock coordinator with last_success_time set relative to now."""
+        from datetime import timezone, timedelta, datetime
+        cc = MagicMock()
+        if last_success_offset_minutes is None:
+            cc.last_success_time = None
+        else:
+            cc.last_success_time = (
+                datetime.now(timezone.utc)
+                - timedelta(minutes=last_success_offset_minutes)
+            )
+        return cc
+
+    def _make_entry(self):
+        entry = MagicMock()
+        entry.entry_id = "test_entry_cloud_stale"
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_fires_when_stale_beyond_threshold(self):
+        """Issue fires when last_success_time > CLOUD_STALE_MINUTES ago."""
+        from custom_components.roomba_plus.repairs import async_check_cloud_stale
+        from custom_components.roomba_plus.const import CLOUD_STALE_MINUTES
+        hass = MagicMock()
+        entry = self._make_entry()
+        cc = self._make_coordinator(CLOUD_STALE_MINUTES + 5)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_cloud_stale(hass, entry, cc)
+        mock_ir.async_create_issue.assert_called_once()
+        kwargs = mock_ir.async_create_issue.call_args[1]
+        assert kwargs["translation_key"] == "cloud_stale"
+
+    @pytest.mark.asyncio
+    async def test_clears_when_fresh(self):
+        """Issue clears when last_success_time is within threshold."""
+        from custom_components.roomba_plus.repairs import async_check_cloud_stale
+        hass = MagicMock()
+        entry = self._make_entry()
+        cc = self._make_coordinator(5)  # 5 min ago — well within 60 min threshold
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_cloud_stale(hass, entry, cc)
+        mock_ir.async_delete_issue.assert_called_once()
+        mock_ir.async_create_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_clears_when_no_success_yet(self):
+        """No issue when last_success_time is None (startup, no fetch yet)."""
+        from custom_components.roomba_plus.repairs import async_check_cloud_stale
+        hass = MagicMock()
+        entry = self._make_entry()
+        cc = self._make_coordinator(None)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_cloud_stale(hass, entry, cc)
+        mock_ir.async_create_issue.assert_not_called()
+
+
+# ── v2.8.3 — Binary sensor unit tests ─────────────────────────────────────────
+
+class TestRoombaCloudConnected:
+    """WIFI-CLOUD-HEALTH (v2.8.3) — RoombaCloudConnected binary sensor."""
+
+    def _make_sensor(self, wifistat=None):
+        from custom_components.roomba_plus.binary_sensor import RoombaCloudConnected
+        roomba = MagicMock()
+        reported = {}
+        if wifistat is not None:
+            reported["wifistat"] = wifistat
+        roomba.master_state = {"state": {"reported": reported}}
+        s = RoombaCloudConnected.__new__(RoombaCloudConnected)
+        s.vacuum = roomba
+        return s
+
+    def test_on_when_cloud_nonzero(self):
+        s = self._make_sensor({"cloud": 1})
+        assert s.is_on is True
+
+    def test_off_when_cloud_zero(self):
+        s = self._make_sensor({"cloud": 0})
+        assert s.is_on is False
+
+    def test_unknown_when_wifistat_absent(self):
+        s = self._make_sensor(None)
+        assert s.is_on is None
+
+    def test_unknown_when_cloud_key_absent(self):
+        s = self._make_sensor({})  # wifistat present but no cloud key
+        assert s.is_on is None
+
+    def test_state_filter_gates_on_wifistat(self):
+        s = self._make_sensor({})
+        assert s.new_state_filter({"wifistat": {}}) is True
+        assert s.new_state_filter({"signal": {}}) is False
+
+
+class TestRoombaFirmwareUpdated:
+    """FW-SENSOR (v2.8.3) — RoombaFirmwareUpdated binary sensor."""
+
+    def _make_sensor(self, last_fw=None, updated_at=None):
+        from custom_components.roomba_plus.binary_sensor import RoombaFirmwareUpdated
+        import time as _t
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        entry = MagicMock()
+        entry.runtime_data.last_firmware_version = last_fw
+        entry.runtime_data.firmware_updated_at = updated_at
+        s = RoombaFirmwareUpdated.__new__(RoombaFirmwareUpdated)
+        s.vacuum = roomba
+        s._entry = entry
+        return s
+
+    def test_none_when_no_fw_seen_yet(self):
+        s = self._make_sensor(last_fw=None, updated_at=None)
+        assert s.is_on is None
+
+    def test_false_when_no_update_detected(self):
+        s = self._make_sensor(last_fw="3.20.11", updated_at=None)
+        assert s.is_on is False
+
+    def test_on_within_24h(self):
+        import time as _t
+        s = self._make_sensor(last_fw="3.20.12", updated_at=_t.time() - 3600)
+        assert s.is_on is True
+
+    def test_off_after_24h(self):
+        import time as _t
+        s = self._make_sensor(last_fw="3.20.12", updated_at=_t.time() - 90000)
+        assert s.is_on is False

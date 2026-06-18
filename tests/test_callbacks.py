@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import itertools
 import pytest
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -21,6 +23,24 @@ from custom_components.roomba_plus.callbacks import make_mission_callback
 from custom_components.roomba_plus.callbacks import make_mission_complete_callback
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
+
+
+@contextmanager
+def _patch_callbacks_time():
+    """Patch callbacks._time_mod so that monotonic() returns increasing values.
+
+    Each call returns a value 10 s larger than the previous one, ensuring the
+    END_SIGNAL_MIN_HOLD_SECONDS (2.0 s) time gate is always satisfied for
+    genuine-end scenarios.  Tests that specifically require a rapid burst
+    (time_held < 2 s) should supply their own side_effect instead.
+
+    time() returns a constant 1000.0 (used only for last_mqtt_message_ts).
+    """
+    _c = itertools.count(1)
+    with patch("custom_components.roomba_plus.callbacks._time_mod") as tmock:
+        tmock.monotonic.side_effect = lambda: float(next(_c)) * 10.0
+        tmock.time.return_value = 1000.0
+        yield tmock
 
 
 def _make_store():
@@ -517,7 +537,9 @@ class TestStuckBypassMissionCallback:
         cb = make_mission_callback(hass, entry)
 
         with patch("custom_components.roomba_plus.callbacks.async_record_mission",
-                   new_callable=AsyncMock) as mock_record:
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+
             captured_kwargs: list[dict] = []
 
             async def _capture(*args, **kwargs):
@@ -597,7 +619,8 @@ class TestFalseMissionRestartOnRecovery:
         captured_start_ts: list[int] = []
 
         with patch("custom_components.roomba_plus.callbacks.async_record_mission",
-                   new_callable=AsyncMock) as mock_record:
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
 
             async def _capture(*args, **kwargs):
                 captured_start_ts.append(kwargs.get("start_ts", -1))
@@ -624,7 +647,9 @@ class TestFalseMissionRestartOnRecovery:
                 }
             }
             cb(recovery)
-            # Mission ends normally (v2.8.1: charge is debounced — needs 2 messages)
+            # Mission ends normally (v2.8.1: charge is debounced — needs 2 messages,
+            # v2.8.3: also needs END_SIGNAL_MIN_HOLD_SECONDS gap — provided by
+            # _patch_callbacks_time() which makes each monotonic() call 10 s later)
             cb(_msg("charge", nstuck=1))
             cb(_msg("charge", nstuck=1))
 
@@ -644,7 +669,8 @@ class TestFalseMissionRestartOnRecovery:
         captured_nstuck_delta: list[int] = []
 
         with patch("custom_components.roomba_plus.callbacks.async_record_mission",
-                   new_callable=AsyncMock) as mock_record:
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
 
             async def _capture(*args, **kwargs):
                 captured_nstuck_delta.append(kwargs.get("nstuck_delta", -1))
@@ -655,6 +681,7 @@ class TestFalseMissionRestartOnRecovery:
             cb(_msg("stuck", nstuck=6)) # nstuck_at_start should still be 5
             cb(_msg("run", nstuck=6))   # recovery — must NOT reset baseline to 6
             # v2.8.1: charge is debounced — needs 2 consecutive messages
+            # v2.8.3: also needs END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch)
             cb(_msg("charge", nstuck=6))
             cb(_msg("charge", nstuck=6))
 
@@ -684,9 +711,10 @@ class TestFalseMissionRestartOnRecovery:
             cb(_msg("run", nstuck=0))
             cb(_msg("stuck", nstuck=1))
             cb(_msg("run", nstuck=1))   # recovery
-            # Wait >300 s (mock monotonic)
-            with patch("custom_components.roomba_plus.callbacks._time_mod") as tmock:
-                tmock.monotonic.return_value = 9999.0  # well past 300s
+            # v2.8.3: use _patch_callbacks_time so the time gate passes on charge messages.
+            # (Previously used return_value=9999.0 which caused time_held=0 because
+            # end_signal_first_ts was also 9999.0 — gap was 0, not 9999 s.)
+            with _patch_callbacks_time():
                 # v2.8.1: charge is debounced — needs 2 consecutive messages
                 cb(_msg("charge", nstuck=1))
                 cb(_msg("charge", nstuck=1))
@@ -788,11 +816,13 @@ class TestEvacPhaseClassification:
         cb = make_mission_callback(hass, entry)
 
         with patch("custom_components.roomba_plus.callbacks.async_record_mission",
-                   new_callable=AsyncMock) as mock_record:
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
             cb(_msg("run", nstuck=0))
             cb(_msg("evac", nstuck=0))  # bin empty
             cb(_msg("run", nstuck=0))   # resume cleaning
             # v2.8.1: charge is debounced — needs 2 consecutive messages
+            # v2.8.3: also needs END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch)
             cb(_msg("charge", nstuck=0))
             cb(_msg("charge", nstuck=0))  # done
 
