@@ -828,6 +828,10 @@
       "title": "Wiederkehrender Fehler: {label}",
       "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase '{phase}', Ort '{room}'. Empfohlene Maßnahme: {action}"
     },
+    "cancellation_recurrence": {
+      "title": "Wiederkehrende Abbrüche",
+      "description": "Missionen wurden in den letzten 30 Tagen {count} Mal abgebrochen ({by_user_count} durch Nutzer/App, {other_count} anders). Prüfen Sie Zeitplankonflikte, Eingriffe über die App oder ob der Roboter manuell gestoppt wird."
+    },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
       "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."

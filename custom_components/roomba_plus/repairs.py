@@ -627,7 +627,7 @@ async def async_check_error_recurrence(
     hass: HomeAssistant,
     entry: Any,
 ) -> None:
-    """F8b — fire Repair Issue when the same error code recurs ≥3 times in 30 days.
+    """F8b — fire Repair Issue when the same numeric error code recurs >=3 times in 30 days.
 
     Issue body includes the error label, occurrence count, cleaning phase at the
     most recent occurrence, room name from UmfAligner (when confidence ≥ 0.70),
@@ -635,19 +635,58 @@ async def async_check_error_recurrence(
 
     Auto-resolves: the issue is deleted when the recurrence count drops below 3
     (e.g. after records age out of the 30-day window on the next check).
+
+    v2.8.2: prefer MissionArchive (ARC1) over the local MissionStore when
+    available. Confirmed against live field data — a 3-week recurring
+    error_216 cluster never produced a local MissionStore record at all (the
+    mission failed before the local "had a cleaning phase" gate that creates
+    one), but was fully visible in the cloud-derived archive. The two sources
+    are not merged: ARC1 generally is a superset for cloud-connected robots,
+    and merging would double-count missions present in both.
+
+    v2.8.2 bug-hunt fix: the archive-preference gate checks the *30-day
+    window itself*, not just whether the archive has ever had any records.
+    A robot whose archive has months of old history but whose cloud
+    coordinator has been unreachable for the last 30 days specifically would
+    otherwise report "no recent archive records -> no failures" even while
+    the local MissionStore (which doesn't depend on cloud connectivity at
+    all) keeps recording a genuine recurring failure during that exact gap —
+    silently masking the one situation this whole archive-preference change
+    was meant to catch more of, not less.
+    Cancellation-result recurrence (no numeric code) is handled separately by
+    async_check_cancellation_recurrence — these were previously invisible to
+    this check entirely, since it only ever looked at `error_code`.
     """
     data = entry.runtime_data
-    ms   = data.mission_store
-    if ms is None:
-        return
+    archive = getattr(data, "mission_archive", None)
+    ms = data.mission_store
 
-    # Count error occurrences in the last 30 days
-    records = ms.query(days=30)
     error_counts: dict[int, int] = {}
-    for r in records:
-        code = r.get("error_code")
-        if code:
-            error_counts[code] = error_counts.get(code, 0) + 1
+    records: list[dict] = []
+    newest_first = False
+
+    if archive is not None:
+        archive_records = archive.recent_derived(days=30)
+        if archive_records:
+            records = archive_records
+            newest_first = True
+
+    if not records:
+        if ms is None:
+            return
+        records = ms.query(days=30)
+        newest_first = False
+
+    if newest_first:
+        for r in records:
+            code = r.get("pause_id")
+            if code:
+                error_counts[code] = error_counts.get(code, 0) + 1
+    else:
+        for r in records:
+            code = r.get("error_code")
+            if code:
+                error_counts[code] = error_counts.get(code, 0) + 1
 
     worst_code = max(error_counts, key=lambda c: error_counts[c], default=None)
     if worst_code is None or error_counts[worst_code] < 3:
@@ -659,13 +698,17 @@ async def async_check_error_recurrence(
     label  = catalogue_entry.get("label",  f"Error {worst_code}")
     action = catalogue_entry.get("action", "")
 
-    # Most recent record with this error code
-    recent = next(
-        (r for r in reversed(records) if r.get("error_code") == worst_code), {}
-    )
+    # Most recent record with this error code. ARC1's recent_derived() is
+    # newest-first already; MissionStore.query() is oldest-first, so it
+    # still needs reversing — same as before this change.
+    key = "pause_id" if newest_first else "error_code"
+    ordered = records if newest_first else reversed(records)
+    recent = next((r for r in ordered if r.get(key) == worst_code), {})
     phase_at_error = recent.get("phase_at_error") or "unknown"
 
-    # Room name from UmfAligner when aligned
+    # Room name from UmfAligner when aligned. error_position_mm is a
+    # MissionStore-only field (F8b) — ARC1 records never have it, so this
+    # naturally degrades to "unknown location" for archive-sourced data.
     room_name: str = "unknown location"
     aligner = data.umf_aligner
     pos     = recent.get("error_position_mm")
@@ -693,6 +736,77 @@ async def async_check_error_recurrence(
             "phase":      phase_at_error,
             "room":       room_name,
             "action":     action,
+        },
+    )
+
+
+async def async_check_cancellation_recurrence(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v2.8.2 — fire Repair Issue when missions are repeatedly cancelled.
+
+    Separate from async_check_error_recurrence because cancelled /
+    cancelled_by_user results carry no numeric error_code at all — they were
+    completely invisible to any existing recurrence check. Confirmed against
+    live field data: 15 of 35 archived missions (43%) over ~6 months were
+    cancelled or cancelled_by_user, including a suspicious recurring pattern
+    of ~89-minute cancellations with no run_min/sqft recorded — never
+    surfaced anywhere because no check counted this result class at all.
+
+    Reads MissionArchive (ARC1) when available (same rationale as
+    async_check_error_recurrence — some cancelled-before-real-start missions
+    may never reach the local MissionStore), falling back to MissionStore.
+
+    v2.8.2 bug-hunt fix: falls back to MissionStore when the archive's
+    30-day window is empty, not just when the archive has never had any
+    records at all — see async_check_error_recurrence for the full
+    rationale (a cloud sync gap during exactly the trailing 30 days must
+    not silently hide a real local cancellation pattern during that gap).
+
+    Auto-resolves below the 3-in-30-days threshold, same as error_recurrence.
+    """
+    data = entry.runtime_data
+    archive = getattr(data, "mission_archive", None)
+    ms = data.mission_store
+
+    records: list[dict] = []
+    if archive is not None:
+        archive_records = archive.recent_derived(days=30)
+        if archive_records:
+            records = archive_records
+
+    if not records:
+        if ms is None:
+            return
+        records = ms.query(days=30)
+
+    counts: dict[str, int] = {}
+    for r in records:
+        result = r.get("result")
+        if result in ("cancelled", "cancelled_by_user"):
+            counts[result] = counts.get(result, 0) + 1
+
+    total = sum(counts.values())
+    if total < 3:
+        ir.async_delete_issue(hass, DOMAIN, "cancellation_recurrence")
+        return
+
+    by_user = counts.get("cancelled_by_user", 0)
+    other   = counts.get("cancelled", 0)
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "cancellation_recurrence",
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="cancellation_recurrence",
+        translation_placeholders={
+            "count":         str(total),
+            "by_user_count": str(by_user),
+            "other_count":   str(other),
         },
     )
 

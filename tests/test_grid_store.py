@@ -419,17 +419,26 @@ class TestEdgeCoverageRatio:
 
     def test_returns_float_with_10_cells(self):
         gs = self._make_gs()
+        # Diagonal placement (not a single row) so the bbox spans far enough
+        # in both dimensions to clear the v2.8.2 minimum-extent guard.
         for i in range(10):
-            gs._cells[(i, 0)] = 0.5
+            gs._cells[(i, i)] = 0.5
         result = gs.edge_coverage_ratio()
         assert result is not None
         assert 0.0 <= result <= 1.0
 
     def test_all_edge_cells_returns_1(self):
-        """A 1×N strip where all cells are on the edge."""
+        """A 1-cell-thick border ring around a large-enough square — every
+        cell sits exactly on the bbox edge regardless of overall size, so
+        this clears the v2.8.2 minimum-extent guard while still exercising
+        ratio == 1.0 (unlike a thin 1xN strip, which would now fail the
+        guard for having zero extent in one dimension)."""
         gs = self._make_gs()
-        for i in range(10):
-            gs._cells[(i, 0)] = 0.5  # all in same row = all on edge
+        n = 10  # indices 0..9 -> span 9*150=1350mm > the 1200mm minimum
+        for gx in range(n):
+            for gy in range(n):
+                if gx in (0, n - 1) or gy in (0, n - 1):
+                    gs._cells[(gx, gy)] = 0.5
         result = gs.edge_coverage_ratio()
         assert result == 1.0
 
@@ -454,6 +463,33 @@ class TestEdgeCoverageRatio:
         if result is not None:
             assert round(result, 4) == result
 
+    def test_none_when_bbox_too_small_despite_enough_cells(self):
+        """v2.8.2 — a robot confined to a tiny area (e.g. stuck the whole
+        mission) can still produce >=10 cells if they're densely packed,
+        but the edge/centre distinction is meaningless without a real
+        interior. Confirmed against live field data: a ~1m x 1m bbox
+        produced a near-1.0 ratio that looked like 'excellent edge
+        coverage' but was really 'every cell is close to every side'."""
+        gs = self._make_gs()
+        # 4x4 block of adjacent cells: span = 3*150=450mm in both dims,
+        # well under the 1200mm minimum for the default edge_depth_mm=300.
+        for gx in range(4):
+            for gy in range(4):
+                gs._cells[(gx, gy)] = 0.5
+        assert len(gs._cells) >= 10
+        assert gs.edge_coverage_ratio() is None
+
+    def test_returns_value_once_bbox_exceeds_minimum(self):
+        """Same shape as the tiny-bbox case above, just scaled up past the
+        minimum span — confirms the guard is about extent, not cell count
+        or density."""
+        gs = self._make_gs()
+        for gx in range(10):
+            for gy in range(10):
+                gs._cells[(gx, gy)] = 0.5
+        result = gs.edge_coverage_ratio()
+        assert result is not None
+
 
 class TestGridStoreEdgeRatioCache:
     def test_cache_empty_on_fresh_instance(self):
@@ -463,7 +499,7 @@ class TestGridStoreEdgeRatioCache:
 
     def test_cache_populated_after_first_call(self):
         """After the first call with enough cells, cache must be keyed by edge_depth_mm."""
-        gs = _make_grid_with_cells(16)
+        gs = _make_grid_with_cells(100)
         result = gs.edge_coverage_ratio()
         assert result is not None
         assert 300.0 in gs._edge_ratio_cache
@@ -471,7 +507,7 @@ class TestGridStoreEdgeRatioCache:
 
     def test_cache_hit_returns_same_value(self):
         """Repeated calls with the same edge_depth_mm must return the same result."""
-        gs = _make_grid_with_cells(16)
+        gs = _make_grid_with_cells(100)
         first = gs.edge_coverage_ratio()
         second = gs.edge_coverage_ratio()
         assert first == second
@@ -479,7 +515,9 @@ class TestGridStoreEdgeRatioCache:
 
     def test_different_depth_parameters_cached_independently(self):
         """Different edge_depth_mm values must not share cache entries."""
-        gs = _make_grid_with_cells(16)
+        # n=200 -> side 15 -> span 2100mm, clears the v2.8.2 minimum-extent
+        # guard even for the wider edge_depth_mm=500.0 (needs >= 2000mm).
+        gs = _make_grid_with_cells(300)
         r300 = gs.edge_coverage_ratio(edge_depth_mm=300.0)
         r500 = gs.edge_coverage_ratio(edge_depth_mm=500.0)
         assert 300.0 in gs._edge_ratio_cache
@@ -489,7 +527,7 @@ class TestGridStoreEdgeRatioCache:
 
     def test_cache_invalidated_by_update_from_mission(self):
         """update_from_mission must clear the entire cache dict."""
-        gs = _make_grid_with_cells(16)
+        gs = _make_grid_with_cells(300)
         gs.edge_coverage_ratio()
         gs.edge_coverage_ratio(edge_depth_mm=500.0)
         assert len(gs._edge_ratio_cache) == 2
@@ -507,7 +545,7 @@ class TestGridStoreEdgeRatioCache:
 
     def test_cache_recomputed_after_invalidation(self):
         """After cache invalidation, next call recomputes and re-caches."""
-        gs = _make_grid_with_cells(16)
+        gs = _make_grid_with_cells(100)
         gs.edge_coverage_ratio()
         gs.update_from_mission([], [])
         assert gs._edge_ratio_cache == {}

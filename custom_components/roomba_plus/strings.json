@@ -846,6 +846,10 @@
       "title": "Recurring error: {label}",
       "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase '{phase}', location '{room}'. Recommended action: {action}"
     },
+    "cancellation_recurrence": {
+      "title": "Recurring cancellations",
+      "description": "Missions have been cancelled {count} time(s) in the last 30 days ({by_user_count} by user/app, {other_count} other). Consider checking for schedule conflicts, app-side interventions, or whether the robot is being manually stopped."
+    },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
       "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."

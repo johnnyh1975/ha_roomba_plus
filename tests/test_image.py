@@ -27,6 +27,7 @@ from custom_components.roomba_plus.callbacks import make_mission_complete_callba
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
 import time
+from typing import Any
 
 
 def _make_entity(cell_count: int = 5, stuck_count: int = 2):
@@ -435,3 +436,429 @@ class TestXvmcCoords:
         src = inspect.getsource(image)
         assert "attributes withheld" not in src
         assert "fallback calibration active" in src
+
+
+def _make_map_entity():
+    """Build a minimal RoombaMapImage suitable for exercising on_message()'s
+    phase-transition / END-DEBOUNCE decision logic in isolation.
+
+    _handle_mission_end is replaced with a MagicMock so the test verifies
+    *when* it gets called without exercising the heavy downstream renderer/
+    ZoneStore/GeometryStore/GridStore/OutlineStore side effects — those are
+    covered separately by their own store-level tests.
+    """
+    from custom_components.roomba_plus.image import RoombaMapImage
+
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+
+    entity = RoombaMapImage.__new__(RoombaMapImage)
+    entity.vacuum = roomba
+    entity._renderer = MagicMock()
+    entity._zone_store = None
+    entity._map_capability = None
+    entity._config_entry = MagicMock()
+    entity._attr_unique_id = "test_blid_map"
+    entity.access_tokens = collections.deque([], 2)
+    entity._cache = None
+    entity._last_phase = ""
+    entity._last_stuck_count = 0
+    entity._mission_points = []
+    entity._stuck_mission_points = []
+    entity._had_cleaning_phase = False
+    entity._end_signal_streak = 0
+    entity._mission_start_ts = None
+    entity._mission_checkpoint_mssn_strt_tm = 0
+    entity._pending_checkpoint = None
+    entity.vacuum_state = {}
+    entity.hass = MagicMock()
+    entity.schedule_update_ha_state = MagicMock()
+    entity._handle_mission_end = MagicMock()
+
+    return entity
+
+
+def _map_msg(phase: str, cycle: str | None = None, mssn_strt_tm: int | None = None) -> dict:
+    """Build a minimal MQTT message dict carrying only cleanMissionStatus."""
+    mission: dict[str, Any] = {"phase": phase}
+    if cycle is not None:
+        mission["cycle"] = cycle
+    if mssn_strt_tm is not None:
+        mission["mssnStrtTm"] = mssn_strt_tm
+    return {"state": {"reported": {"cleanMissionStatus": mission}}}
+
+
+def _stuck_msg(n_stuck: int) -> dict:
+    """Build a minimal MQTT message dict carrying only bbrun.nStuck."""
+    return {"state": {"reported": {"bbrun": {"nStuck": n_stuck}}}}
+
+
+def _feed_map_entity(entity, msg: dict) -> None:
+    """Simulate roombapy merging the delta into master_state, then deliver it."""
+    reported = entity.vacuum.master_state["state"]["reported"]
+    reported.update(msg["state"]["reported"])
+    entity.on_message(msg)
+
+
+class TestImageEndDebounceV281:
+    """v2.8.1 (END-DEBOUNCE) — image.py's independent mission-end detection
+    had zero protection at all (not even the v2.8.0 cycle-only guard), so a
+    single transient ambiguous-phase blip would fragment _mission_points
+    (and therefore ZoneStore/GeometryStore/GridStore/OutlineStore) mid-
+    mission. This mirrors the callbacks.py coverage for the matching fix.
+    """
+
+    def test_single_transient_charge_blip_does_not_trigger_mission_end(self):
+        entity = _make_map_entity()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        assert entity._had_cleaning_phase is True
+
+        # Single transient blip — must not fire _handle_mission_end()
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+
+        entity._handle_mission_end.assert_not_called()
+        assert entity._had_cleaning_phase is True
+
+    def test_streak_does_not_carry_across_an_interruption(self):
+        entity = _make_map_entity()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+
+        entity._handle_mission_end.assert_not_called()
+
+    def test_two_consecutive_charge_messages_confirm_genuine_end(self):
+        entity = _make_map_entity()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+
+        entity._handle_mission_end.assert_called_once_with("charge")
+        assert entity._had_cleaning_phase is False
+
+    def test_stop_phase_still_confirms_immediately_no_debounce(self):
+        entity = _make_map_entity()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        _feed_map_entity(entity, _map_msg("stop", cycle="none"))
+
+        entity._handle_mission_end.assert_called_once_with("stop")
+
+    def test_mission_points_not_wiped_by_a_transient_blip(self):
+        """Direct regression test for the reported symptom: a transient
+        blip must not cause the live map / zone tracking to lose its
+        accumulated trajectory mid-mission."""
+        entity = _make_map_entity()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        entity._mission_points = [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)]
+
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+
+        assert entity._mission_points == [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)], (
+            "A single transient blip must not clear _mission_points — this "
+            "is what fragments ZoneStore/GeometryStore/GridStore/OutlineStore"
+        )
+
+
+class TestMissionCheckpointV282:
+    """v2.8.2 — mission-in-progress checkpoint (save on stuck, resume-or
+    -salvage on the next message). Protects against the case that matters
+    most for a robot with a high mission-failure rate: a mission that gets
+    stuck and never reaches a clean end (HA restart, manual intervention)
+    before that happens — without this, _mission_points (and therefore
+    ZoneStore/GeometryStore/GridStore/OutlineStore) would simply lose that
+    data, since those stores are only ever fed at a genuine mission end.
+    """
+
+    # ── _consume_pending_checkpoint() ────────────────────────────────────
+
+    def test_no_checkpoint_is_a_noop(self):
+        entity = _make_map_entity()
+        entity._pending_checkpoint = None
+        entity._consume_pending_checkpoint()
+        entity._handle_mission_end.assert_not_called()
+        assert entity._mission_points == []
+
+    def test_same_mission_still_active_resumes(self):
+        entity = _make_map_entity()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,
+            "mission_points": [(10.0, 20.0), (30.0, 40.0)],
+            "stuck_mission_points": [(10.0, 20.0)],
+            "mission_start_ts": "2026-06-18T10:00:00+00:00",
+            "renderer_state": {"fake": "state"},
+            "last_stuck_count": 3,
+        }
+        entity._consume_pending_checkpoint()
+
+        assert entity._mission_points == [(10.0, 20.0), (30.0, 40.0)]
+        assert entity._stuck_mission_points == [(10.0, 20.0)]
+        assert entity._mission_start_ts == "2026-06-18T10:00:00+00:00"
+        assert entity._had_cleaning_phase is True
+        assert entity._mission_checkpoint_mssn_strt_tm == 12345
+        assert entity._last_stuck_count == 3, (
+            "bug-hunt fix — must be restored from the checkpoint, not left "
+            "at the post-__init__ default of 0 (which would make the next "
+            "bbrun message look like a brand-new stuck event)"
+        )
+        entity._renderer.restore_state.assert_called_once_with({"fake": "state"})
+        entity._handle_mission_end.assert_not_called()
+        assert entity._pending_checkpoint is None
+
+    def test_resume_does_not_require_an_actively_cleaning_phase(self):
+        """bug-hunt fix — a matching mssnStrtTm alone proves this is the
+        same physical mission. Previously this also required current_phase
+        to be in CLEANING_PHASES, which meant landing on an ordinary
+        inter-room transition blip (charge/hmPostMsn) as the first
+        post-restart message would wrongly salvage a still-running mission.
+        Resume must fire regardless of what current_phase happens to be —
+        the normal phase-transition/END-DEBOUNCE logic, run immediately
+        after against this same message, is what actually decides whether
+        the mission keeps going or has genuinely ended."""
+        entity = _make_map_entity()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,
+            "mission_points": [(10.0, 20.0)],
+            "stuck_mission_points": [],
+            "mission_start_ts": "2026-06-18T10:00:00+00:00",
+            "renderer_state": None,
+            "last_stuck_count": 0,
+        }
+        # current_phase is no longer a parameter at all — the live phase is
+        # read internally from vacuum_state only for the mssnStrtTm match.
+        entity._consume_pending_checkpoint()
+
+        entity._handle_mission_end.assert_not_called()
+        assert entity._had_cleaning_phase is True
+        assert entity._mission_points == [(10.0, 20.0)]
+
+    def test_different_mission_started_salvages(self):
+        entity = _make_map_entity()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 99999}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,  # different from the live mission
+            "mission_points": [(10.0, 20.0)],
+            "stuck_mission_points": [],
+            "mission_start_ts": "2026-06-18T10:00:00+00:00",
+            "renderer_state": None,
+        }
+        entity._consume_pending_checkpoint()
+
+        entity._handle_mission_end.assert_called_once_with(ending_phase="")
+        assert entity._pending_checkpoint is None
+
+    def test_checkpoint_without_mssn_strt_tm_salvages(self):
+        """A checkpoint with no recorded mssnStrtTm can never be confirmed
+        as 'the same mission' — must always be treated as orphaned, never
+        silently resumed against an unrelated live mission."""
+        entity = _make_map_entity()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 0,
+            "mission_points": [(10.0, 20.0)],
+            "stuck_mission_points": [],
+            "mission_start_ts": None,
+            "renderer_state": None,
+        }
+        entity._consume_pending_checkpoint()
+
+        entity._handle_mission_end.assert_called_once_with(ending_phase="")
+
+    def test_never_both_resume_and_salvage(self):
+        """Whichever branch is taken, the other must never also fire — the
+        core double-counting guard for the whole feature."""
+        entity = _make_map_entity()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,
+            "mission_points": [(10.0, 20.0)],
+            "stuck_mission_points": [],
+            "mission_start_ts": None,
+            "renderer_state": None,
+        }
+        entity._consume_pending_checkpoint()
+        assert entity._had_cleaning_phase is True
+        entity._handle_mission_end.assert_not_called()  # resumed, not salvaged
+
+    # ── _salvage_orphaned_checkpoint() ───────────────────────────────────
+
+    def test_salvage_loads_points_before_calling_mission_end(self):
+        entity = _make_map_entity()
+        checkpoint = {
+            "mission_points": [(1.0, 2.0), (3.0, 4.0)],
+            "stuck_mission_points": [(1.0, 2.0)],
+            "mission_start_ts": "2026-06-18T09:00:00+00:00",
+            "renderer_state": {"fake": "state"},
+        }
+
+        captured: dict[str, Any] = {}
+
+        def _capture_end(ending_phase):
+            captured["mission_points"] = list(entity._mission_points)
+            captured["stuck_mission_points"] = list(entity._stuck_mission_points)
+            captured["ending_phase"] = ending_phase
+
+        entity._handle_mission_end = MagicMock(side_effect=_capture_end)
+
+        entity._salvage_orphaned_checkpoint(checkpoint)
+
+        assert captured["mission_points"] == [(1.0, 2.0), (3.0, 4.0)]
+        assert captured["stuck_mission_points"] == [(1.0, 2.0)]
+        assert captured["ending_phase"] == ""
+        entity._renderer.restore_state.assert_called_once_with({"fake": "state"})
+
+    def test_empty_checkpoint_still_gets_cleared(self):
+        """bug-hunt fix — _handle_mission_end() has an early-return when
+        _mission_points is empty (nothing to process). A checkpoint can
+        legitimately be saved with empty mission_points (a stuck event
+        fired before any pose message had arrived yet), and
+        _salvage_orphaned_checkpoint() loads exactly that. Before this fix,
+        the checkpoint-clear call sat after the early-return and never ran
+        for this case — the same empty checkpoint would be reloaded and
+        re-salvaged (a no-op) on every subsequent HA restart forever. Uses
+        the real _handle_mission_end (not the mocked one from
+        _make_map_entity()) since that's exactly the code path being
+        verified."""
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        entity = RoombaMapImage.__new__(RoombaMapImage)
+        entity.hass = MagicMock()
+        entity._config_entry = MagicMock()
+        entity._renderer = MagicMock()
+        entity._zone_store = None
+        entity._map_capability = None
+        entity._mission_points = []  # the empty-checkpoint case
+        entity._stuck_mission_points = []
+        entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
+        ) as mock_run:
+            entity._handle_mission_end(ending_phase="")
+
+        scheduled_coros = [c.args[0] for c in mock_run.call_args_list]
+        assert any(
+            getattr(c, "__qualname__", "").endswith("_async_clear_mission_checkpoint")
+            for c in scheduled_coros
+        ), "checkpoint clear must still be scheduled even with no mission_points"
+        for c in scheduled_coros:
+            c.close()  # avoid "coroutine was never awaited" warnings
+
+    # ── _async_save_mission_checkpoint() ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_save_checkpoint_persists_expected_shape(self):
+        entity = _make_map_entity()
+        entity._mission_points = [(1.0, 2.0)]
+        entity._stuck_mission_points = [(1.0, 2.0)]
+        entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
+        entity._mission_checkpoint_mssn_strt_tm = 555
+        entity._renderer.dump_state.return_value = {"r": 1}
+
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_store_cls.return_value = mock_instance
+            await entity._async_save_mission_checkpoint()
+
+        mock_instance.async_save.assert_called_once_with({
+            "mssn_strt_tm": 555,
+            "mission_points": [(1.0, 2.0)],
+            "stuck_mission_points": [(1.0, 2.0)],
+            "mission_start_ts": "2026-06-18T09:00:00+00:00",
+            "renderer_state": {"r": 1},
+            "last_stuck_count": 0,
+        })
+
+    @pytest.mark.asyncio
+    async def test_save_checkpoint_no_config_entry_is_noop(self):
+        entity = _make_map_entity()
+        entity._config_entry = None
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            await entity._async_save_mission_checkpoint()
+        mock_store_cls.assert_not_called()
+
+    # ── _async_load_pending_checkpoint() ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_load_checkpoint_sets_pending(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_instance.async_load = AsyncMock(
+                return_value={"mssn_strt_tm": 1, "mission_points": [(1.0, 2.0)]}
+            )
+            mock_store_cls.return_value = mock_instance
+            await entity._async_load_pending_checkpoint()
+
+        assert entity._pending_checkpoint == {
+            "mssn_strt_tm": 1, "mission_points": [(1.0, 2.0)],
+        }
+
+    @pytest.mark.asyncio
+    async def test_load_checkpoint_no_data_leaves_pending_none(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_instance.async_load = AsyncMock(return_value=None)
+            mock_store_cls.return_value = mock_instance
+            await entity._async_load_pending_checkpoint()
+
+        assert entity._pending_checkpoint is None
+
+    @pytest.mark.asyncio
+    async def test_load_checkpoint_handles_exception_gracefully(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_instance.async_load = AsyncMock(side_effect=RuntimeError("boom"))
+            mock_store_cls.return_value = mock_instance
+            await entity._async_load_pending_checkpoint()  # must not raise
+
+        assert entity._pending_checkpoint is None
+
+    # ── _async_clear_mission_checkpoint() ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_clear_checkpoint_removes_store_entry(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image.Store") as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_store_cls.return_value = mock_instance
+            await entity._async_clear_mission_checkpoint()
+
+        mock_instance.async_remove.assert_called_once()
+
+    # ── Integration via on_message() ─────────────────────────────────────
+
+    def test_stuck_event_triggers_checkpoint_save(self):
+        """A stuck event during an active mission must schedule a
+        checkpoint save — the actual end-to-end trigger condition."""
+        entity = _make_map_entity()
+        entity._had_cleaning_phase = True
+        entity._mission_points = [(0.0, 0.0)]
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
+        ) as mock_run:
+            _feed_map_entity(entity, _stuck_msg(1))
+
+        assert mock_run.call_count == 1
+        mock_run.call_args.args[0].close()  # avoid "never awaited" warning
+
+    def test_stuck_event_before_cleaning_phase_does_not_checkpoint(self):
+        """No mission has actually started yet (e.g. a stray stuck count
+        left over from a prior session) — nothing meaningful to save."""
+        entity = _make_map_entity()
+        entity._had_cleaning_phase = False
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
+        ) as mock_run:
+            _feed_map_entity(entity, _stuck_msg(1))
+
+        assert mock_run.call_count == 0
+

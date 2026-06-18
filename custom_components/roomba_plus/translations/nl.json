@@ -832,6 +832,10 @@
       "title": "Terugkerende fout: {label}",
       "description": "Fout {error_code} ({label}) is de afgelopen 30 dagen {count} keer opgetreden. Meest recent: fase '{phase}', locatie '{room}'. Aanbevolen actie: {action}"
     },
+    "cancellation_recurrence": {
+      "title": "Terugkerende annuleringen",
+      "description": "Missies zijn de afgelopen 30 dagen {count} keer geannuleerd ({by_user_count} door gebruiker/app, {other_count} anders). Controleer op planningsconflicten, ingrepen via de app, of of de robot handmatig wordt gestopt."
+    },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
       "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."

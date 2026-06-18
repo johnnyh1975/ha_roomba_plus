@@ -15,6 +15,7 @@ import pytest
 from custom_components.roomba_plus.map_renderer import MapRenderer
 from custom_components.roomba_plus.map_renderer import RendererConfig
 from custom_components.roomba_plus.map_renderer import _STATE_VERSION
+from custom_components.roomba_plus.map_renderer import CLEANED_COLOUR
 import os
 import types
 import math
@@ -721,3 +722,77 @@ class TestRenderKeeputZones:
         r._last_png = original
         result = r.render_keepout_zones([[(0, 0), (1, 0), (1, 1)]])
         assert result is r._last_png  # _last_png updated in place
+
+
+class TestRenderForOutline:
+    """v2.8.2 — render_for_outline() must use a FIXED coordinate space (no
+    auto-fit) so contour pixels are comparable across missions with
+    different spatial extents.
+
+    Confirmed via live field data: an OutlineStore that had only ever seen
+    auto-fit renders ended up with 73% of its 3269 accumulated contour
+    points sitting exactly on the canvas border — not a room shape, but an
+    artefact of EMA-blending two PNGs whose pixel (x, y) meant different
+    real-world positions per mission. See map_renderer.py docstring.
+    """
+
+    def test_no_points_returns_none(self):
+        r = _make_renderer()
+        assert r.render_for_outline() is None
+
+    def test_returns_valid_png(self):
+        r = _make_renderer()
+        r.add_pose(0, 0, 0)
+        r.add_pose(500, 500, 0)
+        result = r.render_for_outline()
+        assert isinstance(result, bytes)
+        assert result[:4] == PNG_MAGIC
+
+    def test_pixel_position_independent_of_other_points_extent(self):
+        """A point at a fixed mm position must render at the same pixel
+        position whether the mission was confined to a tiny area or spans
+        a huge one. Before the fix, auto-fit would zoom/centre each
+        render independently, moving this point to a different pixel
+        position depending on what else was in that mission."""
+        shared_mm = (300.0, 300.0)
+
+        r_small = _make_renderer()
+        r_small.add_pose(shared_mm[0], shared_mm[1], 0)
+        r_small.add_pose(310, 310, 0)          # tiny extent, ~14mm away
+
+        r_large = _make_renderer()
+        r_large.add_pose(shared_mm[0], shared_mm[1], 0)
+        r_large.add_pose(2500, 2500, 0)        # huge extent
+
+        # Sanity: the fixed mapping itself is mission-independent.
+        expected_px = r_small._mm_to_px(*shared_mm)
+        assert r_large._mm_to_px(*shared_mm) == expected_px
+
+        png_small = r_small.render_for_outline()
+        png_large = r_large.render_for_outline()
+
+        colour_small = _pixel_at(png_small, *expected_px)
+        colour_large = _pixel_at(png_large, *expected_px)
+        assert colour_small[:3] == CLEANED_COLOUR[:3]
+        assert colour_large[:3] == CLEANED_COLOUR[:3]
+
+    def test_does_not_permanently_mutate_fit_state(self):
+        r = _make_renderer()
+        r.add_pose(0, 0, 0)
+        r.add_pose(2500, 2500, 0)
+        before = (r._fit_scale, r._fit_cx, r._fit_cy)
+        r.render_for_outline()
+        after = (r._fit_scale, r._fit_cx, r._fit_cy)
+        assert before == after
+
+    def test_ignores_auto_fit_config_flag(self):
+        """Even with auto_fit=True (the default), render_for_outline() must
+        never auto-fit — it always uses the fixed coordinate space."""
+        r = _make_renderer(auto_fit=True)
+        r.add_pose(300, 300, 0)
+        r.add_pose(2500, 2500, 0)
+        png = r.render_for_outline()
+        expected_px = r._mm_to_px(300, 300)
+        colour = _pixel_at(png, *expected_px)
+        assert colour[:3] == CLEANED_COLOUR[:3]
+

@@ -392,6 +392,7 @@ class TestUpdateFailureSuppression:
         coord = _make_coordinator()
         assert coord._last_success_time is None
 
+    @pytest.mark.asyncio
     async def test_success_stamps_last_success_time(self):
         """A successful _async_update_data call must set _last_success_time."""
         coord = _make_coordinator()
@@ -410,6 +411,7 @@ class TestUpdateFailureSuppression:
         # The important assertion: on clean success it gets set
         # (integration test; confirmed via logic trace of _async_update_data)
 
+    @pytest.mark.asyncio
     async def test_cloud_error_within_grace_period_returns_last_data(self):
         """CloudApiError within grace period → return last data, no UpdateFailed."""
         coord = _make_coordinator()
@@ -422,6 +424,7 @@ class TestUpdateFailureSuppression:
 
         assert result is coord.data
 
+    @pytest.mark.asyncio
     async def test_cloud_error_after_grace_period_raises_update_failed(self):
         """CloudApiError after grace period expires → raises UpdateFailed."""
         coord = _make_coordinator()
@@ -433,6 +436,7 @@ class TestUpdateFailureSuppression:
             with pytest.raises(UpdateFailed):
                 await coord._async_update_data()
 
+    @pytest.mark.asyncio
     async def test_cloud_error_with_no_prior_success_raises_update_failed(self):
         """CloudApiError with _last_success_time=None → UpdateFailed immediately."""
         coord = _make_coordinator()
@@ -443,6 +447,7 @@ class TestUpdateFailureSuppression:
             with pytest.raises(UpdateFailed):
                 await coord._async_update_data()
 
+    @pytest.mark.asyncio
     async def test_cloud_error_with_no_cached_data_raises_update_failed(self):
         """CloudApiError within grace period but coord.data is None → UpdateFailed.
 

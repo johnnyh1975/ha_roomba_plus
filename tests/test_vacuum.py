@@ -250,6 +250,7 @@ class TestSupportedFeaturesGate:
 
 class TestAsyncGetSegments:
 
+    @pytest.mark.asyncio
     async def test_returns_segments_with_cloud_data(self):
         v = _make_vacuum_entity()
         segments = await v.async_get_segments()
@@ -258,6 +259,7 @@ class TestAsyncGetSegments:
         assert "MAP001_19" in ids
         assert "MAP001_21" in ids
 
+    @pytest.mark.asyncio
     async def test_segment_names_correct(self):
         v = _make_vacuum_entity()
         segments = await v.async_get_segments()
@@ -265,18 +267,21 @@ class TestAsyncGetSegments:
         assert name_map["MAP001_19"] == "Living Room"
         assert name_map["MAP001_21"] == "Kitchen"
 
+    @pytest.mark.asyncio
     async def test_segment_group_from_floor_option(self):
         v = _make_vacuum_entity()
         v._config_entry.options = {"floor_label": "Ground Floor"}
         segments = await v.async_get_segments()
         assert all(s.group == "Ground Floor" for s in segments)
 
+    @pytest.mark.asyncio
     async def test_segment_group_none_when_no_floor_option(self):
         v = _make_vacuum_entity()
         v._config_entry.options = {}
         segments = await v.async_get_segments()
         assert all(s.group is None for s in segments)
 
+    @pytest.mark.asyncio
     async def test_returns_empty_when_no_cloud(self):
         data = _make_smart_data(has_data=False)
         data.cloud_coordinator = None
@@ -284,12 +289,14 @@ class TestAsyncGetSegments:
         segments = await v.async_get_segments()
         assert segments == []
 
+    @pytest.mark.asyncio
     async def test_returns_empty_when_no_config_entry(self):
         v = _make_vacuum_entity()
         v._config_entry = None
         segments = await v.async_get_segments()
         assert segments == []
 
+    @pytest.mark.asyncio
     async def test_skips_regions_without_id(self):
         data = _make_smart_data(regions=[
             {"id": "19", "name": "Living Room"},
@@ -300,6 +307,7 @@ class TestAsyncGetSegments:
         segments = await v.async_get_segments()
         assert len(segments) == 2
 
+    @pytest.mark.asyncio
     async def test_empty_regions_returns_empty(self):
         data = _make_smart_data(regions=[])
         v = _make_vacuum_entity(runtime_data=data)
@@ -309,6 +317,7 @@ class TestAsyncGetSegments:
 
 class TestAsyncCleanSegments:
 
+    @pytest.mark.asyncio
     async def test_matching_pmap_sends_command(self):
         v = _make_vacuum_entity()
         v._config_entry.runtime_data.cloud_coordinator.async_refresh = AsyncMock()
@@ -327,18 +336,21 @@ class TestAsyncCleanSegments:
         assert params["regions"][0]["region_id"] == "19"
         assert params["regions"][1]["region_id"] == "21"
 
+    @pytest.mark.asyncio
     async def test_non_matching_pmap_raises_service_validation_error(self):
         v = _make_vacuum_entity()
         with pytest.raises(ServiceValidationError):
             with patch.object(v, 'hass'):
                 await v.async_clean_segments(["OTHERMAP_19"])
 
+    @pytest.mark.asyncio
     async def test_empty_segment_list_raises_service_validation_error(self):
         v = _make_vacuum_entity()
         with pytest.raises(ServiceValidationError):
             with patch.object(v, 'hass'):
                 await v.async_clean_segments([])
 
+    @pytest.mark.asyncio
     async def test_mixed_pmap_ids_filters_to_matching_only(self):
         """Segments from other maps are silently dropped; remaining segments are sent."""
         v = _make_vacuum_entity()
@@ -353,6 +365,7 @@ class TestAsyncCleanSegments:
         assert len(params["regions"]) == 1
         assert params["regions"][0]["region_id"] == "19"
 
+    @pytest.mark.asyncio
     async def test_two_pass_false_by_default(self):
         v = _make_vacuum_entity(state={})  # no twoPass key
         v._config_entry.runtime_data.cloud_coordinator.async_refresh = AsyncMock()
@@ -364,6 +377,7 @@ class TestAsyncCleanSegments:
         payload = mock_hass.async_add_executor_job.call_args[0][2]
         assert payload["regions"][0]["params"]["twoPass"] is False
 
+    @pytest.mark.asyncio
     async def test_region_params_always_auto_mode(self):
         """v2.6.5: async_clean_segments always sends noAutoPasses=False, twoPass=False.
 
@@ -383,6 +397,7 @@ class TestAsyncCleanSegments:
         assert payload["regions"][0]["params"]["noAutoPasses"] is False
         assert payload["regions"][0]["params"]["twoPass"] is False
 
+    @pytest.mark.asyncio
     async def test_kwargs_silently_ignored(self):
         """repeat and other kwargs must not raise — removed from spec Oct 2025."""
         v = _make_vacuum_entity()
@@ -393,6 +408,7 @@ class TestAsyncCleanSegments:
             await v.async_clean_segments(["MAP001_19"], repeat=2, some_future_kwarg="x")
         # No exception raised
 
+    @pytest.mark.asyncio
     async def test_async_refresh_called_after_command(self):
         """F-RB-1: coordinator.async_refresh() must be called after send."""
         v = _make_vacuum_entity()
@@ -405,6 +421,7 @@ class TestAsyncCleanSegments:
 
         refresh_mock.assert_called_once()
 
+    @pytest.mark.asyncio
     async def test_no_cloud_returns_early(self):
         data = _make_smart_data(has_data=False)
         data.cloud_coordinator = None
@@ -511,6 +528,7 @@ class TestAsyncGetSegmentsNonePmapGuard:
     match in async_clean_segments, causing misleading no_valid_segments errors.
     """
 
+    @pytest.mark.asyncio
     async def test_returns_empty_when_active_pmap_id_is_none(self):
         """active_pmap_id = None → return [] immediately, no segments created."""
         data = _make_smart_data()
@@ -522,6 +540,7 @@ class TestAsyncGetSegmentsNonePmapGuard:
             "to prevent storing 'None_XX' segment IDs"
         )
 
+    @pytest.mark.asyncio
     async def test_no_none_prefix_in_returned_segment_ids(self):
         """Segment IDs must never start with 'None_'."""
         v = _make_vacuum_entity()
@@ -546,6 +565,7 @@ class TestPmapUnderscoreRegression:
     partition, which correctly handles any pmap_id regardless of underscores.
     """
 
+    @pytest.mark.asyncio
     async def test_clean_area_succeeds_when_pmap_id_contains_underscore(self):
         """Segment IDs with underscore-containing pmap_id must be accepted."""
         from unittest.mock import AsyncMock, patch
@@ -572,6 +592,7 @@ class TestPmapUnderscoreRegression:
         assert len(payload["regions"]) == 1
         assert payload["regions"][0]["region_id"] == region_id
 
+    @pytest.mark.asyncio
     async def test_clean_area_raises_for_wrong_pmap(self):
         """Segment IDs from a different pmap must still be rejected."""
         pmap_id = "2Bly_kGURy6OcUVTX7FN3w"
@@ -767,6 +788,7 @@ class TestStaleRegionIdAutoHeal:
 
 class TestGetSegmentsZones:
 
+    @pytest.mark.asyncio
     async def test_includes_zone_segments(self):
         """async_get_segments includes zones alongside room segments."""
         try:
@@ -787,6 +809,7 @@ class TestGetSegmentsZones:
         assert "PMAP1_19" in segment_ids
         assert "PMAP1_zid_z1" in segment_ids
 
+    @pytest.mark.asyncio
     async def test_zone_segment_id_format(self):
         """Zone segments use {pmap_id}_zid_{zone_id} format."""
         try:
@@ -807,6 +830,7 @@ class TestGetSegmentsZones:
         assert zone_segs[0].id == "PMAP1_zid_42"
         assert zone_segs[0].name == "Sofa zone"
 
+    @pytest.mark.asyncio
     async def test_zone_segment_group_is_zone_type(self):
         """Zone segment group reflects zone_type."""
         try:
@@ -837,6 +861,7 @@ class TestCleanSegmentsZones:
         except ServiceValidationError:
             raise
 
+    @pytest.mark.asyncio
     async def test_zone_segment_uses_zid_type(self):
         """Zone segments are sent to robot with type='zid'."""
         cc = _make_coordinator(
@@ -861,6 +886,7 @@ class TestCleanSegmentsZones:
         assert sent_regions[0]["type"] == "zid"
         assert sent_regions[0]["region_id"] == "z1"
 
+    @pytest.mark.asyncio
     async def test_room_segment_still_uses_rid_type(self):
         """Room segments continue to use type='rid'."""
         cc = _make_coordinator(
@@ -883,6 +909,7 @@ class TestCleanSegmentsZones:
         assert sent_regions[0]["type"] == "rid"
         assert sent_regions[0]["region_id"] == "19"
 
+    @pytest.mark.asyncio
     async def test_mixed_room_and_zone_segments(self):
         """Mixed room + zone segments produce correct region types."""
         cc = _make_coordinator(

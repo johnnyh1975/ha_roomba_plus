@@ -27,7 +27,38 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX   = "roomba_plus_outline"
-STORAGE_VERSION      = 1
+
+# v2.8.3 CRITICAL FIX — these are two genuinely different things and must
+# never be conflated again:
+#
+#   _HA_STORE_VERSION  — passed to homeassistant.helpers.storage.Store()'s
+#                         constructor. This is HA's OWN file-format version.
+#                         If it doesn't match what's already on disk, HA's
+#                         Store calls self._async_migrate_func(old_version,
+#                         old_minor_version, old_data) BEFORE we ever see the
+#                         data — and the base Store class's default
+#                         _async_migrate_func simply `raise NotImplementedError`.
+#                         We never implemented one. Bumping this constant
+#                         crashed async_setup_entry outright for every
+#                         existing installation (confirmed in the field,
+#                         v2.8.2). This value must stay 1 forever unless a
+#                         real _async_migrate_func is written.
+#
+#   PAYLOAD_VERSION    — our OWN application-level marker, embedded inside
+#                         the dict we hand to store.async_save()/get back
+#                         from store.async_load(). Checking this ourselves
+#                         in async_load() (see below) is exactly the right
+#                         way to discard an old, incompatible payload shape —
+#                         it just must never be passed to Store()'s own
+#                         constructor, which is what went wrong here.
+#
+# v2.8.2 bumped what was then a single combined constant 1 -> 2 specifically
+# to discard contour_points accumulated from incompatible per-mission
+# auto-fit renders (see render_for_outline() docstring in map_renderer.py).
+# That payload-discard intent was correct; routing it through Store()'s own
+# version parameter was the bug.
+_HA_STORE_VERSION    = 1
+PAYLOAD_VERSION      = 2
 
 # Don't show outline until we have at least this many missions
 MIN_MISSIONS_TO_SHOW = 2
@@ -150,7 +181,7 @@ class OutlineStore:
             from homeassistant.helpers.storage import Store
             self._store = Store(
                 hass,
-                STORAGE_VERSION,
+                _HA_STORE_VERSION,
                 f"{STORAGE_KEY_PREFIX}_{entry_id}",
                 private=True,
             )
@@ -162,7 +193,7 @@ class OutlineStore:
         """Load persisted outline state from hass.storage."""
         store = self._get_store(hass, entry_id)
         data = await store.async_load()
-        if data and isinstance(data, dict) and data.get("version") == STORAGE_VERSION:
+        if data and isinstance(data, dict) and data.get("version") == PAYLOAD_VERSION:
             self._mission_count = int(data.get("mission_count", 0))
             raw = data.get("contour_points", [])
             self._contour_points = [(int(p[0]), int(p[1])) for p in raw if len(p) == 2]
@@ -178,7 +209,7 @@ class OutlineStore:
         """Persist outline state to hass.storage."""
         store = self._get_store(hass, entry_id)
         await store.async_save({
-            "version": STORAGE_VERSION,
+            "version": PAYLOAD_VERSION,
             "mission_count": self._mission_count,
             "contour_points": list(self._contour_points),
             "canvas_size": list(self._canvas_size) if self._canvas_size else None,

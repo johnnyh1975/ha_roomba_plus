@@ -45,7 +45,14 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
-from .const import CLEANING_PHASES, DOMAIN, MISSION_END_PHASES, REGION_TYPE_ICONS
+from .const import (
+    CLEANING_PHASES,
+    DOMAIN,
+    END_SIGNAL_DEBOUNCE_COUNT,
+    MISSION_END_PHASES,
+    REGION_TYPE_ICONS,
+    ROOM_TRANSITION_CANDIDATE_PHASES,
+)
 from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
@@ -58,6 +65,20 @@ PARALLEL_UPDATES = 0
 # CLEANING_PHASES and MISSION_END_PHASES moved to const.py (v2.3.0 Step 1)
 
 _MAP_STORAGE_VERSION = 1
+
+# v2.8.2 — mission-in-progress checkpoint. Separate storage key/version from
+# _MAP_STORAGE_VERSION (the renderer's "last completed mission" snapshot)
+# because this one represents a possibly-incomplete, still-in-flight mission
+# and has a different lifecycle: written on every stuck event, consumed
+# (resumed or salvaged) exactly once on the first MQTT message after
+# startup, and deleted once a mission reaches a normal end. See
+# RoombaMapImage._consume_pending_checkpoint() / _salvage_orphaned_checkpoint().
+_MISSION_CHECKPOINT_STORAGE_VERSION = 1
+
+
+def _mission_checkpoint_storage_key(entry_id: str) -> str:
+    return f"roomba_plus_map_checkpoint_{entry_id}"
+
 
 # v2.6.3 E — dispatcher signal fired by RoombaMapImage after GridStore update.
 # RoombaCoverageImage listens to bump image_last_updated so the frontend re-fetches.
@@ -199,6 +220,18 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # Replaces last_phase-in-CLEANING_PHASES guard; fixes stuck-bypass and
         # false mission-restart on stuck → run recovery.
         self._had_cleaning_phase: bool = False
+        # v2.8.1 (END-DEBOUNCE) — consecutive-message counter, mirrors the
+        # same mechanism in callbacks.py. See _on_message for details.
+        self._end_signal_streak: int = 0
+        # v2.8.2 — mission-in-progress checkpoint state. mssn_strt_tm
+        # identifies "is this still the same mission" across an HA restart
+        # (same field callbacks.py already uses for this purpose — robust
+        # because 980/900-series firmware does NOT reset it mid-mission,
+        # unlike at mission end). _pending_checkpoint holds whatever was
+        # loaded from storage at startup until the first MQTT message
+        # resolves it (resume or salvage) — see _consume_pending_checkpoint().
+        self._mission_checkpoint_mssn_strt_tm: int = 0
+        self._pending_checkpoint: dict[str, Any] | None = None
 
         # Initial timestamp so frontend knows an image exists from the start
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
@@ -211,6 +244,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self.async_update_token()
         # Restore last mission's map from hass.storage (if any)
         await self._async_restore_map_state()
+        # v2.8.2 — load (but do not yet apply) a mission-in-progress
+        # checkpoint, if one exists. The first live MQTT message decides
+        # whether to resume it or salvage it — see _consume_pending_checkpoint().
+        await self._async_load_pending_checkpoint()
 
     # ── ImageEntity interface ─────────────────────────────────────────────────
 
@@ -346,6 +383,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             self.vacuum_state.get("cleanMissionStatus", {}).get("phase", "")
         )
 
+        # v2.8.2 — resolve any checkpoint loaded at startup against this,
+        # the first live MQTT message since restart. Must run before the
+        # phase-transition block below: if this resumes a still-ongoing
+        # mission, _had_cleaning_phase is set True here, which correctly
+        # makes the "mission started" reset below a no-op for this message.
+        if self._pending_checkpoint is not None:
+            self._consume_pending_checkpoint()
+
         # Phase transitions
         if current_phase != self._last_phase:
             # v2.6.3 D — guard with _had_cleaning_phase so stuck → run (recovery)
@@ -357,15 +402,72 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._mission_points = []
                     self._stuck_mission_points = []
                     self._mission_start_ts: str | None = dt_util.now().isoformat()
+                    # v2.8.2 — cached the same way callbacks.py caches it:
+                    # needed so a later checkpoint (saved on a stuck event)
+                    # can be matched against the live mission on restart.
+                    self._mission_checkpoint_mssn_strt_tm = (
+                        self.vacuum_state.get("cleanMissionStatus", {}).get("mssnStrtTm") or 0
+                    )
                     _LOGGER.debug("Map: mission started, renderer reset")
+
+            self._last_phase = current_phase
+
+        # v2.8.1 (END-DEBOUNCE): mirrors the fix in callbacks.py's
+        # _on_mission_message. Before this fix, a single transient MQTT
+        # message momentarily reporting an ambiguous phase (charge/hmPostMsn)
+        # — without even a cycle check, unlike callbacks.py's pre-v2.8.1
+        # state — was enough to fire _handle_mission_end() mid-mission. That
+        # call clears self._mission_points (line 556 below) and feeds the
+        # partial trajectory-so-far into ZoneStore, GeometryStore, GridStore,
+        # and OutlineStore. The next genuine "run" message then wipes
+        # self._mission_points again via the mission-start reset above —
+        # fragmenting one continuous multi-room mission into several small,
+        # disconnected pieces, none of which individually shows the gap
+        # needed to ever split a zone or register a door marker. This is the
+        # same root cause confirmed (and fixed) in callbacks.py for the
+        # MissionTimerStore progress-reset regression; this is the matching
+        # fix for the map/zone/geometry/grid/outline side, which had no
+        # protection at all (not even the v2.8.0 cycle-only guard).
+        #
+        # Deliberately evaluated on every message that actually carries a
+        # cleanMissionStatus update — NOT folded into the "phase transitions"
+        # edge-trigger above. A real "stays in charge for two consecutive
+        # messages" sequence has the same current_phase value both times, so
+        # an edge-triggered (`current_phase != self._last_phase`) check would
+        # only ever see ONE transition and could never count two consecutive
+        # confirmations. Restricting to "cleanMissionStatus" in state (the
+        # raw per-message delta, not the merged self.vacuum_state) instead of
+        # running on every on_message() call avoids over-counting against
+        # pose-only/bbrun-only updates that don't represent a new mission
+        # status reading at all.
+        if "cleanMissionStatus" in state:
+            _cycle = self.vacuum_state.get("cleanMissionStatus", {}).get("cycle", "")
+            _is_inter_room_transition = _cycle in ("clean", "quick")
+            _looks_like_end = (
+                current_phase in MISSION_END_PHASES and not _is_inter_room_transition
+            )
+            _ambiguous_end_phase = current_phase in ROOM_TRANSITION_CANDIDATE_PHASES
+
+            if self._had_cleaning_phase:
+                if not _looks_like_end:
+                    self._end_signal_streak = 0
+                elif _ambiguous_end_phase:
+                    self._end_signal_streak += 1
+                else:
+                    # Unambiguous terminal phase (stop) — confirm immediately.
+                    self._end_signal_streak = END_SIGNAL_DEBOUNCE_COUNT
 
             # v2.6.3 A — use _had_cleaning_phase so stuck → stop/charge
             # (stuck_and_abandoned) correctly triggers _handle_mission_end().
-            if current_phase in MISSION_END_PHASES and self._had_cleaning_phase:
+            if (
+                current_phase in MISSION_END_PHASES
+                and self._had_cleaning_phase
+                and _looks_like_end
+                and self._end_signal_streak >= END_SIGNAL_DEBOUNCE_COUNT
+            ):
                 self._had_cleaning_phase = False
+                self._end_signal_streak = 0
                 self._handle_mission_end(current_phase)
-
-            self._last_phase = current_phase
 
         # Pose update — process regardless of phase so the map and direction
         # vector stay live even when the robot is stuck, returning, or
@@ -382,6 +484,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 # Record stuck position in mm for GridStore
                 if self._mission_points:
                     self._stuck_mission_points.append(self._mission_points[-1])
+                # v2.8.2 — checkpoint the in-progress mission. A stuck event
+                # is exactly the moment a mission is most at risk of never
+                # reaching a clean end (HA restart, manual intervention) —
+                # see _async_save_mission_checkpoint() docstring.
+                if self._config_entry is not None and self._had_cleaning_phase:
+                    asyncio.run_coroutine_threadsafe(
+                        self._async_save_mission_checkpoint(), self.hass.loop
+                    )
             self._last_stuck_count = stuck
 
         self.schedule_update_ha_state()
@@ -404,10 +514,27 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # hass.async_create_task() is not thread-safe and raises RuntimeError
         # on recent HA versions when called from a foreign thread.
         # All coroutine scheduling must go through asyncio.run_coroutine_threadsafe().
+        loop = self.hass.loop
+
+        # v2.8.2 bug-hunt fix — checkpoint clearing must happen unconditionally,
+        # before the "nothing to process" early-return below. A checkpoint can
+        # legitimately have empty mission_points (e.g. a stuck event fired
+        # before any pose message had ever arrived this mission), and
+        # _salvage_orphaned_checkpoint() loads exactly that into
+        # self._mission_points before calling this method. With the clear
+        # call previously placed after the early-return, that specific
+        # checkpoint would never be deleted — it would be reloaded and
+        # re-"salvaged" (a no-op) on every subsequent HA restart forever.
+        # Store.async_remove() is a safe no-op when nothing is persisted, so
+        # this is harmless on the (overwhelmingly common) normal-end path
+        # where no checkpoint exists at all.
+        if self._config_entry is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._async_clear_mission_checkpoint(), loop
+            )
+
         if not self._mission_points:
             return
-
-        loop = self.hass.loop
 
         # v2.6.3 B5 — only run drift detection when the robot actually returned
         # to the dock.  For stuck-and-abandoned (ending_phase="stop") or user-
@@ -604,6 +731,199 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             )
         else:
             _LOGGER.warning("Map: stored state was incompatible, starting blank")
+
+    # ── Mission checkpoint (v2.8.2) ──────────────────────────────────────────
+    #
+    # Distinct from the renderer's _async_save_map_state()/_async_restore_map_state()
+    # above, which only ever runs at a clean mission end. These four methods
+    # protect against the case that matters most for a robot with a high
+    # mission-failure rate: a mission that gets stuck and never reaches a
+    # clean end (HA restart, manual intervention) before that happens.
+
+    async def _async_load_pending_checkpoint(self) -> None:
+        """Load a mission checkpoint (if any) at startup.
+
+        Does not apply it yet — self._pending_checkpoint is only resolved
+        (resumed or salvaged) once the first live MQTT message arrives and
+        we know the robot's current mssnStrtTm/phase. See
+        _consume_pending_checkpoint().
+        """
+        if self._config_entry is None:
+            return
+        store = Store(
+            self.hass,
+            _MISSION_CHECKPOINT_STORAGE_VERSION,
+            _mission_checkpoint_storage_key(self._config_entry.entry_id),
+        )
+        try:
+            data = await store.async_load()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Map: failed to load mission checkpoint: %s", exc)
+            return
+        if data:
+            self._pending_checkpoint = data
+            _LOGGER.debug(
+                "Map: loaded pending mission checkpoint — %d pose pt(s)",
+                len(data.get("mission_points", [])),
+            )
+
+    def _consume_pending_checkpoint(self) -> None:
+        """Resolve self._pending_checkpoint against the first live message.
+
+        Called at most once per entity lifetime — always sets
+        self._pending_checkpoint back to None, whichever branch is taken,
+        so a checkpoint is either resumed seamlessly (no extra
+        process_mission()-style call) or salvaged exactly once. Never both,
+        which would double-count the same trajectory data.
+
+        Same mission still running (mssnStrtTm matches) -> resume: restore
+        _mission_points/_stuck_mission_points/_mission_start_ts/
+        _last_stuck_count and the renderer state, set
+        _had_cleaning_phase=True so the normal "mission started" reset
+        below this call becomes a no-op for this message.
+
+        v2.8.2 bug-hunt fix — deliberately does NOT also require
+        current_phase to be an actively-cleaning phase. mssnStrtTm matching
+        already proves this is the same physical mission (980/900-series
+        firmware does not reset it mid-mission); requiring CLEANING_PHASES
+        on top of that meant landing on an ordinary inter-room transition
+        blip (current_phase == "charge"/"hmPostMsn", not yet confirmed as a
+        genuine end) as the very first post-restart message would wrongly
+        treat a still-running mission as ended and salvage it — fragmenting
+        one continuous mission into an orphaned piece plus a fresh restart,
+        exactly the kind of fragmentation this whole feature exists to
+        prevent. Resuming unconditionally on a mssnStrtTm match instead lets
+        the normal phase-transition / END-DEBOUNCE logic below — which runs
+        immediately after, against this same message — correctly decide
+        what to do with whatever phase we're actually in: keep going if
+        still cleaning, or end correctly (with the real ending_phase, e.g.
+        for accurate dock-return/drift detection) if it turns out the
+        mission genuinely did conclude while HA was down.
+
+        Otherwise (different mission already started, or mssnStrtTm absent
+        from either side) -> orphaned -> salvage once through the same
+        store-feeding logic a normal mission end uses, so the data isn't
+        silently lost.
+        """
+        checkpoint = self._pending_checkpoint
+        self._pending_checkpoint = None
+        if checkpoint is None:
+            return
+
+        live_mssn_strt_tm = (
+            self.vacuum_state.get("cleanMissionStatus", {}).get("mssnStrtTm") or 0
+        )
+        checkpoint_mssn_strt_tm = checkpoint.get("mssn_strt_tm") or 0
+
+        same_mission_still_active = (
+            bool(live_mssn_strt_tm)
+            and bool(checkpoint_mssn_strt_tm)
+            and live_mssn_strt_tm == checkpoint_mssn_strt_tm
+        )
+
+        if same_mission_still_active:
+            self._mission_points = list(checkpoint.get("mission_points", []))
+            self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
+            self._mission_start_ts = checkpoint.get("mission_start_ts")
+            self._mission_checkpoint_mssn_strt_tm = live_mssn_strt_tm
+            self._had_cleaning_phase = True
+            # v2.8.2 bug-hunt fix — see _async_save_mission_checkpoint()
+            # docstring for why this must be restored, not left at the
+            # post-__init__ default of 0.
+            self._last_stuck_count = checkpoint.get("last_stuck_count", 0)
+            renderer_state = checkpoint.get("renderer_state")
+            if self._renderer is not None and renderer_state:
+                self._renderer.restore_state(renderer_state)
+            _LOGGER.debug(
+                "Map: resumed mission from checkpoint after restart — "
+                "%d pose pt(s), %d stuck pt(s)",
+                len(self._mission_points), len(self._stuck_mission_points),
+            )
+        else:
+            _LOGGER.debug(
+                "Map: checkpoint orphaned (mission ended or changed while "
+                "HA was down) — salvaging %d pose pt(s)",
+                len(checkpoint.get("mission_points", [])),
+            )
+            self._salvage_orphaned_checkpoint(checkpoint)
+
+    def _salvage_orphaned_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+        """Process an orphaned checkpoint exactly once via _handle_mission_end().
+
+        Reuses _handle_mission_end() directly by temporarily loading the
+        checkpoint's data into self._mission_points etc. — safe because at
+        this point (entity just started, before the current message's own
+        phase-transition handling has run) those attributes are still at
+        their fresh __init__ defaults. _handle_mission_end() always clears
+        them back to empty/None at the end and also deletes the now
+        -consumed checkpoint file, so no explicit cleanup is needed here.
+
+        ending_phase="" — matching the existing stuck-and-abandoned
+        ("stop") case, since we don't actually know whether this mission
+        made it back to the dock before HA went down. _dock_return inside
+        _handle_mission_end() is False for any phase outside
+        {"charge", "hmPostMsn"}, so drift detection is correctly skipped.
+        """
+        self._mission_points = list(checkpoint.get("mission_points", []))
+        self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
+        self._mission_start_ts = checkpoint.get("mission_start_ts")
+        renderer_state = checkpoint.get("renderer_state")
+        if self._renderer is not None and renderer_state:
+            self._renderer.restore_state(renderer_state)
+        self._handle_mission_end(ending_phase="")
+
+    async def _async_save_mission_checkpoint(self) -> None:
+        """Persist the in-progress mission so a stuck-then-interrupted
+        mission doesn't silently lose its accumulated exploration data.
+
+        Idempotent — safe to call repeatedly during the same mission (e.g.
+        on every stuck event); each call overwrites the previous checkpoint
+        for this config entry in place. Does NOT feed ZoneStore/GeometryStore
+        /GridStore/OutlineStore — those still only run once, at a genuine
+        mission end (normal or salvaged), to avoid double-counting.
+        """
+        if self._config_entry is None:
+            return
+        store = Store(
+            self.hass,
+            _MISSION_CHECKPOINT_STORAGE_VERSION,
+            _mission_checkpoint_storage_key(self._config_entry.entry_id),
+        )
+        await store.async_save({
+            "mssn_strt_tm": self._mission_checkpoint_mssn_strt_tm,
+            "mission_points": list(self._mission_points),
+            "stuck_mission_points": list(self._stuck_mission_points),
+            "mission_start_ts": self._mission_start_ts,
+            "renderer_state": self._renderer.dump_state() if self._renderer else None,
+            # v2.8.2 bug-hunt fix — without this, a resumed mission would
+            # see _last_stuck_count reset to its __init__ default of 0 (the
+            # whole entity object is recreated on HA restart), so the very
+            # next bbrun message with the robot's already-known nStuck count
+            # would look like a brand-new stuck event (n > 0) and append a
+            # spurious duplicate marker to _stuck_mission_points.
+            "last_stuck_count": self._last_stuck_count,
+        })
+        _LOGGER.debug(
+            "Map: saved mission checkpoint — %d pose pt(s), %d stuck pt(s)",
+            len(self._mission_points), len(self._stuck_mission_points),
+        )
+
+    async def _async_clear_mission_checkpoint(self) -> None:
+        """Delete the mission checkpoint — it is now redundant.
+
+        Called from _handle_mission_end(), which covers both a normal
+        mission end (the authoritative, complete processing just ran) and
+        a salvage call (the checkpoint was just consumed and fed through
+        the same method).
+        """
+        if self._config_entry is None:
+            return
+        store = Store(
+            self.hass,
+            _MISSION_CHECKPOINT_STORAGE_VERSION,
+            _mission_checkpoint_storage_key(self._config_entry.entry_id),
+        )
+        await store.async_remove()
 
     async def _trigger_zone_issue(self) -> None:
         from homeassistant.components import repairs as ir

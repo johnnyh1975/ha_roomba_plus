@@ -244,7 +244,15 @@ class GridStore:
         bounding box. A low ratio with high total coverage indicates
         the robot is over-cleaning the centre and under-covering edges.
 
-        Returns None when fewer than 10 cells exist (insufficient data).
+        Returns None when fewer than 10 cells exist (insufficient data), or
+        when the bounding box itself is too small for the edge/centre
+        distinction to be meaningful — v2.8.2: a robot confined to e.g. a
+        1m x 1m patch (heavily fragmented exploration, or genuinely a tiny
+        space) would otherwise have *every* cell within edge_depth_mm of
+        some side, producing a near-1.0 ratio that looks like "excellent
+        edge coverage" but is really just "there is no centre region to
+        compare against". Requiring each bbox dimension to exceed
+        4 * edge_depth_mm guarantees a real interior exists.
         P3: result is cached by edge_depth_mm and invalidated by update_from_mission;
         safe to call repeatedly during a mission without re-computing on every pose
         update. Keyed by edge_depth_mm so different callers with different parameters
@@ -260,6 +268,12 @@ class GridStore:
         if bbox is None:
             return None
         x_min, x_max, y_min, y_max = bbox
+        # v2.8.2 — bbox too small for the edge/centre distinction to mean
+        # anything (see docstring). Mirrors the "insufficient data" None
+        # return above rather than caching a misleading number.
+        _min_span = 4.0 * edge_depth_mm
+        if (x_max - x_min) < _min_span or (y_max - y_min) < _min_span:
+            return None
         edge_count = 0
         for (gx, gy) in self._cells:
             x_mm, y_mm = _cell_to_mm(gx, gy)

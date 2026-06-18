@@ -155,6 +155,7 @@ class TestOutlineStore:
     def test_ema_alpha_is_0_4(self):
         assert EMA_ALPHA == 0.4
 
+    @pytest.mark.asyncio
     async def test_async_update_from_png_increments_mission_count(self):
         store = OutlineStore()
         hass = MagicMock()
@@ -168,6 +169,7 @@ class TestOutlineStore:
             await store.async_update_from_png(b"fake_png", hass, "entry1")
         assert store._mission_count == 1
 
+    @pytest.mark.asyncio
     async def test_async_update_from_png_skips_none_png(self):
         store = OutlineStore()
         hass = MagicMock()
@@ -175,6 +177,7 @@ class TestOutlineStore:
         await store.async_update_from_png(None, hass, "entry1")
         hass.async_add_executor_job.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_async_update_skips_when_too_few_points(self):
         store = OutlineStore()
         hass = MagicMock()
@@ -183,12 +186,13 @@ class TestOutlineStore:
         await store.async_update_from_png(b"fake_png", hass, "entry1")
         assert store._mission_count == 0
 
+    @pytest.mark.asyncio
     async def test_async_load_restores_state(self):
         store = OutlineStore()
         hass = MagicMock()
 
         loaded_data = {
-            "version": 1,
+            "version": 2,
             "mission_count": 5,
             "contour_points": [[10, 20], [30, 40]],
             "canvas_size": [300, 300],
@@ -206,6 +210,7 @@ class TestOutlineStore:
         assert store._contour_points == [(10, 20), (30, 40)]
         assert store._canvas_size == (300, 300)
 
+    @pytest.mark.asyncio
     async def test_async_load_ignores_wrong_version(self):
         store = OutlineStore()
         hass = MagicMock()
@@ -225,8 +230,77 @@ class TestOutlineStore:
 
         assert store._mission_count == 0  # not loaded
 
+    @pytest.mark.asyncio
+    async def test_async_load_discards_pre_v2_8_2_data(self):
+        """v2.8.2 — payload version bumped 1 -> 2 specifically to discard
+        contour data accumulated from per-mission auto-fit renders (an
+        incompatible coordinate space per mission — see map_renderer.py
+        render_for_outline() docstring). A persisted file still at
+        version 1 must be treated like any other stale version: ignored,
+        not loaded, so the installation starts the outline fresh under
+        the fixed-coordinate-space render."""
+        store = OutlineStore()
+        hass = MagicMock()
 
-class TestRenderRoomOutline:
+        loaded_data = {
+            "version": 1,  # pre-fix format
+            "mission_count": 3,
+            "contour_points": [[0, 0], [599, 599]],  # the corrupted shape
+            "canvas_size": [600, 600],
+        }
+
+        with patch(
+            "homeassistant.helpers.storage.Store",
+        ) as mock_store_cls:
+            mock_instance = AsyncMock()
+            mock_instance.async_load = AsyncMock(return_value=loaded_data)
+            mock_store_cls.return_value = mock_instance
+            await store.async_load(hass, "entry1")
+
+        assert store._mission_count == 0
+        assert store._contour_points == []
+        assert store._canvas_size is None
+
+
+class TestRealStoreVersionRegression:
+    """v2.8.3 — every test above mocks homeassistant.helpers.storage.Store
+    entirely, which means none of them ever exercised HA's *own* on-disk
+    version-mismatch handling. That blind spot is exactly how the v2.8.2
+    field crash (NotImplementedError from Store._async_migrate_func, every
+    EPHEMERAL install with pre-existing outline data on disk) shipped
+    despite a fully green suite.
+
+    A genuine real-Store, real-hass round-trip test was attempted here and
+    deliberately dropped: `pytest_homeassistant_custom_component`'s
+    `async_test_home_assistant()` is not currently wired into this project's
+    pytest-asyncio setup (no `hass` fixture is used anywhere else in this
+    suite), and using it ad hoc in a single test corrupted the event loop
+    for unrelated, later tests in the same run, and separately broke this
+    project's `custom_components` namespace-package import when done from
+    inside the HA test context. Wiring up real-hass testing properly is a
+    test-infrastructure project of its own, not something to bolt on
+    mid-hotfix.
+
+    The fix was instead confirmed directly against the real (unmocked)
+    `homeassistant.helpers.storage.Store` class in a standalone script
+    outside pytest: constructing `Store(hass, 2, key)` against an on-disk
+    file saved with `Store(hass, 1, key)` reproduces the exact field
+    NotImplementedError; constructing `Store(hass, 1, key)` (matching the
+    pinned `_HA_STORE_VERSION` below) against the same file loads cleanly.
+    The cheap guard rail below is what's practical to keep permanently in
+    this suite.
+    """
+
+    def test_ha_store_version_is_pinned(self):
+        """Guard rail: _HA_STORE_VERSION must never change again unless a
+        real Store._async_migrate_func override ships alongside it. This
+        constant is what's already embedded in every existing installation's
+        on-disk file — changing it without a migration function reproduces
+        the exact v2.8.2 field crash this test exists to prevent."""
+        from custom_components.roomba_plus.outline_store import (
+            _HA_STORE_VERSION,
+        )
+        assert _HA_STORE_VERSION == 1
 
     def _make_renderer_with_png(self):
         from custom_components.roomba_plus.map_renderer import MapRenderer, RendererConfig

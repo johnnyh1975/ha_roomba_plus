@@ -378,10 +378,16 @@ class TestErrorRecurrence:
         ms._records = records
         return ms
 
-    def _entry(self, ms, aligner=None):
+    def _entry(self, ms, aligner=None, archive=None):
         entry = MagicMock()
-        entry.runtime_data.mission_store = ms
-        entry.runtime_data.umf_aligner   = aligner
+        entry.runtime_data.mission_store   = ms
+        entry.runtime_data.umf_aligner     = aligner
+        # v2.8.2: must be explicit. entry is a bare MagicMock, so an unset
+        # mission_archive attribute auto-vivifies into a non-None MagicMock
+        # — async_check_error_recurrence would then treat it as "has
+        # records" and try to iterate a MagicMock, crashing every test that
+        # doesn't set this explicitly.
+        entry.runtime_data.mission_archive = archive
         return entry
 
     @pytest.mark.asyncio
@@ -444,7 +450,8 @@ class TestErrorRecurrence:
     async def test_no_mission_store_no_crash(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
         entry = MagicMock()
-        entry.runtime_data.mission_store = None
+        entry.runtime_data.mission_store   = None
+        entry.runtime_data.mission_archive = None
         await async_check_error_recurrence(MagicMock(), entry)  # no exception
 
     @pytest.mark.asyncio
@@ -479,6 +486,269 @@ class TestErrorRecurrence:
             await async_check_error_recurrence(hass, entry)
             placeholders = mock_create.call_args.kwargs["translation_placeholders"]
             assert placeholders["room"] == "unknown location"
+
+
+class TestErrorRecurrenceArchivePreferred:
+    """v2.8.2 — async_check_error_recurrence prefers MissionArchive (ARC1)
+    over the local MissionStore when the archive has records.
+
+    Motivation (confirmed against live field data): some failing missions
+    never produce a local MissionStore record at all (the mission fails
+    before the local "had a cleaning phase" gate that creates one), but are
+    fully visible in the cloud-derived archive. The two sources are not
+    merged, to avoid double-counting a mission present in both.
+    """
+
+    def _archive_with_pause_ids(self, pause_id: int, count: int):
+        from custom_components.roomba_plus.mission_archive import MissionArchive
+        from homeassistant.util import dt as dt_util
+        archive = MissionArchive()
+        now_str = dt_util.utcnow().isoformat()
+        # MissionArchive.recent_derived() is newest-first, mirroring how
+        # _derived is actually populated in production (insert(0, ...)).
+        archive._derived = [
+            {
+                "nMssn": i, "start_ts": now_str, "end_ts": now_str,
+                "duration_min": 60, "result": f"error_{pause_id}",
+                "pause_id": pause_id, "initiator": "schedule",
+            }
+            for i in range(count)
+        ]
+        return archive
+
+    def _entry(self, ms=None, archive=None, aligner=None):
+        entry = MagicMock()
+        entry.runtime_data.mission_store   = ms
+        entry.runtime_data.mission_archive = archive
+        entry.runtime_data.umf_aligner     = aligner
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_archive_used_when_it_has_records(self):
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        archive = self._archive_with_pause_ids(216, 3)
+        # A conflicting local MissionStore that must be ignored — if it were
+        # used instead, count/error_code below would differ.
+        ms = TestErrorRecurrence()._ms_with_errors(99, 5)
+        entry = self._entry(ms=ms, archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_error_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["error_code"] == "216"
+            assert placeholders["count"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mission_store_when_archive_empty(self):
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        from custom_components.roomba_plus.mission_archive import MissionArchive
+        archive = MissionArchive()  # record_count == 0
+        ms = TestErrorRecurrence()._ms_with_errors(15, 3)
+        entry = self._entry(ms=ms, archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_error_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["error_code"] == "15"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mission_store_when_no_archive(self):
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        ms = TestErrorRecurrence()._ms_with_errors(15, 3)
+        entry = self._entry(ms=ms, archive=None)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_error_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["error_code"] == "15"
+
+    @pytest.mark.asyncio
+    async def test_no_store_and_no_archive_no_crash(self):
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        entry = self._entry(ms=None, archive=None)
+        await async_check_error_recurrence(MagicMock(), entry)  # no exception
+
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mission_store_when_archive_has_only_old_records(self):
+        """v2.8.2 bug-hunt fix — record_count > 0 alone is not enough to
+        prefer the archive; its 30-day window must actually have data.
+        Without this, a cloud sync gap during exactly the trailing 30 days
+        (archive has months of older history, just nothing recent) would
+        report 'no recent archive records -> no failures' even while the
+        local MissionStore — which doesn't depend on cloud connectivity at
+        all — keeps recording a genuine recurring failure during that gap."""
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        from custom_components.roomba_plus.mission_archive import MissionArchive
+        from homeassistant.util import dt as dt_util
+        from datetime import timedelta
+
+        archive = MissionArchive()
+        old_ts = (dt_util.utcnow() - timedelta(days=90)).isoformat()
+        archive._derived = [
+            {
+                "nMssn": i, "start_ts": old_ts, "end_ts": old_ts,
+                "duration_min": 60, "result": "error_216",
+                "pause_id": 216, "initiator": "schedule",
+            }
+            for i in range(5)
+        ]
+        assert archive.record_count > 0  # the old, insufficient check would pass here
+        assert archive.recent_derived(days=30) == []  # but the real window is empty
+
+        ms = TestErrorRecurrence()._ms_with_errors(15, 3)
+        entry = self._entry(ms=ms, archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_error_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["error_code"] == "15"
+
+
+class TestCancellationRecurrence:
+    """v2.8.2 — async_check_cancellation_recurrence.
+
+    cancelled/cancelled_by_user results carry no numeric error_code, so they
+    were completely invisible to async_check_error_recurrence. Confirmed
+    against live field data: 15 of 35 archived missions over ~6 months were
+    cancelled or cancelled_by_user — never surfaced anywhere."""
+
+    def _entry(self, ms=None, archive=None):
+        entry = MagicMock()
+        entry.runtime_data.mission_store   = ms
+        entry.runtime_data.mission_archive = archive
+        return entry
+
+    def _archive_with_results(self, results: list[str]):
+        from custom_components.roomba_plus.mission_archive import MissionArchive
+        from homeassistant.util import dt as dt_util
+        archive = MissionArchive()
+        now_str = dt_util.utcnow().isoformat()
+        archive._derived = [
+            {"nMssn": i, "start_ts": now_str, "end_ts": now_str,
+             "duration_min": 60, "result": r}
+            for i, r in enumerate(results)
+        ]
+        return archive
+
+    def _ms_with_results(self, results: list[str]):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from homeassistant.util import dt as dt_util
+        ms = MissionStore()
+        now_str = dt_util.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        ms._records = [
+            {"id": f"m_{i}", "started_at": now_str, "ended_at": now_str,
+             "duration_min": 60, "result": r, "initiator": "schedule",
+             "zones": [], "error_code": None, "bbrun_hr": 0}
+            for i, r in enumerate(results)
+        ]
+        return ms
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_deletes_issue(self):
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        archive = self._archive_with_results(["cancelled", "cancelled"])
+        entry = self._entry(archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue") as mock_delete, \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_cancellation_recurrence(hass, entry)
+            mock_delete.assert_called_once()
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_at_threshold_creates_issue_with_breakdown(self):
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        archive = self._archive_with_results(
+            ["cancelled_by_user", "cancelled_by_user", "cancelled"]
+        )
+        entry = self._entry(archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_cancellation_recurrence(hass, entry)
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs["translation_key"] == "cancellation_recurrence"
+            placeholders = call_kwargs["translation_placeholders"]
+            assert placeholders["count"] == "3"
+            assert placeholders["by_user_count"] == "2"
+            assert placeholders["other_count"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_completed_results_not_counted(self):
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        archive = self._archive_with_results(
+            ["completed", "completed", "stuck_and_resumed", "error_17"]
+        )
+        entry = self._entry(archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue") as mock_delete, \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_cancellation_recurrence(hass, entry)
+            mock_delete.assert_called_once()
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mission_store_when_no_archive(self):
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        ms = self._ms_with_results(["cancelled", "cancelled", "cancelled_by_user"])
+        entry = self._entry(ms=ms, archive=None)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_cancellation_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["count"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_mission_store_when_archive_has_only_old_records(self):
+        """v2.8.2 bug-hunt fix — same rationale as the matching test on
+        async_check_error_recurrence: an archive with months of old history
+        but nothing in the trailing 30 days must not be treated as 'no
+        failures' when the local MissionStore has a real recent pattern."""
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        import custom_components.roomba_plus.repairs as repairs_mod
+        from custom_components.roomba_plus.mission_archive import MissionArchive
+        from homeassistant.util import dt as dt_util
+        from datetime import timedelta
+
+        archive = MissionArchive()
+        old_ts = (dt_util.utcnow() - timedelta(days=90)).isoformat()
+        archive._derived = [
+            {"nMssn": i, "start_ts": old_ts, "end_ts": old_ts,
+             "duration_min": 60, "result": "cancelled"}
+            for i in range(5)
+        ]
+        assert archive.record_count > 0
+        assert archive.recent_derived(days=30) == []
+
+        ms = self._ms_with_results(["cancelled", "cancelled", "cancelled_by_user"])
+        entry = self._entry(ms=ms, archive=archive)
+        hass  = MagicMock()
+        with patch.object(repairs_mod.ir, "async_delete_issue"), \
+             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
+            await async_check_cancellation_recurrence(hass, entry)
+            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+            assert placeholders["count"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_no_store_and_no_archive_no_crash(self):
+        from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
+        entry = self._entry(ms=None, archive=None)
+        await async_check_cancellation_recurrence(MagicMock(), entry)  # no exception
 
 
 class TestSmberr:

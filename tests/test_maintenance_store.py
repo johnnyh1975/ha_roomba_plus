@@ -1136,6 +1136,7 @@ class TestIA74Maint:
         assert ms.contact_cleaned_at is None
         assert ms.bin_cleaned_at is None
 
+    @pytest.mark.asyncio
     async def test_fields_persist_through_save_load(self):
         ms = MaintenanceStore()
         ms.wheel_cleaned_at = "2026-06-01T10:00:00"

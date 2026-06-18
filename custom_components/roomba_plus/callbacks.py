@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SMART_ZONE_DATA
+from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, ROOM_TRANSITION_CANDIDATE_PHASES
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -51,7 +51,14 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
 # and should never trigger an automatic room advance. "pause" and "stuck" are
 # excluded by design (handled by the error/cycle guard below, but kept out of
 # the candidate set entirely as a second layer of defence).
-_ROOM_TRANSITION_CANDIDATE_PHASES: frozenset[str] = frozenset({"charge", "hmPostMsn"})
+#
+# v2.8.1 — moved to const.py as ROOM_TRANSITION_CANDIDATE_PHASES /
+# END_SIGNAL_DEBOUNCE_COUNT so image.py's independent mission-end detection
+# (map renderer / ZoneStore / GeometryStore / GridStore / OutlineStore) can
+# share the exact same phase set and debounce threshold instead of risking a
+# second, silently-diverging copy.
+_ROOM_TRANSITION_CANDIDATE_PHASES = ROOM_TRANSITION_CANDIDATE_PHASES
+_END_SIGNAL_DEBOUNCE_COUNT = END_SIGNAL_DEBOUNCE_COUNT
 
 # AUTO-ADVANCE-ROOM time-confidence threshold: time spent in the current room
 # must be at least this fraction of the heuristic expected-per-room duration
@@ -59,14 +66,6 @@ _ROOM_TRANSITION_CANDIDATE_PHASES: frozenset[str] = frozenset({"charge", "hmPost
 # Conservative (0.5) since expected_room_sec is a uniform-split heuristic, not
 # a true per-room estimate — large rooms legitimately take longer than average.
 _ROOM_TRANSITION_MIN_ELAPSED_RATIO: float = 0.5
-
-# v2.8.1 (END-DEBOUNCE): number of consecutive "looks like a genuine end"
-# messages required before _on_mission_message commits to ending the mission
-# (clearing MissionTimerStore, recording the MissionStore entry, etc.). A
-# single inter-room MQTT message momentarily misreporting cycle no longer
-# wrongly clears state; a genuine end persists across multiple messages
-# while the robot sits docked, so 2 adds negligible detection latency.
-_END_SIGNAL_DEBOUNCE_COUNT: int = 2
 
 
 def _room_transition_confidence_ok(
@@ -250,7 +249,15 @@ async def async_record_mission(
         "started_at": started_at.isoformat(),
         "ended_at": now.isoformat(),
         "duration_min": duration_min,
-        "area_sqft": mission.get("sqft"),   # None for 600-series — correct
+        # v2.8.2: "or None" added — some robots (confirmed: 980 9-series with
+        # aftermarket NiMH battery) report cleanMissionStatus.sqft as a literal
+        # 0 rather than omitting the field, even for missions lasting hours.
+        # Without this, the merge-precedence rule ("never overwrite a
+        # non-None value") permanently locks out cloud backfill, even though
+        # the cloud often has a real area value for the same mission. A
+        # genuine 0-sqft mission is indistinguishable from "no data" anyway,
+        # so this loses nothing and lets backfill work as intended.
+        "area_sqft": mission.get("sqft") or None,   # None for 600-series — correct
         "result": result,
         "initiator": mission.get("initiator", "none"),
         "zones": zones,

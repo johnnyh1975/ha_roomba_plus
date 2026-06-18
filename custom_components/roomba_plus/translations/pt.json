@@ -832,6 +832,10 @@
       "title": "Erro recorrente: {label}",
       "description": "O erro {error_code} ({label}) ocorreu {count} vez(es) nos últimos 30 dias. Mais recente: fase '{phase}', localização '{room}'. Ação recomendada: {action}"
     },
+    "cancellation_recurrence": {
+      "title": "Cancelamentos recorrentes",
+      "description": "As missões foram canceladas {count} vez(es) nos últimos 30 dias ({by_user_count} pelo usuário/app, {other_count} outras). Verifique conflitos de agenda, intervenções pelo app, ou se o robô está sendo parado manualmente."
+    },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
       "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."

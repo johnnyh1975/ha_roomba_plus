@@ -720,6 +720,7 @@ class TestPollInterval:
 
 class TestAsyncEvaluate:
 
+    @pytest.mark.asyncio
     async def test_skips_when_disabled(self):
         mgr = _make_manager(options={CONF_DEMAND_CLEANING_ENABLED: False})
         coord = MagicMock()
@@ -731,6 +732,7 @@ class TestAsyncEvaluate:
         await mgr.async_evaluate(coord, "test_entry")
         mgr._entry.runtime_data.roomba.send_command.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_when_robot_busy(self):
         mgr = _make_manager()
         coord = MagicMock()
@@ -742,6 +744,7 @@ class TestAsyncEvaluate:
         await mgr.async_evaluate(coord, "test_entry")
         mgr._entry.runtime_data.roomba.send_command.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_when_blocking_manager_queued(self):
         mgr = _make_manager()
         coord = MagicMock()
@@ -752,6 +755,7 @@ class TestAsyncEvaluate:
         await mgr.async_evaluate(coord, "test_entry")
         mgr._entry.runtime_data.roomba.send_command.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_triggers_when_all_gates_pass(self):
         mgr = _make_manager()
         coord = MagicMock()
@@ -767,6 +771,7 @@ class TestAsyncEvaluate:
                 await mgr.async_evaluate(coord, "test_entry")
             mock_job.assert_called_once()
 
+    @pytest.mark.asyncio
     async def test_last_trigger_time_set_after_trigger(self):
         mgr = _make_manager()
         coord = MagicMock()
@@ -782,6 +787,7 @@ class TestAsyncEvaluate:
                 await mgr.async_evaluate(coord, "test_entry")
         assert mgr._last_trigger_time is not None
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_exception(self):
         """async_evaluate must never propagate exceptions."""
         mgr = _make_manager()
@@ -798,6 +804,7 @@ class TestF11WiringInInit:
     was never called, making demand cleaning completely non-functional.
     """
 
+    @pytest.mark.asyncio
     async def test_async_evaluate_called_after_cloud_refresh(self):
         """async_evaluate is scheduled via async_create_task after merge."""
         from unittest.mock import AsyncMock, MagicMock, call, patch

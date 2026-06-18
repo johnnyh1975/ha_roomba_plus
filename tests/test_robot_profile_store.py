@@ -150,6 +150,7 @@ class TestRobotProfileStore:
             rps.update_coverage_baseline(0.75)
         assert rps.coverage_baseline_ready
 
+    @pytest.mark.asyncio
     async def test_async_reset_clears_all_fields(self):
         """reset() wipes every learned field and saves."""
         rps = RobotProfileStore()
@@ -166,6 +167,7 @@ class TestRobotProfileStore:
         assert rps.learned_filter_hours is None
         mock_save.assert_awaited_once()
 
+    @pytest.mark.asyncio
     async def test_load_save_roundtrip(self):
         """Data survives a save→load cycle."""
         rps = RobotProfileStore()

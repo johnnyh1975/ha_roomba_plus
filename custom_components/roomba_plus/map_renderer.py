@@ -394,18 +394,45 @@ class MapRenderer:
         This method renders only the cleaned-area fill on a plain white canvas
         so the only edges are the actual cleaning path boundaries.
         Returns None when no pose points have been recorded yet.
+
+        v2.8.2 — deliberately does NOT use self._compute_fit() / auto-fit.
+        Auto-fit independently scales and centres each mission's content to
+        fill the canvas based on *that mission's own* bounding box. Since
+        self._points are already stored in a fixed pixel space (via
+        self._mm_to_px, using self._cfg.scale — constant across missions for
+        a given config entry), skipping auto-fit here means pixel (x, y) in
+        this mission's outline render always corresponds to the same real
+        -world position as pixel (x, y) in every other mission's outline
+        render. _merge_contours() EMA-blends two PNGs pixel-by-pixel — that
+        is only meaningful if both PNGs share one coordinate system. With
+        auto-fit, a mission confined to a small area gets zoomed to fill the
+        canvas, while a mission covering most of the home does not — the
+        same pixel position means two unrelated real-world locations, and
+        the blended result is closer to noise than to a room outline.
+        Confirmed against live data: an OutlineStore that had only ever seen
+        auto-fit renders had 73% of its accumulated contour points sitting
+        exactly on the canvas border (0/599 of a 600x600 canvas) — not a
+        room shape, an artefact of blending incompatible coordinate spaces.
+        Trade-off: a mission covering only a small area now renders as a
+        small blob on a mostly blank canvas rather than a canvas-filling
+        zoomed view. That is the correct behaviour here — the outline is
+        meant to accumulate a stable picture of the home over many missions,
+        not to look good as a single-mission snapshot.
         """
         if not self._points:
             return None
 
         import io as _io
-        fit_ratio, tx, ty, new_scale, fit_cx, fit_cy = self._compute_fit()
-        # Temporarily apply fit state so _draw_cleaned_area can use _fit_scale
+        size = self._cfg.size_px
+        orig_cx = orig_cy = size // 2
+        # Fixed transform — identical to the "too little content" fallback
+        # branch of _compute_fit(), but used unconditionally here so every
+        # mission's outline render shares the same coordinate system.
+        fit_ratio, tx, ty, new_scale = 1.0, 0.0, 0.0, self._cfg.scale
         old_scale, old_cx, old_cy = self._fit_scale, self._fit_cx, self._fit_cy
-        self._fit_scale, self._fit_cx, self._fit_cy = new_scale, fit_cx, fit_cy
+        self._fit_scale, self._fit_cx, self._fit_cy = new_scale, orig_cx, orig_cy
 
         try:
-            size = self._cfg.size_px
             img = Image.new("RGBA", (size, size), BG_COLOUR)
             draw = ImageDraw.Draw(img)
             # NO FLOOR_BORDER — intentional, prevents false edge capture

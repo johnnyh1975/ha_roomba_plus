@@ -298,6 +298,19 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
 CLEANING_PHASES: Final[frozenset[str]] = frozenset({"run", "hmMidMsn", "evac"})
 MISSION_END_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn", "stop"})
 
+# v2.8.1 (END-DEBOUNCE) — shared between callbacks.py (MissionTimerStore /
+# MissionStore mission-end detection) and image.py (map renderer / ZoneStore /
+# GeometryStore / GridStore / OutlineStore mission-end detection). Both files
+# independently implement the same "is this phase a genuine mission end or a
+# transient inter-room transition blip" check; these two phases are the ones
+# observed to appear both at genuine mission end AND transiently between
+# rooms — "stop"/"completed"/"cancelled" are unambiguous, deliberate terminal
+# phases never used for inter-room signalling and always confirm immediately.
+ROOM_TRANSITION_CANDIDATE_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn"})
+# Number of consecutive "looks like a genuine end" messages required on an
+# ambiguous phase before committing to end-of-mission processing.
+END_SIGNAL_DEBOUNCE_COUNT: Final[int] = 2
+
 # Human-readable phase labels (from rest980 — extended)
 
 # ── v1.8.0 — Error catalogue with descriptions and suggested actions ──────────

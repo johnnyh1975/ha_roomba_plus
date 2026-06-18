@@ -2799,6 +2799,15 @@ async def async_setup_entry(
                 async_check_error_recurrence(hass, config_entry),
                 name="roomba_plus_error_recurrence_check",
             )
+            # v2.8.2 — cancellation recurrence Repair Issue (separate from
+            # error_recurrence since cancelled/cancelled_by_user results
+            # carry no numeric error_code and were previously invisible to
+            # any recurrence check).
+            from .repairs import async_check_cancellation_recurrence
+            hass.async_create_task(
+                async_check_cancellation_recurrence(hass, config_entry),
+                name="roomba_plus_cancellation_recurrence_check",
+            )
             # v2.6.0 L5/L6 — update RobotProfileStore from latest cloud data
             _rps = config_entry.runtime_data.robot_profile_store
             if _rps is not None:
