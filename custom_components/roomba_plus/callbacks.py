@@ -60,6 +60,14 @@ _ROOM_TRANSITION_CANDIDATE_PHASES: frozenset[str] = frozenset({"charge", "hmPost
 # a true per-room estimate — large rooms legitimately take longer than average.
 _ROOM_TRANSITION_MIN_ELAPSED_RATIO: float = 0.5
 
+# v2.8.1 (END-DEBOUNCE): number of consecutive "looks like a genuine end"
+# messages required before _on_mission_message commits to ending the mission
+# (clearing MissionTimerStore, recording the MissionStore entry, etc.). A
+# single inter-room MQTT message momentarily misreporting cycle no longer
+# wrongly clears state; a genuine end persists across multiple messages
+# while the robot sits docked, so 2 adds negligible detection latency.
+_END_SIGNAL_DEBOUNCE_COUNT: int = 2
+
 
 def _room_transition_confidence_ok(
     mission: dict[str, Any],
@@ -76,19 +84,23 @@ def _room_transition_confidence_ok(
     Conditions (ALL must hold):
       1. No active error on the mission (mission.error == 0).
       2. cycle is still "clean" or "quick" — robot has not reported mission end.
-      3. expected_room_sec is available (total_estimated_sec wired in) AND
-         time_in_current_room_sec is at least _ROOM_TRANSITION_MIN_ELAPSED_RATIO
-         of the expected per-room duration.
+      3. expected_room_sec is available AND time_in_current_room_sec is at
+         least _ROOM_TRANSITION_MIN_ELAPSED_RATIO of the expected per-room
+         duration.
 
-    KNOWN LIMITATION (as of v2.8.0): total_estimated_sec is currently always
-    passed as 0 by the only call site (set_mission_plan in this module), so
-    expected_room_sec is always None and condition 3 always fails. This means
-    AUTO-ADVANCE-ROOM is architecturally complete but DORMANT until a real
-    mission time estimate is wired in (tracked as a v2.9.0+ backlog item).
-    This is a deliberate conservative choice: without genuine timing data we
-    cannot distinguish "robot finished this room" from "robot is recharging
-    mid-room", and firing incorrectly would silently corrupt current_room/
-    next_room tracking — worse than not firing at all.
+    v2.8.0 (live wiring): the call site in this module now computes real
+    per-room cloud TE1 time estimates via _compute_room_time_estimates() and
+    passes them through set_mission_plan(room_estimates_sec=...), so
+    expected_room_sec is populated whenever cloud data is available for the
+    current room (falling back to a uniform total_estimated_sec / room_count
+    split otherwise). AUTO-ADVANCE-ROOM is therefore live, not dormant, as
+    long as at least a uniform estimate can be derived.
+
+    Condition 2 shares the same cycle field as the INTER-ROOM-TRANSITION
+    guard above and is subject to the same known reliability caveat — see
+    the v2.8.1 END-DEBOUNCE comment on that guard. A cycle misread here would
+    simply suppress an auto-advance (conservative failure mode) rather than
+    corrupt state, so no debounce was added on this path.
     """
     error_code = mission.get("error", 0) or 0
     if error_code:
@@ -302,6 +314,10 @@ def make_mission_callback(
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
+    # v2.8.1 (END-DEBOUNCE) — consecutive-message counter for the genuine-end
+    # debounce below. Resets to 0 whenever a message does not look like a
+    # genuine end (cycle still active, or phase back in an active phase).
+    end_signal_streak: int = 0
     # F4e — accumulate recharge minutes across mid-mission recharge phases
     recharge_min_accumulator: int = 0
     last_recharge_phase_ts: float = 0.0
@@ -318,6 +334,7 @@ def make_mission_callback(
         nonlocal last_phase, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
+        nonlocal end_signal_streak
 
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
@@ -416,7 +433,7 @@ def make_mission_callback(
         # rooms in a multi-room mission.  Each room segment ends with a non-run
         # phase before the next room begins.
         #
-        # Reliable discriminator: cleanMissionStatus.cycle
+        # Primary discriminator: cleanMissionStatus.cycle
         #   "clean" / "quick" → robot is still in an active mission (inter-room)
         #   "none"  / absent  → robot truly finished, heading to dock
         #
@@ -424,13 +441,67 @@ def make_mission_callback(
         # resetting run_sec=0, mission_id=None → progress resets to 0% each room.
         # (Thonno regression reported for v2.7.6.)
         #
-        # NOTE: this guard is a best-effort heuristic until we have confirmed
-        # MQTT phase sequences from Thonno's i7+ logs.  If cycle is unreliable
-        # on some firmware variants, we may need to fall back to nMssn tracking.
+        # v2.8.1 (END-DEBOUNCE): cycle alone was confirmed insufficient — Thonno
+        # reproduced a reset even with the v2.8.0 guard above. The symptom
+        # (elapsed time reset to 0, then current_room/next_room briefly showing
+        # raw region IDs and progress/estimated-remaining going Unknown) is
+        # consistent with cycle momentarily reporting outside ("clean","quick")
+        # on a single inter-room MQTT message while the mission is genuinely
+        # still running.
+        #
+        # An earlier draft of this fix tried corroborating with nMssn (the
+        # lifetime mission counter), but nMssn is constant for the entire
+        # duration of one mission — start through true end — so "nMssn
+        # changed" can never confirm a genuine end of *this* mission; it only
+        # ever becomes true once a *later* mission starts. That approach was
+        # caught and dropped by the existing test_mission_timer_store.py
+        # genuine-end tests before shipping.
+        #
+        # Fix actually used: debounce, scoped to the genuinely ambiguous
+        # phases only. _ROOM_TRANSITION_CANDIDATE_PHASES ("charge",
+        # "hmPostMsn") are the two phases already established (by
+        # AUTO-ADVANCE-ROOM, above) as appearing both at genuine mission end
+        # AND transiently between rooms — exactly where a cycle misread can
+        # cause a false end. "stop", "completed", "cancelled" are deliberate,
+        # unambiguous terminal phases that are never used for inter-room
+        # signalling, so they keep confirming on a single message, same as
+        # before.  A genuine end on an ambiguous phase is a stable state —
+        # the robot keeps reporting it on every subsequent message while
+        # sitting docked — while a transient inter-room blip is not: the
+        # very next message reverts to phase=="run" or a correctly-reported
+        # cycle. Requiring the signal to hold for _END_SIGNAL_DEBOUNCE_COUNT
+        # consecutive messages filters out single-message blips at the cost
+        # of a small, acceptable detection delay on genuine ends.
         _cycle = mission.get("cycle", "")
         _is_inter_room_transition = _cycle in ("clean", "quick")
-        if phase in _MISSION_END_PHASES and had_cleaning_phase and not _is_inter_room_transition:
+        _looks_like_end = phase in _MISSION_END_PHASES and not _is_inter_room_transition
+        _ambiguous_end_phase = phase in _ROOM_TRANSITION_CANDIDATE_PHASES
+
+        if had_cleaning_phase:
+            if not _looks_like_end:
+                end_signal_streak = 0
+            elif _ambiguous_end_phase:
+                end_signal_streak += 1
+            else:
+                # Unambiguous terminal phase — confirm immediately.
+                end_signal_streak = _END_SIGNAL_DEBOUNCE_COUNT
+
+        if phase in _MISSION_END_PHASES and had_cleaning_phase:
+            _LOGGER.debug(
+                "MissionStore: end-phase check phase=%s cycle=%s ambiguous=%s "
+                "is_inter_room=%s end_signal_streak=%d",
+                phase, _cycle, _ambiguous_end_phase,
+                _is_inter_room_transition, end_signal_streak,
+            )
+
+        if (
+            phase in _MISSION_END_PHASES
+            and had_cleaning_phase
+            and _looks_like_end
+            and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
+        ):
             had_cleaning_phase = False
+            end_signal_streak = 0
             bbrun_end = reported.get("bbrun", {})
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
 
