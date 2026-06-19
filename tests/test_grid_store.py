@@ -598,12 +598,22 @@ class TestGridStoreL7Format:
         assert gs.stuck_event_count == 8
 
     def test_async_load_migrates_v1_int_format(self):
-        """async_load converts plain-int v1 values to v2 dict format."""
+        """async_load converts plain-int v1 values to v2 dict format.
+
+        v2.9.0 — this test's "v1" refers to the stuck dict's OWN internal
+        format (plain int count vs. {"count","times"} dict, a v2.7.0 L7
+        change), which is orthogonal to the payload-level PAYLOAD_VERSION
+        marker (the units-fix discard check, also added in v2.9.0). The
+        fixture must include a current "version" field to get past that
+        gate before the stuck-format migration logic even runs.
+        """
         import asyncio
         from unittest.mock import AsyncMock, MagicMock, patch
+        from custom_components.roomba_plus.grid_store import PAYLOAD_VERSION
 
         gs = GridStore()
         v1_data = {
+            "version": PAYLOAD_VERSION,
             "cells": {"0,0": 0.5},
             "stuck": {"1,1": 3, "2,2": 7},  # v1 plain int format
         }

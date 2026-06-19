@@ -18,6 +18,7 @@ from custom_components.roomba_plus.outline_store import MIN_CONTOUR_POINTS
 from custom_components.roomba_plus.outline_store import MIN_MISSIONS_TO_SHOW
 from custom_components.roomba_plus.outline_store import EMA_ALPHA
 from custom_components.roomba_plus.outline_store import OutlineStore
+from custom_components.roomba_plus.outline_store import PAYLOAD_VERSION
 from custom_components.roomba_plus.outline_store import _merge_contours
 from custom_components.roomba_plus.outline_store import extract_contour_from_png
 
@@ -188,11 +189,14 @@ class TestOutlineStore:
 
     @pytest.mark.asyncio
     async def test_async_load_restores_state(self):
+        """v2.9.0 — PAYLOAD_VERSION bumped 2 -> 3 for the units fix (pose
+        coordinates were 10x too small everywhere); fixture must use the
+        current PAYLOAD_VERSION, not a hardcoded historical value."""
         store = OutlineStore()
         hass = MagicMock()
 
         loaded_data = {
-            "version": 2,
+            "version": PAYLOAD_VERSION,
             "mission_count": 5,
             "contour_points": [[10, 20], [30, 40]],
             "canvas_size": [300, 300],

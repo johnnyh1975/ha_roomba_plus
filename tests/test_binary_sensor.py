@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import homeassistant.helpers.entity_platform as _ep
 
 
@@ -117,3 +117,171 @@ class TestMissionActiveSensor:
 
         assert active.is_on is True
         assert recharge.is_on is False
+
+
+def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None):
+    """Build a minimal RoombaMqttStale with stubbed hass/vacuum/entry state.
+
+    v2.9.0 — covers the enriched mqtt_watchdog Repair Issue (last known
+    phase, actual silence duration, cloud connectivity cross-check).
+    Previously this sensor/issue had zero test coverage at all.
+    """
+    from custom_components.roomba_plus.binary_sensor import RoombaMqttStale
+
+    reported = {"cleanMissionStatus": {"phase": phase}}
+    if wifistat is not None:
+        reported["wifistat"] = wifistat
+
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": reported}}
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.runtime_data.last_mqtt_message_ts = last_mqtt_message_ts
+
+    s = RoombaMqttStale.__new__(RoombaMqttStale)
+    s.vacuum = roomba
+    s._entry = entry
+    s.hass = MagicMock()
+    s._was_stale = False
+    s._attr_unique_id = "test_robot_mqtt_stale"
+    return s
+
+
+class TestMqttWatchdogRepairIssue:
+    """v2.9.0 — enriched mqtt_watchdog Repair Issue content.
+
+    Confirmed real-world problem (2026-06-19, 980 OG, screenshot-reported):
+    the issue used to say only "check your network connection" with no
+    way to tell whether the robot was genuinely unreachable or just
+    physically stuck (last_stuck_count=165 on the same mission this
+    watchdog could plausibly fire for). Now includes last known phase,
+    actual elapsed silence in minutes, and a cloud-connectivity hint.
+    """
+
+    def test_fires_with_last_known_phase_and_minutes(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        # Robot last seen 7 minutes ago, in "stuck" phase — i.e. it may
+        # have gone quiet because it was already stuck, not because of a
+        # real connectivity loss.
+        s = _mqtt_stale_sensor(phase="stuck", last_mqtt_message_ts=now - 7 * 60)
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        assert mock_create.called
+        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+        assert placeholders["minutes"] == "7"
+        assert placeholders["last_phase"] == "stuck"
+
+    def test_cloud_hint_unknown_when_wifistat_absent(self):
+        """9-series firmware (incl. the 980 OG test robot) never sends
+        wifistat at all — must report "unknown", never guess connected."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 600, wifistat=None)
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+        assert "unbekannt" in placeholders["cloud_hint"]
+
+    def test_cloud_hint_connected_points_to_local_issue(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(
+            phase="run", last_mqtt_message_ts=now - 600, wifistat={"cloud": 1}
+        )
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+        assert "lokale" in placeholders["cloud_hint"] or "lokal" in placeholders["cloud_hint"]
+
+    def test_cloud_hint_disconnected_points_to_robot_wifi(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(
+            phase="run", last_mqtt_message_ts=now - 600, wifistat={"cloud": 0}
+        )
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
+        assert "WLAN-Ausfall am Roboter" in placeholders["cloud_hint"]
+
+    def test_issue_cleared_on_recovery(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 600)
+        s._was_stale = True  # was already stale
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_delete_issue") as mock_delete:
+            # Fresh message just arrived — no longer stale.
+            s._entry.runtime_data.last_mqtt_message_ts = now
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        assert mock_delete.called
+
+    def test_does_not_fire_when_not_in_run_phase(self):
+        """Docked/idle robots going quiet is normal, not a watchdog condition."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="charge", last_mqtt_message_ts=now - 6000)
+
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+
+        assert not mock_create.called
+
+    def test_broadened_gate_fires_for_stuck_and_pause(self):
+        """v2.9.0 — silence starting in 'stuck' or 'pause' must also fire;
+        previously only phase=='run' was checked, missing exactly the
+        scenario most likely to coincide with a real connectivity loss
+        (the robot struggling, then vanishing)."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        for phase in ("stuck", "pause", "run", "hmMidMsn", "evac"):
+            s = _mqtt_stale_sensor(phase=phase, last_mqtt_message_ts=now - 600)
+            with patch.object(bs_mod, "_time_mod") as tmock, \
+                 patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+                tmock.time.return_value = now
+                s._async_watchdog_tick(None)
+            assert mock_create.called, f"phase={phase} should fire the watchdog"
+
+    def test_broadened_gate_excludes_mission_end_phases(self):
+        """Mission-end phases (charge, hmPostMsn, stop) and idle must never
+        fire — going quiet there is the normal, expected end state."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        for phase in ("charge", "hmPostMsn", "stop", ""):
+            s = _mqtt_stale_sensor(phase=phase, last_mqtt_message_ts=now - 6000)
+            with patch.object(bs_mod, "_time_mod") as tmock, \
+                 patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+                tmock.time.return_value = now
+                s._async_watchdog_tick(None)
+            assert not mock_create.called, f"phase={phase} must not fire the watchdog"

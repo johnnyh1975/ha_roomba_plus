@@ -142,7 +142,23 @@ def _msg(phase: str, nstuck: int = 0, sqft: int = 100) -> dict:
 def _make_callback_env():
     """Return (hass, entry, recorded_missions) for make_mission_callback tests."""
     hass = MagicMock()
-    hass.loop = asyncio.get_event_loop()
+
+    def _close_coro(*args, **kwargs):
+        for a in args:
+            if asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
+
+    # v2.9.0 — pytest_homeassistant_custom_component installs its own
+    # asyncio event loop policy (HassEventLoopPolicy) at import time, which
+    # affects what asyncio.get_event_loop() returns globally for the whole
+    # test session. Relying on it here made these tests fail under pytest
+    # (while passing fine standalone) because the loop captured at hass.loop
+    # assignment time and the loop used later to drain run_coroutine_threadsafe
+    # calls were not reliably the same object. Creating and owning an
+    # explicit, dedicated loop for this test environment sidesteps the
+    # global policy entirely.
+    hass.loop = asyncio.new_event_loop()
     hass.is_running = True
 
     mission_store = MagicMock()
@@ -431,6 +447,12 @@ class TestMissionCompleteCallback:
         cc = MagicMock()
         cc.async_request_refresh = AsyncMock()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
@@ -447,6 +469,12 @@ class TestMissionCompleteCallback:
         cc = MagicMock()
         cc.async_request_refresh = AsyncMock()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
@@ -528,6 +556,147 @@ class TestErrorContextFields:
         assert error_position_mm["x"] == 1200.0
 
 
+class TestRoomIndexCorroboration:
+    """v2.9.0 — ROOM-INDEX CORROBORATION.
+
+    Reported by Thonno (i7+, lewis 22.52.10) on v2.8.3: the time gate alone
+    confirmed a false mission end after the robot sat in an ambiguous end
+    phase for ~12 seconds during a genuine inter-room transition — well
+    past END_SIGNAL_MIN_HOLD_SECONDS (2.0s). The diagnostics snapshot from
+    that exact run showed phase=="run" immediately afterwards, confirming
+    the mission never actually ended. Fix: if MissionTimerStore still has
+    unvisited planned rooms, an ambiguous end phase (charge/hmPostMsn) can
+    never confirm a genuine end, regardless of how long the time gate has
+    been satisfied.
+    """
+
+    def _run_phases_with_rooms(
+        self,
+        phases_nstuck: list[tuple[str, int]],
+        planned_rooms: list[str] | None,
+        current_room_idx: int = 0,
+    ) -> list[dict]:
+        """Drive the callback with a MissionTimerStore that has a room plan."""
+        hass, entry, recorded, _ = _make_callback_env()
+        mts = MagicMock()
+        mts.planned_rooms = planned_rooms or []
+        mts.current_room_idx = current_room_idx
+        entry.runtime_data.mission_timer_store = mts
+        cb = make_mission_callback(hass, entry)
+
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+
+            captured_kwargs: list[dict] = []
+
+            async def _capture(*args, **kwargs):
+                captured_kwargs.append(kwargs)
+
+            mock_record.side_effect = _capture
+
+            for phase, nstuck in phases_nstuck:
+                cb(_msg(phase, nstuck=nstuck))
+
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        return captured_kwargs
+
+    def test_ambiguous_end_suppressed_with_unvisited_rooms(self):
+        """Mirrors Thonno's exact report: long hold time on an ambiguous
+        phase must NOT confirm an end while rooms remain unvisited, even
+        though the time gate alone would have been satisfied."""
+        recorded = self._run_phases_with_rooms(
+            [
+                ("run", 0),
+                ("charge", 0),   # streak=1
+                ("charge", 0),   # streak=2, time gate now satisfied too
+                ("charge", 0),   # would confirm under the OLD logic
+            ],
+            planned_rooms=["Kitchen", "Hallway", "Bedroom"],
+            current_room_idx=0,  # 2 more rooms still ahead
+        )
+        assert len(recorded) == 0, (
+            "Must not confirm mission end while rooms remain unvisited"
+        )
+
+    def test_ambiguous_end_confirms_on_last_planned_room(self):
+        """When the robot IS on the last planned room, the existing
+        time-based gate behaves exactly as before — no unvisited rooms left
+        to suppress confirmation."""
+        recorded = self._run_phases_with_rooms(
+            [
+                ("run", 0),
+                ("charge", 0),
+                ("charge", 0),
+                ("charge", 0),
+            ],
+            planned_rooms=["Kitchen", "Hallway", "Bedroom"],
+            current_room_idx=2,  # last room (index 2 of 3) — none left after
+        )
+        assert len(recorded) == 1, (
+            "Must confirm normally once on the last planned room"
+        )
+
+    def test_unambiguous_terminal_phase_still_confirms_with_unvisited_rooms(self):
+        """A genuinely unambiguous terminal phase (e.g. user-initiated
+        'stop') must still confirm immediately even with rooms remaining —
+        the room-index check is deliberately scoped to ambiguous phases
+        only, since a manual early stop is a legitimate real end."""
+        recorded = self._run_phases_with_rooms(
+            [
+                ("run", 0),
+                ("stop", 0),
+            ],
+            planned_rooms=["Kitchen", "Hallway", "Bedroom"],
+            current_room_idx=0,
+        )
+        assert len(recorded) == 1, (
+            "Unambiguous stop must confirm even with unvisited rooms"
+        )
+
+    def test_no_room_plan_falls_back_to_time_gate_unchanged(self):
+        """EPHEMERAL/whole-home missions with no room plan at all must
+        behave exactly as before this fix — falls through to the existing
+        time-based gate."""
+        recorded = self._run_phases_with_rooms(
+            [
+                ("run", 0),
+                ("charge", 0),
+                ("charge", 0),
+                ("charge", 0),
+            ],
+            planned_rooms=[],
+            current_room_idx=0,
+        )
+        assert len(recorded) == 1, (
+            "No room plan must not change existing time-gate behaviour"
+        )
+
+    def test_missing_mission_timer_store_falls_back_to_time_gate(self):
+        """If mission_timer_store is None (default in _make_callback_env),
+        the corroboration check must be a no-op, not raise."""
+        hass, entry, recorded, _ = _make_callback_env()
+        assert entry.runtime_data.mission_timer_store is None
+        cb = make_mission_callback(hass, entry)
+
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+            captured_kwargs: list[dict] = []
+
+            async def _capture(*args, **kwargs):
+                captured_kwargs.append(kwargs)
+            mock_record.side_effect = _capture
+
+            for phase, nstuck in [("run", 0), ("charge", 0), ("charge", 0), ("charge", 0)]:
+                cb(_msg(phase, nstuck=nstuck))
+
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert len(captured_kwargs) == 1
+
+
 class TestStuckBypassMissionCallback:
     """Bug A — make_mission_callback must fire for stuck → stop/charge."""
 
@@ -550,9 +719,10 @@ class TestStuckBypassMissionCallback:
             for phase, nstuck in phases_nstuck:
                 cb(_msg(phase, nstuck=nstuck))
 
-            # Drain the event loop so run_coroutine_threadsafe tasks execute
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            # Drain the event loop so run_coroutine_threadsafe tasks execute.
+            # Must be the SAME loop object stored on hass.loop (see
+            # _make_callback_env rationale) — not asyncio.get_event_loop().
+            hass.loop.run_until_complete(asyncio.sleep(0))
 
         return captured_kwargs
 
@@ -653,8 +823,7 @@ class TestFalseMissionRestartOnRecovery:
             cb(_msg("charge", nstuck=1))
             cb(_msg("charge", nstuck=1))
 
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            hass.loop.run_until_complete(asyncio.sleep(0))
 
         assert len(captured_start_ts) == 1
         assert captured_start_ts[0] == 1700000000, (
@@ -685,8 +854,7 @@ class TestFalseMissionRestartOnRecovery:
             cb(_msg("charge", nstuck=6))
             cb(_msg("charge", nstuck=6))
 
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            hass.loop.run_until_complete(asyncio.sleep(0))
 
         assert len(captured_nstuck_delta) == 1
         assert captured_nstuck_delta[0] == 1, (
@@ -719,8 +887,7 @@ class TestFalseMissionRestartOnRecovery:
                 cb(_msg("charge", nstuck=1))
                 cb(_msg("charge", nstuck=1))
 
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            hass.loop.run_until_complete(asyncio.sleep(0))
 
         # result_override should be "stuck_and_resumed" or "stuck_and_abandoned"
         # — definitely NOT None (which would mean had_stuck_event was False)
@@ -738,14 +905,20 @@ class TestStuckBypassCloudRefreshCallback:
         coordinator = MagicMock()
         coordinator.async_request_refresh = AsyncMock(return_value=None)
         hass = MagicMock()
-        hass.loop = asyncio.get_event_loop()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        # v2.9.0 — explicit dedicated loop; see _make_callback_env rationale.
+        hass.loop = asyncio.new_event_loop()
         cb = make_mission_complete_callback(hass, coordinator)
 
         for phase in phases:
             cb(_msg(phase))
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(asyncio.sleep(0))
+        hass.loop.run_until_complete(asyncio.sleep(0))
         return coordinator.async_request_refresh.call_count
 
     def test_stuck_then_stop_triggers_refresh(self):
@@ -804,8 +977,7 @@ class TestEvacPhaseClassification:
             cb(_msg("run", nstuck=0))
             cb(_msg("evac", nstuck=0))  # self-empty bin — must NOT end mission
             # mission still running — no end yet
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            hass.loop.run_until_complete(asyncio.sleep(0))
             assert mock_record.call_count == 0, (
                 "evac must not trigger mission end recording"
             )
@@ -826,8 +998,7 @@ class TestEvacPhaseClassification:
             cb(_msg("charge", nstuck=0))
             cb(_msg("charge", nstuck=0))  # done
 
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(asyncio.sleep(0))
+            hass.loop.run_until_complete(asyncio.sleep(0))
             assert mock_record.call_count == 1, (
                 "Mission must be recorded once after evac → run → charge"
             )

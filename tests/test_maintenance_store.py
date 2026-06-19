@@ -98,6 +98,12 @@ def _make_entry(mission_store=None, maintenance_store=None):
 
 def _make_hass():
     hass = MagicMock()
+    def _close_coro(*args, **kwargs):
+        import asyncio as _asyncio
+        for a in args:
+            if _asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
     hass.loop = None
     return hass
 
@@ -164,6 +170,12 @@ def _records(n: int = 10, sqft: float = 200, run_m: float = 40,
 
 def _make_dtm() -> DirtThresholdManager:
     hass = MagicMock()
+    def _close_coro(*args, **kwargs):
+        import asyncio as _asyncio
+        for a in args:
+            if _asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
     entry = MagicMock()
     entry.options = {}
     return DirtThresholdManager(hass, entry)
@@ -229,7 +241,12 @@ def _utcnow() -> datetime_v260_learning:
 
 def _make_hass_v260_learning() -> MagicMock:
     hass = MagicMock()
-    hass.async_create_task = MagicMock()
+    def _close_coro(*args, **kwargs):
+        import asyncio as _asyncio
+        for a in args:
+            if _asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
     return hass
 
 
@@ -1154,6 +1171,12 @@ class TestIA74Maint:
         store_mock.async_save = _save
         store_mock.async_load = _load
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
 
         with patch(
             "custom_components.roomba_plus.maintenance_store.Store",

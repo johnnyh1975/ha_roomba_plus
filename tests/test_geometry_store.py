@@ -24,7 +24,7 @@ from custom_components.roomba_plus.geometry_store import DEFAULT_DRIFT_THRESHOLD
 from custom_components.roomba_plus.geometry_store import DEFAULT_WALL_OFFSET_MM
 from custom_components.roomba_plus.geometry_store import DOOR_CLUSTER_TOL_MM
 from custom_components.roomba_plus.geometry_store import MAX_MARKER_OBSERVATIONS
-from custom_components.roomba_plus.geometry_store import STORAGE_VERSION
+from custom_components.roomba_plus.geometry_store import PAYLOAD_VERSION
 from custom_components.roomba_plus.geometry_store import DoorMarker
 from custom_components.roomba_plus.geometry_store import GeometryStore
 from custom_components.roomba_plus.geometry_store import UserDoor
@@ -570,7 +570,7 @@ class TestGeometryStoreSerialisaion:
 
     def test_version_present(self):
         gs = GeometryStore()
-        assert gs._to_dict()["version"] == STORAGE_VERSION
+        assert gs._to_dict()["version"] == PAYLOAD_VERSION
 
     def test_round_trip_walls(self):
         gs = self._populated_store()
@@ -625,7 +625,7 @@ class TestGeometryStoreSerialisaion:
         d = gs._to_dict()
         raw = json.dumps(d)  # raises TypeError on non-serialisable types
         parsed = json.loads(raw)
-        assert parsed["version"] == STORAGE_VERSION
+        assert parsed["version"] == PAYLOAD_VERSION
 
 
 class TestGeometryStoreAsyncIO:
@@ -689,7 +689,7 @@ class TestGeometryStoreAsyncIO:
         gs.cumulative_drift_mm = 100.0  # pre-set to check reset
         mock_store = AsyncMock()
         mock_store.async_load.return_value = {
-            "version": STORAGE_VERSION,
+            "version": PAYLOAD_VERSION,
             "walls": [{"bad_key": "no coordinates"}],  # missing required fields
         }
         with patch("custom_components.roomba_plus.geometry_store.Store",
@@ -708,7 +708,7 @@ class TestGeometryStoreAsyncIO:
             self._run(gs.async_save(self._mock_hass(), "entry_abc"))
         mock_store.async_save.assert_awaited_once()
         saved_dict = mock_store.async_save.call_args[0][0]
-        assert saved_dict["version"] == STORAGE_VERSION
+        assert saved_dict["version"] == PAYLOAD_VERSION
 
 
 class TestDiagnosticInfo:

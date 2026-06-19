@@ -51,7 +51,20 @@ def _utcnow() -> datetime:
 
 def _make_hass() -> MagicMock:
     hass = MagicMock()
-    hass.async_create_task = MagicMock()
+    def _close_coro(*args, **kwargs):
+        import asyncio as _asyncio
+        for a in args:
+            if _asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
+    # Close any coroutines passed to async_create_task so Python does not emit
+    # "coroutine 'X' was never awaited" RuntimeWarnings during tests.
+    def _close_coro(*args, **kwargs):
+        import asyncio
+        for a in args:
+            if asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
     return hass
 
 
@@ -277,6 +290,12 @@ class TestMissionTimerStorePersist:
 
         store = MissionTimerStore()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = asyncio.new_event_loop()
 
         stale_ts = time.time() - 9000  # 2.5 hours ago
@@ -572,6 +591,12 @@ class TestAdvanceRoom:
     def test_advances_idx(self):
         mts = _make_mts(current_room_idx=0)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             result = mts.advance_room(hass, "entry")
         assert result is True
@@ -580,6 +605,12 @@ class TestAdvanceRoom:
     def test_returns_false_at_last_room(self):
         mts = _make_mts(planned_rooms=["Kitchen", "Hall"], current_room_idx=1)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             result = mts.advance_room(hass, "entry")
         assert result is False
@@ -588,12 +619,24 @@ class TestAdvanceRoom:
     def test_returns_false_no_planned_rooms(self):
         mts = _make_mts(planned_rooms=[])
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         result = mts.advance_room(hass, "entry")
         assert result is False
 
     def test_saves_after_advance(self):
         mts = _make_mts(current_room_idx=0)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save") as mock_save:
             mts.advance_room(hass, "entry")
         mock_save.assert_called_once_with(hass, "entry")
@@ -601,6 +644,12 @@ class TestAdvanceRoom:
     def test_current_room_after_advance(self):
         mts = _make_mts(planned_rooms=["Kitchen", "Hall", "Bedroom"], current_room_idx=0)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.advance_room(hass, "entry")
         assert mts.current_room == "Hall"
@@ -811,6 +860,12 @@ class TestMissionTimerStoreTimingProperties:
     def test_room_entered_run_sec_resets_on_new_mission(self):
         mts = self._mts()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.set_mission_plan("m1", ["A", "B"], 0, hass, "e")
             mts.room_entered_run_sec = 50.0  # simulate some progress
@@ -823,6 +878,12 @@ class TestMissionTimerStoreTimingProperties:
         mts.current_room_idx = 0
         mts.run_sec = 300.0
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.advance_room(hass, "e")
         assert mts.room_entered_run_sec == 300.0
@@ -841,11 +902,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -866,11 +933,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0  # 300s/room average
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -892,11 +965,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -921,11 +1000,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -944,11 +1029,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -968,11 +1059,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0  # 300s/room
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -994,11 +1091,17 @@ class TestAutoAdvanceRoomIntegration:
         mts.total_estimated_sec = 900.0
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
@@ -1029,6 +1132,12 @@ class TestRoomEstimatesSecField:
     def test_set_mission_plan_stores_room_estimates(self):
         mts = self._mts()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.set_mission_plan(
                 "m1", ["Kitchen", "Hall"], 1000.0, hass, "e",
@@ -1040,6 +1149,12 @@ class TestRoomEstimatesSecField:
         """Backward compatibility: omitting the new kwarg still works."""
         mts = self._mts()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.set_mission_plan("m1", ["Kitchen", "Hall"], 1000.0, hass, "e")
         assert mts.room_estimates_sec == []
@@ -1047,6 +1162,12 @@ class TestRoomEstimatesSecField:
     def test_room_estimates_reset_on_new_mission(self):
         mts = self._mts()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.set_mission_plan(
                 "m1", ["Kitchen"], 600.0, hass, "e", room_estimates_sec=[600.0]
@@ -1059,6 +1180,12 @@ class TestRoomEstimatesSecField:
     def test_room_estimates_reset_on_clear(self):
         mts = self._mts()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch.object(mts, "_schedule_save"):
             mts.set_mission_plan(
                 "m1", ["Kitchen"], 600.0, hass, "e", room_estimates_sec=[600.0]
@@ -1074,6 +1201,12 @@ class TestRoomEstimatesSecField:
         store_mock = MagicMock()
         store_mock.async_save = AsyncMock()
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         with patch(
             "custom_components.roomba_plus.mission_timer_store.Store",
             return_value=store_mock,
@@ -1155,12 +1288,18 @@ class TestCallbacksWiresRealEstimates:
         mts = MissionTimerStore()
         entry = _make_entry_v280_auto_advance_room_live(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         fake_estimates = [600, 400]  # Kitchen, Hall
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
             return_value=fake_estimates,
@@ -1178,11 +1317,17 @@ class TestCallbacksWiresRealEstimates:
         mts = MissionTimerStore()
         entry = _make_entry_v280_auto_advance_room_live(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
             return_value=[None, None],
@@ -1201,12 +1346,18 @@ class TestCallbacksWiresRealEstimates:
         mts = MissionTimerStore()
         entry = _make_entry_v280_auto_advance_room_live(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         fake_estimates = [600, 400]  # Kitchen=600s, Hall=400s
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
             return_value=fake_estimates,
@@ -1233,11 +1384,17 @@ class TestInterRoomRechargeMTSNotReset:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             # Mission starts
@@ -1262,11 +1419,17 @@ class TestInterRoomRechargeMTSNotReset:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1286,11 +1449,17 @@ class TestInterRoomRechargeMTSNotReset:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             # Phase 1: run (room A)
@@ -1316,11 +1485,17 @@ class TestInterRoomRechargeMTSNotReset:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="quick"))
@@ -1341,11 +1516,17 @@ class TestInterRoomRechargeMTSNotReset:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1376,11 +1557,17 @@ class TestGenuineMissionEndClearsMTS:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1403,11 +1590,17 @@ class TestGenuineMissionEndClearsMTS:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1424,11 +1617,17 @@ class TestGenuineMissionEndClearsMTS:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1443,6 +1642,12 @@ class TestGenuineMissionEndClearsMTS:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         def _msg_no_cycle(phase: str) -> dict:
@@ -1456,7 +1661,7 @@ class TestGenuineMissionEndClearsMTS:
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_no_cycle("run"))
@@ -1488,11 +1693,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1519,11 +1730,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1545,11 +1762,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
         ) as tmock:
@@ -1588,11 +1811,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
         ) as tmock:
@@ -1628,11 +1857,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
@@ -1650,11 +1885,17 @@ class TestEndDebounceV281:
         mts = _make_mts_v280_inter_room_recharge()
         entry = _make_entry_v280_auto_advance_room_live(mts)
         hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
         hass.loop = None
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, loop: None,
+            side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))

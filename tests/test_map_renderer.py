@@ -178,6 +178,114 @@ class TestAddPose:
         assert r._theta == 135
 
 
+class TestPoseJumpRejectionCascade:
+    """v2.9.0 — confirmed from real field data (2026-06-19, 980 OG): a single
+    rejected jump used to permanently strand the renderer's path tracking
+    behind a stale anchor point, because the rejected call never updated
+    self._points[-1]. Every subsequent real position then also read as
+    "too far from that stale anchor", cascading indefinitely. A real
+    checkpoint mid-mission in a 106 m² home showed only ~0.7m x 0.7m of
+    pose data survive intact because of this. Fixed via
+    _MAX_CONSECUTIVE_REJECTED_JUMPS: a short streak of rejections is still
+    filtered (catches real momentary glitches), but a *sustained* streak of
+    "too large" jumps is accepted as a genuine move/relocalisation.
+    """
+
+    def test_single_isolated_jump_is_still_rejected(self):
+        """One large jump, surrounded by normal small moves, is filtered —
+        this is exactly the momentary-glitch case the guard exists for."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(150, 100, 0)          # normal small move
+        r.add_pose(5000, 5000, 0)        # one bogus jump — rejected
+        assert r.point_count == 2
+        r.add_pose(200, 100, 0)          # back to normal small moves
+        assert r.point_count == 3
+
+    def test_sustained_jump_streak_is_eventually_accepted(self):
+        """A *real* move (robot genuinely traversed far from the last
+        recorded point) must not be permanently stranded — after enough
+        consecutive rejections, the new position is accepted."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        assert r.point_count == 1
+
+        # Robot really did move ~5m away (e.g. long hallway traverse with a
+        # sparse MQTT update gap). First _MAX_CONSECUTIVE_REJECTED_JUMPS
+        # repeats of essentially the same far-away position are rejected...
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS):
+            r.add_pose(5100, 100, 0)
+            assert r.point_count == 1, "still within the rejection streak"
+
+        # ...but the move is real and keeps happening — must now be accepted
+        # rather than cascading forever.
+        r.add_pose(5100, 100, 0)
+        assert r.point_count == 2
+        assert r._robot_px is not None
+
+    def test_real_world_scenario_does_not_strand_path_in_small_pocket(self):
+        """Regression test mirroring the actual field-data bug: mission
+        starts normally, one big legitimate jump occurs (e.g. post-recharge
+        relocalisation), then movement continues across a large home. The
+        path must not get stuck recording only the tiny pocket near the
+        stale anchor."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(200, 100, 0)
+
+        # A real ~6m jump (e.g. robot resumed on the far side of a 106 m²
+        # home after a recharge cycle).
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(6200, 100, 0)
+
+        # Movement continues normally from the NEW location — must accumulate,
+        # not get rejected forever relative to the old (100,100) anchor.
+        for i in range(1, 11):
+            r.add_pose(6200 + i * 200, 100, 0)
+
+        assert r.point_count > 5, (
+            "path must continue accumulating after the sustained jump, "
+            "not remain stranded at the pre-jump anchor"
+        )
+
+    def test_rejection_streak_resets_after_acceptance(self):
+        """Once a sustained jump is accepted, the streak counter must reset
+        so a *future* isolated glitch is filtered normally again, not
+        immediately accepted because the counter was left primed."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(6000, 100, 0)
+        accepted_count = r.point_count
+        assert r._consecutive_rejected_jumps == 0
+
+        # A fresh isolated glitch right after acceptance must still be
+        # filtered — the streak counter must not carry over.
+        r.add_pose(20000, 20000, 0)
+        assert r.point_count == accepted_count
+
+    def test_reset_clears_rejection_streak(self):
+        """A new mission (reset()) must not inherit a rejection streak from
+        the previous mission's unfinished state."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(9000, 100, 0)  # one rejection, streak=1
+        assert r._consecutive_rejected_jumps == 1
+
+        r.reset()
+        assert r._consecutive_rejected_jumps == 0
+
+    def test_normal_small_moves_never_increment_streak(self):
+        """Plausible, well within-threshold moves must never touch the
+        rejection-streak counter at all."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for i in range(1, 21):
+            r.add_pose(100 + i * 50, 100, 0)
+        assert r._consecutive_rejected_jumps == 0
+        assert r.point_count == 21
+
+
 class TestMarkStuck:
     def test_stuck_recorded_at_robot_position(self):
         r = _make_renderer()
