@@ -68,7 +68,13 @@ from .outline_store import OutlineStore
 from .maintenance_store import MaintenanceStore
 from .robot_profile_store import RobotProfileStore  # v2.6 L4
 from .mission_timer_store import MissionTimerStore  # v2.6 MP1
-from .map_renderer import MapRenderer, RendererConfig
+from .map_renderer import (
+    MapRenderer,
+    RendererConfig,
+    ROBOT_DIAMETER_MM_900_SERIES,
+    ROBOT_DIAMETER_MM_ISJ_SERIES,
+    ROBOT_DIAMETER_MM_DEFAULT,
+)
 from .models import MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .zone_store import ZoneStore
@@ -2396,10 +2402,22 @@ async def async_setup_entry(
             geometry_store = GeometryStore()
             await geometry_store.async_load(hass, config_entry.entry_id)
 
+        # v2.9.0 — robot footprint circle radius matches the real chassis
+        # diameter, not an arbitrary cleaning-width guess. 900-series (incl.
+        # EPHEMERAL test robot 980) has a slightly larger chassis than
+        # i/s/j-series (SMART).
+        if map_capability == MapCapability.EPHEMERAL:
+            _robot_diameter_mm = ROBOT_DIAMETER_MM_900_SERIES
+        elif map_capability == MapCapability.SMART:
+            _robot_diameter_mm = ROBOT_DIAMETER_MM_ISJ_SERIES
+        else:
+            _robot_diameter_mm = ROBOT_DIAMETER_MM_DEFAULT
+
         renderer = MapRenderer(
             RendererConfig(
                 size_px=config_entry.options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
                 scale=config_entry.options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
+                robot_diameter_mm=_robot_diameter_mm,
             ),
             geometry_store=geometry_store,
             zone_store=zone_store,

@@ -38,7 +38,25 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_geometry"
-STORAGE_VERSION    = 1
+
+# v2.9.0 CRITICAL FIX — this module was using a single STORAGE_VERSION
+# constant for BOTH homeassistant.helpers.storage.Store()'s own version
+# argument AND as its own application-level payload marker (checked via
+# data.get("version", 0) != STORAGE_VERSION below). This is the exact
+# dual-purpose pattern that caused the v2.8.2 production crash in
+# outline_store.py: bumping the combined constant to discard an
+# incompatible payload also changes what Store() expects on disk, and the
+# base Store class's default _async_migrate_func is `raise
+# NotImplementedError` — crashing async_setup_entry for every existing
+# installation. This module never actually NEEDED to bump its version
+# before now, so the bug was latent rather than triggered. It is needed
+# now: door markers/walls/obstacles were computed from pose coordinates
+# 10x too small (POSE_POINT_CM_TO_MM fix, const.py) and must be discarded,
+# not silently kept around as spatially wrong geometry. Split exactly per
+# the outline_store.py precedent — _HA_STORE_VERSION pinned forever,
+# PAYLOAD_VERSION free to bump.
+_HA_STORE_VERSION  = 1
+PAYLOAD_VERSION    = 2
 
 # ── Clustering ────────────────────────────────────────────────────────────────
 DOOR_CLUSTER_TOL_MM = 400   # two midpoints within 400 mm → same crossing
@@ -240,12 +258,12 @@ class GeometryStore:
         Silently starts clean on missing data or version mismatch — the store
         accumulates from the next mission rather than crashing.
         """
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         data: dict | None = await store.async_load()
         if not data:
             _LOGGER.debug("GeometryStore: no persisted geometry for %s", entry_id)
             return
-        if data.get("version", 0) != STORAGE_VERSION:
+        if data.get("version", 0) != PAYLOAD_VERSION:
             _LOGGER.warning(
                 "GeometryStore: incompatible storage version %s for %s, starting clean",
                 data.get("version"), entry_id,
@@ -265,7 +283,7 @@ class GeometryStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current geometry to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save(self._to_dict())
         _LOGGER.debug(
             "GeometryStore: saved %d markers, %d walls for %s",
@@ -439,7 +457,7 @@ class GeometryStore:
 
     def _to_dict(self) -> dict[str, Any]:
         return {
-            "version": STORAGE_VERSION,
+            "version": PAYLOAD_VERSION,
             "next_marker_id": self._next_marker_id,
             "cumulative_drift_mm": self.cumulative_drift_mm,
             "wall_offset_mm": self.wall_offset_mm,

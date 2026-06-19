@@ -29,6 +29,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from . import roomba_reported_state
 from .const import (
+    CLEANING_PHASES,
     CONF_BLOCKING_SENSORS,
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
@@ -824,14 +825,19 @@ _FIRMWARE_UPDATED_WINDOW_SECONDS: float = 86400.0  # 24 h
 
 
 class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
-    """MQTT-WATCHDOG (v2.8.3) — silence detection during active cleaning.
+    """MQTT-WATCHDOG (v2.8.3, broadened v2.9.0) — silence detection during
+    an active mission.
 
-    ON when phase==run is active AND no MQTT message has been received for
-    MQTT_WATCHDOG_SECONDS (5 min).  Checked on a 60-second periodic tick.
+    ON when the mission is still considered active (CLEANING_PHASES, plus
+    "stuck" and "pause" — see _MISSION_ACTIVE_PHASES) AND no MQTT message
+    has been received for MQTT_WATCHDOG_SECONDS (5 min). Checked on a
+    60-second periodic tick.
 
     When ON:
       - Entity state turns ON (visible in the UI)
-      - mqtt_watchdog Repair Issue fires
+      - mqtt_watchdog Repair Issue fires, including the last known phase,
+        actual elapsed silence in minutes, and a cloud-connectivity
+        cross-check hint (v2.9.0 enrichment).
 
     When OFF (new message received):
       - Entity turns OFF
@@ -881,6 +887,47 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
         now_stale = bool(self.is_on)
         if now_stale and not self._was_stale:
             # Transition OFF → ON: MQTT went silent during an active mission.
+            #
+            # v2.9.0 — a bare "connection lost, check your network" message
+            # gives the user nothing to act on, and worse, may be flatly
+            # wrong: a robot that is physically stuck/wedged can go quiet on
+            # MQTT for long stretches with the local network completely
+            # fine (confirmed scenario from real field data, 2026-06-19 —
+            # last_stuck_count=165 on the exact mission this watchdog could
+            # plausibly fire for). The message now includes the LAST KNOWN
+            # PHASE before silence (so the user can immediately tell "it was
+            # already stuck" from "it was actively cleaning and vanished"),
+            # the ACTUAL elapsed silence duration (not a hardcoded "5
+            # minutes" — could be 6 or 60), and the robot's own cloud
+            # connectivity status when available (wifistat is absent on
+            # 9-series firmware — reported as "unbekannt"/unknown there,
+            # never guessed).
+            data = self._entry.runtime_data
+            last_phase = (
+                roomba_reported_state(self.vacuum)
+                .get("cleanMissionStatus", {})
+                .get("phase", "")
+            ) or "unbekannt"
+            silence_min = int((_time_mod.time() - data.last_mqtt_message_ts) / 60)
+
+            # v2.9.0 — read wifistat directly rather than looking up the
+            # cloud_connected entity by a constructed entity_id string.
+            # unique_id is not guaranteed to match the real entity_id slug
+            # (HA slugifies independently, users can rename entities) — a
+            # raw self.hass.states.get(f"binary_sensor.{...}") guess could
+            # silently miss and always report "unknown". Mirrors exactly
+            # the same field RoombaCloudConnected.is_on reads.
+            wifistat = roomba_reported_state(self.vacuum).get("wifistat")
+            cloud_val = (
+                wifistat.get("cloud") if isinstance(wifistat, dict) else None
+            )
+            if wifistat is None or cloud_val is None:
+                cloud_hint = "unbekannt (Feld fehlt auf dieser Firmware)"
+            elif bool(cloud_val):
+                cloud_hint = "verbunden — spricht für ein lokales/HA-seitiges Problem, nicht für WLAN-Ausfall am Roboter"
+            else:
+                cloud_hint = "getrennt — deutet auf WLAN-Ausfall am Roboter selbst hin"
+
             ir.async_create_issue(
                 self.hass,
                 DOMAIN,
@@ -889,6 +936,11 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
                 is_persistent=False,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key="mqtt_watchdog",
+                translation_placeholders={
+                    "minutes": str(silence_min),
+                    "last_phase": last_phase,
+                    "cloud_hint": cloud_hint,
+                },
             )
         elif not now_stale and self._was_stale:
             # Transition ON → OFF: MQTT traffic resumed.
@@ -898,9 +950,23 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
         self._was_stale = now_stale
         self.schedule_update_ha_state(force_refresh=True)
 
+    # v2.9.0 — was gated on phase != "run" only, missing silence that starts
+    # while the robot is "stuck" or "pause"d mid-mission (both real firmware
+    # phase values, confirmed in const.py's PHASE_TO_ACTIVITY map). A robot
+    # whose last message before going silent reported "stuck" would cache
+    # that phase and never satisfy phase=="run" again until a new message
+    # arrives — meaning the watchdog could never fire for exactly the
+    # scenario most likely to coincide with a real connectivity loss (the
+    # robot struggling, then vanishing). CLEANING_PHASES ("run", "hmMidMsn",
+    # "evac") plus "stuck" and "pause" are all phases where the mission is
+    # still considered ongoing and silence is unexpected. MISSION_END_PHASES
+    # ("charge", "hmPostMsn", "stop") and idle ("") are deliberately excluded
+    # — quiet there is normal, not a watchdog condition.
+    _MISSION_ACTIVE_PHASES = CLEANING_PHASES | {"stuck", "pause"}
+
     @property
     def is_on(self) -> bool:
-        """Return True when MQTT is silent during phase=run."""
+        """Return True when MQTT is silent during an active mission."""
         data = self._entry.runtime_data
         ts = data.last_mqtt_message_ts
         if ts == 0.0:
@@ -910,7 +976,7 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
             .get("cleanMissionStatus", {})
             .get("phase", "")
         )
-        if phase != "run":
+        if phase not in self._MISSION_ACTIVE_PHASES:
             return False
         return (_time_mod.time() - ts) > MQTT_WATCHDOG_SECONDS
 

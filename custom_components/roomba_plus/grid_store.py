@@ -23,7 +23,21 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX     = "roomba_plus_grid"
-STORAGE_VERSION        = 1
+
+# v2.9.0 — split following the outline_store.py precedent (v2.8.2 bug-hunt).
+# _HA_STORE_VERSION is homeassistant.helpers.storage.Store()'s OWN version
+# argument and must NEVER change without a real _async_migrate_func — the
+# base Store class's default migrate function raises NotImplementedError,
+# which would crash async_setup_entry for every existing installation on
+# upgrade (confirmed in the field, v2.8.2). PAYLOAD_VERSION is our own
+# application-level marker, checked in async_load() below — free to bump
+# whenever the payload's *meaning* changes, even though its on-disk shape
+# doesn't (this bump: cells/stuck were accumulated from pose data that was
+# 10x too small everywhere, confirmed 2026-06-19 — see POSE_POINT_CM_TO_MM
+# in const.py. Old cells are spatially WRONG, not just stale, so they are
+# discarded on load rather than left to slowly decay out over ~14 missions).
+_HA_STORE_VERSION      = 1
+PAYLOAD_VERSION        = 2
 
 CELL_SIZE_MM           = 150
 DECAY                  = 0.85
@@ -85,12 +99,27 @@ class GridStore:
     # ── Persistence ───────────────────────────────────────────────────────────
 
     async def async_load(self, hass: Any, entry_id: str) -> None:
-        """Load persisted grid from hass.storage."""
+        """Load persisted grid from hass.storage.
+
+        v2.9.0 — discards payloads from before the pose-units fix (no
+        "version" field, or an older PAYLOAD_VERSION): those cells were
+        built from pose coordinates that were 10x too small, so they are
+        spatially wrong, not just stale. Starting empty and re-accumulating
+        from corrected pose data is safer than keeping misplaced cells
+        around to slowly decay out over many missions.
+        """
         from homeassistant.helpers.storage import Store
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         data: dict | None = await store.async_load()
         if not data:
             _LOGGER.debug("GridStore: no persisted data for %s", entry_id)
+            return
+        if data.get("version") != PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "GridStore: discarding pre-units-fix grid data for %s "
+                "(stored cells were built from pose coordinates that were "
+                "10x too small) — starting empty", entry_id,
+            )
             return
         try:
             raw_cells = data.get("cells", {})
@@ -122,8 +151,9 @@ class GridStore:
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
         from homeassistant.helpers.storage import Store
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
+            "version": PAYLOAD_VERSION,
             "cells": {f"{gx},{gy}": w for (gx, gy), w in self._cells.items()},
             "stuck": {
                 f"{gx},{gy}": {"count": v["count"], "times": v["times"]}

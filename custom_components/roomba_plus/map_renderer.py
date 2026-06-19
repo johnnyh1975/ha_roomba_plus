@@ -65,12 +65,50 @@ DOOR_ARC_OUTLINE = ( 24,  95, 165, 120)  # Blue — door swing arc border
 OBSTACLE_FILL    = (186, 117,  23,  45)  # Amber — obstacle area fill
 OBSTACLE_OUTLINE = (186, 117,  23, 190)  # Amber — obstacle border and hatch
 
+# ── Robot footprint (real chassis diameter, mm) ───────────────────────────────
+# pose.point.x/y is the robot's own reported navigation centre — the geometric
+# centre of the (round) chassis. The path line therefore traces that centre,
+# not an edge. The "cleaned area" circle drawn at each pose point should
+# match the real chassis radius so the rendered swept area corresponds to
+# the robot's actual physical footprint, not an arbitrary cleaning-width guess.
+# 600/900-series (round, incl. test robot 980): 13.9 in = 353 mm.
+# i/s/j-series (round, slightly slimmer chassis): 13.34 in = 339 mm.
+# Braava (m6/jet, non-round wedge shape) is not represented well by a circle
+# at all — falls back to the generic default below.
+ROBOT_DIAMETER_MM_900_SERIES = 353
+ROBOT_DIAMETER_MM_ISJ_SERIES = 339
+ROBOT_DIAMETER_MM_DEFAULT    = 340   # generic fallback when model tier unknown
+
 # ── Rendering constants ───────────────────────────────────────────────────────
-DOCK_HALF       = 6    # px half-side of dock square
-ROBOT_RADIUS    = 8    # px robot circle radius
-ARROW_LENGTH    = 16   # px direction arrow length
-STUCK_RADIUS    = 7    # px stuck triangle circumradius
-PATH_WIDTH      = 6    # px path line width — v2.6.3 D2: increased 3→6 so the
+# v2.9.0 — DOCK_HALF/ROBOT_RADIUS/STUCK_RADIUS/PATH_WIDTH used to be fixed
+# pixel sizes, never adjusted for the auto_fit zoom factor. Only the cleaned-
+# area circles (_draw_cleaned_area) scaled with zoom — causing the path,
+# dock marker, robot icon, and stuck triangle to visually drift relative to
+# the cleaned-area blob at different zoom levels (confirmed from a real
+# field-data screenshot: at one zoom level the path was ~17x thinner than
+# the cleaned-area circle, and the dock marker nearly invisible against it).
+#
+# First attempt at the fix made dock/robot icons literally robot_diameter_mm
+# wide (same as the cleaned-area footprint circle) — confirmed WRONG against
+# real field data (2026-06-19): on a tightly-confined mission (~0.7m x 0.75m
+# span, robot stuck/oscillating), a literal-diameter dock/robot circle
+# swallowed most of the canvas even though the cleaned-area shape itself
+# correctly traced the real room layout at that scale. Dock and robot-
+# position are map MARKERS — like a pin on a map — not footprint paint;
+# only the cleaned-area circles (actual swept coverage) should be literally
+# to-scale. Markers now use a deliberately smaller, fixed real-world
+# reference size, decoupled from cfg.robot_diameter_mm, but still
+# zoom-scaled via _mm_radius_px() so they stay visible (not 6px-fixed)
+# without dominating the canvas.
+ARROW_LENGTH            = 16   # px direction arrow length — kept fixed (small UI element)
+ROBOT_ICON_DIAMETER_MM  = 160  # current-position marker — a recognisable dot, not a footprint
+DOCK_ICON_DIAMETER_MM   = 160  # dock marker — same marker convention as the robot icon
+STUCK_DIAMETER_MM       = 140  # stuck-event marker — slightly smaller, visually distinct
+PATH_WIDTH_MM           = 60   # real-world width of the travel-path line
+DOCK_MIN_PX             = 3
+ROBOT_MIN_PX            = 3
+STUCK_MIN_PX            = 3
+PATH_MIN_PX             = 2
 
 # ── Geometry layer constants ───────────────────────────────────────────────────
 WALL_WIDTH         = 6    # px user wall stroke width
@@ -92,6 +130,7 @@ class RendererConfig:
     persist: bool  = True    # Keep last frame between missions
     auto_fit: bool = True    # Scale and centre map to fill canvas
     fit_margin: int = 40     # Pixel margin on each side when auto-fitting
+    robot_diameter_mm: int = ROBOT_DIAMETER_MM_DEFAULT  # Real chassis diameter
 
 
 class MapRenderer:
@@ -130,6 +169,10 @@ class MapRenderer:
         self._fit_scale: float = self._cfg.scale
         self._fit_cx: int = self._cfg.size_px // 2
         self._fit_cy: int = self._cfg.size_px // 2
+        # v2.9.0 — see _MAX_POSE_JUMP_MM rationale below. Counts consecutive
+        # rejected jumps so a real, sustained move isn't permanently stranded
+        # behind one stale anchor point.
+        self._consecutive_rejected_jumps: int = 0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -139,6 +182,7 @@ class MapRenderer:
         self._stuck_px.clear()
         self._robot_px = None
         self._theta = 0.0
+        self._consecutive_rejected_jumps = 0
         if not self._cfg.persist:
             self._last_png = None
         _LOGGER.debug("MapRenderer: mission reset")
@@ -151,6 +195,26 @@ class MapRenderer:
     # Derived from NickWaterton/Roomba980-Python max_distance = 500.
     _MAX_POSE_JUMP_MM: float = 500.0
 
+    # v2.9.0 — CASCADING REJECTION BUG (confirmed from real field data,
+    # 2026-06-19): rejecting a jump returns without appending the new point,
+    # so self._points[-1] stays the same OLD anchor for the *next* call too.
+    # If the robot genuinely moved away (long hallway traverse, relocalising
+    # after a charge/stuck recovery, a sparse MQTT update gap), every
+    # subsequent real position also reads as "too far from that stale
+    # anchor" — rejection cascades and never recovers on its own. A real
+    # 980 OG checkpoint mid-mission showed exactly this: 1413 points all
+    # stranded within a ~0.7m x 0.7m pocket despite a 106 m² home, because
+    # one early rejected jump froze the anchor and every later legitimate
+    # pose got compared against it forever.
+    #
+    # Fix: track consecutive rejections. A single rejected jump still gets
+    # filtered (catches the momentary firmware glitches this guard was
+    # built for). But once jumps keep being "too large" several times in a
+    # row, that's not a glitch — it is the robot, accept the move and
+    # re-anchor. This bounds the worst case to a short gap in the path
+    # instead of an indefinite, often mission-long, rejection cascade.
+    _MAX_CONSECUTIVE_REJECTED_JUMPS: int = 2
+
     def add_pose(self, x_mm: float, y_mm: float, theta_deg: float) -> None:
         """Record a new pose point from the MQTT state update.
 
@@ -159,7 +223,9 @@ class MapRenderer:
         Ignores (0, 0, any_theta) at mission start to avoid bogus dock point.
         Rejects jumps > _MAX_POSE_JUMP_MM from the previous point — these
         indicate stuck-recovery relocalisation or firmware bogus updates and
-        would otherwise draw a line across the entire map.
+        would otherwise draw a line across the entire map. See
+        _MAX_CONSECUTIVE_REJECTED_JUMPS above: this rejection self-heals
+        after a short streak instead of cascading indefinitely.
         """
         if x_mm == 0.0 and y_mm == 0.0 and not self._points:
             return  # First point at dock — skip
@@ -175,14 +241,27 @@ class MapRenderer:
             prev_x_mm = (prev_px - orig_cx) * self._cfg.scale
             prev_y_mm = (orig_cy - prev_py) * self._cfg.scale
             jump_mm = math.hypot(x_mm - prev_x_mm, y_mm - prev_y_mm)
-            if jump_mm > self._MAX_POSE_JUMP_MM:
+            if (
+                jump_mm > self._MAX_POSE_JUMP_MM
+                and self._consecutive_rejected_jumps < self._MAX_CONSECUTIVE_REJECTED_JUMPS
+            ):
+                self._consecutive_rejected_jumps += 1
                 _LOGGER.debug(
                     "MapRenderer: rejecting bogus pose jump %.0f mm "
-                    "(%.0f, %.0f) -> (%.0f, %.0f)",
+                    "(%.0f, %.0f) -> (%.0f, %.0f) [streak=%d]",
                     jump_mm, prev_x_mm, prev_y_mm, x_mm, y_mm,
+                    self._consecutive_rejected_jumps,
                 )
                 return
+            if jump_mm > self._MAX_POSE_JUMP_MM:
+                _LOGGER.info(
+                    "MapRenderer: accepting sustained pose jump %.0f mm "
+                    "after %d consecutive rejections — treating as a real "
+                    "move/relocalisation, not a glitch",
+                    jump_mm, self._consecutive_rejected_jumps,
+                )
 
+        self._consecutive_rejected_jumps = 0
         px, py = self._mm_to_px(x_mm, y_mm)
         self._points.append((px, py))
         self._robot_px = (px, py)
@@ -196,6 +275,18 @@ class MapRenderer:
     # Minimum content span in mm. Prevents extreme zoom when only a few
     # points are present (e.g. mission just started).
     _MIN_FIT_CONTENT_MM: float = 500.0
+
+    # v2.9.0 — the robot footprint circle (cfg.robot_diameter_mm) must never
+    # dominate the canvas just because the pose path happens to stay within
+    # a small area (e.g. robot stuck/spinning in one spot for a long time —
+    # confirmed from real field data: 1413 pose points spanning only ~0.7m,
+    # last_stuck_count=165). _MIN_FIT_CONTENT_MM alone doesn't catch this,
+    # since it's a flat mm value unrelated to the robot's own size. The
+    # effective minimum content span is now whichever is larger: the flat
+    # floor above, or robot_diameter_mm × this multiplier — so the robot's
+    # own diameter is at most 1 / _MIN_FIT_CONTENT_ROBOT_MULTIPLIER of the
+    # visible canvas width, regardless of how small the real path is.
+    _MIN_FIT_CONTENT_ROBOT_MULTIPLIER: float = 4.0
 
     def _compute_fit(self) -> tuple[float, float, float, float, int, int]:
         """Compute pixel-space transform for auto-fit rendering.
@@ -226,14 +317,19 @@ class MapRenderer:
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
 
-        # Enforce a minimum content span in pixel space to prevent extreme
-        # zoom when only a few points exist (mission just started).
-        min_content_px = self._MIN_FIT_CONTENT_MM / self._cfg.scale
-        if (max_x - min_x) < min_content_px and (max_y - min_y) < min_content_px:
-            return identity
+        # v2.9.0 — clamp the content span used for the fit calculation to at
+        # least this effective minimum, rather than the old binary "below
+        # 500mm → no zoom at all, above → zoom to exactly fit" cliff. The
+        # clamp keeps the robot footprint circle proportionally reasonable
+        # at every zoom level, including the small-area/stuck-robot case.
+        min_content_mm = max(
+            self._MIN_FIT_CONTENT_MM,
+            self._cfg.robot_diameter_mm * self._MIN_FIT_CONTENT_ROBOT_MULTIPLIER,
+        )
+        min_content_px = min_content_mm / self._cfg.scale
 
-        content_w = max(max_x - min_x, 1)
-        content_h = max(max_y - min_y, 1)
+        content_w = max(max_x - min_x, min_content_px)
+        content_h = max(max_y - min_y, min_content_px)
 
         available = size - 2 * self._cfg.fit_margin
         if available < 10:
@@ -296,22 +392,60 @@ class MapRenderer:
 
         for sx, sy in self._stuck_px:
             fsx, fsy = _fit_px(sx, sy)
-            self._draw_triangle(draw, fsx, fsy, STUCK_RADIUS, STUCK_COLOUR)
+            stuck_r = self._mm_radius_px(STUCK_DIAMETER_MM / 2, min_px=STUCK_MIN_PX)
+            self._draw_triangle(draw, fsx, fsy, stuck_r, STUCK_COLOUR)
 
+        # v2.9.0 — robot-footprint reference circle around the dock, in
+        # addition to the small marker dot. Filled, semi-transparent green
+        # (not solid) — clearly reads as "the dock zone" while still letting
+        # the cleaned-area/path detail underneath show through. This is a
+        # scale reference ("this much space if the robot were sitting right
+        # here"), not a coverage indicator — kept visually distinct from the
+        # solid CLEANED_COLOUR circles.
+        #
+        # PIL's ImageDraw overwrites destination pixels (alpha channel
+        # included) rather than alpha-compositing onto existing content —
+        # drawing a semi-transparent fill directly with `draw.ellipse(...)`
+        # would erase whatever was underneath instead of blending with it.
+        # Drawing onto a separate fully-transparent overlay and compositing
+        # with Image.alpha_composite() is the correct way to get a real
+        # blend. img is reassigned, so `draw` must be rebound afterwards —
+        # every draw call below this point uses the new `draw`.
+        dock_footprint_r = self._mm_radius_px(
+            self._cfg.robot_diameter_mm / 2, min_px=DOCK_MIN_PX
+        )
         dock_px = _fit_px(size // 2, size // 2)
         dcx, dcy = dock_px
+        dock_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(dock_overlay)
+        overlay_draw.ellipse(
+            [dcx - dock_footprint_r, dcy - dock_footprint_r,
+             dcx + dock_footprint_r, dcy + dock_footprint_r],
+            fill=(80, 180, 80, 90),
+            outline=(30, 120, 30, 200),
+            width=2,
+        )
+        img = Image.alpha_composite(img, dock_overlay)
+        draw = ImageDraw.Draw(img)
+
+        dock_r = self._mm_radius_px(DOCK_ICON_DIAMETER_MM / 2, min_px=DOCK_MIN_PX)
         draw.ellipse(
-            [dcx - DOCK_HALF, dcy - DOCK_HALF, dcx + DOCK_HALF, dcy + DOCK_HALF],
+            [dcx - dock_r, dcy - dock_r, dcx + dock_r, dcy + dock_r],
             fill=DOCK_COLOUR,
             outline=(30, 120, 30, 255),
             width=2,
         )
 
         if self._robot_px:
+            # v2.9.0 — robot icon uses the smaller marker-convention size
+            # (ROBOT_ICON_DIAMETER_MM), not the literal chassis diameter.
+            # It marks "robot is here" like a pin, distinct from the
+            # to-scale cleaned-area footprint circles along its trail.
+            robot_r = self._mm_radius_px(ROBOT_ICON_DIAMETER_MM / 2, min_px=ROBOT_MIN_PX)
             rx, ry = _fit_px(*self._robot_px)
             draw.ellipse(
-                [rx - ROBOT_RADIUS, ry - ROBOT_RADIUS,
-                 rx + ROBOT_RADIUS, ry + ROBOT_RADIUS],
+                [rx - robot_r, ry - robot_r,
+                 rx + robot_r, ry + robot_r],
                 fill=ROBOT_COLOUR,
             )
             angle_rad = math.radians(self._theta)
@@ -763,16 +897,33 @@ class MapRenderer:
             int(self._fit_cy - y_mm / self._fit_scale),
         )
 
+    def _mm_radius_px(self, mm: float, min_px: int = 2) -> int:
+        """Convert a real-world mm radius/width to zoom-correct pixels.
+
+        Mathematically: base_r_px * (cfg.scale / fit_scale)
+                      = (mm / cfg.scale) * (cfg.scale / fit_scale)
+                      = mm / fit_scale
+
+        cfg.scale cancels out — this is the single source of truth for
+        converting any real-world mm size to on-canvas pixels, used by
+        every marker (cleaned-area circles, path width, dock, robot icon,
+        stuck triangle) so they all scale together under auto_fit zoom.
+        """
+        return max(min_px, int(mm / self._fit_scale))
+
     def _draw_cleaned_area(
         self, draw: ImageDraw.ImageDraw,
         fit_px: Callable[[int, int], tuple[int, int]],
     ) -> None:
-        """Draw a filled circle per pose point to approximate cleaned area."""
-        # Radius in original pixel space (150mm / cfg.scale), then scaled
-        # by fit_ratio so it matches the zoomed content size.
-        # This keeps the cleaned area proportional at all zoom levels.
-        base_r_px = max(4, int(150 / self._cfg.scale))
-        r = max(4, int(base_r_px * (self._cfg.scale / self._fit_scale)))
+        """Draw a filled circle per pose point to approximate cleaned area.
+
+        pose.point.x/y is the robot's own reported navigation centre — the
+        path line traces that centre, not an edge. The circle radius is
+        therefore the real chassis radius (cfg.robot_diameter_mm / 2), so the
+        rendered footprint matches the robot's actual physical size at each
+        point along its path, rather than an arbitrary cleaning-width guess.
+        """
+        r = self._mm_radius_px(self._cfg.robot_diameter_mm / 2, min_px=2)
         fitted = [fit_px(px, py) for px, py in self._points]
         for px, py in self._interpolated(fitted, max_gap_px=r):
             draw.ellipse([px - r, py - r, px + r, py + r], fill=CLEANED_COLOUR)
@@ -781,15 +932,25 @@ class MapRenderer:
         self, draw: ImageDraw.ImageDraw,
         fit_px: Callable[[int, int], tuple[int, int]],
     ) -> None:
-        """Draw the travel path polyline, clipped to canvas bounds."""
+        """Draw the travel path polyline, clipped to canvas bounds.
+
+        v2.9.0: line width now derives from PATH_WIDTH_MM via the same
+        zoom-correct conversion as the cleaned-area circles (_mm_radius_px),
+        instead of a fixed pixel constant. Previously the path stayed a
+        constant 6px regardless of auto_fit zoom level, while the cleaned-
+        area circles scaled with it — causing the two layers to visually
+        drift apart at different zoom levels (e.g. path looking too thin
+        relative to the cleaned-area blob on a zoomed-in map).
+        """
         if len(self._points) < 2:
             return
         size = self._cfg.size_px
+        width_px = self._mm_radius_px(PATH_WIDTH_MM, min_px=PATH_MIN_PX)
         clipped = [
             (max(0, min(size - 1, px)), max(0, min(size - 1, py)))
             for px, py in (fit_px(px, py) for px, py in self._points)
         ]
-        draw.line(clipped, fill=PATH_COLOUR, width=PATH_WIDTH)
+        draw.line(clipped, fill=PATH_COLOUR, width=width_px)
 
     @staticmethod
     def _interpolated(

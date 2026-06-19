@@ -874,7 +874,7 @@
     },
     "mqtt_watchdog": {
       "title": "MQTT-verbinding robot verbroken tijdens missie",
-      "description": "Roomba+ heeft meer dan 5 minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. De weergegeven robotstatus kan verouderd zijn. Controleer de lokale netwerkverbinding tussen Home Assistant en de robot."
+      "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: {cloud_hint}. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     }
   },
   "device_automation": {

@@ -870,7 +870,7 @@
     },
     "mqtt_watchdog": {
       "title": "Roboter-MQTT-Verbindung während Mission verloren",
-      "description": "Roomba+ hat seit über 5 Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Der angezeigte Roboterstatus könnte veraltet sein. Prüfen Sie die lokale Netzwerkverbindung zwischen Home Assistant und dem Roboter."
+      "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: {cloud_hint}. Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
     }
   },
   "device_automation": {

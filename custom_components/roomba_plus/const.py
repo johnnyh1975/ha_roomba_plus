@@ -112,6 +112,26 @@ CONF_CLEAN_DELAY_MIN: Final = "clean_delay_min"   # int — delay before second 
 
 DEFAULT_CLEAN_DELAY_MIN: Final = 0         # minutes
 
+# v2.9.0 — CONFIRMED UNIT BUG (field data, 2026-06-19, 980 OG):
+# firmware-reported pose.point.x / pose.point.y are in CENTIMETRES, not
+# millimetres as every consumer in this codebase previously assumed (the
+# "_mm" suffix on variables throughout image.py/callbacks.py/map_renderer.py/
+# grid_store.py/zone_store.py was an unverified naming assumption, never
+# checked against real hardware). Evidence: a real mid-mission checkpoint
+# showed pose data confined to an apparent ~0.7m x 0.75m pocket; the user
+# confirmed the robot had in fact covered roughly half of a 106 m² home by
+# that point. Multiplying the raw pose values by 10 (cm -> mm) gives
+# 7.0m x 7.5m = 52.5 m^2 = 49.5% of 106 m^2 — matching the user's own
+# estimate almost exactly. This also explains why GAP_THRESHOLD_MM (800) /
+# MIN_DOOR_WIDTH_MM (600) / MAX_DOOR_WIDTH_MM (1200) in zone_store.py could
+# essentially never fire correctly: real ~600-1200mm door gaps were
+# arriving as ~60-120 raw units, an order of magnitude under threshold.
+# Apply this factor at every point pose.point.x/y is first read from the
+# raw MQTT payload — never downstream, since downstream mm-calibrated
+# constants (CELL_SIZE_MM, MAX_POSE_JUMP_MM, door widths, etc.) are correct
+# once given genuine millimetres.
+POSE_POINT_CM_TO_MM: Final = 10.0
+
 # ── v2.2.0 — new service ──────────────────────────────────────────────────────
 SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when robot A finishes
 

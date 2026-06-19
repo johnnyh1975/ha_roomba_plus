@@ -52,6 +52,7 @@ from .const import (
     END_SIGNAL_DEBOUNCE_COUNT,
     END_SIGNAL_MIN_HOLD_SECONDS,
     MISSION_END_PHASES,
+    POSE_POINT_CM_TO_MM,
     REGION_TYPE_ICONS,
     ROOM_TRANSITION_CANDIDATE_PHASES,
 )
@@ -518,10 +519,18 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _handle_pose(self, pose: dict[str, Any]) -> None:
-        """Add pose point and signal frontend to re-fetch image."""
+        """Add pose point and signal frontend to re-fetch image.
+
+        v2.9.0 — firmware reports pose.point.x/y in CENTIMETRES, not
+        millimetres (confirmed from real field data; see POSE_POINT_CM_TO_MM
+        in const.py for the full rationale). Converted here, at the single
+        point this value first enters the system, so every downstream
+        consumer (MapRenderer, self._mission_points -> GridStore/ZoneStore/
+        OutlineStore) receives genuine millimetres and needs no changes.
+        """
         point = pose.get("point", {})
-        x = float(point.get("x", 0))
-        y = float(point.get("y", 0))
+        x = float(point.get("x", 0)) * POSE_POINT_CM_TO_MM
+        y = float(point.get("y", 0)) * POSE_POINT_CM_TO_MM
         theta = float(pose.get("theta", 0))
         if self._renderer:
             self._renderer.add_pose(x, y, theta)

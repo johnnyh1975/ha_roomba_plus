@@ -840,11 +840,11 @@
       "title": "Obstacles détectés par le robot dans la carte cloud",
       "description": "Votre carte cloud iRobot contient {zone_count} zone(s) d'obstacles détectés par le robot. Effectuez quelques missions de nettoyage pour que Roomba+ puisse les confirmer localement."
     },
-    "error_recurrence": {
+    "error_reçurrence": {
       "title": "Erreur récurrente : {label}",
       "description": "L'erreur {error_code} ({label}) s'est produite {count} fois au cours des 30 derniers jours. Dernier : phase '{phase}', emplacement '{room}'. Action recommandée : {action}"
     },
-    "cancellation_recurrence": {
+    "cancellation_reçurrence": {
       "title": "Annulations récurrentes",
       "description": "Les missions ont été annulées {count} fois au cours des 30 derniers jours ({by_user_count} par l'utilisateur/l'appli, {other_count} autres). Vérifiez les conflits d'horaire, les interventions via l'appli, ou si le robot est arrêté manuellement."
     },
@@ -874,7 +874,7 @@
     },
     "mqtt_watchdog": {
       "title": "Connexion MQTT du robot perdue pendant la mission",
-      "description": "Roomba+ n'a reçu aucun message MQTT du robot depuis plus de 5 minutes alors qu'une mission de nettoyage était active. L'état affiché peut être obsolète. Vérifiez la connexion réseau locale entre Home Assistant et le robot."
+      "description": "Roomba+ n'a reçu aucun message MQTT du robot depuis {minutes} minutes alors qu'une mission de nettoyage était active. Dernière phase connue avant le silence : {last_phase}. Connectivité cloud du robot : {cloud_hint}. Si le robot semble physiquement coincé ou en pause, il ne s'agit peut-être pas d'un vrai problème réseau -- verifiez d'abord le robot en personne."
     }
   },
   "device_automation": {

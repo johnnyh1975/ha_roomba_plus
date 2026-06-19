@@ -42,6 +42,7 @@ from .const import (
     ATTR_LID_CLOSED,
     ATTR_PAD_WETNESS,
     ATTR_POSITION,
+    POSE_POINT_CM_TO_MM,
     ATTR_SOFTWARE_VERSION,
     ATTR_TANK_LEVEL,
     ATTR_TANK_PRESENT,
@@ -231,10 +232,14 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # Position (models with cap.pose == 1)
         if self._cap_position:
             pos_state = state.get("pose", {})
-            pos_x = pos_state.get("point", {}).get("x")
-            pos_y = pos_state.get("point", {}).get("y")
+            pos_x_raw = pos_state.get("point", {}).get("x")
+            pos_y_raw = pos_state.get("point", {}).get("y")
             theta = pos_state.get("theta")
-            if all(v is not None for v in (pos_x, pos_y, theta)):
+            if all(v is not None for v in (pos_x_raw, pos_y_raw, theta)):
+                # v2.9.0 — firmware reports cm, not mm. See
+                # POSE_POINT_CM_TO_MM in const.py.
+                pos_x = pos_x_raw * POSE_POINT_CM_TO_MM
+                pos_y = pos_y_raw * POSE_POINT_CM_TO_MM
                 attrs[ATTR_POSITION] = f"({pos_x}, {pos_y}, {theta})"
             else:
                 attrs[ATTR_POSITION] = None

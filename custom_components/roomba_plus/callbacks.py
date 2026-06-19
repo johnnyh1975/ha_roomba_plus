@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, ROOM_TRANSITION_CANDIDATE_PHASES
+from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -230,9 +230,11 @@ async def async_record_mission(
         pose_point = reported.get("pose", {}).get("point") if reported.get("pose") else None
         if pose_point:
             try:
+                # v2.9.0 — firmware reports cm, not mm. See POSE_POINT_CM_TO_MM
+                # in const.py.
                 error_position_mm = {
-                    "x": float(pose_point.get("x", 0)),
-                    "y": float(pose_point.get("y", 0)),
+                    "x": float(pose_point.get("x", 0)) * POSE_POINT_CM_TO_MM,
+                    "y": float(pose_point.get("y", 0)) * POSE_POINT_CM_TO_MM,
                 }
             except (TypeError, ValueError):
                 pass
@@ -516,6 +518,42 @@ def make_mission_callback(
         _looks_like_end = phase in _MISSION_END_PHASES and not _is_inter_room_transition
         _ambiguous_end_phase = phase in _ROOM_TRANSITION_CANDIDATE_PHASES
 
+        # v2.9.0 — ROOM-INDEX CORROBORATION. Reported by Thonno (i7+, lewis
+        # 22.52.10) on v2.8.3: the time gate alone is not sufficient. Walking
+        # through his timestamps, the robot sat in an ambiguous end phase for
+        # ~12 seconds during a genuine inter-room transition — well past
+        # END_SIGNAL_MIN_HOLD_SECONDS (2.0s) — so the time gate confirmed a
+        # false end even though the mission was still running (confirmed:
+        # the diagnostics snapshot from that exact run showed phase=="run"
+        # afterwards). The 2.8.1/2.8.3 design assumed a transient blip
+        # reverts within a message or two; that assumption doesn't hold for
+        # this firmware's actual inter-room pause duration, and no fixed
+        # timeout can be picked without overfitting to one firmware's
+        # behaviour.
+        #
+        # Rather than guess a longer timeout, corroborate with a fact we
+        # already have: MissionTimerStore's planned_rooms/current_room_idx.
+        # If the robot still has at least one more planned room after the
+        # current one, an ambiguous end phase (charge/hmPostMsn) cannot be a
+        # genuine end — it suppresses confirmation regardless of how long
+        # the time gate has been satisfied. Deliberately does NOT apply to
+        # unambiguous terminal phases (stop/completed/cancelled), which can
+        # be a genuine user-initiated early stop even with rooms remaining.
+        # Naturally a no-op for EPHEMERAL/whole-home missions with no room
+        # plan (planned_rooms empty) — falls through to the existing
+        # time-based gate unchanged.
+        def _has_unvisited_planned_rooms() -> bool:
+            _mts_check = getattr(entry.runtime_data, "mission_timer_store", None)
+            if _mts_check is None:
+                return False
+            _rooms = getattr(_mts_check, "planned_rooms", None) or []
+            if not isinstance(_rooms, list) or not _rooms:
+                return False
+            _idx = getattr(_mts_check, "current_room_idx", 0)
+            if not isinstance(_idx, int):
+                return False
+            return _idx < len(_rooms) - 1
+
         if had_cleaning_phase:
             if not _looks_like_end:
                 end_signal_streak = 0
@@ -536,21 +574,25 @@ def make_mission_callback(
                 if end_signal_first_ts > 0
                 else 0.0
             )
+            _unvisited_rooms = _ambiguous_end_phase and _has_unvisited_planned_rooms()
             _LOGGER.debug(
                 "MissionStore: end-phase check phase=%s cycle=%s ambiguous=%s "
-                "is_inter_room=%s end_signal_streak=%d time_held=%.3fs",
+                "is_inter_room=%s end_signal_streak=%d time_held=%.3fs "
+                "unvisited_rooms=%s",
                 phase, _cycle, _ambiguous_end_phase,
                 _is_inter_room_transition, end_signal_streak, _time_held,
+                _unvisited_rooms,
             )
             if (
                 _ambiguous_end_phase
                 and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
-                and _time_held < _END_SIGNAL_MIN_HOLD_SECONDS
+                and (_time_held < _END_SIGNAL_MIN_HOLD_SECONDS or _unvisited_rooms)
             ):
                 _LOGGER.info(
                     "MissionStore: end-phase burst rejected "
-                    "(time_held=%.3fs < %.1fs) — mission still active",
-                    _time_held, _END_SIGNAL_MIN_HOLD_SECONDS,
+                    "(time_held=%.3fs < %.1fs, unvisited_rooms=%s) — "
+                    "mission still active",
+                    _time_held, _END_SIGNAL_MIN_HOLD_SECONDS, _unvisited_rooms,
                 )
 
         if (
@@ -563,6 +605,7 @@ def make_mission_callback(
                 or (
                     _time_mod.monotonic() - end_signal_first_ts
                     >= _END_SIGNAL_MIN_HOLD_SECONDS
+                    and not _has_unvisited_planned_rooms()
                 )
             )
         ):

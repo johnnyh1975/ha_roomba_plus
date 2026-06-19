@@ -838,7 +838,7 @@
     },
     "observed_zones_detected": {
       "title": "Obstáculos detectados por el robot en el mapa en la nube",
-      "description": "Su mapa en la nube de iRobot contiene {zone_count} zona(s) de obstáculos detectados por el robot. Realice algunas misiones de limpieza para que Roomba+ pueda confirmarlos localmente."
+      "description": "Su mapa en la nube de iRobot contiene {zone_count} zona(s) de obstáculos detectados por el robot. Realice algunas misiónes de limpieza para que Roomba+ pueda confirmarlos localmente."
     },
     "error_recurrence": {
       "title": "Error recurrente: {label}",
@@ -846,7 +846,7 @@
     },
     "cancellation_recurrence": {
       "title": "Cancelaciones recurrentes",
-      "description": "Las misiones se han cancelado {count} veces en los últimos 30 días ({by_user_count} por usuario/app, {other_count} otras). Compruebe si hay conflictos de horario, intervenciones desde la app, o si el robot se detiene manualmente."
+      "description": "Las misiónes se han cancelado {count} veces en los últimos 30 días ({by_user_count} por usuario/app, {other_count} otras). Compruebe si hay conflictos de horario, intervenciones desde la app, o si el robot se detiene manualmente."
     },
     "schedule_suboptimal": {
       "title": "Schedule may be missing high-dirt days",
@@ -874,7 +874,7 @@
     },
     "mqtt_watchdog": {
       "title": "Conexión MQTT del robot perdida durante la misión",
-      "description": "Roomba+ no ha recibido mensajes MQTT del robot en más de 5 minutos mientras había una misión de limpieza activa. El estado mostrado puede estar desactualizado. Compruebe la conexión de red local entre Home Assistant y el robot."
+      "description": "Roomba+ no ha recibido mensajes MQTT del robot durante {minutes} minutos mientras había una misión de limpieza activa. Última fase conocida antes del silencio: {last_phase}. Conectividad en la nube del robot: {cloud_hint}. Si el robot parece estar fisicamente atascado o en pausa, esto puede no ser un problema de red real -- compruebe primero el robot en persona."
     }
   },
   "device_automation": {

@@ -57,8 +57,15 @@ STORAGE_KEY_PREFIX   = "roomba_plus_outline"
 # auto-fit renders (see render_for_outline() docstring in map_renderer.py).
 # That payload-discard intent was correct; routing it through Store()'s own
 # version parameter was the bug.
+#
+# v2.9.0 bumps PAYLOAD_VERSION again, 2 -> 3, for an unrelated second reason:
+# pose.point.x/y were confirmed 10x too small everywhere (cm reported,
+# treated as mm — see POSE_POINT_CM_TO_MM in const.py). Every accumulated
+# contour_points entry was extracted from PNGs rendered at the wrong scale,
+# regardless of whether it already survived the v2.8.2 coordinate-space
+# fix. Old contours are spatially wrong, not just stale.
 _HA_STORE_VERSION    = 1
-PAYLOAD_VERSION      = 2
+PAYLOAD_VERSION      = 3
 
 # Don't show outline until we have at least this many missions
 MIN_MISSIONS_TO_SHOW = 2

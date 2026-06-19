@@ -874,7 +874,7 @@
     },
     "mqtt_watchdog": {
       "title": "Ligação MQTT do robot perdida durante a missão",
-      "description": "O Roomba+ não recebeu mensagens MQTT do robot há mais de 5 minutos enquanto uma missão de limpeza estava ativa. O estado apresentado pode estar desatualizado. Verifique a ligação de rede local entre o Home Assistant e o robot."
+      "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: {cloud_hint}. Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
     }
   },
   "device_automation": {

@@ -36,7 +36,16 @@ from homeassistant.helpers.storage import Store
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_zones"
-STORAGE_VERSION    = 1
+
+# v2.9.0 — same split as grid_store.py/outline_store.py. _HA_STORE_VERSION
+# is pinned forever (see grid_store.py comment for the full rationale —
+# bumping it without a real _async_migrate_func crashed async_setup_entry
+# for every installation, v2.8.2). PAYLOAD_VERSION is bumped here because
+# zone bounding boxes (and any _scale_factor from calibrate_from_gaps())
+# were built from pose coordinates 10x too small — discarded on load
+# rather than left around as spatially wrong zones.
+_HA_STORE_VERSION  = 1
+PAYLOAD_VERSION    = 2
 
 # ── Segmentation parameters ───────────────────────────────────────────────────
 GAP_THRESHOLD_MM  = 800    # > 80 cm gap → doorway crossing
@@ -197,11 +206,23 @@ class ZoneStore:
     # ── Persistence ───────────────────────────────────────────────────────────
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
-        """Load persisted zones from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        """Load persisted zones from hass.storage.
+
+        v2.9.0 — discards payloads from before the pose-units fix. Zone
+        bounding boxes (and _scale_factor, if calibrate_from_gaps() ever
+        ran) were computed from pose coordinates 10x too small.
+        """
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         data: dict | None = await store.async_load()
         if not data:
             _LOGGER.debug("ZoneStore: no persisted zones for %s", entry_id)
+            return
+        if data.get("version") != PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "ZoneStore: discarding pre-units-fix zone data for %s "
+                "(zones were computed from pose coordinates that were 10x "
+                "too small) — starting empty", entry_id,
+            )
             return
         try:
             self._next_id = data.get("next_id", 1)
@@ -219,8 +240,9 @@ class ZoneStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current zones to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
+            "version": PAYLOAD_VERSION,
             "next_id": self._next_id,
             "gap_threshold_mm": self._gap_threshold_mm,
             "scale_factor": self._scale_factor,
