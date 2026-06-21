@@ -688,6 +688,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._mission_points,
                     self._stuck_mission_points,
                     stuck_wh=_stuck_wh,
+                    # v2.9.0 (DISK-FILL) — mark each pose point's actual
+                    # swept footprint, not just its single centre cell.
+                    # _cfg.robot_diameter_mm is already set correctly per
+                    # robot tier (see __init__.py's map_capability-based
+                    # selection) — grid_store.py stays HA-free by taking
+                    # a plain float here rather than importing the
+                    # tier-detection logic itself.
+                    robot_radius_mm=self._renderer._cfg.robot_diameter_mm / 2,
                 )
                 asyncio.run_coroutine_threadsafe(
                     _gdata.grid_store.async_save(

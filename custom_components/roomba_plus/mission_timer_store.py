@@ -181,6 +181,34 @@ class MissionTimerStore:
         self.room_estimates_sec  = room_estimates_sec or []
         self._schedule_save(hass, entry_id)
 
+    def update_estimates(
+        self,
+        total_estimated_sec: float | None,
+        room_estimates_sec: list[float | None] | None,
+        hass: HomeAssistant,
+        entry_id: str,
+    ) -> None:
+        """Refresh ONLY the time-estimate fields for the current mission.
+
+        v2.9.0 (E) — RETRY for missing estimates. set_mission_plan() ran
+        exactly once, at the first phase=="run" message of a mission. If
+        cloud TE1 data (cloud_coordinator.regions) simply hadn't synced yet
+        at that exact moment — a real, confirmed risk (see the v2.9.0
+        _get_planned_room_order PARTIAL resolution fix) — total_estimated_sec
+        stayed None/uniform-fallback for the WHOLE mission with no chance to
+        recover, even though the real per-room data might have become
+        available moments later.
+
+        Deliberately does NOT touch mission_id/run_sec/current_room_idx/
+        planned_rooms/recharge_positions — only the two estimate fields.
+        Safe to call repeatedly; the caller (callbacks.py) only invokes this
+        when total_estimated_sec is still None, so a successful refresh is
+        a one-time event per mission in practice.
+        """
+        self.total_estimated_sec = total_estimated_sec
+        self.room_estimates_sec  = room_estimates_sec or []
+        self._schedule_save(hass, entry_id)
+
     def on_recharge(self, hass: HomeAssistant, entry_id: str) -> None:
         """Called when a recharge event is detected mid-mission.
 
@@ -201,9 +229,27 @@ class MissionTimerStore:
         Saves asynchronously via asyncio.run_coroutine_threadsafe (thread-safe;
         called from paho-MQTT thread via callbacks.py) to avoid blocking
         the MQTT callback loop.
+
+        v2.9.0 — added debug logging to both branches. Reported by Thonno
+        (i7+, lewis 22.52.10): progress/elapsed-time resets to 0 during a
+        genuine inter-room transition within a SINGLE clean_room mission
+        (confirmed from his debug capture that callbacks.py's END-DEBOUNCE
+        mission-end confirmation never fires during the affected window —
+        ruling out that code path entirely). This function resets run_sec
+        whenever self.mission_id != mission_id and was completely silent,
+        making it impossible to confirm or rule out as the actual cause.
+        mission_id is computed in callbacks.py as f"{blid}_{mission_start_ts}"
+        — if mission_start_ts is read from a momentarily-stale or re-derived
+        value during the transition, this comparison could spuriously see
+        "a new mission" mid-mission and zero the counter.
         """
         now = time.monotonic()
         if self.mission_id != mission_id:
+            _LOGGER.debug(
+                "MissionTimerStore: on_phase_run sees NEW mission_id "
+                "(old=%s new=%s) — resetting run_sec (was %.0f)",
+                self.mission_id, mission_id, self.run_sec,
+            )
             # New mission — reset counter (plan set separately via set_mission_plan)
             self.mission_id      = mission_id
             self.run_sec         = 0.0
@@ -217,6 +263,12 @@ class MissionTimerStore:
             if 0 < delta < 120:
                 self.run_sec += delta
                 self._schedule_save(hass, entry_id)
+            else:
+                _LOGGER.debug(
+                    "MissionTimerStore: on_phase_run gap=%.1fs outside "
+                    "0-120s clamp — NOT accumulated into run_sec=%.0f",
+                    delta, self.run_sec,
+                )
         self._last_phase_ts = now
 
     def on_phase_other(

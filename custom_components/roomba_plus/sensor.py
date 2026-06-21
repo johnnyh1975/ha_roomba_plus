@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 import logging
+import time as _time_mod
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import StateType
 import datetime
 import datetime as dt_stdlib
@@ -62,8 +64,12 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
+    DOMAIN,
     ERROR_CATALOGUE,
     ERROR_CODE_LABELS,
+    INTEGRATION_HEALTH_ARC1_STALE_HOURS,
+    INTEGRATION_HEALTH_MQTT_STALE_HOURS,
+    INTEGRATION_HEALTH_TICK_SECONDS,
     JOB_INITIATOR_LABELS,
     MOP_RANK_LABELS,
     NOT_READY_LABELS,
@@ -513,6 +519,15 @@ def _raw_wifi_floor(records: list[dict]) -> StateType:
 
     Amendment 8d: corrects the previous min(bars) implementation which
     returned the minimum bucket count, not the weakest signal bucket.
+
+    v2.9.0 — this is a worst-case/dead-zone diagnostic (did the signal ever
+    dip into the weakest bucket at all), deliberately distinct from average
+    quality. Still useful on its own (RoombaWifiHealthSensor exposes it as
+    the weakest_bucket_observed attribute), but must not be used as a
+    PERCENTAGE "quality" state — a single brief dip into bucket 0 during an
+    otherwise excellent connection would make WLAN-Qualität read "0%" even
+    though the WiFi is fine. See _raw_wifi_quality_pct for the actual
+    quality-percentage metric.
     """
     for r in records:
         bars = r.get("wlBars")
@@ -521,6 +536,130 @@ def _raw_wifi_floor(records: list[dict]) -> StateType:
                 if count > 0:
                     return i     # 0 = worst present, 4 = best present
     return None
+
+
+def _raw_wifi_quality_pct(records: list[dict]) -> StateType:
+    """Return average WiFi signal quality (%) across the API window.
+
+    v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
+    state. _raw_wifi_floor returns a raw 0-4 bucket index from a SINGLE
+    record (the first one found with valid data) — yet the entity declares
+    PERCENTAGE as its unit and its docstring claimed "% of missions with
+    acceptable floor signal". Neither matched the implementation: a "0"
+    bucket-index value displayed as "0%" reads as "WiFi is unusable" when
+    it may just mean one brief dip during an otherwise good connection.
+
+    F1 -- wlBars is a 5-element histogram (index = signal bucket 0=weakest,
+    4=strongest, value = count). For each mission record, compute the
+    weighted mean bucket index (same approach as the already-correct
+    _raw_wifi_stability, which uses the full histogram distribution rather
+    than just whether the weakest bucket was ever touched), then average
+    those per-mission means across all available records and scale the
+    0.0-4.0 result to a genuine 0-100% PERCENTAGE.
+    """
+    means: list[float] = []
+    for r in records:
+        bars = r.get("wlBars")
+        if not isinstance(bars, list) or len(bars) != 5:
+            continue
+        total = sum(bars)
+        if total == 0:
+            continue
+        means.append(sum(i * b for i, b in enumerate(bars)) / total)
+    if not means:
+        return None
+    return round((sum(means) / len(means)) / 4 * 100, 1)
+
+
+def _compute_integration_health(hass: Any, entry: Any) -> tuple[int, dict[str, Any]]:
+    """Return (score 0-100, breakdown) for the integration_health sensor.
+
+    v2.9.0 (INTEG-HEALTH). Three signals, each independently testable:
+
+    1. Active Repair Issues for this config entry — the strongest signal,
+       since each one already represents a confirmed, specific problem
+       (cloud_stale, mqtt_watchdog, error_recurrence, etc.). -20 per issue,
+       capped at -60 so a handful of issues doesn't immediately floor the
+       score to 0 — still useful as a relative health trend.
+
+    2. MQTT message age — only penalised beyond
+       INTEGRATION_HEALTH_MQTT_STALE_HOURS (24h), a much longer bar than
+       MQTT_WATCHDOG_SECONDS (5 min, mission-specific). This catches "the
+       local connection looks entirely dead", not routine idle-time quiet
+       — most installs go hours between missions with no MQTT traffic at
+       all, and that's completely normal.
+
+    3. ARC1 (MissionArchive) freshness — only evaluated when cloud is
+       configured. The newest archived mission being older than
+       INTEGRATION_HEALTH_ARC1_STALE_HOURS (48h) suggests the cloud→
+       archive sync pipeline itself may be stuck, even if the coordinator's
+       own refresh calls are nominally succeeding (a DIFFERENT failure
+       mode than CLOUD-STALE, which only checks the refresh call itself).
+       This is a proxy, not a direct "last sync attempt" timestamp — no
+       such field exists yet, and recent mission age also legitimately
+       reflects "the robot just hasn't cleaned in a while", not only sync
+       health. Documented as a known limitation rather than over-claiming
+       precision here.
+
+    Two signals from the original plan were deliberately NOT implemented
+    as separate items:
+    - "Cloud age" — redundant with signal 1, since a stale cloud
+      coordinator already raises the cloud_stale Repair Issue, which
+      signal 1 already counts. A separate cloud-age penalty would
+      double-count the same underlying condition.
+    - "Last store save" — no generic "last saved" timestamp is tracked
+      across all stores today; inventing one just for this score, without
+      a real use case driving its precision, was judged not worth the
+      new persisted state it would require.
+    """
+    score = 100
+    breakdown: dict[str, Any] = {}
+
+    registry = ir.async_get(hass)
+    suffix = f"_{entry.entry_id}"
+    active_issues = [
+        e for (domain, issue_id), e in registry.issues.items()
+        if domain == DOMAIN and issue_id.endswith(suffix) and e.active
+    ]
+    issue_count = len(active_issues)
+    score -= min(60, issue_count * 20)
+    breakdown["active_issues"] = issue_count
+
+    data = entry.runtime_data
+    last_mqtt_ts = getattr(data, "last_mqtt_message_ts", 0.0) or 0.0
+    mqtt_age_hours: float | None = None
+    if last_mqtt_ts > 0:
+        mqtt_age_hours = (_time_mod.time() - last_mqtt_ts) / 3600
+        if mqtt_age_hours > INTEGRATION_HEALTH_MQTT_STALE_HOURS:
+            score -= 20
+    breakdown["mqtt_age_hours"] = (
+        round(mqtt_age_hours, 1) if mqtt_age_hours is not None else None
+    )
+
+    archive = getattr(data, "mission_archive", None)
+    cloud = getattr(data, "cloud_coordinator", None)
+    arc1_age_hours: float | None = None
+    if archive is not None and cloud is not None and archive.record_count > 0:
+        newest = archive.all_derived_oldest_first()[-1]
+        end_ts = newest.get("end_ts")
+        if end_ts:
+            try:
+                parsed = dt_util.parse_datetime(end_ts)
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed is not None:
+                arc1_age_hours = (
+                    dt_util.utcnow() - parsed
+                ).total_seconds() / 3600
+                if arc1_age_hours > INTEGRATION_HEALTH_ARC1_STALE_HOURS:
+                    score -= 20
+    breakdown["arc1_age_hours"] = (
+        round(arc1_age_hours, 1) if arc1_age_hours is not None else None
+    )
+
+    score = max(0, score)
+    breakdown["score"] = score
+    return score, breakdown
 
 
 def _raw_wifi_stability(records: list[dict]) -> StateType:
@@ -1040,10 +1179,121 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # v2.9.0 (J) — same AREA-ZERO-FIX family as v2.8.2's
+        # mission.get("sqft") or None fix in callbacks.py: confirmed on the
+        # same hardware (980 9-series + aftermarket NiMH battery) that
+        # firmware can report a literal 0 instead of omitting the field
+        # even with genuine cleaning history. `or None` treats a literal 0
+        # as "no reliable value" — a falsely-missing display beats a
+        # confidently wrong one.
+        #
+        # Field report investigated: this value (176 m²) appeared smaller
+        # than cleaning_analytics_30d's window-sum (683 m² over its cloud
+        # API window). Initially suspected a battery-replacement-triggered
+        # counter reset as the explanation — DISPROVEN, not just
+        # unconfirmed: the integration's "Reset battery" button
+        # (maintenance_store.reset_battery()) only writes battery_reset_hr/
+        # battery_reset_at to our OWN local MaintenanceStore for our own
+        # wear-rate bookkeeping. It sends no MQTT command and has no path
+        # to the robot's firmware at all — it cannot possibly reset
+        # bbrun.sqft. The two values being non-comparable (cleaning_
+        # analytics_30d explicitly sums "for the API window (not
+        # lifetime)" per cloud_coordinator.py's own docstring) still holds,
+        # but the remaining gap beyond that has NO confirmed explanation.
+        # Left as an open, honestly-unexplained discrepancy rather than
+        # attributed to a mechanism that was checked and does not exist.
+        # v2.9.0 (J) — SOURCE CHANGE. The robot's own onboard lifetime
+        # counter (bbrun.sqft / runtimeStats.sqft) was field-confirmed
+        # (via a months-old diagnostics snapshot showing 1882 sqft ≈
+        # 174.8 m², essentially the same as a recent reading of 176 m²)
+        # to barely change over a very long period, while every OTHER
+        # bbrun.* counter (nPanics, nStuck, etc.) keeps incrementing
+        # normally. Investigated against dorita980/roombapy/Roomba980-
+        # Python reference implementations: sqft/hr/min are reported
+        # atomically alongside the actively-incrementing counters in the
+        # SAME bbrun object — no documented firmware quirk explains this,
+        # and our own merge logic (entity.py's run_stats, which could have
+        # let a stale runtimeStats override a fresh bbrun value) was ruled
+        # out: this robot's master_state_keys never contains "runtimeStats"
+        # at all. The mechanism remains genuinely unexplained.
+        #
+        # Rather than keep trusting a counter we cannot independently
+        # verify, the primary value uses MissionArchive's cumulative_sqft
+        # — a persistent running total over EVERY mission ever archived
+        # (not capped at MAX_RECORDS=800; see the accumulator's own
+        # docstring in mission_archive.py for why a live re-sum over the
+        # currently-held records would be wrong for any robot with more
+        # lifetime missions than that). Built entirely from cloud
+        # per-mission data, which does NOT share whatever mechanism
+        # affects bbrun.sqft (confirmed non-zero, plausible per-mission
+        # values throughout today's investigation). Still not necessarily
+        # a true "since the robot was new" total (limited by however far
+        # back the cloud account itself retains mission history, and only
+        # starts accumulating from whenever cloud credentials were first
+        # configured), but self-consistent, independently verifiable, and
+        # immune to the bbrun staleness
+        # question entirely.
+        #
+        # Both sources are only LOWER BOUNDS on the true lifetime total —
+        # the archive can be incomplete (cloud credentials added only
+        # after months of local-only use), and the onboard counter can
+        # freeze, but whatever it captured before freezing was real,
+        # already-cleaned area. A genuine lifetime total can never DECREASE
+        # relative to either source, so the displayed value is always the
+        # larger of the two — never let a more-complete archive disagree
+        # downward from a frozen-but-still-real onboard reading, and vice
+        # versa.
+        #
+        # Uses MissionArchive.cumulative_sqft (a persistent running total,
+        # incremented once per newly-archived mission BEFORE any FIFO
+        # trim) rather than summing all_derived_oldest_first() live — a
+        # robot with more than MAX_RECORDS (800) lifetime missions would
+        # otherwise see this number DECREASE every time an old mission
+        # ages out of the FIFO-capped list, which is exactly the kind of
+        # "lifetime total going backwards" this fix exists to prevent.
         value_fn=lambda e: (
-            None
-            if (sqft := e.run_stats.get("sqft")) is None
-            else round(sqft * SQFT_TO_M2, 1)
+            lambda arc: max(
+                (
+                    round(arc.cumulative_sqft * SQFT_TO_M2, 1)
+                    if arc is not None and arc.cumulative_sqft > 0
+                    else None
+                ) or 0.0,
+                (
+                    round(sqft * SQFT_TO_M2, 1)
+                    if (sqft := e.run_stats.get("sqft"))
+                    else None
+                ) or 0.0,
+            ) or None
+        )(getattr(e._config_entry.runtime_data, "mission_archive", None)),
+        # v2.9.0 (J) — bbrun's raw reading + staleness tracking kept as
+        # attributes for comparison/diagnosis, now that it's no longer the
+        # primary value. RobotProfileStore staleness fields are updated in
+        # __init__.py's _async_update_robot_profile_store, not here —
+        # value_fn/extra_attributes_fn stay side-effect-free, consistent
+        # with every other sensor in this module.
+        extra_attributes_fn=lambda e: (
+            lambda rps, arc: {
+                "onboard_counter_m2": (
+                    round(sqft * SQFT_TO_M2, 1)
+                    if (sqft := e.run_stats.get("sqft"))
+                    else None
+                ),
+                "onboard_counter_last_changed_at": (
+                    rps.lifetime_sqft_last_changed_at if rps is not None else None
+                ),
+                "onboard_counter_days_unchanged": (
+                    round(d, 1)
+                    if rps is not None
+                    and (d := rps.lifetime_sqft_days_unchanged) is not None
+                    else None
+                ),
+                "archived_mission_count": (
+                    arc.record_count if arc is not None else 0
+                ),
+            }
+        )(
+            getattr(e._config_entry.runtime_data, "robot_profile_store", None),
+            getattr(e._config_entry.runtime_data, "mission_archive", None),
         ),
     ),
     RoombaSensorDescription(
@@ -2017,6 +2267,9 @@ async def async_setup_entry(
 
     # v2.8.3 FW-SENSOR — firmware version, always created (universal across all robot families).
     entities.append(RoombaFirmwareVersionSensor(roomba, blid))
+
+    # v2.9.0 INTEG-HEALTH — integration health meta-sensor, always created.
+    entities.append(RoombaIntegrationHealthSensor(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -3331,18 +3584,42 @@ def _get_planned_room_order(data: Any) -> list[str]:
         for r in (last_cmd.get("regions") or [])
         if _MS._extract_rid(r)
     ]
+    mts = getattr(data, "mission_timer_store", None)
     if not region_ids:
         # lastCommand.regions temporarily empty — fall back to MTS snapshot.
-        mts = getattr(data, "mission_timer_store", None)
+        _LOGGER.debug(
+            "_get_planned_room_order: lastCommand.regions empty, "
+            "falling back to mts.planned_rooms=%s",
+            getattr(mts, "planned_rooms", None) if mts else None,
+        )
         if mts is not None and mts.planned_rooms:
             return list(mts.planned_rooms)
         return []
 
     id_to_name = {r["id"]: r["name"] for r in cc.regions if r.get("id")}
     result = [id_to_name[rid] for rid in region_ids if rid in id_to_name]
-    if not result:
-        # cc.regions temporarily empty (cloud mid-refresh) — fall back.
-        mts = getattr(data, "mission_timer_store", None)
+
+    # v2.9.0 — region_ids had entries, but not all of them resolved via
+    # cc.regions (id_to_name). The pre-v2.9.0 fallback only triggered when
+    # `result` was COMPLETELY empty, missing the case where it's a PARTIAL
+    # match (e.g. region_ids=["21","25"] but cc.regions is mid-refresh and
+    # only resolves "21" — result=["Corridoio"], non-empty, no fallback
+    # triggered). A genuine 2-room mission's planned_order would then
+    # silently shrink to 1 room mid-mission, corrupting every
+    # elapsed/estimate calculation derived from it (mission_progress,
+    # current_room/next_room, estimated_remaining_min) — a strong candidate
+    # for Thonno's "progress reset" report, since phase stayed "run" the
+    # whole time in his capture (ruling out every phase-based mechanism
+    # already investigated). Logged at debug so the next capture confirms
+    # or refutes this directly instead of guessing again.
+    if len(result) != len(region_ids):
+        _LOGGER.debug(
+            "_get_planned_room_order: PARTIAL resolution — "
+            "region_ids=%s resolved=%s (cc.regions stale/mid-refresh?). "
+            "mts.planned_rooms=%s",
+            region_ids, result,
+            getattr(mts, "planned_rooms", None) if mts else None,
+        )
         if mts is not None and mts.planned_rooms:
             return list(mts.planned_rooms)
     return result
@@ -3421,6 +3698,76 @@ def _compute_room_time_estimates(
 
 
 # ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
+
+def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
+    """Resolve current_room/next_room/elapsed/estimated_remaining_min for a
+    SMART-tier robot's active mission.
+
+    v2.9.0 — EXTRACTED from RoombaMissionProgress.extra_state_attributes
+    (was inline there since v2.7.2/MP-ELAPSED-FIX) into a shared,
+    module-level function so RoombaDeviceTracker can use the EXACT same
+    room resolution — current_room shown by the device tracker and by
+    mission_progress must always agree; two separately-maintained copies
+    of this logic would risk drifting apart over time as either one gets
+    tweaked independently.
+
+    Prefers the estimate-based room when the calculation succeeds (all
+    per-room estimates available and elapsed within range); falls back to
+    MissionTimerStore's own current_room/next_room when no per-room
+    estimates exist (e.g. Auto pass mode — see the v2.9.0 AUTO-ADVANCE-ROOM
+    Auto-mode fallback fix for why that's now far less restrictive than
+    it used to be).
+    """
+    data = config_entry.runtime_data
+    state = data.roomba_reported_state()
+    phase = state.get("cleanMissionStatus", {}).get("phase", "")
+    mts = data.mission_timer_store
+    if mts is None or mts.mission_id is None:
+        return {}
+
+    planned_order: list[str] = _get_planned_room_order(data)
+    # v2.7.2 (MP-ELAPSED-FIX): use live-delta elapsed so elapsed_run_min
+    # and current_room/next_room stay smooth between MQTT messages.
+    elapsed = RoombaMissionProgress._elapsed_sec(mts, phase)
+    estimates = (
+        _compute_room_time_estimates(config_entry, planned_order)
+        if planned_order else []
+    )
+
+    # Determine current and next room from elapsed
+    current_room: str | None = None
+    next_room: str | None = None
+    estimated_remaining_min: int | None = None
+
+    if planned_order and estimates and all(e is not None for e in estimates):
+        cumulative = 0
+        for i, est in enumerate(estimates):
+            assert est is not None
+            if elapsed < cumulative + est:
+                current_room = planned_order[i]
+                next_room = planned_order[i + 1] if i + 1 < len(planned_order) else None
+                remaining_sec = (cumulative + est - elapsed) + sum(
+                    estimates[j]  # type: ignore[arg-type]
+                    for j in range(i + 1, len(estimates))
+                )
+                estimated_remaining_min = max(0, round(remaining_sec / 60))
+                break
+            cumulative += est
+        else:
+            # All rooms elapsed — in final room
+            current_room = planned_order[-1]
+
+    return {
+        # Prefer estimate-based room when the calculation succeeded (all
+        # estimates available and elapsed > 0). MTS value is the fallback
+        # for when no per-room estimates exist.
+        "current_room": current_room if current_room is not None else mts.current_room,
+        "next_room":    next_room    if current_room is not None else mts.next_room,
+        "elapsed_run_min": round(elapsed / 60, 1),
+        "estimated_remaining_min": estimated_remaining_min,
+        "room_sequence": planned_order,
+    }
+
 
 class RoombaMissionProgress(IRobotEntity, SensorEntity):
     """Estimated mission completion percentage (0–100).
@@ -3517,6 +3864,19 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         elapsed = self._elapsed_sec(mts, phase)
 
         planned_order: list[str] = _get_planned_room_order(data)
+
+        # v2.9.0 — comprehensive diagnostic for Thonno's "progress reset"
+        # report. Every phase-based mechanism already investigated has been
+        # ruled out (phase stays "run" throughout his capture); this logs
+        # every input to the progress calculation on every poll so the next
+        # capture shows directly whether planned_order/estimates change
+        # shape mid-mission while phase never leaves "run".
+        _LOGGER.debug(
+            "mission_progress: phase=%s elapsed=%.1fs mission_id=%s "
+            "planned_order=%s",
+            phase, elapsed, mts.mission_id, planned_order,
+        )
+
         if not planned_order:
             # No room sequence — use elapsed vs. rolling mean as fallback
             rps = getattr(data, "robot_profile_store", None)
@@ -3529,6 +3889,10 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             return None
 
         estimates = self._room_estimates(planned_order)
+        _LOGGER.debug(
+            "mission_progress: planned_order=%s estimates=%s",
+            planned_order, estimates,
+        )
         if any(e is None for e in estimates):
             # At least one room has no estimate — use count-based progress
             total_rooms = len(planned_order)
@@ -3537,6 +3901,12 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             avg_sec = total_known / max(len([e for e in estimates if e is not None]), 1)
             if avg_sec > 0:
                 completed_rooms = min(total_rooms - 1, int(elapsed / avg_sec))
+                _LOGGER.debug(
+                    "mission_progress: count-based branch total_rooms=%d "
+                    "avg_sec=%.1f completed_rooms=%d -> %d%%",
+                    total_rooms, avg_sec, completed_rooms,
+                    min(99, round(completed_rooms / total_rooms * 100)),
+                )
                 return min(99, round(completed_rooms / total_rooms * 100))
             return None
 
@@ -3547,52 +3917,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        data = self._config_entry.runtime_data
-        state = data.roomba_reported_state()
-        phase = state.get("cleanMissionStatus", {}).get("phase", "")
-        mts = data.mission_timer_store
-        if mts is None or mts.mission_id is None:
-            return {}
-
-        planned_order: list[str] = _get_planned_room_order(data)
-        # v2.7.2 (MP-ELAPSED-FIX): use live-delta elapsed so elapsed_run_min
-        # and current_room/next_room stay smooth between MQTT messages.
-        elapsed = self._elapsed_sec(mts, phase)
-        estimates = self._room_estimates(planned_order) if planned_order else []
-
-        # Determine current and next room from elapsed
-        current_room: str | None = None
-        next_room: str | None = None
-        estimated_remaining_min: int | None = None
-
-        if planned_order and estimates and all(e is not None for e in estimates):
-            cumulative = 0
-            for i, est in enumerate(estimates):
-                assert est is not None
-                if elapsed < cumulative + est:
-                    current_room = planned_order[i]
-                    next_room = planned_order[i + 1] if i + 1 < len(planned_order) else None
-                    remaining_sec = (cumulative + est - elapsed) + sum(
-                        estimates[j]  # type: ignore[arg-type]
-                        for j in range(i + 1, len(estimates))
-                    )
-                    estimated_remaining_min = max(0, round(remaining_sec / 60))
-                    break
-                cumulative += est
-            else:
-                # All rooms elapsed — in final room
-                current_room = planned_order[-1]
-
-        return {
-            # v2.7.2 (MP-ELAPSED-FIX): prefer estimate-based room when the
-            # calculation succeeded (all estimates available and elapsed > 0).
-            # MTS value is the fallback for when no per-room estimates exist.
-            "current_room": current_room if current_room is not None else mts.current_room,
-            "next_room":    next_room    if current_room is not None else mts.next_room,
-            "elapsed_run_min": round(elapsed / 60, 1),
-            "estimated_remaining_min": estimated_remaining_min,
-            "room_sequence": planned_order,
-        }
+        return _resolve_smart_tier_room_state(self._config_entry)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
@@ -3861,10 +4186,18 @@ class RoombaCleaningAnalytics30dSensor(_ConsolidatedCloudSensor):
 
 
 class RoombaWifiHealthSensor(_ConsolidatedCloudSensor):
-    """SC1 — Wi-Fi health: signal floor + stability.
+    """SC1 — Wi-Fi health: average signal quality + stability + worst dip.
 
-    State: signal floor (% of missions with acceptable floor signal).
-    Attributes: stability_pct.
+    State: average WiFi signal quality (%) across the cloud API window —
+    a weighted mean over each mission's full wlBars histogram distribution,
+    not just whether the weakest bucket was ever touched (v2.9.0 fix; see
+    _raw_wifi_quality_pct docstring for the full rationale — the previous
+    implementation returned a raw 0-4 bucket index from a single mission
+    mislabelled as a percentage, so a single brief signal dip could read
+    as "0%" even with an otherwise excellent connection).
+    Attributes: stability_pct, weakest_bucket_observed (0-4, the original
+    "floor" diagnostic — still useful for spotting a dead zone, just not
+    as the misleading primary percentage).
 
     Replaces: recent_wifi_floor, recent_wifi_stability.
     """
@@ -3883,7 +4216,7 @@ class RoombaWifiHealthSensor(_ConsolidatedCloudSensor):
 
     @property
     def native_value(self) -> StateType:
-        return _raw_wifi_floor(self._coordinator.raw_records)
+        return _raw_wifi_quality_pct(self._coordinator.raw_records)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -3891,6 +4224,9 @@ class RoombaWifiHealthSensor(_ConsolidatedCloudSensor):
         stab = _raw_wifi_stability(self._coordinator.raw_records)
         if stab is not None:
             attrs["stability_pct"] = stab
+        floor = _raw_wifi_floor(self._coordinator.raw_records)
+        if floor is not None:
+            attrs["weakest_bucket_observed"] = floor
         return attrs
 
 
@@ -4229,3 +4565,71 @@ class RoombaFirmwareVersionSensor(IRobotEntity, SensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "softwareVer" in new_state
+
+
+class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
+    """INTEG-HEALTH (v2.9.0) — integration health meta-sensor (0-100).
+
+    Combines three signals into one diagnostic score: active Repair Issue
+    count, MQTT message age, and ARC1 (MissionArchive) freshness. See
+    _compute_integration_health()'s docstring for the exact formula and
+    why two originally-planned signals (cloud age, "last store save")
+    were folded in or dropped.
+
+    Score is computed on every poll (cheap — no I/O, just registry/store
+    reads already held in memory) AND on a 60-second periodic tick, which
+    additionally fires/clears the integration_health Repair Issue when the
+    score has been below INTEGRATION_HEALTH_LOW_THRESHOLD (50) for at
+    least INTEGRATION_HEALTH_SUSTAINED_MINUTES (30 min) — a single bad
+    reading should not alarm the user; a sustained one should.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="integration_health",
+        name="Integration health",
+        translation_key="integration_health",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+    )
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_integration_health"
+        self._unsub_tick: Any | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Start the 60-second periodic tick that drives the Repair Issue."""
+        await super().async_added_to_hass()
+        self._unsub_tick = async_track_time_interval(
+            self.hass,
+            self._async_health_tick,
+            dt_stdlib.timedelta(seconds=INTEGRATION_HEALTH_TICK_SECONDS),
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub_tick is not None:
+            self._unsub_tick()
+            self._unsub_tick = None
+        ir.async_delete_issue(
+            self.hass, DOMAIN, f"integration_health_{self._entry.entry_id}"
+        )
+
+    @callback
+    def _async_health_tick(self, _now: Any) -> None:
+        """Re-evaluate health on a timer and fire/clear the Repair Issue."""
+        from .repairs import async_check_integration_health
+        async_check_integration_health(self.hass, self._entry)
+        self.schedule_update_ha_state(force_refresh=True)
+
+    @property
+    def native_value(self) -> int:
+        score, _ = _compute_integration_health(self.hass, self._entry)
+        return score
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        _, breakdown = _compute_integration_health(self.hass, self._entry)
+        return breakdown

@@ -597,6 +597,14 @@
       },
       "firmware_version": {
         "name": "Firmware version"
+      },
+      "integration_health": {
+        "name": "Integration health"
+      }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Position"
       }
     },
     "binary_sensor": {
@@ -889,6 +897,10 @@
     "mqtt_watchdog": {
       "title": "Robot MQTT connection lost during mission",
       "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: {cloud_hint}. If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
+    },
+    "integration_health": {
+      "title": "Integration health is degraded",
+      "description": "Roomba+'s integration health score has been below 50 for at least 30 minutes (current score: {score}/100). This combines active Repair Issue count, MQTT message age, and mission archive freshness. Check the sensor.*_integration_health entity's attributes for a breakdown of which signal is affected, and review any other active Repair Issues for this robot."
     }
   },
   "device_automation": {

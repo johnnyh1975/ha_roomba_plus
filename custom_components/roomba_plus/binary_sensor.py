@@ -29,7 +29,6 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from . import roomba_reported_state
 from .const import (
-    CLEANING_PHASES,
     CONF_BLOCKING_SENSORS,
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
@@ -825,11 +824,11 @@ _FIRMWARE_UPDATED_WINDOW_SECONDS: float = 86400.0  # 24 h
 
 
 class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
-    """MQTT-WATCHDOG (v2.8.3, broadened v2.9.0) — silence detection during
-    an active mission.
+    """MQTT-WATCHDOG (v2.8.3; phase set broadened then reverted v2.9.0,
+    see _MISSION_ACTIVE_PHASES) — silence detection during an active
+    mission.
 
-    ON when the mission is still considered active (CLEANING_PHASES, plus
-    "stuck" and "pause" — see _MISSION_ACTIVE_PHASES) AND no MQTT message
+    ON when phase=="run" (see _MISSION_ACTIVE_PHASES) AND no MQTT message
     has been received for MQTT_WATCHDOG_SECONDS (5 min). Checked on a
     60-second periodic tick.
 
@@ -950,19 +949,29 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
         self._was_stale = now_stale
         self.schedule_update_ha_state(force_refresh=True)
 
-    # v2.9.0 — was gated on phase != "run" only, missing silence that starts
-    # while the robot is "stuck" or "pause"d mid-mission (both real firmware
-    # phase values, confirmed in const.py's PHASE_TO_ACTIVITY map). A robot
-    # whose last message before going silent reported "stuck" would cache
-    # that phase and never satisfy phase=="run" again until a new message
-    # arrives — meaning the watchdog could never fire for exactly the
-    # scenario most likely to coincide with a real connectivity loss (the
-    # robot struggling, then vanishing). CLEANING_PHASES ("run", "hmMidMsn",
-    # "evac") plus "stuck" and "pause" are all phases where the mission is
-    # still considered ongoing and silence is unexpected. MISSION_END_PHASES
-    # ("charge", "hmPostMsn", "stop") and idle ("") are deliberately excluded
-    # — quiet there is normal, not a watchdog condition.
-    _MISSION_ACTIVE_PHASES = CLEANING_PHASES | {"stuck", "pause"}
+    # v2.9.0 — REVERTED. The phase set was briefly broadened to
+    # CLEANING_PHASES | {"stuck", "pause"} on the theory that a robot
+    # whose last message before going silent reported "stuck"/"pause"
+    # should also be caught. That broadening was speculative — added
+    # proactively from a single user screenshot, not a confirmed bug
+    # report — and field use the same day confirmed a real, ongoing cost
+    # for any robot that gets stuck often (the common case for some
+    # hardware/environment combos): firmware appears to push bbrun/
+    # cleanMissionStatus updates far less frequently while motionless and
+    # "stuck" but otherwise still connected, which is NORMAL low-chatter
+    # behaviour, not a connectivity problem. Under the broadened set this
+    # fired on essentially every mission with a stuck episode — an 88s+
+    # wait inflated to a recurring false alarm on every genuinely-stuck-
+    # but-fine robot, not just the rare disconnect-while-stuck case it was
+    # meant to catch.
+    #
+    # Back to "run" only — the watchdog's purpose is specifically network/
+    # connectivity diagnosis. A robot that's "stuck" has a navigation or
+    # hardware problem, not a network one; that's a job for stuck-pattern
+    # detection (L7) and the cancellation/error recurrence Repair Issues,
+    # not this sensor. MISSION_END_PHASES ("charge", "hmPostMsn", "stop")
+    # and idle ("") remain excluded — quiet there is normal.
+    _MISSION_ACTIVE_PHASES = {"run"}
 
     @property
     def is_on(self) -> bool:

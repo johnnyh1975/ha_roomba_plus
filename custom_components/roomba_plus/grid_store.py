@@ -54,6 +54,42 @@ def _mm_to_cell(x_mm: float, y_mm: float) -> tuple[int, int]:
     )
 
 
+def _disk_filled_cells(
+    pose_points: list[tuple[float, float]],
+    radius_mm: float,
+) -> set[tuple[int, int]]:
+    """v2.9.0 (DISK-FILL) — every cell within radius_mm of ANY pose point.
+
+    Marks the robot's actual swept footprint, not just the single cell its
+    chassis centre happened to be in. Module-level (not a GridStore method)
+    since it only needs the radius and point list — pure geometry, no
+    instance state, easy to unit-test in isolation.
+
+    Distance check uses each candidate cell's CENTRE point against the pose
+    point, matching how a circle of radius_mm centred on the robot would
+    actually cover the cell grid (not just bounding-box overlap, which
+    would over-include corner cells the circle doesn't actually reach).
+    """
+    touched: set[tuple[int, int]] = set()
+    cell_radius = int(radius_mm // CELL_SIZE_MM) + 1
+    for x_mm, y_mm in pose_points:
+        cx, cy = _mm_to_cell(x_mm, y_mm)
+        # The cell containing the point itself is always touched, even if
+        # the point sits near a corner of that cell (far from its centre)
+        # and radius_mm is small enough that the centre-distance check
+        # below would otherwise miss it. The robot is physically inside
+        # this cell regardless of where exactly within it.
+        touched.add((cx, cy))
+        for dx in range(-cell_radius, cell_radius + 1):
+            for dy in range(-cell_radius, cell_radius + 1):
+                gx, gy = cx + dx, cy + dy
+                cell_centre_x = gx * CELL_SIZE_MM + CELL_SIZE_MM / 2
+                cell_centre_y = gy * CELL_SIZE_MM + CELL_SIZE_MM / 2
+                if (cell_centre_x - x_mm) ** 2 + (cell_centre_y - y_mm) ** 2 <= radius_mm ** 2:
+                    touched.add((gx, gy))
+    return touched
+
+
 def _cell_to_mm(gx: int, gy: int) -> tuple[float, float]:
     """Return the centre of a grid cell in dock-relative mm."""
     return (
@@ -168,6 +204,7 @@ class GridStore:
         pose_points: list[tuple[float, float]],
         stuck_points: list[tuple[float, float]],
         stuck_wh: tuple[int, int] | None = None,
+        robot_radius_mm: float | None = None,
     ) -> None:
         """Apply EMA decay to all cells, then add visit increments for this mission.
 
@@ -177,6 +214,29 @@ class GridStore:
             stuck_wh:     Optional (weekday, hour) of mission start in HA local time.
                           Passed by the caller (image.py) which already has dt_util;
                           grid_store.py remains HA-free per its design contract.
+            robot_radius_mm: v2.9.0 (DISK-FILL) — when given, each pose point marks
+                          every cell within this radius of the point as visited,
+                          not just the single cell containing the exact point.
+                          Caller (image.py) passes the robot's real chassis radius
+                          (robot_diameter_mm / 2 from the renderer config it already
+                          has, kept HA-free here by taking a plain float — see
+                          rationale below). None preserves the old single-cell
+                          behaviour (used by tests that don't care about this).
+
+                          Rationale: GridStore previously marked only the exact
+                          cell containing each pose sample — the robot's pose is
+                          its chassis CENTRE, not a single point of contact, so
+                          this undercounted real swept floor area. Confirmed via
+                          real data (June 2026): the raw single-cell trace doesn't
+                          even form one connected blob under 8-connectivity (median
+                          inter-sample step ~67mm vs. CELL_SIZE_MM=150mm — many
+                          consecutive samples skip whole cells), and any coverage
+                          fraction derived from it (edge_coverage_ratio,
+                          coverage_by_polygon — used in the "Kitchen 75% · Hallway
+                          60%" mission-history display) was systematically too low.
+                          Disk-filling each sample to the robot's actual footprint
+                          fixes both, independent of any future room-segmentation
+                          work this was originally investigated for.
         """
         # 1. Decay all existing cells; prune below threshold
         # P3: cells are about to change — invalidate the edge ratio cache
@@ -191,8 +251,17 @@ class GridStore:
             self._cells[cell] *= DECAY
 
         # 2. Add visit increments for visited cells
-        for x_mm, y_mm in pose_points:
-            cell = _mm_to_cell(x_mm, y_mm)
+        # v2.9.0 (DISK-FILL): collect the FULL set of cells touched by this
+        # mission first (deduplicated across all pose points), then apply
+        # VISIT_INCREMENT once per touched cell — preserves the existing
+        # "one increment per mission per cell" semantics even though a
+        # single cell is now very likely touched by MANY overlapping
+        # pose-point disks, not just one exact point.
+        if robot_radius_mm is not None and robot_radius_mm > 0:
+            touched = _disk_filled_cells(pose_points, robot_radius_mm)
+        else:
+            touched = {_mm_to_cell(x, y) for x, y in pose_points}
+        for cell in touched:
             self._cells[cell] = min(1.0, self._cells.get(cell, 0.0) + VISIT_INCREMENT)
 
         # 3. Record stuck events with optional time context
@@ -392,6 +461,21 @@ class GridStore:
         polygons_pose: {rid: [(x_mm, y_mm), ...]} — vertices in pose space (mm).
         Returns {rid: fraction} where fraction ∈ [0.0, 1.0].
         Empty dict when no cells or all polygons are empty.
+
+        v2.9.0 — DENOMINATOR FIX. Previously iterated only over
+        self._cells (cells we have ANY recorded weight for) when counting
+        `total`, instead of every geometrically possible cell within the
+        polygon. Since pruned cells (score <= PRUNE_THRESHOLD) are deleted
+        from self._cells entirely — never left behind with a low score —
+        virtually every entry that DOES exist already satisfies
+        `score > PRUNE_THRESHOLD` by construction. That made `visited`
+        and `total` nearly identical regardless of how much of the room
+        was actually swept, so the fraction reported ~100% even for a
+        barely-explored corner of a large room. Fixed: `total` now comes
+        from iterating every grid cell whose centre falls within the
+        polygon's bounding box (a pure geometric count, independent of
+        self._cells), while `visited` still only counts those AMONG them
+        that self._cells actually has recorded with sufficient weight.
         """
         result: dict[str, float] = {}
         if not self._cells:
@@ -407,15 +491,24 @@ class GridStore:
             max_x = max(p[0] for p in polygon) + half
             min_y = min(p[1] for p in polygon) - half
             max_y = max(p[1] for p in polygon) + half
-            total   = 0
+
+            gx_min = int(min_x // CELL_SIZE_MM)
+            gx_max = int(max_x // CELL_SIZE_MM)
+            gy_min = int(min_y // CELL_SIZE_MM)
+            gy_max = int(max_y // CELL_SIZE_MM)
+
+            total = 0
             visited = 0
-            for (gx, gy), score in self._cells.items():
-                cx, cy = _cell_to_mm(gx, gy)
-                if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
-                    continue
-                if _point_in_polygon_grid(cx, cy, polygon):
+            for gx in range(gx_min, gx_max + 1):
+                for gy in range(gy_min, gy_max + 1):
+                    cx, cy = _cell_to_mm(gx, gy)
+                    if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
+                        continue
+                    if not _point_in_polygon_grid(cx, cy, polygon):
+                        continue
                     total += 1
-                    if score > PRUNE_THRESHOLD:
+                    score = self._cells.get((gx, gy))
+                    if score is not None and score > PRUNE_THRESHOLD:
                         visited += 1
             result[rid] = visited / total if total > 0 else 0.0
         return result

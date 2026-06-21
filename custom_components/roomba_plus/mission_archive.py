@@ -176,6 +176,17 @@ class MissionArchive:
         self._last_nMssn: int = 0
         # Set to True once the initial load completes
         self._initial_load_done: bool = False
+        # v2.9.0 (J) — CUMULATIVE-SQFT ACCUMULATOR. Summing area_sqft over
+        # the CURRENTLY-held _derived list undercounts on any robot with
+        # more than MAX_RECORDS (800) lifetime missions: _append()'s FIFO
+        # trim permanently discards the oldest record (and its sqft
+        # contribution) once the cap is exceeded, which would make a
+        # live-recomputed sum DECREASE over time as old missions age out —
+        # the opposite of what a lifetime total should ever do. This field
+        # is incremented once per newly-archived mission, BEFORE any FIFO
+        # trim happens, so evicted records' area is never lost. Persisted
+        # across restarts; never recomputed from the current _derived list.
+        self._cumulative_sqft: float = 0.0
 
     # ── Persistence ───────────────────────────────────────────────────────
 
@@ -200,6 +211,26 @@ class MissionArchive:
                 for r in self._derived
                 if _safe_int(r.get("nMssn")) > 0
             }
+
+            # v2.9.0 (J) — load the persisted accumulator, or SEED it once
+            # from whatever's currently held if this is the first load
+            # after the feature was added (existing installations already
+            # have up to MAX_RECORDS archived — starting the accumulator
+            # at 0.0 would undercount for a long time until enough NEW
+            # missions accumulate to "catch up", which is worse than the
+            # old live-recompute behaviour it's meant to replace).
+            if "cumulative_sqft" in data:
+                self._cumulative_sqft = float(data["cumulative_sqft"] or 0.0)
+            else:
+                self._cumulative_sqft = sum(
+                    _s for r in self._derived if (_s := r.get("sqft"))
+                )
+                _LOGGER.debug(
+                    "MissionArchive: seeded cumulative_sqft=%.0f from %d "
+                    "already-archived record(s) (one-time migration)",
+                    self._cumulative_sqft, len(self._derived),
+                )
+
             _LOGGER.debug(
                 "MissionArchive: loaded %d record(s) (last_nMssn=%d, "
                 "raw_anomalous=%d) for %s",
@@ -214,6 +245,7 @@ class MissionArchive:
             self._timeline = []
             self._raw = {}
             self._last_nMssn = 0
+            self._cumulative_sqft = 0.0
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current archive to hass.storage."""
@@ -226,6 +258,7 @@ class MissionArchive:
             "timeline": self._timeline,
             # JSON keys must be strings
             "raw": {str(k): v for k, v in self._raw.items()},
+            "cumulative_sqft": self._cumulative_sqft,
         })
 
     # ── Initial load (background task) ────────────────────────────────────
@@ -338,8 +371,47 @@ class MissionArchive:
         n_mssn = _safe_int(raw_record.get("nMssn"))
         if n_mssn <= 0:
             return False  # invalid nMssn — skip entirely
-        if n_mssn in self._archived_nmssns:
-            return False  # already archived (exact match)
+
+        # v2.9.0 — DISCONTINUITY GUARD. Checked BEFORE the simple dedup-set
+        # membership check below — under normal operation nMssn only ever
+        # increases, so seeing one significantly lower than our high-water
+        # mark is itself the signal that the robot's lifetime mission
+        # counter has reset or discontinued for some reason (factory
+        # reset, RMA replacement unit, etc. — the exact cause doesn't
+        # matter here, and detecting/labelling the cause was judged not
+        # worth a whole feature on its own). Critically, this must run
+        # FIRST: the recycled nMssn value will almost always ALREADY be
+        # in _archived_nmssns from before the discontinuity (that's the
+        # whole problem) — checking membership first would immediately
+        # return False and this guard would never run for the exact case
+        # it exists to catch.
+        #
+        # Fix: clear (not reseed from _derived — that would immediately
+        # reintroduce the same collision, since the old records still
+        # have the same now-recycled nMssn values) the dedup set, and
+        # reset last_nMssn to the new epoch's value (otherwise every
+        # subsequent mission would ALSO be "< last_nMssn" and re-trigger
+        # this same clear/warning on every single mission until the new
+        # epoch's count organically catches up to the old high-water
+        # mark). Known, accepted limitation: an nMssn value can now
+        # legitimately appear twice in _derived (once from each "epoch"
+        # either side of the discontinuity) — any code doing nMssn-keyed
+        # lookups should treat it as a recency-ordered list, not assume
+        # global uniqueness. This is a narrow correctness fix for the
+        # (rare) discontinuity case, not a guarantee of cross-epoch
+        # uniqueness.
+        if n_mssn < self._last_nMssn:
+            _LOGGER.warning(
+                "MissionArchive: nMssn discontinuity detected for %s "
+                "(reported=%d, high-water mark=%d) — robot's lifetime "
+                "mission counter appears to have reset; clearing dedup "
+                "set so future missions are no longer silently blocked",
+                entry_id, n_mssn, self._last_nMssn,
+            )
+            self._archived_nmssns.clear()
+            self._last_nMssn = 0
+        elif n_mssn in self._archived_nmssns:
+            return False  # already archived (exact match, same epoch)
 
         self._append(raw_record)
         await self.async_save(hass, entry_id)
@@ -360,6 +432,12 @@ class MissionArchive:
         derived = self._parse_derived(raw)
         timeline = self._parse_timeline(raw)
         n_mssn = derived.get("nMssn")
+
+        # v2.9.0 (J) — increment BEFORE the FIFO trim below, so an evicted
+        # record's area is never lost from the running lifetime total.
+        _sqft = derived.get("sqft")
+        if _sqft:
+            self._cumulative_sqft += _sqft
 
         # Prepend to Layers 1 and 2 (newest first)
         self._derived.insert(0, derived)
@@ -618,6 +696,15 @@ class MissionArchive:
     def record_count(self) -> int:
         """Number of derived records currently in the archive."""
         return len(self._derived)
+
+    @property
+    def cumulative_sqft(self) -> float:
+        """Running lifetime total of area_sqft across every mission ever
+        archived (v2.9.0 J) — survives FIFO eviction once MAX_RECORDS is
+        exceeded, unlike summing all_derived_oldest_first() live. See the
+        accumulator's definition in __init__ for the full rationale.
+        """
+        return self._cumulative_sqft
 
     @property
     def last_nMssn(self) -> int:

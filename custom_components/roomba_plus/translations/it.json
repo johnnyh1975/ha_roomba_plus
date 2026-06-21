@@ -583,6 +583,9 @@
       },
       "firmware_version": {
         "name": "Versione firmware"
+      },
+      "integration_health": {
+        "name": "Salute dell'integrazione"
       }
     },
     "binary_sensor": {
@@ -761,6 +764,11 @@
       "rooms_map": {
         "name": "Mappa delle stanze"
       }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Posizione"
+      }
     }
   },
   "issues": {
@@ -875,6 +883,10 @@
     "mqtt_watchdog": {
       "title": "Connessione MQTT del robot persa durante la missione",
       "description": "Roomba+ non ha ricevuto messaggi MQTT dal robot per {minutes} minuti mentre era attiva una missione di pulizia. Ultima fase nota prima del silenzio: {last_phase}. Connettività cloud del robot: {cloud_hint}. Se il robot sembra essere fisicamente bloccato o in pausa, potrebbe non trattarsi di un vero problema di rete: controlla prima il robot di persona."
+    },
+    "integration_health": {
+      "title": "Lo stato di salute dell'integrazione è degradato",
+      "description": "Il punteggio di salute dell'integrazione Roomba+ è inferiore a 50 da almeno 30 minuti (punteggio attuale: {score}/100). Questo combina il numero di Repair Issue attivi, l'età dell'ultimo messaggio MQTT e l'aggiornamento dell'archivio missioni. Controlla gli attributi dell'entità sensor.*_integration_health per vedere quale segnale è interessato, e controlla altri Repair Issue attivi per questo robot."
     }
   },
   "device_automation": {

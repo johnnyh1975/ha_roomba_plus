@@ -583,6 +583,9 @@
       },
       "firmware_version": {
         "name": "Firmwareversie"
+      },
+      "integration_health": {
+        "name": "Integratiegezondheid"
       }
     },
     "binary_sensor": {
@@ -761,6 +764,11 @@
       "rooms_map": {
         "name": "Kamerkaart"
       }
+    },
+    "device_tracker": {
+      "position": {
+        "name": "Positie"
+      }
     }
   },
   "issues": {
@@ -875,6 +883,10 @@
     "mqtt_watchdog": {
       "title": "MQTT-verbinding robot verbroken tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: {cloud_hint}. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
+    },
+    "integration_health": {
+      "title": "Integratiegezondheid is verminderd",
+      "description": "De integratiegezondheidsscore van Roomba+ ligt al minstens 30 minuten onder 50 (huidige score: {score}/100). Dit combineert het aantal actieve Repair Issues, de leeftijd van het laatste MQTT-bericht en de actualiteit van het missiearchief. Controleer de attributen van de entiteit sensor.*_integration_health voor een uitsplitsing van welk signaal is beïnvloed, en bekijk andere actieve Repair Issues voor deze robot."
     }
   },
   "device_automation": {

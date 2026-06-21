@@ -24,6 +24,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,6 +87,19 @@ class RobotProfileStore:
     coverage_baseline: float | None = None
     coverage_mission_count: int = 0
 
+    # v2.9.0 (J) — STALENESS TRACKING for total_cleaned_area (bbrun.sqft /
+    # runtimeStats.sqft, the robot's own onboard lifetime area counter).
+    # Field-confirmed (980 9-series + aftermarket NiMH battery): this value
+    # can remain frozen for weeks at a time while the robot keeps actively
+    # cleaning and every OTHER bbrun.* counter (nPanics, nStuck, nEvacs,
+    # etc.) keeps incrementing normally — the firmware appears to simply
+    # stop pushing sqft/hr/min updates after some point, rather than
+    # reporting a wrong VALUE. We cannot make the robot send fresher data,
+    # but we can detect and surface "this number hasn't changed in N days"
+    # so it isn't mistaken for an accurate live reading.
+    lifetime_sqft_last_value: float | None = None
+    lifetime_sqft_last_changed_at: str | None = None
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -122,6 +136,11 @@ class RobotProfileStore:
             self.coverage_baseline = float(cb) if cb is not None else None
             self.coverage_mission_count = int(data.get("coverage_mission_count", 0))
 
+            # v2.9.0 (J) — sqft staleness tracking
+            lsv = data.get("lifetime_sqft_last_value")
+            self.lifetime_sqft_last_value = float(lsv) if lsv is not None else None
+            self.lifetime_sqft_last_changed_at = data.get("lifetime_sqft_last_changed_at")
+
             _LOGGER.debug(
                 "RobotProfileStore: loaded — rooms=%d coverage_baseline=%s",
                 len(self.room_dirt_index),
@@ -143,6 +162,8 @@ class RobotProfileStore:
             "mission_area_mean": self.mission_area_mean,
             "coverage_baseline": self.coverage_baseline,
             "coverage_mission_count": self.coverage_mission_count,
+            "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
+            "lifetime_sqft_last_changed_at": self.lifetime_sqft_last_changed_at,
         })
 
     async def async_reset(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -161,6 +182,8 @@ class RobotProfileStore:
         self.mission_area_mean = None
         self.coverage_baseline = None
         self.coverage_mission_count = 0
+        self.lifetime_sqft_last_value = None
+        self.lifetime_sqft_last_changed_at = None
         await self.async_save(hass, entry_id)
         _LOGGER.info("RobotProfileStore: reset for entry %s", entry_id)
 
@@ -232,6 +255,49 @@ class RobotProfileStore:
             "RobotProfileStore: coverage baseline → %.3f (n=%d)",
             self.coverage_baseline, self.coverage_mission_count,
         )
+
+    def update_lifetime_sqft_tracking(self, current_sqft: float) -> bool:
+        """Compare the current lifetime sqft reading against the last seen
+        value; update the "last changed" timestamp only when it actually
+        differs.
+
+        v2.9.0 (J) — STALENESS TRACKING. Returns True when the timestamp was
+        updated (caller should persist), False when the value is unchanged
+        from last time (timestamp deliberately left untouched — that's the
+        whole point: an old, never-refreshed timestamp is the signal that
+        the firmware has stopped pushing this field).
+
+        First-ever observation (lifetime_sqft_last_value is None) always
+        counts as a "change" so a fresh install gets an initial timestamp
+        immediately, rather than waiting for a second differing reading.
+        """
+        if (
+            self.lifetime_sqft_last_value is not None
+            and current_sqft == self.lifetime_sqft_last_value
+        ):
+            return False
+        self.lifetime_sqft_last_value = current_sqft
+        self.lifetime_sqft_last_changed_at = dt_util.now().isoformat()
+        return True
+
+    @property
+    def lifetime_sqft_days_unchanged(self) -> float | None:
+        """Days since the lifetime sqft reading last actually changed.
+
+        None when no observation has been recorded yet. A large value here
+        (while the robot has clearly run missions in the meantime) means
+        the firmware has stopped refreshing this specific field — see
+        update_lifetime_sqft_tracking() docstring.
+        """
+        if self.lifetime_sqft_last_changed_at is None:
+            return None
+        try:
+            last = dt_util.parse_datetime(self.lifetime_sqft_last_changed_at)
+        except (TypeError, ValueError):
+            return None
+        if last is None:
+            return None
+        return (dt_util.now() - last).total_seconds() / 86400
 
     @property
     def coverage_baseline_ready(self) -> bool:

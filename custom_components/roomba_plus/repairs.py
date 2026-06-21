@@ -22,7 +22,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SQFT_TO_M2
+from .const import (
+    DOMAIN,
+    INTEGRATION_HEALTH_LOW_THRESHOLD,
+    INTEGRATION_HEALTH_SUSTAINED_MINUTES,
+    SQFT_TO_M2,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1196,4 +1201,64 @@ async def async_check_cloud_stale(
             translation_placeholders={"minutes": str(int(age_minutes))},
         )
     else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+# v2.9.0 (INTEG-HEALTH) — when the score has been below
+# INTEGRATION_HEALTH_LOW_THRESHOLD continuously since this timestamp, for at
+# least INTEGRATION_HEALTH_SUSTAINED_MINUTES, the Repair Issue fires. Not
+# persisted (matches RoombaMqttStale's in-memory _was_stale pattern) — a
+# fresh HA restart simply restarts the sustained-low timer, which is the
+# right behaviour: a brand new HA session hasn't actually observed 30
+# minutes of poor health yet, regardless of what happened before the
+# restart.
+_health_low_since: dict[str, float] = {}
+
+
+def async_check_integration_health(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """INTEG-HEALTH (v2.9.0) — fire or clear the integration_health Repair Issue.
+
+    Fires when _compute_integration_health()'s score has been continuously
+    below INTEGRATION_HEALTH_LOW_THRESHOLD (50) for at least
+    INTEGRATION_HEALTH_SUSTAINED_MINUTES (30 min). A single bad reading
+    (e.g. one momentarily-stale cloud refresh) should not alarm the user;
+    a sustained one should. Auto-resolves as soon as the score recovers,
+    even before the 30-minute window would have elapsed for a NEW low
+    period — the sustained timer only gates fresh alarms, not recovery.
+
+    Called from RoombaIntegrationHealthSensor's 60-second periodic tick.
+    """
+    from .sensor import _compute_integration_health
+
+    score, _ = _compute_integration_health(hass, config_entry)
+    issue_id = f"integration_health_{config_entry.entry_id}"
+    entry_id = config_entry.entry_id
+    now = dt_util.utcnow().timestamp()
+
+    if score < INTEGRATION_HEALTH_LOW_THRESHOLD:
+        low_since = _health_low_since.setdefault(entry_id, now)
+        sustained_minutes = (now - low_since) / 60.0
+        if sustained_minutes >= INTEGRATION_HEALTH_SUSTAINED_MINUTES:
+            _LOGGER.warning(
+                "Roomba+: integration_health for %s has been below %d for "
+                "%.0f min (threshold %d min) — raising integration_health "
+                "issue (score=%d)",
+                entry_id, INTEGRATION_HEALTH_LOW_THRESHOLD,
+                sustained_minutes, INTEGRATION_HEALTH_SUSTAINED_MINUTES, score,
+            )
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="integration_health",
+                translation_placeholders={"score": str(score)},
+            )
+    else:
+        _health_low_since.pop(entry_id, None)
         ir.async_delete_issue(hass, DOMAIN, issue_id)

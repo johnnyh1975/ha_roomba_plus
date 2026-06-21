@@ -18,6 +18,7 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.BUTTON,
     Platform.SWITCH,
     Platform.SELECT,
+    Platform.DEVICE_TRACKER,
 ]
 
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)
@@ -344,6 +345,24 @@ END_SIGNAL_DEBOUNCE_COUNT: Final[int] = 2
 # Unambiguous terminal phases (stop/completed/cancelled) are unaffected.
 END_SIGNAL_MIN_HOLD_SECONDS: Final[float] = 2.0
 
+# v2.9.0 — UNVISITED-ROOMS SAFETY CAP. ROOM-INDEX CORROBORATION (added
+# v2.9.0 for Thonno's progress-reset report) suppresses end confirmation on
+# an ambiguous phase while MissionTimerStore still has unvisited planned
+# rooms — but this assumes current_room_idx reliably advances via
+# AUTO-ADVANCE-ROOM. Confirmed broken in the field (Thonno, i7+, lewis
+# 22.52.10, 2026-06-19): a genuine 2-room mission that the robot fully
+# completed and docked from never confirmed — end_signal_streak reached 10,
+# time_held reached 66+ seconds, yet unvisited_rooms stayed True the entire
+# time (current_room_idx never advanced past 0), permanently blocking
+# MissionStore recording and MissionTimerStore.clear(). A corroboration
+# signal that can hang a real mission end forever is worse than the
+# false-positive it was built to prevent. This cap bounds the room-index
+# suppression: past this many seconds of held ambiguous-phase signal, end
+# confirmation proceeds regardless of unvisited_rooms — either
+# current_room_idx tracking is unreliable for this firmware/scenario, or
+# it really is a genuine end; either way, never hang indefinitely.
+UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS: Final[float] = 90.0
+
 # v2.8.3 — Cloud-staleness threshold (CLOUD-STALE Repair Issue).
 # A cloud coordinator that has not successfully refreshed for this many minutes
 # fires the cloud_stale Repair Issue.  Chosen to be comfortably larger than
@@ -357,6 +376,27 @@ CLOUD_STALE_MINUTES: Final[int] = 60
 # 300 s (5 min) is conservative — the robot normally sends multiple messages
 # per minute while cleaning.
 MQTT_WATCHDOG_SECONDS: Final[int] = 300
+
+# v2.9.0 — INTEG-HEALTH meta-sensor thresholds.
+# Score (0-100) combines: active Repair Issue count, MQTT message age, and
+# ARC1 (MissionArchive) freshness. See sensor.py's _compute_integration_health
+# docstring for the exact scoring formula and the rationale for which
+# originally-planned signals (cloud age, "last store save") were folded in
+# or dropped.
+INTEGRATION_HEALTH_TICK_SECONDS: Final[int] = 60
+INTEGRATION_HEALTH_LOW_THRESHOLD: Final[int] = 50
+INTEGRATION_HEALTH_SUSTAINED_MINUTES: Final[int] = 30
+# MQTT silence beyond this is penalised even outside an active mission —
+# distinct from MQTT_WATCHDOG_SECONDS (5 min, mission-specific): this is a
+# much longer bar meant to catch "the integration's local connection appears
+# entirely dead", not routine idle-time quiet.
+INTEGRATION_HEALTH_MQTT_STALE_HOURS: Final[float] = 24.0
+# ARC1 (MissionArchive) freshness — the newest archived mission is older
+# than this despite cloud being enabled, suggesting the sync pipeline itself
+# may be stuck (distinct from CLOUD-STALE, which only checks whether the
+# coordinator's OWN refresh call is succeeding, not whether new missions are
+# actually making it into the archive).
+INTEGRATION_HEALTH_ARC1_STALE_HOURS: Final[float] = 48.0
 
 # Human-readable phase labels (from rest980 — extended)
 

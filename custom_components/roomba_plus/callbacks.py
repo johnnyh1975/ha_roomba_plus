@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES
+from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -60,6 +60,7 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
 _ROOM_TRANSITION_CANDIDATE_PHASES = ROOM_TRANSITION_CANDIDATE_PHASES
 _END_SIGNAL_DEBOUNCE_COUNT = END_SIGNAL_DEBOUNCE_COUNT
 _END_SIGNAL_MIN_HOLD_SECONDS = END_SIGNAL_MIN_HOLD_SECONDS
+_UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS = UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
 
 # AUTO-ADVANCE-ROOM time-confidence threshold: time spent in the current room
 # must be at least this fraction of the heuristic expected-per-room duration
@@ -104,18 +105,41 @@ def _room_transition_confidence_ok(
     """
     error_code = mission.get("error", 0) or 0
     if error_code:
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: confidence check failed — "
+            "active error_code=%d",
+            error_code,
+        )
         return False
 
     cycle = mission.get("cycle", "")
     if cycle not in ("clean", "quick"):
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: confidence check failed — "
+            "cycle=%r not in (clean, quick)",
+            cycle,
+        )
         return False
 
     expected = mts.expected_room_sec
     if expected is None or expected <= 0:
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: confidence check failed — "
+            "expected_room_sec=%s (no per-room or total estimate available)",
+            expected,
+        )
         return False  # cannot confirm timing — conservative refusal (see docstring)
 
     elapsed = mts.time_in_current_room_sec
-    return elapsed >= expected * _ROOM_TRANSITION_MIN_ELAPSED_RATIO
+    _ok = elapsed >= expected * _ROOM_TRANSITION_MIN_ELAPSED_RATIO
+    if not _ok:
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: confidence check failed — "
+            "elapsed=%.1fs < expected=%.1fs * ratio=%.2f (room finished "
+            "faster than estimated, or robot just entered it)",
+            elapsed, expected, _ROOM_TRANSITION_MIN_ELAPSED_RATIO,
+        )
+    return _ok
 
 
 # ── Zone-name capture ─────────────────────────────────────────────────────────
@@ -542,12 +566,47 @@ def make_mission_callback(
         # Naturally a no-op for EPHEMERAL/whole-home missions with no room
         # plan (planned_rooms empty) — falls through to the existing
         # time-based gate unchanged.
+        #
+        # v2.9.0 CONFIDENCE GUARD — confirmed regression: current_room_idx
+        # can ONLY ever advance via AUTO-ADVANCE-ROOM, which requires
+        # expected_room_sec to be available (see
+        # _room_transition_confidence_ok in this module). That in turn
+        # requires at least one room in the plan to have a real per-room or
+        # total time estimate — structurally impossible whenever every
+        # planned room uses Auto pass mode (no per-room estimate exists at
+        # all by design), or whenever cloud TE1 data simply hasn't reached
+        # GOOD_CONFIDENCE yet for any planned region (insufficient cleaning
+        # history). For those missions — likely the majority, since Auto is
+        # the default pass mode — current_room_idx is PERMANENTLY stuck at
+        # 0, making _has_unvisited_planned_rooms() return True for the
+        # entire mission regardless of actual progress. Without this guard,
+        # EVERY genuine mission end for such missions would wait out the
+        # full UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS safety cap (90s)
+        # instead of the normal END_SIGNAL_MIN_HOLD_SECONDS (2s) — an 88s
+        # regression on every single mission, not just the rare false-
+        # positive case the original fix targeted. Only trust
+        # current_room_idx as a corroboration signal when there is
+        # concrete evidence AUTO-ADVANCE-ROOM could ever have advanced it
+        # (at least one usable estimate exists); otherwise skip the
+        # room-index check entirely and fall back to the plain time gate
+        # immediately, as before this feature existed.
         def _has_unvisited_planned_rooms() -> bool:
             _mts_check = getattr(entry.runtime_data, "mission_timer_store", None)
             if _mts_check is None:
                 return False
             _rooms = getattr(_mts_check, "planned_rooms", None) or []
             if not isinstance(_rooms, list) or not _rooms:
+                return False
+            _room_secs = getattr(_mts_check, "room_estimates_sec", None) or []
+            _has_any_estimate = (
+                any(_s is not None for _s in _room_secs)
+                or getattr(_mts_check, "total_estimated_sec", None) is not None
+            )
+            if not _has_any_estimate:
+                # current_room_idx cannot be trusted — AUTO-ADVANCE-ROOM
+                # never had data to work with, so it never had a chance to
+                # advance past 0. Don't penalise this mission with the 90s
+                # safety-cap wait; fall back to the plain time gate.
                 return False
             _idx = getattr(_mts_check, "current_room_idx", 0)
             if not isinstance(_idx, int):
@@ -574,7 +633,20 @@ def make_mission_callback(
                 if end_signal_first_ts > 0
                 else 0.0
             )
-            _unvisited_rooms = _ambiguous_end_phase and _has_unvisited_planned_rooms()
+            # v2.9.0 SAFETY CAP — confirmed in the field (Thonno, i7+, lewis
+            # 22.52.10): a genuine, fully-completed 2-room mission never
+            # confirmed because current_room_idx never advanced past 0 for
+            # the whole charge-phase hold (streak reached 10, time_held
+            # reached 66+ seconds, unvisited_rooms stayed True throughout).
+            # Past this many seconds, treat current_room_idx as unreliable
+            # for this firmware/scenario and stop honouring it — see
+            # UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS in const.py.
+            _unvisited_rooms = (
+                _ambiguous_end_phase
+                and _has_unvisited_planned_rooms()
+                and _time_held < _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
+            )
+            _time_gate_open = _time_held >= _END_SIGNAL_MIN_HOLD_SECONDS
             _LOGGER.debug(
                 "MissionStore: end-phase check phase=%s cycle=%s ambiguous=%s "
                 "is_inter_room=%s end_signal_streak=%d time_held=%.3fs "
@@ -586,13 +658,27 @@ def make_mission_callback(
             if (
                 _ambiguous_end_phase
                 and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
-                and (_time_held < _END_SIGNAL_MIN_HOLD_SECONDS or _unvisited_rooms)
+                and (not _time_gate_open or _unvisited_rooms)
             ):
+                # v2.9.0 — log message now names the ACTUAL reason for
+                # rejection instead of always printing the time-gate
+                # wording. Reported by Thonno: "time_held value is well
+                # above the 2-second threshold, yet the log message still
+                # appears to reference the debounce rejection path" —
+                # confirmed bug, the old message hardcoded the time-gate
+                # phrasing even when unvisited_rooms was the actual cause.
+                if not _time_gate_open and _unvisited_rooms:
+                    _reason = "time gate AND unvisited rooms"
+                elif not _time_gate_open:
+                    _reason = "time gate (time_held=%.3fs < %.1fs)" % (
+                        _time_held, _END_SIGNAL_MIN_HOLD_SECONDS,
+                    )
+                else:
+                    _reason = "unvisited rooms (time_held=%.3fs, OK)" % _time_held
                 _LOGGER.info(
-                    "MissionStore: end-phase burst rejected "
-                    "(time_held=%.3fs < %.1fs, unvisited_rooms=%s) — "
+                    "MissionStore: end-phase burst rejected (%s) — "
                     "mission still active",
-                    _time_held, _END_SIGNAL_MIN_HOLD_SECONDS, _unvisited_rooms,
+                    _reason,
                 )
 
         if (
@@ -605,7 +691,11 @@ def make_mission_callback(
                 or (
                     _time_mod.monotonic() - end_signal_first_ts
                     >= _END_SIGNAL_MIN_HOLD_SECONDS
-                    and not _has_unvisited_planned_rooms()
+                    and (
+                        not _has_unvisited_planned_rooms()
+                        or (_time_mod.monotonic() - end_signal_first_ts)
+                        >= _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
+                    )
                 )
             )
         ):
@@ -677,13 +767,49 @@ def make_mission_callback(
                     _rep = (_master.get("state") or {}).get("reported") or {}
                     _regions = (_rep.get("lastCommand") or {}).get("regions") or []
                     _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
+                    # v2.9.0 (D) — use MissionStore._extract_rid() instead of
+                    # only checking region_id/region_name. The iRobot app
+                    # (direct start, not via roomba_plus.clean_room) reports
+                    # regions as {"rid": ...} on lewis 22.52.10+ — the same
+                    # format _get_planned_room_order() already handles
+                    # correctly for the sensor display. This block builds
+                    # mts.planned_rooms (the AUTO-ADVANCE-ROOM/estimate-
+                    # wiring source) and previously missed this format
+                    # entirely, leaving planned_rooms empty for any mission
+                    # started directly from the iRobot app.
+                    #
+                    # v2.9.0 (H) — NAME-PRIORITY CONSISTENCY. This used to
+                    # prefer region_name (raw MQTT field) then the zone
+                    # alias, then the raw ID — a DIFFERENT priority order
+                    # than _get_planned_room_order() (sensor.py, the live
+                    # display path), which resolves PURELY from
+                    # cloud_coordinator.regions[*].name keyed by rid, never
+                    # considering region_name or the zone alias at all. With
+                    # a custom alias configured that differs from the cloud
+                    # name, mts.planned_rooms (this fallback source) and the
+                    # live sensor display could show two different strings
+                    # for the same room. Now matches the same priority:
+                    # cloud name first, region_name/alias/raw-id as
+                    # successive fallbacks only when cloud data is
+                    # unavailable (mirrors how _get_planned_room_order()
+                    # itself falls back to mts.planned_rooms when cc.regions
+                    # can't resolve a name).
+                    from .mission_store import MissionStore as _MS
+                    _cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+                    _cloud_id_to_name: dict[str, str] = {}
+                    if _cc is not None:
+                        _cloud_id_to_name = {
+                            r["id"]: r["name"]
+                            for r in (getattr(_cc, "regions", None) or [])
+                            if r.get("id") and r.get("name")
+                        }
                     _names = [
-                        r.get("region_name")
-                        or (_zone.get(str(r.get("region_id", ""))) or {}).get("name")
-                        or str(r.get("region_id", ""))
+                        _cloud_id_to_name.get(_MS._extract_rid(r))
+                        or r.get("region_name")
+                        or (_zone.get(_MS._extract_rid(r)) or {}).get("name")
+                        or _MS._extract_rid(r)
                         for r in _regions
-                        if isinstance(r, dict)
-                        and (r.get("region_name") or r.get("region_id"))
+                        if isinstance(r, dict) and _MS._extract_rid(r)
                     ]
                     if _names:
                         # v2.8.0 AUTO-ADVANCE-ROOM (live wiring): use the real
@@ -720,7 +846,53 @@ def make_mission_callback(
                                     continue
                                 if _sf > 0:
                                     _known_secs.append(_sf)
-                            _total_est = sum(_known_secs) if _known_secs else None
+                            if _known_secs:
+                                _total_est = sum(_known_secs)
+                            else:
+                                # v2.9.0 (A) — CONFIRMED ROOT CAUSE: every
+                                # planned room using Auto pass mode (no
+                                # per-room estimate exists by firmware design)
+                                # OR none of them yet having GOOD_CONFIDENCE
+                                # cloud history both leave _known_secs empty,
+                                # making total_estimated_sec permanently None
+                                # for the WHOLE mission — and with it,
+                                # expected_room_sec's uniform-split fallback
+                                # has nothing to divide. AUTO-ADVANCE-ROOM can
+                                # then never advance current_room_idx past 0,
+                                # for the entire mission, regardless of how
+                                # many rooms the robot actually visits. Likely
+                                # the majority case (Auto is the default pass
+                                # mode). Falls back to the robot's own
+                                # historical mean mission duration — already
+                                # used by mission_progress's "no room
+                                # sequence" branch for exactly this purpose,
+                                # same pattern applied here. Stays None only
+                                # for a brand-new install with no mission
+                                # history yet, in which case AUTO-ADVANCE-ROOM
+                                # correctly continues to conservatively refuse
+                                # (same behaviour as before this fix).
+                                _rps = getattr(
+                                    entry.runtime_data, "robot_profile_store", None
+                                )
+                                _mean_min = (
+                                    getattr(_rps, "mission_duration_mean", None)
+                                    if _rps is not None else None
+                                )
+                                _total_est = (
+                                    round(_mean_min * 60)
+                                    if _mean_min and _mean_min > 0
+                                    else None
+                                )
+                                if _total_est:
+                                    _LOGGER.debug(
+                                        "AUTO-ADVANCE-ROOM: no per-room "
+                                        "estimates available (Auto pass mode "
+                                        "or insufficient cloud confidence) — "
+                                        "falling back to robot_profile_store"
+                                        ".mission_duration_mean=%.1fmin "
+                                        "(total_estimated_sec=%s)",
+                                        _mean_min, _total_est,
+                                    )
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug(
                                 "AUTO-ADVANCE-ROOM: room time estimate lookup "
@@ -739,6 +911,50 @@ def make_mission_callback(
                 # v2.7.5: pass hass/entry_id so on_phase_other can save
                 # the flushed delta without waiting for next on_phase_run.
                 _mts_upd.on_phase_other(hass, entry.entry_id)
+
+                # v2.9.0 (E) — RETRY for missing estimates. set_mission_plan()
+                # only ran once, at the first "run" message. If cloud TE1
+                # data wasn't synced yet at that exact moment, total_estimated
+                # _sec stayed None for the rest of the mission with no
+                # chance to recover — even though the data might be ready
+                # now, several messages later. One-shot per mission in
+                # practice: once update_estimates() succeeds, this check is
+                # always False afterwards (total_estimated_sec is no longer
+                # None). Cheap and side-effect-free when cloud_coordinator
+                # is None or regions are still empty — _compute_room_time_
+                # estimates() degrades to all-None, update_estimates() just
+                # re-saves the same None it already had.
+                if (
+                    _mts_upd.total_estimated_sec is None
+                    and _mts_upd.planned_rooms
+                ):
+                    try:
+                        from .sensor import _compute_room_time_estimates
+                        _retry_secs = _compute_room_time_estimates(
+                            entry, _mts_upd.planned_rooms
+                        )
+                        _retry_known = [
+                            float(_s) for _s in _retry_secs
+                            if _s is not None and float(_s) > 0
+                        ]
+                        if _retry_known:
+                            _mts_upd.update_estimates(
+                                sum(_retry_known), _retry_secs,
+                                hass, entry.entry_id,
+                            )
+                            _LOGGER.info(
+                                "AUTO-ADVANCE-ROOM: retry succeeded — cloud "
+                                "estimates now available (total_estimated_sec"
+                                "=%.0fs), updated mid-mission without "
+                                "resetting progress",
+                                sum(_retry_known),
+                            )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug(
+                            "AUTO-ADVANCE-ROOM: estimate retry failed — "
+                            "continuing without estimates",
+                            exc_info=True,
+                        )
 
                 # v2.8.0 AUTO-ADVANCE-ROOM — automatic confidence-based room
                 # advancement, per community feature request (Thonno).

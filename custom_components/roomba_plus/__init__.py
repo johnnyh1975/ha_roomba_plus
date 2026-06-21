@@ -2159,6 +2159,25 @@ async def _async_update_robot_profile_store(
         except Exception:  # noqa: BLE001
             pass
 
+    # ── J: lifetime sqft staleness tracking ────────────────────────────────
+    # v2.9.0 — field-confirmed: bbrun.sqft/runtimeStats.sqft can remain
+    # frozen for weeks while the robot keeps actively cleaning and every
+    # OTHER bbrun.* counter keeps incrementing normally. We cannot make the
+    # firmware send fresher data, but we CAN detect and surface "this
+    # number hasn't changed in N days" via the total_cleaned_area sensor's
+    # extra_attributes_fn, instead of silently displaying a stale number as
+    # if it were a live reading.
+    try:
+        _state = roomba_reported_state(entry.runtime_data.roomba)
+        _bbrun = _state.get("bbrun", {})
+        _runtime = _state.get("runtimeStats", {})
+        _sqft = _runtime.get("sqft", _bbrun.get("sqft"))
+        if _sqft is not None:
+            if robot_profile_store.update_lifetime_sqft_tracking(float(_sqft)):
+                changed = True
+    except Exception:  # noqa: BLE001
+        pass
+
     if changed:
         await robot_profile_store.async_save(hass, entry.entry_id)
 
