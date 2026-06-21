@@ -884,3 +884,206 @@ class TestExportEndpoint:
         resp = await view.get(req, "abc123")
         body = json.loads(resp.body)
         assert body["export_version"] == 1
+
+
+def _digest_rec(
+    started_at: str,
+    ended_at: str | None = None,
+    area_sqft: float | None = 100.0,
+    result: str = "completed",
+    initiator: str = "schedule",
+    bbrun_hr: float | None = None,
+    battery_cycles: int | None = None,
+) -> dict:
+    return {
+        "id": f"m_{started_at}",
+        "started_at": started_at,
+        "ended_at": ended_at or started_at,
+        "duration_min": 30,
+        "area_sqft": area_sqft,
+        "result": result,
+        "initiator": initiator,
+        "zones": [],
+        "error_code": None,
+        "bbrun_hr": bbrun_hr,
+        "battery_cycles": battery_cycles,
+    }
+
+
+def _real_mission_store(records: list[dict]):
+    """A REAL MissionStore (not the MagicMock helper above) — DailyDigestView
+    calls .query(), which the MagicMock _make_mission_store() doesn't
+    implement (only _records is set there; the other view formats that use
+    it read ._records directly, bypassing .query() entirely)."""
+    from custom_components.roomba_plus.mission_store import MissionStore
+    store = MissionStore()
+    store._records = list(records)
+    return store
+
+
+class TestLifetimeDeltaForDay:
+    """v2.9.0 DAILY-DIGEST — _lifetime_delta_for_day() pure delta logic."""
+
+    def _delta(self, records, target_date_str, field="bbrun_hr"):
+        from custom_components.roomba_plus.api_views import DailyDigestView
+        target = datetime.date.fromisoformat(target_date_str)
+        return DailyDigestView._lifetime_delta_for_day(records, target, field)
+
+    def test_simple_two_day_delta(self):
+        records = [
+            _digest_rec("2026-06-15T08:00:00+00:00", bbrun_hr=100.0),
+            _digest_rec("2026-06-16T08:00:00+00:00", bbrun_hr=101.5),
+        ]
+        assert self._delta(records, "2026-06-16") == pytest.approx(1.5)
+
+    def test_multiple_records_on_target_day_uses_last(self):
+        """Two missions on the target day — delta must use the LAST one
+        (highest counter value), not double-count or sum them."""
+        records = [
+            _digest_rec("2026-06-15T08:00:00+00:00", bbrun_hr=100.0),
+            _digest_rec("2026-06-16T08:00:00+00:00", bbrun_hr=100.8),
+            _digest_rec("2026-06-16T14:00:00+00:00", bbrun_hr=101.5),
+        ]
+        assert self._delta(records, "2026-06-16") == pytest.approx(1.5)
+
+    def test_no_prior_record_returns_none(self):
+        """First-ever day of history — nothing to diff against. Must be
+        None (honest 'unknown'), never silently assume a 0 baseline."""
+        records = [_digest_rec("2026-06-16T08:00:00+00:00", bbrun_hr=5.0)]
+        assert self._delta(records, "2026-06-16") is None
+
+    def test_no_record_on_target_day_returns_none(self):
+        records = [_digest_rec("2026-06-15T08:00:00+00:00", bbrun_hr=100.0)]
+        assert self._delta(records, "2026-06-16") is None
+
+    def test_gap_of_several_days_still_correct(self):
+        """Prior record several days back (not just yesterday) — counter
+        cannot have changed in the gap, so the delta is still exact."""
+        records = [
+            _digest_rec("2026-06-10T08:00:00+00:00", bbrun_hr=90.0),
+            _digest_rec("2026-06-16T08:00:00+00:00", bbrun_hr=93.0),
+        ]
+        assert self._delta(records, "2026-06-16") == pytest.approx(3.0)
+
+    def test_missing_field_value_skipped(self):
+        """A record with the field absent (None) must not poison the
+        delta — e.g. a 600-series robot with no battery_cycles at all."""
+        records = [
+            _digest_rec("2026-06-15T08:00:00+00:00", bbrun_hr=100.0,
+                        battery_cycles=None),
+            _digest_rec("2026-06-16T08:00:00+00:00", bbrun_hr=101.0,
+                        battery_cycles=None),
+        ]
+        assert self._delta(records, "2026-06-16", field="battery_cycles") is None
+
+    def test_battery_cycles_field_works_identically(self):
+        records = [
+            _digest_rec("2026-06-15T08:00:00+00:00", battery_cycles=40),
+            _digest_rec("2026-06-16T08:00:00+00:00", battery_cycles=42),
+        ]
+        assert self._delta(records, "2026-06-16", field="battery_cycles") == 2
+
+
+class TestDailyDigestView:
+    """v2.9.0 DAILY-DIGEST — full GET /api/roomba_plus/{entry_id}/digest flow."""
+
+    def _make_request(self, hass, date: str | None = None):
+        req = MagicMock()
+        req.app = {"hass": hass}
+        req.query = {"date": date} if date else {}
+        return req
+
+    @pytest.mark.asyncio
+    async def test_basic_digest_shape(self):
+        from custom_components.roomba_plus.api_views import DailyDigestView
+
+        records = [
+            _digest_rec("2026-06-16T08:00:00+00:00", area_sqft=250.0,
+                        result="completed", initiator="schedule",
+                        bbrun_hr=100.0, battery_cycles=40),
+            _digest_rec("2026-06-16T14:00:00+00:00", area_sqft=500.0,
+                        result="stuck", initiator="demand",
+                        bbrun_hr=101.5, battery_cycles=42),
+            # prior day — baseline for the deltas above
+            _digest_rec("2026-06-15T08:00:00+00:00", area_sqft=300.0,
+                        bbrun_hr=99.0, battery_cycles=39),
+        ]
+        hass, _ = _make_hass_with_entry(records=records)
+        hass.config_entries.async_get_entry.return_value.runtime_data.mission_store = (
+            _real_mission_store(records)
+        )
+
+        view = DailyDigestView()
+        req = self._make_request(hass, "2026-06-16")
+        resp = await view.get(req, "abc123")
+        body = json.loads(resp.body)
+
+        assert body["missions"] == 2
+        # SQFT_TO_M2 ≈ 0.0929 — (250+500) * 0.0929 ≈ 69.7
+        assert body["area_m2"] == pytest.approx(69.7, abs=0.1)
+        assert body["stuck_events"] == 1
+        assert body["demand_cleans"] == 1
+        assert body["filter_hours_today"] == pytest.approx(2.5)   # 101.5-99.0
+        assert body["battery_cycles_today"] == 3                  # 42-39
+
+    @pytest.mark.asyncio
+    async def test_no_missions_on_date_returns_zeros(self):
+        from custom_components.roomba_plus.api_views import DailyDigestView
+
+        records = [_digest_rec("2026-06-10T08:00:00+00:00", bbrun_hr=90.0)]
+        hass, _ = _make_hass_with_entry(records=records)
+        hass.config_entries.async_get_entry.return_value.runtime_data.mission_store = (
+            _real_mission_store(records)
+        )
+
+        view = DailyDigestView()
+        req = self._make_request(hass, "2026-06-16")
+        resp = await view.get(req, "abc123")
+        body = json.loads(resp.body)
+
+        assert body["missions"] == 0
+        assert body["area_m2"] is None
+        assert body["stuck_events"] == 0
+        assert body["demand_cleans"] == 0
+        assert body["filter_hours_today"] is None  # no record ON 06-16 at all
+
+    @pytest.mark.asyncio
+    async def test_invalid_date_returns_400(self):
+        from custom_components.roomba_plus.api_views import DailyDigestView
+
+        hass, _ = _make_hass_with_entry(records=[])
+        hass.config_entries.async_get_entry.return_value.runtime_data.mission_store = (
+            _real_mission_store([])
+        )
+
+        view = DailyDigestView()
+        req = self._make_request(hass, "not-a-date")
+        resp = await view.get(req, "abc123")
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_entry_not_found_returns_404(self):
+        from custom_components.roomba_plus.api_views import DailyDigestView
+
+        hass, _ = _make_hass_with_entry(entry_present=False)
+        view = DailyDigestView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "missing_entry")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_no_date_param_defaults_to_today(self):
+        """When `date` is omitted, defaults to today — just verify it
+        doesn't error and returns a well-formed response."""
+        from custom_components.roomba_plus.api_views import DailyDigestView
+
+        hass, _ = _make_hass_with_entry(records=[])
+        hass.config_entries.async_get_entry.return_value.runtime_data.mission_store = (
+            _real_mission_store([])
+        )
+
+        view = DailyDigestView()
+        req = self._make_request(hass)  # no date
+        resp = await view.get(req, "abc123")
+        body = json.loads(resp.body)
+        assert body["missions"] == 0

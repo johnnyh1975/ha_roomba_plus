@@ -234,3 +234,68 @@ class TestExperimentalButtonTranslationKeys:
 
     def test_power_off_translation_key(self):
         assert _get_button("power_off").translation_key == "power_off"
+
+
+# ── v2.9.0 LOGBOOK — maintenance reset buttons fire roomba_plus_maintenance_reset ──
+
+def _make_reset_button(cls):
+    """Build a FilterResetButton/BrushResetButton/BatteryResetButton with a
+    real (mocked) MaintenanceStore and config_entry, hass mocked out."""
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {"bbrun": {"hr": 123}}}}
+    config_entry = MagicMock()
+    config_entry.entry_id = "entry1"
+    config_entry.title = "Test Robot"
+    store = MagicMock()
+    store.async_save = AsyncMock()
+    config_entry.runtime_data.maintenance_store = store
+    entity = cls(roomba, "test_blid", config_entry)
+    entity.hass = MagicMock()
+    entity.schedule_update_ha_state = MagicMock()
+    return entity, store, config_entry
+
+
+class TestMaintenanceResetButtonsFireLogbookEvent:
+    """v2.9.0 LOGBOOK — Filter/Brush/Battery reset buttons must fire
+    roomba_plus_maintenance_reset (same event the reset SERVICES fire via
+    services.py's shared _fire_maintenance_reset_event), so the Logbook
+    entry appears regardless of which path the user used."""
+
+    @pytest.mark.asyncio
+    async def test_filter_reset_button_fires_event(self):
+        from custom_components.roomba_plus.button import FilterResetButton
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        entity, store, entry = _make_reset_button(FilterResetButton)
+        await entity.async_press()
+
+        store.reset_filter.assert_called_once_with(123)
+        entity.hass.bus.async_fire.assert_called_once_with(
+            EVENT_MAINTENANCE_RESET,
+            {"entry_id": "entry1", "name": "Test Robot", "component": "filter", "hours": 123},
+        )
+
+    @pytest.mark.asyncio
+    async def test_brush_reset_button_fires_event(self):
+        from custom_components.roomba_plus.button import BrushResetButton
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        entity, store, entry = _make_reset_button(BrushResetButton)
+        await entity.async_press()
+
+        store.reset_brush.assert_called_once_with(123)
+        payload = entity.hass.bus.async_fire.call_args[0][1]
+        assert payload["component"] == "brush"
+        assert payload["hours"] == 123
+
+    @pytest.mark.asyncio
+    async def test_battery_reset_button_fires_event(self):
+        from custom_components.roomba_plus.button import BatteryResetButton
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        entity, store, entry = _make_reset_button(BatteryResetButton)
+        await entity.async_press()
+
+        store.reset_battery.assert_called_once_with(123)
+        payload = entity.hass.bus.async_fire.call_args[0][1]
+        assert payload["component"] == "battery"

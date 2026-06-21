@@ -742,7 +742,12 @@ class TestRecordCleanEventWiring:
         assert record_idx > phase_idx, (
             "record_clean_event must be called after the mission-start phase transition"
         )
-        assert record_idx - phase_idx < 800, (
+        # v2.9.0 — threshold bumped 800→900: F4e's current_leg_rechrgM
+        # double-counting bugfix added one legitimate reset line to this
+        # exact span (mission-start block). record_clean_event's actual
+        # placement (still immediately after the phase-guard block) is
+        # unchanged — this is proximity slack, not a placement regression.
+        assert record_idx - phase_idx < 900, (
             "record_clean_event is too far from the mission-start transition — check placement"
         )
 

@@ -10,7 +10,25 @@ from __future__ import annotations
 
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _make_entity_registry_entry(config_entry_id: str) -> MagicMock:
+    e = MagicMock()
+    e.config_entry_id = config_entry_id
+    return e
+
+
+def _make_config_entry(entry_id="entry1", title="Test Robot", maintenance_store=None):
+    entry = MagicMock()
+    entry.entry_id = entry_id
+    entry.title = title
+    entry.runtime_data.maintenance_store = maintenance_store or MagicMock()
+    entry.runtime_data.maintenance_store.async_save = AsyncMock()
+    entry.runtime_data.roomba_reported_state.return_value = {
+        "bbrun": {"hr": 42}, "runtimeStats": {},
+    }
+    return entry
 
 
 class TestServicesRegistration:
@@ -186,3 +204,107 @@ class TestCleanSequenceConstant:
         )
         assert callable(async_handle_clean_sequence)
         assert _CLEAN_SEQUENCE_SCHEMA is not None
+
+
+class TestFireMaintenanceResetEvent:
+    """v2.9.0 LOGBOOK — _fire_maintenance_reset_event() shared helper."""
+
+    def test_payload_with_hours(self):
+        from custom_components.roomba_plus.services import _fire_maintenance_reset_event
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="e1", title="Roomba 980")
+
+        _fire_maintenance_reset_event(hass, entry, "filter", 142)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_MAINTENANCE_RESET,
+            {"entry_id": "e1", "name": "Roomba 980", "component": "filter", "hours": 142},
+        )
+
+    def test_payload_without_hours(self):
+        """Calendar-based inspect resets (wheel/contact/bin) have no hr baseline."""
+        from custom_components.roomba_plus.services import _fire_maintenance_reset_event
+
+        hass = MagicMock()
+        entry = _make_config_entry()
+
+        _fire_maintenance_reset_event(hass, entry, "wheel", None)
+
+        payload = hass.bus.async_fire.call_args[0][1]
+        assert payload["hours"] is None
+        assert payload["component"] == "wheel"
+
+
+class TestHandleResetServiceFiresEvent:
+    """v2.9.0 LOGBOOK — _handle_reset_service() fires maintenance_reset."""
+
+    async def _run(self, part="filter"):
+        from custom_components.roomba_plus.services import _handle_reset_service
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="e1", title="Roomba 980")
+        hass.config_entries.async_get_entry.return_value = entry
+
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry("e1")
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        ), patch(
+            "custom_components.roomba_plus.services._async_signal_entities",
+        ):
+            call = MagicMock()
+            call.data = {"entity_id": ["sensor.x_filter_remaining_hours"]}
+            await _handle_reset_service(hass, call, part)
+
+        return hass, entry, EVENT_MAINTENANCE_RESET
+
+    @pytest.mark.asyncio
+    async def test_fires_event_with_current_hr(self):
+        hass, entry, event = await self._run("filter")
+        hass.bus.async_fire.assert_called_once_with(
+            event,
+            {"entry_id": "e1", "name": "Roomba 980", "component": "filter", "hours": 42},
+        )
+
+    @pytest.mark.asyncio
+    async def test_works_for_each_resettable_part(self):
+        for part in ("filter", "brush", "battery", "pad"):
+            hass, _, event = await self._run(part)
+            payload = hass.bus.async_fire.call_args[0][1]
+            assert payload["component"] == part
+
+
+class TestHandleInspectResetServiceFiresEvent:
+    """v2.9.0 LOGBOOK — _handle_inspect_reset_service() fires
+    maintenance_reset with hours=None (no hr-counter baseline for
+    calendar-based wheel/contact/bin cleaning resets)."""
+
+    @pytest.mark.asyncio
+    async def test_fires_event_with_hours_none(self):
+        from custom_components.roomba_plus.services import _handle_inspect_reset_service
+        from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="e1", title="Roomba 980")
+        hass.config_entries.async_get_entry.return_value = entry
+
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry("e1")
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        ), patch(
+            "custom_components.roomba_plus.services._async_signal_entities",
+        ):
+            call = MagicMock()
+            call.data = {"entity_id": ["sensor.x_wheel_last_cleaned"]}
+            await _handle_inspect_reset_service(hass, call, "wheel")
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_MAINTENANCE_RESET,
+            {"entry_id": "e1", "name": "Roomba 980", "component": "wheel", "hours": None},
+        )

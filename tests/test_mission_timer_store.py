@@ -378,11 +378,17 @@ class TestAttributesUseElapsedSec:
         mts._last_phase_ts = time.monotonic() - 120  # 2 min live delta
         mts.current_room = "Bathroom"
         mts.next_room = "Corridor"
+        # v2.9.0 — None forces the old _elapsed_sec() live-delta fallback,
+        # which is what this test is actually exercising (no
+        # mission_started_wall_ts set on this MagicMock, matching a mission
+        # already in progress when v2.9.0 shipped).
+        mts.effective_elapsed_min = None
 
         state = {"cleanMissionStatus": {"phase": "run"}}
         data = MagicMock()
         data.roomba_reported_state.return_value = state
         data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
         sensor._config_entry.runtime_data = data
 
         with patch(
@@ -393,6 +399,194 @@ class TestAttributesUseElapsedSec:
 
         # elapsed_run_min should reflect run_sec + ~120s live delta ≈ 3 min
         assert attrs["elapsed_run_min"] >= 2.5
+
+    def test_elapsed_run_min_uses_effective_elapsed_min_when_available(self):
+        """v2.9.0 — primary path: when mts.effective_elapsed_min is set (the
+        normal case for any mission started after this shipped), it's used
+        directly instead of the old live-delta clamp fallback."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.current_room = "Bathroom"
+        mts.next_room = "Corridor"
+        mts.effective_elapsed_min = 12.5
+        mts.mission_duration_min = 15.0
+        mts.recharge_min = 2.5
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=[],
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        assert attrs["elapsed_run_min"] == pytest.approx(12.5)
+
+    def test_new_v290_attributes_present(self):
+        """mission_duration_min and recharge_min appear alongside the
+        existing attributes, sourced directly from MissionTimerStore."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.current_room = "Bathroom"
+        mts.next_room = "Corridor"
+        mts.effective_elapsed_min = 12.5
+        mts.mission_duration_min = 15.0
+        mts.recharge_min = 2.5
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=[],
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        assert attrs["mission_duration_min"] == 15.0
+        assert attrs["recharge_min"] == 2.5
+
+    def test_native_value_uses_effective_elapsed_min(self):
+        """v2.9.0 — percentage calculation (native_value) uses the new
+        formula too, not just the elapsed_run_min attribute — both read
+        the same elapsed value internally."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [600.0, 600.0]  # 2 rooms, 10 min each
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 6.0  # 360s effective — no recharge involved
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["A", "B"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        # 360s elapsed / 1200s total = 30%
+        assert pct == 30
+
+    def test_native_value_auto_mode_all_estimates_none_falls_back_to_mean(self):
+        """v2.9.0 — Thonno's original Auto-mode field report: planned_order
+        resolves fine, but ALL per-room estimates are None (Auto pass mode
+        has no per-room TE1 data at all). Must fall back to
+        mission_duration_mean instead of returning None ("Unknown") for the
+        entire mission."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [None, None, None]  # Auto mode
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 10.0  # 600s effective elapsed
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store.mission_duration_mean = 20.0  # 20-min typical mission
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        # 600s / (20min*60=1200s) = 50%, NOT None/"Unknown"
+        assert pct == 50
+
+    def test_native_value_auto_mode_no_profile_store_stays_none(self):
+        """If there's truly no rolling-average data either (brand new
+        robot), still correctly returns None rather than crashing or
+        guessing a number."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [None, None]
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 5.0
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store = None
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["A", "B"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        assert pct is None
+
+    def test_resolve_smart_tier_room_state_auto_mode_remaining_min_fallback(self):
+        """Same fallback for the estimated_remaining_min attribute (not
+        just the percentage native_value) — the attribute previously also
+        stayed None for the whole Auto-mode mission."""
+        from custom_components.roomba_plus.sensor import _resolve_smart_tier_room_state
+
+        config_entry = MagicMock()
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 10.0  # 600s
+        mts.mission_duration_min = 10.0
+        mts.recharge_min = 0.0
+        mts.current_room = "Cabina Armadio"
+        mts.next_room = "Camera da letto"
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store.mission_duration_mean = 20.0  # 1200s typical
+        config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None, None],
+        ):
+            attrs = _resolve_smart_tier_room_state(config_entry)
+
+        # remaining = 1200s total - 600s elapsed = 600s = 10 min, not None
+        assert attrs["estimated_remaining_min"] == 10
 
 
 class TestCurrentRoomPrefersEstimate:
@@ -412,11 +606,15 @@ class TestCurrentRoomPrefersEstimate:
         mts._last_phase_ts = 0.0  # no live delta
         mts.current_room = "Bathroom"   # stale MTS value
         mts.next_room = "Corridor"
+        # v2.9.0 — force the old _elapsed_sec() fallback (see comment in
+        # TestAttributesUseElapsedSec above for why).
+        mts.effective_elapsed_min = None
 
         state = {"cleanMissionStatus": {"phase": "run"}}
         data = MagicMock()
         data.roomba_reported_state.return_value = state
         data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
         sensor._config_entry.runtime_data = data
 
         with patch(
@@ -1131,6 +1329,130 @@ class TestRoomTransitionConfidenceOk:
         assert _room_transition_confidence_ok(
             {"cycle": "clean", "error": 0}, mts
         ) is True
+
+
+class TestMissionDurationMin:
+    """v2.9.0 — mission_duration_min: pure wall-clock duration since mission
+    start, independent of run_sec/phase-tracking entirely."""
+
+    def _mts(self) -> MissionTimerStore:
+        return MissionTimerStore()
+
+    def test_none_when_no_active_mission(self):
+        mts = self._mts()
+        assert mts.mission_duration_min is None
+
+    def test_none_when_wall_ts_not_set(self):
+        """mission_id present but mission_started_wall_ts still 0 — e.g. a
+        mission already in progress when this field was introduced."""
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = 0.0
+        assert mts.mission_duration_min is None
+
+    def test_computes_wall_clock_minutes(self):
+        import time
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() - 600  # 10 minutes ago
+        assert mts.mission_duration_min == pytest.approx(10.0, abs=0.05)
+
+    def test_never_negative_even_with_clock_skew(self):
+        import time
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() + 100  # future timestamp
+        assert mts.mission_duration_min == 0.0
+
+
+class TestEffectiveElapsedMin:
+    """v2.9.0 — effective_elapsed_min = mission_duration_min - recharge_min.
+    No time-based clamp; recharge_min comes from the robot's own F4e
+    (hmMidMsn/rechrgM) reporting, not a heuristic."""
+
+    def _mts(self, minutes_ago: float) -> MissionTimerStore:
+        import time
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() - minutes_ago * 60
+        return mts
+
+    def test_none_when_no_duration(self):
+        mts = MissionTimerStore()
+        assert mts.effective_elapsed_min is None
+
+    def test_subtracts_recharge_min(self):
+        mts = self._mts(minutes_ago=20)
+        mts.recharge_min = 5.0
+        assert mts.effective_elapsed_min == pytest.approx(15.0, abs=0.05)
+
+    def test_zero_recharge_equals_full_duration(self):
+        mts = self._mts(minutes_ago=10)
+        mts.recharge_min = 0.0
+        assert mts.effective_elapsed_min == pytest.approx(10.0, abs=0.05)
+
+    def test_never_negative_when_recharge_exceeds_duration(self):
+        """Defensive floor — shouldn't normally happen (recharge_min can't
+        exceed real elapsed wall-clock time), but never show negative."""
+        mts = self._mts(minutes_ago=2)
+        mts.recharge_min = 100.0
+        assert mts.effective_elapsed_min == 0.0
+
+    def test_navigation_gap_counts_as_effective_time(self):
+        """The actual field scenario this was built for: a multi-minute gap
+        with NO recharge reported (navigation/room-reading, confirmed by
+        Thonno's app observation) must count fully as effective time, not
+        be excluded by any fixed-duration clamp."""
+        mts = self._mts(minutes_ago=4.37)  # ~262s, Thonno's exact field gap
+        mts.recharge_min = 0.0  # no hmMidMsn ever reported during this gap
+        assert mts.effective_elapsed_min == pytest.approx(4.37, abs=0.05)
+
+
+class TestMissionTimerStorePersistsNewFields:
+    """v2.9.0 — mission_started_wall_ts and recharge_min round-trip through
+    async_save/async_load like every other field."""
+
+    @pytest.mark.asyncio
+    async def test_save_load_roundtrip(self, tmp_path):
+        import time
+        hass = MagicMock()
+        hass.config.path = lambda *a: str(tmp_path / "_".join(a))
+
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        wall_ts = time.time() - 300
+        mts.mission_started_wall_ts = wall_ts
+        mts.recharge_min = 7.5
+
+        store_calls = {}
+
+        class _FakeStore:
+            def __init__(self, hass, version, key):
+                store_calls["key"] = key
+            async def async_save(self, data):
+                store_calls["data"] = data
+            async def async_load(self):
+                return store_calls.get("data")
+
+        with patch("custom_components.roomba_plus.mission_timer_store.Store", _FakeStore):
+            await mts.async_save(hass, "entry1")
+            mts2 = MissionTimerStore()
+            await mts2.async_load(hass, "entry1")
+
+        assert mts2.mission_started_wall_ts == pytest.approx(wall_ts)
+        assert mts2.recharge_min == 7.5
+
+    def test_clear_resets_new_fields(self):
+        import time
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time()
+        mts.recharge_min = 12.0
+        hass = MagicMock()
+        with patch.object(mts, "_schedule_save"):
+            mts.clear(hass, "entry1")
+        assert mts.mission_started_wall_ts == 0.0
+        assert mts.recharge_min == 0.0
 
 
 class TestMissionTimerStoreTimingProperties:

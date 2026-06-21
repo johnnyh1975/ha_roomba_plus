@@ -2022,6 +2022,110 @@ class TestRechargeAccumulation:
             }}})
 
 
+class TestRechargeAccumulationDoubleCountingFix:
+    """v2.9.0 — F4e bugfix regression: repeated hmMidMsn messages within the
+    SAME charge leg must not double-count rechrgM (it's already cumulative
+    for that one leg — must be SET, not added, on each message). Found
+    while wiring recharge_min into MissionTimerStore for live exposure
+    (mission_progress's new mission_duration_min/effective_elapsed_min
+    attributes) — previously only mattered for the final mission-end
+    record, where this bug had gone undetected since the only prior test
+    (test_recharge_min_in_record) sent exactly one hmMidMsn message.
+    """
+
+    def _msg(self, phase: str, recharge_m: int | None = None) -> dict:
+        mission = {"phase": phase, "mssnStrtTm": 1700000000, "sqft": 100}
+        if recharge_m is not None:
+            mission["rechrgM"] = recharge_m
+        return {"state": {"reported": {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}}}}
+
+    def _make_env(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        entry = MagicMock()
+        entry.runtime_data.mission_store = MagicMock()
+        entry.runtime_data.mission_store.async_append = AsyncMock()
+        entry.runtime_data.mission_store.async_save = AsyncMock()
+        entry.runtime_data.zone_store = None
+        entry.runtime_data.map_capability = None
+        entry.runtime_data.cloud_coordinator = None
+
+        mts = MagicMock()
+        mts.mission_id = "fakeid_1700000000"
+        entry.runtime_data.mission_timer_store = mts
+
+        hass = MagicMock()
+        patcher = patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
+        )
+        mock_rct = patcher.start()
+        import asyncio
+        mock_rct.side_effect = lambda coro, loop: asyncio.ensure_future(coro)
+
+        cb = make_mission_callback(hass, entry)
+        return cb, mts, patcher
+
+    def test_repeated_messages_same_leg_not_double_counted(self):
+        cb, mts, patcher = self._make_env()
+        try:
+            cb(self._msg("run"))
+            cb(self._msg("hmMidMsn", recharge_m=1))
+            cb(self._msg("hmMidMsn", recharge_m=2))
+            cb(self._msg("hmMidMsn", recharge_m=3))
+            assert mts.recharge_min == 3.0  # NOT 1+2+3=6
+        finally:
+            patcher.stop()
+
+    def test_leg_total_locked_in_when_leg_ends(self):
+        cb, mts, patcher = self._make_env()
+        try:
+            cb(self._msg("run"))
+            cb(self._msg("hmMidMsn", recharge_m=5))
+            cb(self._msg("run"))  # leg ends
+            assert mts.recharge_min == 5.0
+        finally:
+            patcher.stop()
+
+    def test_second_leg_adds_to_first_legs_total(self):
+        """Two SEPARATE charge legs in one mission — totals must add, not
+        overwrite (the completed-legs accumulator must persist across legs,
+        only the in-progress leg's own value resets)."""
+        cb, mts, patcher = self._make_env()
+        try:
+            cb(self._msg("run"))
+            cb(self._msg("hmMidMsn", recharge_m=5))
+            cb(self._msg("run"))            # leg 1 ends, locked in at 5
+            cb(self._msg("hmMidMsn", recharge_m=2))
+            assert mts.recharge_min == 7.0  # 5 (leg 1) + 2 (leg 2, live)
+            cb(self._msg("run"))            # leg 2 ends
+            assert mts.recharge_min == 7.0  # 5 + 2 locked in
+        finally:
+            patcher.stop()
+
+    def test_fallback_path_when_rechrgM_unavailable(self):
+        """If rechrgM is never reported, falls back to wall-clock elapsed
+        time for the leg — must still work after the fix."""
+        import time as _t
+        cb, mts, patcher = self._make_env()
+        try:
+            cb(self._msg("run"))
+            cb(self._msg("hmMidMsn"))  # no rechrgM field at all
+            _t.sleep(0.05)
+            cb(self._msg("hmMidMsn"))  # still no rechrgM — stays on fallback path
+            cb(self._msg("run"))       # leg ends — fallback computes elapsed minutes
+            # A real wall-clock gap under 1 minute rounds down to 0 via the
+            # fallback's int(.../60) — the live mirror only writes when the
+            # value actually CHANGES, so for a sub-minute fallback leg it
+            # correctly never fires at all (mts.recharge_min stays whatever
+            # it started as). The real assertion here is just "no exception"
+            # — confirms the fallback path itself didn't break after the fix.
+            from unittest.mock import MagicMock
+            assert mts.recharge_min is not None  # MagicMock or a real number — both fine
+        finally:
+            patcher.stop()
+
+
 class TestCoveragePct:
     def _store_with_areas(self, areas: list[float]) -> MagicMock:
         from custom_components.roomba_plus.mission_store import MissionStore

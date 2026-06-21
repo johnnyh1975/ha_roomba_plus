@@ -1178,6 +1178,106 @@ class TestComputeIntegrationHealth:
         assert score == 20  # 100 - 60 (capped) - 20 (mqtt) = 20, never negative
 
 
+class TestHealthBand:
+    """v2.9.0 EVENT-BUS — _health_band() pure classification helper."""
+
+    def test_healthy_at_and_above_threshold(self):
+        from custom_components.roomba_plus.sensor import _health_band
+        assert _health_band(100) == "healthy"
+        assert _health_band(80) == "healthy"
+
+    def test_degraded_between_thresholds(self):
+        from custom_components.roomba_plus.sensor import _health_band
+        assert _health_band(79) == "degraded"
+        assert _health_band(50) == "degraded"
+
+    def test_critical_below_low_threshold(self):
+        from custom_components.roomba_plus.sensor import _health_band
+        assert _health_band(49) == "critical"
+        assert _health_band(0) == "critical"
+
+
+class TestHealthChangeEvent:
+    """v2.9.0 EVENT-BUS — roomba_plus_health_change fires only on band
+    crossing during the periodic tick, never on the first tick (no prior
+    band to compare against), and never on a same-band score wobble.
+    """
+
+    def _make_sensor(self, hass):
+        from custom_components.roomba_plus.sensor import RoombaIntegrationHealthSensor
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.title = "Test Robot"
+        sensor = RoombaIntegrationHealthSensor(MagicMock(), "blid123", entry)
+        sensor.hass = hass
+        sensor.schedule_update_ha_state = MagicMock()
+        return sensor, entry
+
+    def test_first_tick_seeds_band_without_firing(self):
+        hass = MagicMock()
+        sensor, _ = self._make_sensor(hass)
+        with patch(
+            "custom_components.roomba_plus.sensor._compute_integration_health",
+            return_value=(100, {}),
+        ), patch(
+            "custom_components.roomba_plus.repairs.async_check_integration_health",
+        ):
+            sensor._async_health_tick(None)
+
+        hass.bus.async_fire.assert_not_called()
+        assert sensor._last_health_band == "healthy"
+        assert sensor._last_health_score == 100
+
+    def test_fires_on_band_crossing(self):
+        from custom_components.roomba_plus.const import EVENT_HEALTH_CHANGE
+
+        hass = MagicMock()
+        sensor, entry = self._make_sensor(hass)
+        sensor._last_health_band = "healthy"
+        sensor._last_health_score = 90
+
+        with patch(
+            "custom_components.roomba_plus.sensor._compute_integration_health",
+            return_value=(40, {}),
+        ), patch(
+            "custom_components.roomba_plus.repairs.async_check_integration_health",
+        ):
+            sensor._async_health_tick(None)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_HEALTH_CHANGE,
+            {
+                "entry_id": "test_entry",
+                "name": "Test Robot",
+                "score": 40,
+                "previous_score": 90,
+                "band": "critical",
+                "previous_band": "healthy",
+            },
+        )
+        assert sensor._last_health_band == "critical"
+
+    def test_no_event_on_same_band_score_wobble(self):
+        hass = MagicMock()
+        sensor, _ = self._make_sensor(hass)
+        sensor._last_health_band = "healthy"
+        sensor._last_health_score = 100
+
+        with patch(
+            "custom_components.roomba_plus.sensor._compute_integration_health",
+            return_value=(85, {}),  # still "healthy" band, minor jitter
+        ), patch(
+            "custom_components.roomba_plus.repairs.async_check_integration_health",
+        ):
+            sensor._async_health_tick(None)
+
+        hass.bus.async_fire.assert_not_called()
+        # Score is still tracked even without a band crossing, so the next
+        # genuine crossing reports an accurate previous_score.
+        assert sensor._last_health_score == 85
+
+
 class TestIntegrationHealthRepairIssue:
     """v2.9.0 (INTEG-HEALTH) — async_check_integration_health sustained-low
     gating and recovery.
@@ -1337,3 +1437,268 @@ class TestRoombaFirmwareUpdated:
         import time as _t
         s = self._make_sensor(last_fw="3.20.12", updated_at=_t.time() - 90000)
         assert s.is_on is False
+
+
+class TestMapRetrainWorkflow:
+    """v2.9.0 MAP-RETRAIN-WF — async_check_map_retrain_workflow() escalation.
+
+    Tracks notReady&64 ("Smart Map updating") duration via repairs.py's
+    in-memory _map_updating_since dict — same pattern as
+    _health_low_since (INTEG-HEALTH). Deliberately does NOT touch the
+    event bus: roomba_plus_map_retrain_started/completed already exist
+    (cloud pmapv_id-driven) and are what TRIGGER+ listens to — Triggers
+    and Repairs must not be redundant.
+    """
+
+    def setup_method(self):
+        from custom_components.roomba_plus import repairs as repairs_mod
+        repairs_mod._map_updating_since.clear()
+
+    def _make_entry(self, entry_id="test_map_entry"):
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        return entry
+
+    def test_not_updating_clears_issue_and_state(self):
+        from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
+        from custom_components.roomba_plus import repairs as repairs_mod
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        repairs_mod._map_updating_since[entry.entry_id] = 12345.0
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_delete_issue") as mock_delete:
+            async_check_map_retrain_workflow(hass, entry, False)
+
+        mock_delete.assert_called_once_with(
+            hass, "roomba_plus", f"map_retrain_workflow_{entry.entry_id}"
+        )
+        assert entry.entry_id not in repairs_mod._map_updating_since
+
+    def test_just_started_no_issue_yet(self):
+        """Stage 1 — map_updating just turned True. No issue fires
+        immediately; brief updates are normal."""
+        from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
+
+        entry = self._make_entry()
+        hass = MagicMock()
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
+            async_check_map_retrain_workflow(hass, entry, True)
+
+        mock_create.assert_not_called()
+
+    def test_warn_stage_after_threshold(self):
+        from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from custom_components.roomba_plus.const import MAP_RETRAIN_WARN_MINUTES
+
+        from homeassistant.util import dt as dt_util
+        entry = self._make_entry()
+        hass = MagicMock()
+        now = dt_util.utcnow().timestamp()
+        repairs_mod._map_updating_since[entry.entry_id] = (
+            now - (MAP_RETRAIN_WARN_MINUTES + 1) * 60
+        )
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
+            async_check_map_retrain_workflow(hass, entry, True)
+
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        assert mock_create.call_args[0][2] == f"map_retrain_workflow_{entry.entry_id}"
+        from homeassistant.helpers import issue_registry as ir
+        assert kwargs["severity"] == ir.IssueSeverity.WARNING
+        assert kwargs["translation_key"] == "map_retrain_in_progress"
+
+    def test_stuck_stage_after_longer_threshold(self):
+        from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from custom_components.roomba_plus.const import MAP_RETRAIN_STUCK_MINUTES
+
+        from homeassistant.util import dt as dt_util
+        entry = self._make_entry()
+        hass = MagicMock()
+        now = dt_util.utcnow().timestamp()
+        repairs_mod._map_updating_since[entry.entry_id] = (
+            now - (MAP_RETRAIN_STUCK_MINUTES + 1) * 60
+        )
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
+            async_check_map_retrain_workflow(hass, entry, True)
+
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        from homeassistant.helpers import issue_registry as ir
+        assert kwargs["severity"] == ir.IssueSeverity.ERROR
+        assert kwargs["translation_key"] == "map_retrain_stuck"
+
+    def test_does_not_fire_any_bus_event(self):
+        """Triggers and Repairs must not be redundant — this check must
+        never touch hass.bus, only the issue registry."""
+        from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from custom_components.roomba_plus.const import MAP_RETRAIN_STUCK_MINUTES
+
+        from homeassistant.util import dt as dt_util
+        entry = self._make_entry()
+        hass = MagicMock()
+        now = dt_util.utcnow().timestamp()
+        repairs_mod._map_updating_since[entry.entry_id] = (
+            now - (MAP_RETRAIN_STUCK_MINUTES + 1) * 60
+        )
+
+        async_check_map_retrain_workflow(hass, entry, True)
+
+        hass.bus.async_fire.assert_not_called()
+
+
+class TestMaintenanceDueRepairIssue:
+    """v2.9.0 — async_check_maintenance_due() sustained-grace-period
+    backstop for users without automations on the maintenance_due trigger.
+    """
+
+    def setup_method(self):
+        from custom_components.roomba_plus import repairs as repairs_mod
+        repairs_mod._maintenance_due_since.clear()
+
+    def _make_entry(self, entry_id="test_maint_entry"):
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        return entry
+
+    def test_nothing_due_clears_issue_and_state(self):
+        from custom_components.roomba_plus.repairs import async_check_maintenance_due
+        from custom_components.roomba_plus import repairs as repairs_mod
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        repairs_mod._maintenance_due_since[entry.entry_id] = 12345.0
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_delete_issue") as mock_delete:
+            async_check_maintenance_due(hass, entry, [])
+
+        mock_delete.assert_called_once_with(
+            hass, "roomba_plus", f"maintenance_due_{entry.entry_id}"
+        )
+        assert entry.entry_id not in repairs_mod._maintenance_due_since
+
+    def test_within_grace_period_no_issue_yet(self):
+        from custom_components.roomba_plus.repairs import async_check_maintenance_due
+
+        entry = self._make_entry()
+        hass = MagicMock()
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
+            async_check_maintenance_due(hass, entry, ["filter"])
+
+        mock_create.assert_not_called()
+
+    def test_fires_after_grace_period(self):
+        from custom_components.roomba_plus.repairs import async_check_maintenance_due
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from custom_components.roomba_plus.const import MAINTENANCE_DUE_GRACE_DAYS
+        from homeassistant.util import dt as dt_util
+        from homeassistant.helpers import issue_registry as ir
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        now = dt_util.utcnow().timestamp()
+        repairs_mod._maintenance_due_since[entry.entry_id] = (
+            now - (MAINTENANCE_DUE_GRACE_DAYS + 1) * 86400
+        )
+
+        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
+            async_check_maintenance_due(hass, entry, ["filter", "brush"])
+
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        assert mock_create.call_args[0][2] == f"maintenance_due_{entry.entry_id}"
+        assert kwargs["severity"] == ir.IssueSeverity.WARNING
+        assert kwargs["translation_key"] == "maintenance_due"
+        assert kwargs["translation_placeholders"] == {"items": "filter, brush"}
+
+    def test_does_not_restart_timer_when_due_set_changes(self):
+        """Resetting ONE overdue consumable while another remains due must
+        not restart the grace-period timer (documented coarse tradeoff)."""
+        from custom_components.roomba_plus.repairs import async_check_maintenance_due
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from homeassistant.util import dt as dt_util
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        original_since = dt_util.utcnow().timestamp() - 1000
+        repairs_mod._maintenance_due_since[entry.entry_id] = original_since
+
+        async_check_maintenance_due(hass, entry, ["brush"])  # filter was reset, brush remains
+
+        assert repairs_mod._maintenance_due_since[entry.entry_id] == original_since
+
+    def test_does_not_fire_any_bus_event(self):
+        """Triggers and Repairs must not be redundant."""
+        from custom_components.roomba_plus.repairs import async_check_maintenance_due
+        from custom_components.roomba_plus import repairs as repairs_mod
+        from custom_components.roomba_plus.const import MAINTENANCE_DUE_GRACE_DAYS
+        from homeassistant.util import dt as dt_util
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        now = dt_util.utcnow().timestamp()
+        repairs_mod._maintenance_due_since[entry.entry_id] = (
+            now - (MAINTENANCE_DUE_GRACE_DAYS + 1) * 86400
+        )
+
+        async_check_maintenance_due(hass, entry, ["filter"])
+
+        hass.bus.async_fire.assert_not_called()
+
+
+class TestMakeMapUpdatingCallback:
+    """v2.9.0 MAP-RETRAIN-WF — make_map_updating_callback() MQTT factory."""
+
+    def _msg(self, not_ready: int) -> dict:
+        return {
+            "state": {
+                "reported": {
+                    "cleanMissionStatus": {"notReady": not_ready},
+                }
+            }
+        }
+
+    def test_extracts_bit_64_and_schedules_check(self):
+        from custom_components.roomba_plus.callbacks import make_map_updating_callback
+
+        hass = MagicMock()
+        entry = MagicMock()
+        cb = make_map_updating_callback(hass, entry)
+
+        cb(self._msg(64))  # bit 64 set
+
+        assert hass.loop.call_soon_threadsafe.call_count == 1
+        args = hass.loop.call_soon_threadsafe.call_args[0]
+        assert args[1] is hass
+        assert args[2] is entry
+        assert args[3] is True
+
+    def test_other_bits_without_64_means_not_updating(self):
+        from custom_components.roomba_plus.callbacks import make_map_updating_callback
+
+        hass = MagicMock()
+        entry = MagicMock()
+        cb = make_map_updating_callback(hass, entry)
+
+        cb(self._msg(34))  # "Not ready" but NOT the map-updating bit
+
+        args = hass.loop.call_soon_threadsafe.call_args[0]
+        assert args[3] is False
+
+    def test_no_clean_mission_status_is_noop(self):
+        from custom_components.roomba_plus.callbacks import make_map_updating_callback
+
+        hass = MagicMock()
+        entry = MagicMock()
+        cb = make_map_updating_callback(hass, entry)
+
+        cb({"state": {"reported": {}}})
+
+        hass.loop.call_soon_threadsafe.assert_not_called()

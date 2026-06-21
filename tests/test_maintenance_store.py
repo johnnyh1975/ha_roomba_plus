@@ -1275,3 +1275,61 @@ class TestInspectResetMethods:
         assert store.wheel_cleaned_at is not None
         assert store.contact_cleaned_at is not None
         assert store.bin_cleaned_at is not None
+
+
+class TestMaintenanceDueOnMessageRepairCheck:
+    """v2.9.0 — RoombaMaintenanceDue.on_message() also forwards the live
+    due-items list to repairs.async_check_maintenance_due(), via
+    call_soon_threadsafe (same MQTT-thread bridge as
+    make_map_updating_callback in callbacks.py).
+    """
+
+    def _make_entity(self, current_hr=100, filter_reset_hr=0, brush_reset_hr=0):
+        from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
+        from unittest.mock import MagicMock
+
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {"bbrun": {"hr": current_hr}}}}
+        entry = MagicMock()
+        store = MaintenanceStore()
+        store.filter_reset_hr = filter_reset_hr
+        store.brush_reset_hr = brush_reset_hr
+        entry.runtime_data.maintenance_store = store
+        entry.options = {}
+
+        entity = RoombaMaintenanceDue(roomba, "test_blid", entry)
+        entity.hass = MagicMock()
+        entity.schedule_update_ha_state = MagicMock()
+        entity._enabled = True  # IRobotEntity checks self.enabled
+        return entity
+
+    def _msg(self, hr: int) -> dict:
+        return {"state": {"reported": {"bbrun": {"hr": hr}}}}
+
+    def test_schedules_check_with_due_items(self):
+        entity = self._make_entity(current_hr=100, filter_reset_hr=0)  # filter overdue (>60h default)
+        entity.on_message(self._msg(100))
+
+        assert entity.hass.loop.call_soon_threadsafe.call_count == 1
+        args = entity.hass.loop.call_soon_threadsafe.call_args[0]
+        assert args[1] is entity.hass
+        assert args[2] is entity._entry
+        assert "filter" in args[3]
+
+    def test_no_check_when_bbrun_absent(self):
+        entity = self._make_entity()
+        entity.on_message({"state": {"reported": {}}})
+
+        entity.hass.loop.call_soon_threadsafe.assert_not_called()
+
+    def test_no_check_when_disabled(self):
+        entity = self._make_entity()
+        entity._attr_entity_registry_enabled_default = False
+        # Entity.enabled reads from registry state normally; simplest path
+        # here is to patch the property directly.
+        with patch.object(
+            type(entity), "enabled",
+            new_callable=lambda: property(lambda self: False),
+        ):
+            entity.on_message(self._msg(100))
+        entity.hass.loop.call_soon_threadsafe.assert_not_called()

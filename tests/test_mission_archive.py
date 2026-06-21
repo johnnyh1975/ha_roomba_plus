@@ -414,6 +414,67 @@ class TestMissionArchiveStorage:
         assert archive2._derived[0]["nMssn"] == 2  # newest first
 
     @pytest.mark.asyncio
+    async def test_last_nmssn_start_ts_roundtrips(self):
+        """v2.8.6 — the new companion field must survive a save/load cycle
+        (needed by the discontinuity guard's chronological check)."""
+        archive = MissionArchive()
+        archive._append(_raw(n_mssn=1, start_time=99999))
+        archive._last_nMssn_start_ts = 99999
+
+        stored: dict = {}
+
+        async def mock_save(data):
+            stored.update(data)
+
+        async def mock_load():
+            return stored if stored else None
+
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save
+        store_mock.async_load = mock_load
+
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_save(hass, "e")
+
+            archive2 = MissionArchive()
+            await archive2.async_load(hass, "e")
+
+        assert archive2._last_nMssn_start_ts == 99999
+
+    @pytest.mark.asyncio
+    async def test_last_nmssn_start_ts_migration_seed_from_derived(self):
+        """v2.8.6 — installations upgrading from a version that never
+        persisted last_nMssn_start_ts must have it seeded once from the
+        currently-held derived record matching last_nMssn, not left at 0
+        (which would make the discontinuity guard's chronological check
+        trivially true for the first delta_update call after upgrade).
+        """
+        archive = MissionArchive()
+        archive._append(_raw(n_mssn=5, start_time=55555))
+        # Simulate OLD persisted data (no last_nMssn_start_ts key at all).
+        old_data = {
+            "version": 1,
+            "last_nMssn": 5,
+            "initial_load_done": True,
+            "derived": archive._derived,
+            "timeline": archive._timeline,
+            "raw": {},
+            "cumulative_sqft": 0.0,
+        }
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value=old_data)
+
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            archive2 = MissionArchive()
+            await archive2.async_load(hass, "e")
+
+        assert archive2._last_nMssn_start_ts == 55555
+
+    @pytest.mark.asyncio
     async def test_load_empty(self):
         archive = MissionArchive()
         store_mock = MagicMock()
@@ -548,6 +609,13 @@ class TestMissionArchiveDeltaUpdate:
         cause every future mission to silently collide with already-
         archived nMssn values from before the reset and get dropped
         forever, since nMssn alone is the dedup key.
+
+        v2.8.6 — a genuine reset must ALSO look chronologically newer than
+        the existing high-water mark (see async_delta_update's discontinuity
+        guard) — pass an explicit start_time far in the future of the
+        pre-reset history to simulate that correctly; using the default
+        (n_mssn-derived) timestamp would make this look like an ordinary
+        OLD duplicate of mission 1, not a reset.
         """
         archive = MissionArchive()
         # Pre-reset history: missions 1 through 5 already archived.
@@ -561,8 +629,13 @@ class TestMissionArchiveDeltaUpdate:
         with patch("custom_components.roomba_plus.mission_archive.Store",
                    return_value=store_mock):
             # Robot's counter has reset — reports "mission 1" again, but
-            # this is a genuinely NEW, different mission.
-            result = await archive.async_delta_update(_raw(n_mssn=1), hass, "e")
+            # this is a genuinely NEW, different mission that happened
+            # long after the original mission 5 (hence the far-future
+            # start_time — that's what makes this a reset, not a stale
+            # duplicate of the original mission 1).
+            result = await archive.async_delta_update(
+                _raw(n_mssn=1, start_time=_NOW_TS + 30 * 86400), hass, "e",
+            )
 
         assert result is True, (
             "A discontinuity must not silently block the new mission — "
@@ -588,7 +661,9 @@ class TestMissionArchiveDeltaUpdate:
         store_mock.async_save = AsyncMock()
         with patch("custom_components.roomba_plus.mission_archive.Store",
                    return_value=store_mock):
-            await archive.async_delta_update(_raw(n_mssn=1), hass, "e")
+            await archive.async_delta_update(
+                _raw(n_mssn=1, start_time=_NOW_TS + 30 * 86400), hass, "e",
+            )
             # last_nMssn must now reflect the NEW epoch, not the old one.
             assert archive.last_nMssn == 1
 
@@ -601,7 +676,10 @@ class TestMissionArchiveDeltaUpdate:
             ) as mock_warn:
                 # Mission 2 of the new epoch — must NOT re-trigger the
                 # discontinuity warning (1 < 5 would have, 2 < 1 does not).
-                await archive.async_delta_update(_raw(n_mssn=2), hass, "e")
+                await archive.async_delta_update(
+                    _raw(n_mssn=2, start_time=_NOW_TS + 30 * 86400 + 3600),
+                    hass, "e",
+                )
             mock_warn.assert_not_called()
 
     @pytest.mark.asyncio
@@ -626,6 +704,91 @@ class TestMissionArchiveDeltaUpdate:
             mock_warn.assert_not_called()
         assert archive.record_count == 5
         assert archive.last_nMssn == 5
+
+    @pytest.mark.asyncio
+    async def test_unarchived_older_record_below_highwater_is_not_a_discontinuity(self):
+        """v2.8.6 CONFIRMED FIELD BUG (Thonno) — async_delta_update() is, in
+        practice, re-fed the entire recent cloud-history window on EVERY
+        coordinator refresh (not only once per genuinely-new mission,
+        despite the docstring). The oldest record in that window is
+        routinely BELOW the high-water mark simply because it's an older,
+        legitimately-never-archived gap-filler — not a counter reset.
+
+        Before the fix, this numerically-lower-but-never-seen-before value
+        alone triggered the discontinuity clear on EVERY refresh, which in
+        turn caused every already-archived record in the same re-fed
+        window to be silently RE-appended as a duplicate (confirmed in the
+        field: 109 -> 209 -> 309 records across two refreshes ~83 min
+        apart, same robot, same "reported=742, high-water mark=858"
+        warning both times).
+
+        The fix requires the value to ALSO already be a collision in
+        _archived_nmssns (a true recycled value) before declaring a
+        discontinuity — an older never-archived record is numerically
+        lower but is NOT a collision, so it must now just append
+        normally, with NO warning and NO dedup-set clear.
+        """
+        archive = MissionArchive()
+        # Recent missions already archived — high-water mark is 858.
+        for n in (850, 851, 852, 856, 858):
+            archive._append(_raw(n_mssn=n))
+        assert archive.last_nMssn == 858
+        archived_before = set(archive._archived_nmssns)
+
+        hass = _make_hass()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            with patch.object(
+                __import__(
+                    "custom_components.roomba_plus.mission_archive",
+                    fromlist=["_LOGGER"],
+                )._LOGGER,
+                "warning",
+            ) as mock_warn:
+                # 742 was never archived before — a legitimate gap, not a
+                # recycled value. Far below last_nMssn=858 but NOT a collision.
+                result = await archive.async_delta_update(_raw(n_mssn=742), hass, "e")
+            mock_warn.assert_not_called()
+
+        assert result is True  # appended normally, as any new record would be
+        assert archive.last_nMssn == 858, (
+            "Must NOT have been reset to 0 — that's what caused every "
+            "already-archived record in the field bug to be re-appended "
+            "as a duplicate on the very next call in the same batch"
+        )
+        # The dedup set must be intact — none of the pre-existing entries
+        # were wiped, so re-feeding 850/851/852/856/858 in the same batch
+        # (as the real cloud refresh does) would correctly dedupe them.
+        assert archived_before.issubset(archive._archived_nmssns)
+
+    @pytest.mark.asyncio
+    async def test_refeeding_same_batch_does_not_duplicate_after_gap_fill(self):
+        """End-to-end reproduction of the exact field sequence: an older
+        gap-filler (742) followed by re-feeding already-archived records
+        from the same batch (850...858) must NOT create duplicates."""
+        archive = MissionArchive()
+        for n in (850, 851, 852, 856, 858):
+            archive._append(_raw(n_mssn=n))
+        count_before = archive.record_count
+
+        hass = _make_hass()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_delta_update(_raw(n_mssn=742), hass, "e")
+            # Same cloud refresh re-feeds the tail of the window, including
+            # records already archived before this call.
+            for n in (850, 851, 852, 856, 858):
+                result = await archive.async_delta_update(_raw(n_mssn=n), hass, "e")
+                assert result is False, (
+                    f"nMssn={n} was already archived — must be deduped, "
+                    "not re-appended"
+                )
+
+        assert archive.record_count == count_before + 1  # only 742 is new
 
 
 class TestMissionArchiveQueries:

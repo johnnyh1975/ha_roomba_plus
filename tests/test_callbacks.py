@@ -84,6 +84,7 @@ def _make_entry(store, map_capability_val="none", zone_store=None,
     class _FakeEntry:
         runtime_data = _FakeData()
         entry_id     = "test_entry"
+        title        = "Test Robot"  # v2.9.0 EVENT-BUS — used in event payloads
 
     return _FakeEntry()
 
@@ -107,6 +108,7 @@ def _make_hass(loop=None):
             self.loop = loop
             self.data = {}
             self.config = self._FakeConfig()
+            self.bus = MagicMock()  # v2.9.0 EVENT-BUS — async_fire() target
             from homeassistant.core import CoreState
             self.state = CoreState.running
     return _FakeHass()
@@ -235,6 +237,104 @@ class TestAsyncRecordMissionResult:
         rec = self._run({"phase": "charge", "error": 5}, {}, nstuck_delta=1)
         assert rec["result"] == "error"
         assert rec["error_code"] == 5
+
+
+class TestAsyncRecordMissionCompletedEvent:
+    """v2.9.0 EVENT-BUS — roomba_plus_mission_completed payload."""
+
+    def _run(self, mission, reported, zones=None, start_ts=None, nstuck_delta=0):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+
+        if start_ts is None:
+            start_ts = int(loop.time()) - 3600
+
+        try:
+            loop.run_until_complete(
+                async_record_mission(
+                    hass, entry, mission, reported,
+                    zones or [], start_ts, nstuck_delta,
+                )
+            )
+        finally:
+            loop.close()
+        return hass, entry
+
+    def test_payload_matches_record(self):
+        from custom_components.roomba_plus.const import EVENT_MISSION_COMPLETED
+
+        hass, entry = self._run(
+            {"phase": "charge", "error": 0, "sqft": 250},
+            {},
+            zones=["Kitchen", "Hallway"],
+            nstuck_delta=1,
+        )
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_MISSION_COMPLETED,
+            {
+                "entry_id": entry.entry_id,
+                "name": entry.title,
+                "rooms_cleaned": 2,
+                "area_sqft": 250,
+                "stuck_count": 1,
+                "result": "stuck",
+            },
+        )
+
+    def test_fires_even_with_no_zones(self):
+        """NONE-tier (600-series) robots have no zone data at all — the
+        event must still fire with rooms_cleaned=0, not be skipped."""
+        from custom_components.roomba_plus.const import EVENT_MISSION_COMPLETED
+
+        hass, entry = self._run(
+            {"phase": "charge", "error": 0, "sqft": None}, {}, zones=[],
+        )
+
+        hass.bus.async_fire.assert_called_once()
+        fired_payload = hass.bus.async_fire.call_args[0][1]
+        assert fired_payload["rooms_cleaned"] == 0
+        assert fired_payload["area_sqft"] is None
+
+
+class TestAsyncRecordMissionBatteryCycles:
+    """v2.9.0 DAILY-DIGEST — battery_cycles snapshot captured per-mission,
+    mirroring the existing bbrun_hr snapshot pattern."""
+
+    def _run(self, reported, start_ts=None):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0, "sqft": 100}
+
+        if start_ts is None:
+            start_ts = int(loop.time()) - 3600
+
+        try:
+            loop.run_until_complete(
+                async_record_mission(hass, entry, mission, reported, [], start_ts, 0)
+            )
+        finally:
+            loop.close()
+        return store.latest()
+
+    def test_nimh_cycles_captured(self):
+        rec = self._run({"bbchg3": {"nNimhChrg": 12, "nLithChrg": 87}})
+        assert rec["battery_cycles"] == 12
+
+    def test_lith_cycles_captured_when_no_nimh(self):
+        rec = self._run({"bbchg3": {"nLithChrg": 87}})
+        assert rec["battery_cycles"] == 87
+
+    def test_none_when_bbchg3_absent(self):
+        """600-series has no bbchg3 at all — must be None, not 0."""
+        rec = self._run({})
+        assert rec["battery_cycles"] is None
 
 
 class TestAsyncRecordMissionTimestamps:
@@ -373,6 +473,9 @@ class TestMakeMapRetrainCallback:
 
     def test_triggers_refresh_on_pmapv_change(self):
         from custom_components.roomba_plus.callbacks import make_map_retrain_callback
+        from custom_components.roomba_plus.const import (
+            EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED,
+        )
 
         loop = asyncio.new_event_loop()
         coord = self._make_coordinator()
@@ -382,8 +485,14 @@ class TestMakeMapRetrainCallback:
             pass
         hass = _FakeHass()
         hass.loop = loop
+        hass.bus = MagicMock()
 
-        cb = make_map_retrain_callback(hass, coord)
+        class _FakeEntry:
+            entry_id = "test_entry"
+            title = "Test Robot"
+        entry = _FakeEntry()
+
+        cb = make_map_retrain_callback(hass, coord, entry)
 
         # First call — sets baseline
         cb({"state": {"reported": {"pmaps": [{"abc": "v1"}]}}})
@@ -392,6 +501,47 @@ class TestMakeMapRetrainCallback:
 
         loop.run_until_complete(asyncio.sleep(0.05))
         coord.async_request_refresh.assert_called_once()
+        # v2.9.0 EVENT-BUS — started fires immediately, completed only
+        # after the (successful) refresh awaits.
+        hass.bus.async_fire.assert_any_call(
+            EVENT_MAP_RETRAIN_STARTED,
+            {"entry_id": "test_entry", "name": "Test Robot", "pmap_id": "abc"},
+        )
+        hass.bus.async_fire.assert_any_call(
+            EVENT_MAP_RETRAIN_COMPLETED,
+            {"entry_id": "test_entry", "name": "Test Robot", "pmap_id": "abc"},
+        )
+        loop.close()
+
+    def test_no_completed_event_when_refresh_fails(self):
+        from custom_components.roomba_plus.callbacks import make_map_retrain_callback
+        from custom_components.roomba_plus.const import (
+            EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED,
+        )
+
+        loop = asyncio.new_event_loop()
+        coord = self._make_coordinator()
+        coord.async_request_refresh = AsyncMock(side_effect=RuntimeError("boom"))
+
+        class _FakeHass:
+            pass
+        hass = _FakeHass()
+        hass.loop = loop
+        hass.bus = MagicMock()
+
+        class _FakeEntry:
+            entry_id = "test_entry"
+            title = "Test Robot"
+        entry = _FakeEntry()
+
+        cb = make_map_retrain_callback(hass, coord, entry)
+        cb({"state": {"reported": {"pmaps": [{"abc": "v1"}]}}})
+        cb({"state": {"reported": {"pmaps": [{"abc": "v2"}]}}})
+
+        loop.run_until_complete(asyncio.sleep(0.05))
+        fired_events = [c.args[0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_MAP_RETRAIN_STARTED in fired_events
+        assert EVENT_MAP_RETRAIN_COMPLETED not in fired_events
         loop.close()
 
     def test_no_refresh_when_pmapv_unchanged(self):
@@ -405,8 +555,14 @@ class TestMakeMapRetrainCallback:
             pass
         hass = _FakeHass()
         hass.loop = loop
+        hass.bus = MagicMock()
 
-        cb = make_map_retrain_callback(hass, coord)
+        class _FakeEntry:
+            entry_id = "test_entry"
+            title = "Test Robot"
+        entry = _FakeEntry()
+
+        cb = make_map_retrain_callback(hass, coord, entry)
         cb({"state": {"reported": {"pmaps": [{"abc": "v1"}]}}})
         cb({"state": {"reported": {"pmaps": [{"abc": "v1"}]}}})  # same
 
@@ -425,8 +581,14 @@ class TestMakeMapRetrainCallback:
             pass
         hass = _FakeHass()
         hass.loop = loop
+        hass.bus = MagicMock()
 
-        cb = make_map_retrain_callback(hass, coord)
+        class _FakeEntry:
+            entry_id = "test_entry"
+            title = "Test Robot"
+        entry = _FakeEntry()
+
+        cb = make_map_retrain_callback(hass, coord, entry)
         cb({"state": {"reported": {}}})   # no pmaps key
 
         loop.run_until_complete(asyncio.sleep(0.05))
@@ -792,6 +954,95 @@ class TestRoomIndexCorroboration:
             "Partial estimate data still means current_room_idx COULD be "
             "trusted — suppression should apply as normal"
         )
+
+
+class TestRoomCompletedEvent:
+    """v2.9.0 EVENT-BUS — roomba_plus_room_completed fires for the room the
+    robot just LEFT when AUTO-ADVANCE-ROOM successfully advances
+    current_room_idx (real MissionTimerStore, not a MagicMock double, since
+    the event payload depends on actual post-advance state).
+    """
+
+    def _transition_msg(self, phase: str, cycle: str = "clean") -> dict:
+        return {
+            "state": {
+                "reported": {
+                    "cleanMissionStatus": {
+                        "phase": phase,
+                        "sqft": 100,
+                        "mssnStrtTm": 1700000000,
+                        "initiator": "schedule",
+                        "error": 0,
+                        "cycle": cycle,
+                    },
+                    "bbrun": {"nStuck": 0, "hr": 10},
+                }
+            }
+        }
+
+    def _make_real_mts(self, entry):
+        """Real MissionTimerStore, pre-configured so AUTO-ADVANCE-ROOM's
+        confidence check passes immediately on the first transition.
+        _schedule_save is stubbed out — Store() needs real hass.storage
+        plumbing the MagicMock hass from _make_callback_env() doesn't have.
+        """
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        mts = MissionTimerStore()
+        blid = entry.data.get("blid", "")
+        # Must match what callbacks.py computes so on_phase_run() does NOT
+        # treat this as a brand-new mission and reset run_sec back to 0.
+        mts.mission_id = f"{blid}_1700000000"
+        mts.planned_rooms = ["Kitchen", "Hallway"]
+        mts.current_room_idx = 0
+        mts.room_estimates_sec = [10.0, 10.0]
+        mts.total_estimated_sec = 20.0
+        mts.run_sec = 20.0              # >> expected_room_sec(10.0) * 0.5
+        mts.room_entered_run_sec = 0.0
+        mts._schedule_save = lambda *a, **kw: None
+        return mts
+
+    def test_fires_for_room_just_left(self):
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
+
+        hass, entry, _, _ = _make_callback_env()
+        mts = self._make_real_mts(entry)
+        entry.runtime_data.mission_timer_store = mts
+
+        cb = make_mission_callback(hass, entry)
+        cb(self._transition_msg("run"))
+        cb(self._transition_msg("charge"))  # ambiguous inter-room transition
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert mts.current_room_idx == 1, "advance_room() must have run for real"
+        hass.bus.async_fire.assert_any_call(
+            EVENT_ROOM_COMPLETED,
+            {
+                "entry_id": entry.entry_id,
+                "name": entry.title,
+                "room_name": "Kitchen",
+                "room_idx": 0,
+            },
+        )
+
+    def test_no_event_when_already_on_last_room(self):
+        """advance_room() returns False at the last planned room — no event."""
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
+
+        hass, entry, _, _ = _make_callback_env()
+        mts = self._make_real_mts(entry)
+        mts.current_room_idx = 1  # already on "Hallway", the last room
+        entry.runtime_data.mission_timer_store = mts
+
+        cb = make_mission_callback(hass, entry)
+        cb(self._transition_msg("run"))
+        cb(self._transition_msg("charge"))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        fired_events = [c.args[0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_ROOM_COMPLETED not in fired_events
 
 
 class TestStuckBypassMissionCallback:

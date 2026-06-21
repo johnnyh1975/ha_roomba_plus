@@ -237,6 +237,40 @@ class TestHasCleanBase:
         assert has_clean_base(state) is False
 
 
+class TestActiveChargeCycles:
+    """v2.9.0 DAILY-DIGEST — active_charge_cycles() chemistry-aware helper.
+
+    Shared between sensor.py (_total_energy_consumed_kwh) and callbacks.py
+    (battery_cycles snapshot at mission end) — same priority both places.
+    """
+
+    def test_nimh_wins_when_present(self):
+        from custom_components.roomba_plus.const import active_charge_cycles
+        # NiMH aftermarket battery after an OEM Li-ion period — nLithChrg
+        # stays at its old OEM count, must not be used.
+        bbchg3 = {"nNimhChrg": 12, "nLithChrg": 87}
+        assert active_charge_cycles(bbchg3) == 12
+
+    def test_falls_back_to_lith_when_no_nimh(self):
+        from custom_components.roomba_plus.const import active_charge_cycles
+        bbchg3 = {"nNimhChrg": 0, "nLithChrg": 87}
+        assert active_charge_cycles(bbchg3) == 87
+
+    def test_falls_back_to_navail_for_old_firmware(self):
+        from custom_components.roomba_plus.const import active_charge_cycles
+        bbchg3 = {"nAvail": 55}
+        assert active_charge_cycles(bbchg3) == 55
+
+    def test_empty_bbchg3_returns_none(self):
+        from custom_components.roomba_plus.const import active_charge_cycles
+        assert active_charge_cycles({}) is None
+
+    def test_nimh_key_missing_falls_through(self):
+        from custom_components.roomba_plus.const import active_charge_cycles
+        bbchg3 = {"nLithChrg": 10}
+        assert active_charge_cycles(bbchg3) == 10
+
+
 class TestIsMop:
     def test_braava_is_mop(self):
         assert is_mop(STATE_BRAAVA) is True
