@@ -201,6 +201,133 @@ class TestRobotProfileStore:
         assert rps2.learned_filter_hours == 50.0
 
 
+class TestLifetimeSqftStaleness:
+    """v2.9.0 (J) — STALENESS TRACKING. Field-confirmed (980 9-series +
+    aftermarket NiMH battery): the robot's onboard lifetime sqft counter
+    (bbrun.sqft / runtimeStats.sqft) can remain frozen for weeks while the
+    robot keeps actively cleaning and every OTHER bbrun.* counter keeps
+    incrementing normally. We cannot make the firmware send fresher data,
+    but we can detect and surface "this number hasn't changed in N days".
+    """
+
+    def test_first_observation_always_counts_as_changed(self):
+        """A fresh install (lifetime_sqft_last_value is None) must get an
+        initial timestamp immediately, not wait for a second reading."""
+        rps = RobotProfileStore()
+        assert rps.update_lifetime_sqft_tracking(1000.0) is True
+        assert rps.lifetime_sqft_last_value == 1000.0
+        assert rps.lifetime_sqft_last_changed_at is not None
+
+    def test_same_value_again_does_not_update_timestamp(self):
+        """The whole point of this feature: an unchanged reading must leave
+        the OLD timestamp in place — that growing age IS the signal."""
+        rps = RobotProfileStore()
+        rps.update_lifetime_sqft_tracking(1000.0)
+        first_ts = rps.lifetime_sqft_last_changed_at
+
+        changed = rps.update_lifetime_sqft_tracking(1000.0)
+
+        assert changed is False
+        assert rps.lifetime_sqft_last_changed_at == first_ts, (
+            "Timestamp must NOT advance when the value hasn't actually "
+            "changed — this is the staleness signal itself"
+        )
+
+    def test_different_value_updates_timestamp(self):
+        rps = RobotProfileStore()
+        rps.update_lifetime_sqft_tracking(1000.0)
+        first_ts = rps.lifetime_sqft_last_changed_at
+
+        import time
+        time.sleep(0.01)
+        changed = rps.update_lifetime_sqft_tracking(1050.0)
+
+        assert changed is True
+        assert rps.lifetime_sqft_last_value == 1050.0
+        assert rps.lifetime_sqft_last_changed_at != first_ts
+
+    def test_days_unchanged_none_before_first_observation(self):
+        rps = RobotProfileStore()
+        assert rps.lifetime_sqft_days_unchanged is None
+
+    def test_days_unchanged_near_zero_immediately_after_update(self):
+        rps = RobotProfileStore()
+        rps.update_lifetime_sqft_tracking(1000.0)
+        days = rps.lifetime_sqft_days_unchanged
+        assert days is not None and days < 0.01
+
+    def test_days_unchanged_reflects_an_old_timestamp(self):
+        """Simulates a value frozen for 21 days — the exact field-reported
+        symptom (180 m² unchanged for multiple weeks)."""
+        rps = RobotProfileStore()
+        from homeassistant.util import dt as dt_util
+        import datetime as _dt
+        old_ts = dt_util.now() - _dt.timedelta(days=21)
+        rps.lifetime_sqft_last_value = 1000.0
+        rps.lifetime_sqft_last_changed_at = old_ts.isoformat()
+
+        days = rps.lifetime_sqft_days_unchanged
+        assert days is not None and 20.9 < days < 21.1
+
+    def test_days_unchanged_handles_malformed_timestamp_gracefully(self):
+        rps = RobotProfileStore()
+        rps.lifetime_sqft_last_changed_at = "not-a-real-timestamp"
+        assert rps.lifetime_sqft_days_unchanged is None
+
+    @pytest.mark.asyncio
+    async def test_staleness_fields_persist_across_save_load(self):
+        rps = RobotProfileStore()
+        rps.update_lifetime_sqft_tracking(1234.0)
+        saved_ts = rps.lifetime_sqft_last_changed_at
+
+        saved_data: dict = {}
+
+        async def mock_save_fn(data: dict) -> None:
+            saved_data.update(data)
+
+        async def mock_load_fn() -> dict:
+            return saved_data
+
+        hass = MagicMock()
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save_fn
+        store_mock.async_load = mock_load_fn
+
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await rps.async_save(hass, "entry123")
+            rps2 = RobotProfileStore()
+            await rps2.async_load(hass, "entry123")
+
+        assert rps2.lifetime_sqft_last_value == 1234.0
+        assert rps2.lifetime_sqft_last_changed_at == saved_ts
+
+    @pytest.mark.asyncio
+    async def test_async_reset_clears_staleness_fields(self):
+        rps = RobotProfileStore()
+        rps.update_lifetime_sqft_tracking(1234.0)
+
+        saved_data: dict = {}
+
+        async def mock_save_fn(data: dict) -> None:
+            saved_data.update(data)
+
+        hass = MagicMock()
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save_fn
+
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await rps.async_reset(hass, "entry123")
+
+        assert rps.lifetime_sqft_last_value is None
+        assert rps.lifetime_sqft_last_changed_at is None
+
+
 class TestMS1TypeGuard:
 
     def test_non_float_demand_triggered_ts_not_used(self):

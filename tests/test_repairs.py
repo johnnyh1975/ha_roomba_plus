@@ -1000,6 +1000,272 @@ class TestCloudStaleRepairIssue:
         mock_ir.async_create_issue.assert_not_called()
 
 
+class TestComputeIntegrationHealth:
+    """v2.9.0 (INTEG-HEALTH) — _compute_integration_health() scoring logic."""
+
+    def _make_entry(self, entry_id="test_health_entry"):
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        entry.runtime_data.last_mqtt_message_ts = 0.0
+        entry.runtime_data.mission_archive = None
+        entry.runtime_data.cloud_coordinator = None
+        return entry
+
+    def test_perfect_score_with_no_issues_and_no_data(self):
+        """No active issues, no MQTT/ARC1 data at all (fresh install) —
+        nothing to penalise, score stays at 100."""
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, breakdown = _compute_integration_health(hass, self._make_entry())
+
+        assert score == 100
+        assert breakdown["active_issues"] == 0
+
+    def test_active_issues_penalised_and_capped(self):
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        from custom_components.roomba_plus.const import DOMAIN
+
+        entry = self._make_entry()
+        hass = MagicMock()
+        registry = MagicMock()
+
+        def _issue(active=True):
+            e = MagicMock()
+            e.active = active
+            return e
+
+        # 4 active issues for this entry — would be -80 uncapped, but the
+        # penalty caps at -60.
+        registry.issues = {
+            (DOMAIN, f"issue1_{entry.entry_id}"): _issue(),
+            (DOMAIN, f"issue2_{entry.entry_id}"): _issue(),
+            (DOMAIN, f"issue3_{entry.entry_id}"): _issue(),
+            (DOMAIN, f"issue4_{entry.entry_id}"): _issue(),
+            # A dismissed/inactive issue must not count.
+            (DOMAIN, f"issue5_{entry.entry_id}"): _issue(active=False),
+            # An issue for a DIFFERENT entry must not count.
+            (DOMAIN, "issue6_some_other_entry"): _issue(),
+        }
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, breakdown = _compute_integration_health(hass, entry)
+
+        assert breakdown["active_issues"] == 4
+        assert score == 40  # 100 - min(60, 4*20) = 100 - 60
+
+    def test_stale_mqtt_penalised(self):
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        import time
+
+        entry = self._make_entry()
+        entry.runtime_data.last_mqtt_message_ts = (
+            time.time() - 25 * 3600  # 25h ago — beyond the 24h threshold
+        )
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, breakdown = _compute_integration_health(hass, entry)
+
+        assert score == 80  # 100 - 20
+        assert breakdown["mqtt_age_hours"] == pytest.approx(25.0, abs=0.1)
+
+    def test_fresh_mqtt_not_penalised(self):
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        import time
+
+        entry = self._make_entry()
+        entry.runtime_data.last_mqtt_message_ts = time.time() - 600  # 10 min ago
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, _ = _compute_integration_health(hass, entry)
+
+        assert score == 100
+
+    def test_stale_arc1_penalised_only_when_cloud_enabled(self):
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        from homeassistant.util import dt as dt_util
+        import datetime as _dt
+
+        entry = self._make_entry()
+        old_ts = (dt_util.utcnow() - _dt.timedelta(hours=72)).isoformat()
+        archive = MagicMock()
+        archive.record_count = 5
+        archive.all_derived_oldest_first.return_value = [{"end_ts": old_ts}]
+        entry.runtime_data.mission_archive = archive
+        entry.runtime_data.cloud_coordinator = MagicMock()  # cloud enabled
+
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, breakdown = _compute_integration_health(hass, entry)
+
+        assert score == 80  # 100 - 20
+        assert breakdown["arc1_age_hours"] == pytest.approx(72.0, abs=0.2)
+
+    def test_arc1_freshness_skipped_without_cloud(self):
+        """No cloud coordinator configured — ARC1 freshness must not be
+        evaluated at all (it's meaningless without cloud syncing)."""
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        from homeassistant.util import dt as dt_util
+        import datetime as _dt
+
+        entry = self._make_entry()
+        old_ts = (dt_util.utcnow() - _dt.timedelta(hours=200)).isoformat()
+        archive = MagicMock()
+        archive.record_count = 5
+        archive.all_derived_oldest_first.return_value = [{"end_ts": old_ts}]
+        entry.runtime_data.mission_archive = archive
+        entry.runtime_data.cloud_coordinator = None  # no cloud
+
+        hass = MagicMock()
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, breakdown = _compute_integration_health(hass, entry)
+
+        assert score == 100
+        assert breakdown["arc1_age_hours"] is None
+
+    def test_score_floors_at_zero_not_negative(self):
+        from custom_components.roomba_plus.sensor import _compute_integration_health
+        from custom_components.roomba_plus.const import DOMAIN
+        import time
+
+        entry = self._make_entry()
+        entry.runtime_data.last_mqtt_message_ts = time.time() - 30 * 3600
+        hass = MagicMock()
+        registry = MagicMock()
+
+        def _issue():
+            e = MagicMock()
+            e.active = True
+            return e
+
+        registry.issues = {
+            (DOMAIN, f"i{n}_{entry.entry_id}"): _issue() for n in range(5)
+        }
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            score, _ = _compute_integration_health(hass, entry)
+
+        assert score == 20  # 100 - 60 (capped) - 20 (mqtt) = 20, never negative
+
+
+class TestIntegrationHealthRepairIssue:
+    """v2.9.0 (INTEG-HEALTH) — async_check_integration_health sustained-low
+    gating and recovery.
+    """
+
+    def setup_method(self):
+        # Module-level dict must not leak state between tests.
+        from custom_components.roomba_plus import repairs as repairs_mod
+        repairs_mod._health_low_since.clear()
+
+    def _patch_score(self, score: int):
+        return patch(
+            "custom_components.roomba_plus.sensor._compute_integration_health",
+            return_value=(score, {}),
+        )
+
+    def test_single_low_reading_does_not_fire_immediately(self):
+        """A single bad reading must not alarm the user — only a SUSTAINED
+        low score over INTEGRATION_HEALTH_SUSTAINED_MINUTES should."""
+        from custom_components.roomba_plus.repairs import async_check_integration_health
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        with self._patch_score(30), \
+             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_integration_health(hass, entry)
+
+        mock_ir.async_create_issue.assert_not_called()
+
+    def test_fires_after_sustained_low_period(self):
+        from custom_components.roomba_plus.repairs import async_check_integration_health
+        from custom_components.roomba_plus import repairs as repairs_mod
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e2"
+
+        with self._patch_score(30), \
+             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_integration_health(hass, entry)
+            # Simulate 31 minutes having passed since the low reading began.
+            repairs_mod._health_low_since["e2"] -= 31 * 60
+            async_check_integration_health(hass, entry)
+
+        mock_ir.async_create_issue.assert_called_once()
+        kwargs = mock_ir.async_create_issue.call_args[1]
+        assert kwargs["translation_key"] == "integration_health"
+
+    def test_recovery_clears_issue_and_resets_timer(self):
+        from custom_components.roomba_plus.repairs import async_check_integration_health
+        from custom_components.roomba_plus import repairs as repairs_mod
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e3"
+
+        with self._patch_score(30), \
+             patch("custom_components.roomba_plus.repairs.ir"):
+            async_check_integration_health(hass, entry)
+        assert "e3" in repairs_mod._health_low_since
+
+        with self._patch_score(90), \
+             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_integration_health(hass, entry)
+
+        mock_ir.async_delete_issue.assert_called_once()
+        assert "e3" not in repairs_mod._health_low_since
+
+    def test_recovery_before_sustained_period_does_not_fire(self):
+        """Score dips low, then recovers within the 30-minute window —
+        must never have fired at all."""
+        from custom_components.roomba_plus.repairs import async_check_integration_health
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e4"
+
+        with self._patch_score(30), \
+             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_integration_health(hass, entry)
+        with self._patch_score(95), \
+             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_integration_health(hass, entry)
+
+        mock_ir.async_create_issue.assert_not_called()
+
+
 # ── v2.8.3 — Binary sensor unit tests ─────────────────────────────────────────
 
 class TestRoombaCloudConnected:

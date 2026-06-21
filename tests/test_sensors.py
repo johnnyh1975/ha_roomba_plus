@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 import importlib
 import unittest.mock as _mock
 from custom_components.roomba_plus.sensor import _raw_wifi_floor
+from custom_components.roomba_plus.sensor import _raw_wifi_quality_pct
 from custom_components.roomba_plus.sensor import _raw_wifi_stability
 from custom_components.roomba_plus.sensor import _mop_clean_mode
 from custom_components.roomba_plus.sensor import _mop_tank_status
@@ -1053,6 +1054,291 @@ class TestWifiStability:
         records = [{"wlBars": [0, 20, 60, 20, 0]}] * 3
         result = _raw_wifi_stability(records)
         assert result == round(result, 2)
+
+
+class TestTotalCleanedAreaArchiveSource:
+    """v2.9.0 (J) — SOURCE CHANGE. total_cleaned_area uses MissionArchive's
+    cumulative_sqft (cloud-derived, immune to whatever mechanism freezes
+    bbrun.sqft, AND immune to FIFO eviction once MAX_RECORDS is exceeded)
+    instead of trusting the robot's own onboard lifetime counter, which
+    was field-confirmed to barely change over a very long period despite
+    continued active use.
+    """
+
+    def _make_entity(self, archive, run_stats_sqft=None):
+        entity = MagicMock()
+        entity.run_stats = {"sqft": run_stats_sqft} if run_stats_sqft is not None else {}
+        entity._config_entry.runtime_data.mission_archive = archive
+        entity._config_entry.runtime_data.robot_profile_store = None
+        return entity
+
+    def _make_archive(self, cumulative_sqft, record_count=10):
+        archive = MagicMock()
+        archive.cumulative_sqft = cumulative_sqft
+        archive.record_count = record_count
+        return archive
+
+    def test_uses_cumulative_sqft_from_archive(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=1200.0)
+        entity = self._make_entity(archive)
+
+        result = desc.value_fn(entity)
+        # 1200 sqft * 0.09290304 = 111.5 m²
+        assert result == pytest.approx(111.5, abs=0.1)
+
+    def test_survives_fifo_eviction_unlike_a_live_resum(self):
+        """The whole point of using cumulative_sqft instead of summing
+        all_derived_oldest_first() live: a robot with more than
+        MAX_RECORDS lifetime missions must NOT see this number decrease
+        just because old missions aged out of the FIFO-capped list.
+        cumulative_sqft is a running total incremented before any trim —
+        this test simply confirms the sensor reads that field directly,
+        not a live recomputation that would be vulnerable to eviction.
+        """
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        # Archive currently holds only a handful of (recent) records —
+        # far less than what cumulative_sqft reflects, simulating a robot
+        # well past MAX_RECORDS where old missions have been evicted.
+        archive = self._make_archive(cumulative_sqft=50_000.0, record_count=5)
+        archive.all_derived_oldest_first.return_value = [
+            {"sqft": 100}, {"sqft": 100},
+        ]  # if this were summed live, result would be tiny — must NOT be used
+        entity = self._make_entity(archive)
+
+        result = desc.value_fn(entity)
+        assert result == pytest.approx(50_000.0 * 0.09290304, abs=1.0), (
+            "Must read cumulative_sqft directly, not recompute from the "
+            "currently-held (FIFO-trimmed) record list"
+        )
+
+    def test_uses_onboard_counter_when_no_archive_data(self):
+        """A fresh install with no archived missions yet must still show
+        SOMETHING rather than nothing — uses the (possibly unreliable, but
+        better than nothing) onboard bbrun reading."""
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=0.0, record_count=0)
+        entity = self._make_entity(archive, run_stats_sqft=1000)
+
+        result = desc.value_fn(entity)
+        assert result == pytest.approx(92.9, abs=0.1)
+
+    def test_uses_onboard_counter_when_no_archive_at_all(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        entity = self._make_entity(archive=None, run_stats_sqft=1000)
+
+        result = desc.value_fn(entity)
+        assert result == pytest.approx(92.9, abs=0.1)
+
+    def test_uses_onboard_counter_when_it_is_larger_than_archive_sum(self):
+        """v2.9.0 — explicit user request: the raw onboard counter should
+        always win when it is LARGER than the archive's cumulative total.
+        Both sources are only lower bounds on the true lifetime total (the
+        archive only accumulates from whenever cloud credentials were
+        first configured, and the onboard counter can freeze, but
+        whatever it captured before freezing was real, already-cleaned
+        area). A genuine lifetime total can never decrease relative to
+        either source.
+        """
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=200.0)  # ≈18.6 m² — smaller
+        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+
+        result = desc.value_fn(entity)
+        assert result == pytest.approx(174.8, abs=0.1), (
+            "Onboard counter (174.8 m²) is larger than the archive's "
+            "cumulative total (18.6 m²) and must win — never show a "
+            "smaller number than either source independently supports"
+        )
+
+    def test_uses_archive_sum_when_it_is_larger_than_onboard_counter(self):
+        """The symmetric case: a well-archived robot whose onboard counter
+        has frozen at a low value must show the larger, more complete
+        cumulative total instead."""
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=50_000.0)  # ≈4645 m²
+        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+
+        result = desc.value_fn(entity)
+        assert result == pytest.approx(4645.2, abs=1.0)
+
+    def test_returns_none_when_neither_source_has_data(self):
+        """Genuine 'no data anywhere' case (e.g. brand-new install before
+        the first mission) must show Unavailable, not a confident 0."""
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=0.0, record_count=0)
+        entity = self._make_entity(archive, run_stats_sqft=0)
+
+        result = desc.value_fn(entity)
+        assert result is None
+
+    def test_extra_attributes_exposes_onboard_counter_for_comparison(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=1000.0, record_count=5)
+        entity = self._make_entity(archive, run_stats_sqft=1882)
+
+        attrs = desc.extra_attributes_fn(entity)
+        assert attrs["onboard_counter_m2"] == pytest.approx(174.8, abs=0.1)
+        assert attrs["archived_mission_count"] == 5
+
+    def test_extra_attributes_staleness_fields_present(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
+
+        archive = self._make_archive(cumulative_sqft=1000.0, record_count=5)
+        entity = self._make_entity(archive, run_stats_sqft=1000)
+        rps = MagicMock()
+        rps.lifetime_sqft_last_changed_at = "2026-01-01T00:00:00+00:00"
+        rps.lifetime_sqft_days_unchanged = 170.3
+        entity._config_entry.runtime_data.robot_profile_store = rps
+
+        attrs = desc.extra_attributes_fn(entity)
+        assert attrs["onboard_counter_last_changed_at"] == "2026-01-01T00:00:00+00:00"
+        assert attrs["onboard_counter_days_unchanged"] == 170.3
+
+
+class TestWifiQualityPct:
+    """v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
+    state. Weighted mean bucket index per mission (full histogram
+    distribution, not just whether the weakest bucket was ever touched),
+    averaged across records, scaled 0.0-4.0 to a genuine 0-100% percentage.
+    """
+
+    def test_all_strongest_bucket_is_100_percent(self):
+        # Every reading in bucket 4 (strongest) → weighted mean = 4.0 → 100%
+        records = [{"wlBars": [0, 0, 0, 0, 100]}]
+        assert _raw_wifi_quality_pct(records) == 100.0
+
+    def test_all_weakest_bucket_is_0_percent(self):
+        # Every reading in bucket 0 (weakest) → weighted mean = 0.0 → 0%
+        records = [{"wlBars": [100, 0, 0, 0, 0]}]
+        assert _raw_wifi_quality_pct(records) == 0.0
+
+    def test_middle_bucket_is_50_percent(self):
+        # All in bucket 2 (middle of 0-4) → weighted mean = 2.0 → 50%
+        records = [{"wlBars": [0, 0, 100, 0, 0]}]
+        assert _raw_wifi_quality_pct(records) == 50.0
+
+    def test_single_brief_dip_does_not_collapse_to_0_percent(self):
+        """The exact bug this fix addresses: a single brief dip into the
+        weakest bucket during an otherwise excellent connection must NOT
+        read as 0% — _raw_wifi_floor() would have returned 0 (bucket index)
+        here, which the old code mislabelled as a percentage."""
+        # Mostly strong signal (bucket 4), one weak reading (bucket 0).
+        records = [{"wlBars": [1, 0, 0, 0, 99]}]
+        val = _raw_wifi_quality_pct(records)
+        assert val is not None and val > 90.0, (
+            "A single brief weak-signal blip must not collapse the "
+            "percentage to near-zero — the weighted mean correctly "
+            "reflects that the connection was excellent almost the "
+            "entire time"
+        )
+
+    def test_averages_across_multiple_missions(self):
+        records = [
+            {"wlBars": [0, 0, 0, 0, 100]},  # mission 1: 100%
+            {"wlBars": [100, 0, 0, 0, 0]},  # mission 2: 0%
+        ]
+        # Average of per-mission weighted means: (4.0 + 0.0) / 2 = 2.0 -> 50%
+        assert _raw_wifi_quality_pct(records) == 50.0
+
+    def test_returns_none_on_empty_list(self):
+        assert _raw_wifi_quality_pct([]) is None
+
+    def test_returns_none_when_no_valid_histograms(self):
+        records = [{"wlBars": None}, {"wlBars": [70, 60, 80]}]  # invalid shapes
+        assert _raw_wifi_quality_pct(records) is None
+
+    def test_skips_non_5element_histograms_but_uses_valid_ones(self):
+        records = [
+            {"wlBars": [70, 60, 80]},          # invalid — skipped
+            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
+        ]
+        assert _raw_wifi_quality_pct(records) == 100.0
+
+    def test_skips_all_zero_histogram(self):
+        """A histogram present but summing to zero (no readings at all)
+        must be skipped, not treated as a 0% mission."""
+        records = [
+            {"wlBars": [0, 0, 0, 0, 0]},        # no data — skipped
+            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
+        ]
+        assert _raw_wifi_quality_pct(records) == 100.0
+
+    def test_result_is_rounded_to_1_decimal(self):
+        records = [{"wlBars": [10, 20, 30, 25, 15]}]
+        result = _raw_wifi_quality_pct(records)
+        assert result == round(result, 1)
+
+    def test_single_record_with_one_mission_minimum(self):
+        """Unlike stability (needs >=3 records), a single mission's
+        quality estimate is still meaningful and must not return None."""
+        records = [{"wlBars": [0, 0, 0, 0, 100]}]
+        assert _raw_wifi_quality_pct(records) is not None
+
+
+class TestWifiHealthSensorUsesQualityPct:
+    """RoombaWifiHealthSensor.native_value must use the new weighted-average
+    percentage, with the old floor-based diagnostic moved to an attribute."""
+
+    def test_native_value_uses_quality_pct_not_floor(self):
+        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
+
+        coordinator = MagicMock()
+        # A single brief dip — floor would be 0, quality_pct should be high.
+        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
+
+        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
+        sensor._coordinator = coordinator
+
+        val = sensor.native_value
+        assert val is not None and val > 90.0, (
+            "native_value must use the weighted-average quality percentage, "
+            "not the raw worst-bucket-touched floor value"
+        )
+
+    def test_weakest_bucket_observed_attribute_present(self):
+        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
+
+        coordinator = MagicMock()
+        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
+
+        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
+        sensor._coordinator = coordinator
+
+        attrs = sensor.extra_state_attributes
+        assert attrs.get("weakest_bucket_observed") == 0, (
+            "The original floor diagnostic must still be available as an "
+            "attribute, just not as the misleading primary percentage"
+        )
+
+    def test_stability_attribute_still_present(self):
+        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
+
+        coordinator = MagicMock()
+        coordinator.raw_records = [{"wlBars": [0, 0, 0, 100, 0]}] * 3
+
+        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
+        sensor._coordinator = coordinator
+
+        attrs = sensor.extra_state_attributes
+        assert "stability_pct" in attrs
 
 
 class TestWifiSensorDescriptions:

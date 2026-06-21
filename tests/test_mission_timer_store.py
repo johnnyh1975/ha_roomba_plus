@@ -405,8 +405,6 @@ class TestCurrentRoomPrefersEstimate:
         sensor = MagicMock(spec=RoombaMissionProgress)
         sensor._config_entry = MagicMock()
         sensor._elapsed_sec = RoombaMissionProgress._elapsed_sec
-        # Estimates: Bathroom=60s, Corridor=120s
-        sensor._room_estimates = MagicMock(return_value=[60, 120])
 
         mts = MagicMock()
         mts.mission_id = "m1"
@@ -424,6 +422,14 @@ class TestCurrentRoomPrefersEstimate:
         with patch(
             "custom_components.roomba_plus.sensor._get_planned_room_order",
             return_value=["Bathroom", "Corridor"],
+        ), patch(
+            # v2.9.0 — the shared _resolve_smart_tier_room_state() function
+            # (extracted from this method) calls _compute_room_time_estimates
+            # directly, not the RoombaMissionProgress instance's
+            # _room_estimates() wrapper — patch the module-level function
+            # that's actually invoked now.
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[60, 120],  # Estimates: Bathroom=60s, Corridor=120s
         ):
             attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
 
@@ -574,6 +580,66 @@ class TestGetPlannedRoomOrderFallback:
         result = _get_planned_room_order(data)
         assert result == ["Kitchen", "Study"]
 
+    def test_falls_back_on_partial_resolution(self):
+        """v2.9.0 — region_ids has entries, but cc.regions only resolves
+        SOME of them (e.g. cloud mid-refresh resolves room 1 of 2). The
+        pre-v2.9.0 code only fell back when `result` was COMPLETELY empty,
+        missing this partial-match case entirely — a genuine 2-room mission
+        (Thonno's exact field report: Corridoio + Camera da letto) would
+        silently shrink to 1 room mid-mission, corrupting every
+        elapsed/estimate calculation derived from planned_order. Must now
+        fall back to the full mts.planned_rooms snapshot instead of
+        returning the truncated partial result.
+        """
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "21"}, {"rid": "25"}]
+            }}}
+        }
+        cc = MagicMock()
+        # Only region 21 (Corridoio) currently resolvable — 25 missing,
+        # simulating cc.regions mid-refresh during the room transition.
+        cc.regions = [{"id": "21", "name": "Corridoio"}]
+        data.cloud_coordinator = cc
+
+        mts = MagicMock()
+        mts.planned_rooms = ["Corridoio", "Camera da letto"]
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Corridoio", "Camera da letto"], (
+            "Partial resolution must fall back to the full MTS snapshot, "
+            "not silently return a truncated 1-room list"
+        )
+
+    def test_partial_resolution_without_mts_fallback_returns_partial(self):
+        """When there's no MTS snapshot to fall back to, the partial result
+        is still returned rather than discarded entirely — better to show
+        a possibly-incomplete order than nothing at all."""
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "21"}, {"rid": "25"}]
+            }}}
+        }
+        cc = MagicMock()
+        cc.regions = [{"id": "21", "name": "Corridoio"}]
+        data.cloud_coordinator = cc
+
+        mts = MagicMock()
+        mts.planned_rooms = []  # nothing to fall back to
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Corridoio"]
+
 
 class TestSetMissionPlanCallSignature:
     """set_mission_plan call in callbacks passes hass and entry_id — v2.7.5 regression."""
@@ -585,6 +651,258 @@ class TestSetMissionPlanCallSignature:
         params = list(inspect.signature(MissionTimerStore.set_mission_plan).parameters)
         assert "hass" in params
         assert "entry_id" in params
+
+
+class TestNamesExtractionRidFormat:
+    """v2.9.0 (D) — _names construction (callbacks.py, AUTO-ADVANCE-ROOM/
+    set_mission_plan wiring) only recognised region_id/region_name keys,
+    missing the {"rid": ...} format lewis 22.52.10+ reports when a mission
+    is started directly from the iRobot app (not via roomba_plus.clean_room).
+    _get_planned_room_order() (sensor.py, live display) already handled all
+    three formats correctly via MissionStore._extract_rid() — this was an
+    inconsistency between the display path and the AUTO-ADVANCE-ROOM
+    wiring path, leaving mts.planned_rooms empty for iRobot-app-started
+    missions on lewis firmware.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rid_only_regions_now_populate_planned_rooms(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        # Override with rid-only format (no region_id/region_name at all) —
+        # the exact shape lewis 22.52.10+ reports for iRobot-app-started
+        # missions.
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"rid": "21"},
+                    {"rid": "25"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["21", "25"], (
+            "rid-only regions must resolve to (at minimum) the raw rid "
+            "strings via _extract_rid(), not leave planned_rooms empty"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rid_format_resolves_zone_alias_by_rid(self):
+        """When a zone alias is configured for the rid, it must be used —
+        same alias-lookup behaviour as the region_id path, just keyed
+        correctly via _extract_rid() instead of a raw region_id-only get()."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [{"rid": "21"}]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_region_id_and_rid_both_resolve(self):
+        """Real-world robustness: a regions list mixing both key formats
+        (e.g. firmware inconsistency) must resolve every entry, not just
+        the first format encountered."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "Kitchen", "region_id": "19"},
+                    {"rid": "25"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Kitchen", "25"]
+
+
+class TestNamesPrefersCloudName:
+    """v2.9.0 (H) — NAME-PRIORITY CONSISTENCY. _names construction
+    (callbacks.py, builds mts.planned_rooms) must use the SAME name
+    priority as _get_planned_room_order() (sensor.py, the live display
+    path): cloud_coordinator.regions[*].name first, region_name/zone-alias/
+    raw-id only as fallbacks when cloud data is unavailable. Before this
+    fix, _names preferred region_name/zone-alias over the cloud name —
+    a custom alias differing from the cloud's own name could make the
+    fallback path (mts.current_room) and the live precision path
+    (extra_state_attributes) show two different strings for the same room.
+    """
+
+    def test_cloud_name_preferred_over_region_name_and_alias(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno (Alias)"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "MQTT-Name", "region_id": "21"},
+                ]},
+            }}
+        }
+        cc = MagicMock()
+        cc.regions = [{"id": "21", "name": "Bagno (Cloud)"}]
+        entry.runtime_data.cloud_coordinator = cc
+
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno (Cloud)"], (
+            "Cloud name must win over both region_name (raw MQTT field) "
+            "and the configured zone alias — same priority "
+            "_get_planned_room_order() already uses for the live display"
+        )
+
+    def test_falls_back_to_region_name_when_no_cloud_coordinator(self):
+        """No cloud_coordinator at all (e.g. cloud disabled) — falls back
+        to region_name, exactly as before this fix."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "MQTT-Name", "region_id": "21"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["MQTT-Name"]
+
+    def test_falls_back_to_zone_alias_when_cloud_has_no_match(self):
+        """Cloud coordinator present, but doesn't have this specific
+        region (e.g. brand-new zone not yet synced) — falls back to the
+        configured alias."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno (Alias)"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [{"region_id": "21"}]},
+            }}
+        }
+        cc = MagicMock()
+        cc.regions = []  # cloud has nothing for this region yet
+        entry.runtime_data.cloud_coordinator = cc
+
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno (Alias)"]
 
 
 class TestAdvanceRoom:
@@ -1340,6 +1658,132 @@ class TestCallbacksWiresRealEstimates:
         assert mts.room_estimates_sec == [None, None]
 
     @pytest.mark.asyncio
+    async def test_total_estimated_sec_falls_back_to_mission_duration_mean(self):
+        """v2.9.0 (A) — CONFIRMED ROOT CAUSE fix. When every planned room
+        uses Auto pass mode (or none has reached GOOD_CONFIDENCE cloud
+        history), _known_secs is empty and total_estimated_sec used to stay
+        None for the WHOLE mission — meaning expected_room_sec's uniform-
+        split fallback had nothing to divide, and AUTO-ADVANCE-ROOM could
+        never advance current_room_idx past 0, for the entire mission,
+        regardless of how many rooms the robot actually visited. Likely the
+        majority case in the field, since Auto is the default pass mode.
+
+        Falls back to robot_profile_store.mission_duration_mean (already
+        used by mission_progress's "no room sequence" branch for exactly
+        this purpose) so AUTO-ADVANCE-ROOM gets at least a coarse uniform
+        estimate instead of nothing, as long as the robot has completed at
+        least one prior mission.
+        """
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = 30.0  # minutes — robot's own history
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],  # Auto mode — no per-room estimates
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec == 1800.0, (  # 30min * 60 = 1800s
+            "Must fall back to mission_duration_mean*60 when no per-room "
+            "estimate exists anywhere, not stay None"
+        )
+        assert mts.room_estimates_sec == [None, None], (
+            "Per-room estimates themselves stay None — only the TOTAL "
+            "gets the fallback, preserving expected_room_sec's existing "
+            "preference for a real per-room value when one exists"
+        )
+
+    @pytest.mark.asyncio
+    async def test_total_estimated_sec_stays_none_without_any_history(self):
+        """Sanity check: with NO robot_profile_store data either (brand-new
+        install, no completed missions yet), the fallback correctly stays
+        None — AUTO-ADVANCE-ROOM conservatively refuses exactly as before
+        this fix, rather than fabricating a number from nothing."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = None  # no history yet
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec is None
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_fallback_unblocks_auto_advance_room(self):
+        """v2.9.0 (A) end-to-end: with the mission_duration_mean fallback,
+        AUTO-ADVANCE-ROOM can now actually fire for a pure-Auto-mode
+        mission — reproducing the exact field scenario (current_room_idx
+        permanently stuck at 0) and confirming it is resolved."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = 20.0  # minutes -> 1200s total -> 600s/room
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],  # pure Auto mode
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))  # sets plan, total_estimated_sec=1200
+            mts.run_sec = 350.0  # >= 600*0.5=300 (uniform split: 1200/2 rooms)
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))  # transient phase
+
+        assert mts.current_room_idx == idx_before + 1, (
+            "Auto-mode fallback must let AUTO-ADVANCE-ROOM fire using the "
+            "uniform-split estimate (total_estimated_sec / room_count), "
+            "exactly reproducing and resolving the field-confirmed "
+            "permanently-stuck-at-0 scenario"
+        )
+
+    @pytest.mark.asyncio
     async def test_auto_advance_room_now_fires_with_real_estimates(self):
         """End-to-end: AUTO-ADVANCE-ROOM is no longer dormant once a real
         per-room estimate is wired in via set_mission_plan."""
@@ -1373,6 +1817,137 @@ class TestCallbacksWiresRealEstimates:
             "AUTO-ADVANCE-ROOM still dormant after wiring real per-room "
             "estimates — expected_room_sec should now resolve to 600.0"
         )
+
+
+class TestEstimateRetry:
+    """v2.9.0 (E) — RETRY for missing estimates. set_mission_plan() only ran
+    once, at the first phase=="run" message. If cloud TE1 data simply hadn't
+    synced yet at that exact moment, total_estimated_sec stayed None for the
+    rest of the mission with no chance to recover. AUTO-ADVANCE-ROOM's
+    evaluation point now retries once via update_estimates() — which must
+    refresh ONLY the estimate fields, never touching mission_id/run_sec/
+    current_room_idx/planned_rooms.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_refreshes_estimates_without_resetting_progress(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        # Mission start: cloud not synced yet — estimates all None.
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec is None
+        mts.run_sec = 123.0  # simulate real progress already accumulated
+
+        # A few messages later: cloud data has now arrived.
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[600, 400],
+        ):
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.total_estimated_sec == 1000.0, (
+            "Retry must pick up the now-available cloud estimates"
+        )
+        assert mts.room_estimates_sec == [600, 400]
+        assert mts.run_sec == pytest.approx(123.0, abs=0.1), (
+            "Retry must NOT reset run_sec — only the estimate fields change"
+        )
+        assert mts.mission_id is not None, (
+            "Retry must NOT clear mission_id"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_is_noop_once_estimates_already_known(self):
+        """Once total_estimated_sec is set, the retry block's guard
+        (`is None`) must prevent it from running again — no wasted cloud
+        lookups on every subsequent ambiguous-phase message."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[600, 400],
+        ) as mock_estimates:
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            calls_after_start = mock_estimates.call_count
+            cb(_msg("charge", cycle="clean"))
+            cb(_msg("charge", cycle="clean"))
+
+        # Retry block should not have fired again — total_estimated_sec was
+        # already known after the first call.
+        assert mock_estimates.call_count == calls_after_start
+
+    @pytest.mark.asyncio
+    async def test_retry_failure_does_not_crash_callback(self):
+        """A cloud lookup exception during retry must be swallowed, same
+        as the mission-start lookup — never crash the MQTT callback."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            side_effect=RuntimeError("cloud API exploded"),
+        ):
+            cb(_msg("charge", cycle="clean"))  # must not raise
+
+        assert mts.total_estimated_sec is None
 
 
 class TestInterRoomRechargeMTSNotReset:

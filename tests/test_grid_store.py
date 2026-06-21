@@ -668,3 +668,169 @@ class TestStuckPattern:
             (0, 0): {"count": 10, "times": []},
         })
         assert gs.stuck_pattern(threshold=8) is None
+
+
+class TestDiskFilledCells:
+    """v2.9.0 (DISK-FILL) — _disk_filled_cells() pure-geometry helper.
+
+    Each pose point's actual swept footprint (robot chassis radius), not
+    just the single cell its centre happens to land in. Confirmed via real
+    data (June 2026) that the old single-cell marking left the trace too
+    sparse to even form one connected blob under 8-connectivity, and
+    undercounted both edge_coverage_ratio and coverage_by_polygon.
+    """
+
+    def test_single_point_covers_multiple_cells_for_realistic_radius(self):
+        from custom_components.roomba_plus.grid_store import (
+            _disk_filled_cells, CELL_SIZE_MM,
+        )
+        # Robot radius ~176mm (353mm diameter / 2) is larger than one
+        # 150mm cell — a single pose point must touch more than one cell.
+        result = _disk_filled_cells([(1000.0, 1000.0)], radius_mm=176.0)
+        assert len(result) > 1
+
+    def test_radius_zero_still_returns_centre_cell_at_minimum(self):
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+        result = _disk_filled_cells([(1000.0, 1000.0)], radius_mm=1.0)
+        assert (6, 6) in result  # 1000 // 150 = 6
+
+    def test_distance_check_excludes_far_corner_cells(self):
+        """Disk-fill must use a real circular distance check, not just a
+        bounding-box square — a corner cell at the edge of the bbox but
+        outside the actual circle radius must NOT be included."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+        # A small radius (just over half a cell) should NOT reach the
+        # diagonal corner cells of its bounding box.
+        result = _disk_filled_cells([(0.0, 0.0)], radius_mm=80.0)
+        # Cell (-1,-1)'s centre is at (-75,-75), distance = sqrt(75²+75²)
+        # ≈ 106mm > 80mm radius — must be excluded.
+        assert (-1, -1) not in result
+
+    def test_dense_consecutive_points_form_one_connected_blob(self):
+        """The whole point of disk-fill: a realistic dense pose trail
+        (median step ~67mm, matching real captured data) must form ONE
+        connected component under 8-connectivity, unlike the old
+        single-cell marking (confirmed empirically to fragment into 19+
+        pieces on real data)."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+        from collections import deque
+
+        # Simulate a dense, winding path — 67mm steps, gentle turns.
+        points = []
+        x, y = 0.0, 0.0
+        import math as _m
+        for i in range(100):
+            angle = i * 0.15
+            x += 67 * _m.cos(angle)
+            y += 67 * _m.sin(angle)
+            points.append((x, y))
+
+        touched = _disk_filled_cells(points, radius_mm=176.0)
+
+        # 8-connectivity flood fill from one cell must reach all of them.
+        start = next(iter(touched))
+        visited = {start}
+        q = deque([start])
+        while q:
+            cx, cy = q.popleft()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nb = (cx + dx, cy + dy)
+                    if nb in touched and nb not in visited:
+                        visited.add(nb)
+                        q.append(nb)
+        assert visited == touched, (
+            f"Disk-filled trace must be one connected blob — "
+            f"{len(touched) - len(visited)} cell(s) unreachable"
+        )
+
+
+class TestUpdateFromMissionDiskFill:
+    """v2.9.0 (DISK-FILL) — update_from_mission()'s robot_radius_mm parameter."""
+
+    def _make_gs(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        return GridStore()
+
+    def test_none_radius_preserves_old_single_cell_behaviour(self):
+        """Backward compatibility: omitting robot_radius_mm must behave
+        exactly as before — existing callers/tests that don't pass it
+        must see no change."""
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [])
+        assert len(gs._cells) == 1
+        assert (6, 6) in gs._cells
+
+    def test_with_radius_marks_more_cells_than_single_point(self):
+        gs_old = self._make_gs()
+        gs_old.update_from_mission([(1000.0, 1000.0)], [])
+
+        gs_new = self._make_gs()
+        gs_new.update_from_mission([(1000.0, 1000.0)], [], robot_radius_mm=176.0)
+
+        assert len(gs_new._cells) > len(gs_old._cells)
+
+    def test_increment_applied_once_per_cell_despite_overlapping_disks(self):
+        """Two adjacent pose points whose disks both touch the same cell
+        must not double-increment that cell within a single mission —
+        preserves the existing 'one VISIT_INCREMENT per mission per cell'
+        semantics, just with disk-based touching instead of single-point."""
+        from custom_components.roomba_plus.grid_store import VISIT_INCREMENT
+        gs = self._make_gs()
+        # Two points 30mm apart — their 176mm-radius disks heavily overlap.
+        gs.update_from_mission(
+            [(1000.0, 1000.0), (1030.0, 1000.0)], [], robot_radius_mm=176.0,
+        )
+        # Every touched cell must have EXACTLY one increment's worth of
+        # weight (mission starts from an empty store), never more.
+        for weight in gs._cells.values():
+            assert weight == VISIT_INCREMENT
+
+
+class TestCoverageAccuracyWithDiskFill:
+    """v2.9.0 (DISK-FILL) — confirms the fix actually improves the two
+    real, user-visible calculations that depend on GridStore cell density:
+    coverage_by_polygon() (per-room % in mission history) and
+    edge_coverage_ratio() (F12d over-cleaning-centre diagnostic).
+    """
+
+    def _make_gs(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        return GridStore()
+
+    def test_coverage_by_polygon_higher_with_disk_fill(self):
+        """A sparse single-cell-per-point trace through a room undercounts
+        coverage; disk-filling the same path should report a higher (more
+        accurate) fraction for the same physical sweep."""
+        import math as _m
+
+        # A short, tight loop confined to roughly the first third of a
+        # large 6000x6000mm room — deliberately leaves most of the
+        # polygon untouched by either variant, so there's room for a
+        # real difference between the two coverage fractions to show up
+        # (a path that already saturates both variants to 100% can't
+        # demonstrate the fix).
+        points = []
+        x, y = 600.0, 600.0
+        for i in range(40):
+            angle = i * 0.3
+            x += 67 * _m.cos(angle)
+            y += 67 * _m.sin(angle)
+            points.append((x, y))
+
+        polygon = {"room1": [(0.0, 0.0), (6000.0, 0.0), (6000.0, 6000.0), (0.0, 6000.0)]}
+
+        gs_old = self._make_gs()
+        gs_old.update_from_mission(points, [])
+        frac_old = gs_old.coverage_by_polygon(polygon)["room1"]
+
+        gs_new = self._make_gs()
+        gs_new.update_from_mission(points, [], robot_radius_mm=176.0)
+        frac_new = gs_new.coverage_by_polygon(polygon)["room1"]
+
+        assert frac_new > frac_old, (
+            f"Disk-fill should report higher coverage for the same sweep "
+            f"(old={frac_old:.2f}, new={frac_new:.2f})"
+        )

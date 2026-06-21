@@ -575,12 +575,26 @@ class TestRoomIndexCorroboration:
         phases_nstuck: list[tuple[str, int]],
         planned_rooms: list[str] | None,
         current_room_idx: int = 0,
+        room_estimates_sec: list | None = None,
+        total_estimated_sec: float | None = 999.0,
     ) -> list[dict]:
-        """Drive the callback with a MissionTimerStore that has a room plan."""
+        """Drive the callback with a MissionTimerStore that has a room plan.
+
+        v2.9.0 — room_estimates_sec/total_estimated_sec default to
+        "estimate data exists" (matching the common case where the
+        room-index corroboration SHOULD apply). Must be explicitly set to
+        None/[] to exercise the CONFIDENCE GUARD test scenarios (Auto-mode/
+        no-estimate missions, where current_room_idx can never be trusted).
+        An unconfigured MagicMock() attribute is technically "not None",
+        which would silently bypass the confidence guard in either
+        direction — explicit values are required for a real test.
+        """
         hass, entry, recorded, _ = _make_callback_env()
         mts = MagicMock()
         mts.planned_rooms = planned_rooms or []
         mts.current_room_idx = current_room_idx
+        mts.room_estimates_sec = room_estimates_sec or []
+        mts.total_estimated_sec = total_estimated_sec
         entry.runtime_data.mission_timer_store = mts
         cb = make_mission_callback(hass, entry)
 
@@ -695,6 +709,89 @@ class TestRoomIndexCorroboration:
             hass.loop.run_until_complete(asyncio.sleep(0))
 
         assert len(captured_kwargs) == 1
+
+    def test_unvisited_rooms_safety_cap_prevents_permanent_hang(self):
+        """v2.9.0 — reproduces the exact field regression reported by Thonno
+        (i7+, lewis 22.52.10, 2026-06-19): a genuine, fully-completed
+        mission never confirmed because current_room_idx never advanced
+        past 0 (AUTO-ADVANCE-ROOM did not fire for this firmware/scenario).
+        end_signal_streak reached 10, time_held reached 66+ seconds, yet
+        unvisited_rooms stayed True the entire captured session — the
+        mission was never recorded and MissionTimerStore was never cleared.
+
+        UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS (90s) must eventually let
+        confirmation through regardless of current_room_idx, so a real
+        mission end can never hang forever.
+        """
+        recorded = self._run_phases_with_rooms(
+            # _patch_callbacks_time advances monotonic by 10s per call —
+            # need enough repeated ambiguous-phase messages for time_held
+            # to cross the 90s safety cap while current_room_idx never
+            # advances (mirrors the field log: streak kept climbing,
+            # unvisited_rooms stayed True throughout).
+            [("run", 0)] + [("charge", 0)] * 11,
+            planned_rooms=["Corridoio", "Camera da letto"],
+            current_room_idx=0,  # never advances — exactly what Thonno saw
+        )
+        assert len(recorded) == 1, (
+            "A genuine mission end must eventually confirm even when "
+            "current_room_idx never advances — must not hang forever"
+        )
+
+    def test_unvisited_rooms_suppression_still_works_within_cap(self):
+        """Sanity check: the safety cap must not defeat the original fix
+        for short, normal inter-room transitions well within 90s."""
+        recorded = self._run_phases_with_rooms(
+            [("run", 0), ("charge", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Corridoio", "Camera da letto"],
+            current_room_idx=0,
+        )
+        assert len(recorded) == 0, (
+            "Short ambiguous-phase bursts with unvisited rooms must still "
+            "be suppressed — the safety cap should not defeat the original "
+            "fix for the common case"
+        )
+
+    def test_confidence_guard_skips_suppression_with_no_estimates_at_all(self):
+        """v2.9.0 CONFIDENCE GUARD — confirmed regression: when no room has
+        ANY time estimate (e.g. every planned room uses Auto pass mode, or
+        cloud TE1 data hasn't reached GOOD_CONFIDENCE for any of them),
+        current_room_idx can never advance via AUTO-ADVANCE-ROOM, making
+        unvisited_rooms permanently True for the entire mission. Without
+        this guard, EVERY genuine end for such a mission (likely the
+        majority — Auto is the default pass mode) would wait out the full
+        90s safety cap instead of the normal 2s time gate. The guard must
+        skip the room-index check entirely here, falling back to the plain
+        time gate immediately.
+        """
+        recorded = self._run_phases_with_rooms(
+            [("run", 0), ("charge", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Corridoio", "Camera da letto"],
+            current_room_idx=0,  # never advanced — Auto mode, as expected
+            room_estimates_sec=[None, None],  # Auto mode — no estimates at all
+            total_estimated_sec=None,          # nothing to sum either
+        )
+        assert len(recorded) == 1, (
+            "With zero estimate data anywhere, current_room_idx cannot be "
+            "trusted — must confirm on the plain time gate (well within "
+            "the short test burst), not wait for the 90s safety cap"
+        )
+
+    def test_confidence_guard_applies_normally_with_partial_estimates(self):
+        """When at least ONE room has a real estimate (even if others
+        don't), current_room_idx had at least a chance to be tracked —
+        the room-index suppression should still apply normally."""
+        recorded = self._run_phases_with_rooms(
+            [("run", 0), ("charge", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Corridoio", "Camera da letto"],
+            current_room_idx=0,
+            room_estimates_sec=[600, None],   # room 1 has an estimate
+            total_estimated_sec=600.0,
+        )
+        assert len(recorded) == 0, (
+            "Partial estimate data still means current_room_idx COULD be "
+            "trusted — suppression should apply as normal"
+        )
 
 
 class TestStuckBypassMissionCallback:

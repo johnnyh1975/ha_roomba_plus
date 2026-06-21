@@ -163,10 +163,11 @@ class TestMqttWatchdogRepairIssue:
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
         now = 1_000_000.0
-        # Robot last seen 7 minutes ago, in "stuck" phase — i.e. it may
-        # have gone quiet because it was already stuck, not because of a
-        # real connectivity loss.
-        s = _mqtt_stale_sensor(phase="stuck", last_mqtt_message_ts=now - 7 * 60)
+        # v2.9.0 — REVERTED to phase=="run" only (see _MISSION_ACTIVE_PHASES
+        # rationale). This test's purpose is verifying the placeholder
+        # text content, not the gating phase itself — uses "run" so the
+        # watchdog actually evaluates and fires.
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 7 * 60)
 
         with patch.object(bs_mod, "_time_mod") as tmock, \
              patch.object(bs_mod.ir, "async_create_issue") as mock_create:
@@ -176,7 +177,7 @@ class TestMqttWatchdogRepairIssue:
         assert mock_create.called
         placeholders = mock_create.call_args.kwargs["translation_placeholders"]
         assert placeholders["minutes"] == "7"
-        assert placeholders["last_phase"] == "stuck"
+        assert placeholders["last_phase"] == "run"
 
     def test_cloud_hint_unknown_when_wifistat_absent(self):
         """9-series firmware (incl. the 980 OG test robot) never sends
@@ -256,21 +257,36 @@ class TestMqttWatchdogRepairIssue:
 
         assert not mock_create.called
 
-    def test_broadened_gate_fires_for_stuck_and_pause(self):
-        """v2.9.0 — silence starting in 'stuck' or 'pause' must also fire;
-        previously only phase=='run' was checked, missing exactly the
-        scenario most likely to coincide with a real connectivity loss
-        (the robot struggling, then vanishing)."""
+    def test_reverted_gate_only_fires_for_run(self):
+        """v2.9.0 — REVERTED. The broadened gate (CLEANING_PHASES |
+        {"stuck", "pause"}) was speculative — added from a single user
+        screenshot, not a confirmed bug report — and field use the same
+        day confirmed a real, recurring cost for any robot that gets stuck
+        often: firmware pushes far fewer updates while motionless-but-
+        stuck-and-still-connected, which is normal low-chatter behaviour,
+        not a connectivity problem. Reverted to "run" only; "stuck",
+        "pause", "hmMidMsn", and "evac" must NOT fire the watchdog.
+        """
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
         now = 1_000_000.0
-        for phase in ("stuck", "pause", "run", "hmMidMsn", "evac"):
+        for phase in ("stuck", "pause", "hmMidMsn", "evac"):
             s = _mqtt_stale_sensor(phase=phase, last_mqtt_message_ts=now - 600)
             with patch.object(bs_mod, "_time_mod") as tmock, \
                  patch.object(bs_mod.ir, "async_create_issue") as mock_create:
                 tmock.time.return_value = now
                 s._async_watchdog_tick(None)
-            assert mock_create.called, f"phase={phase} should fire the watchdog"
+            assert not mock_create.called, (
+                f"phase={phase} must NOT fire the watchdog after the revert"
+            )
+
+        # "run" must still fire — the watchdog's actual purpose.
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 600)
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        assert mock_create.called, "phase=run must still fire the watchdog"
 
     def test_broadened_gate_excludes_mission_end_phases(self):
         """Mission-end phases (charge, hmPostMsn, stop) and idle must never
@@ -285,3 +301,212 @@ class TestMqttWatchdogRepairIssue:
                 tmock.time.return_value = now
                 s._async_watchdog_tick(None)
             assert not mock_create.called, f"phase={phase} must not fire the watchdog"
+
+
+# ── RoombaMapSavingStatus tests (merged from test_map_saving_sensor.py) ───────
+
+from custom_components.roomba_plus.binary_sensor import (
+    RoombaMapSavingStatus,
+    _NOT_READY_MAP_SAVING,
+)
+
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _make_sensor(not_ready: int = 0) -> RoombaMapSavingStatus:
+    roomba = MagicMock()
+    roomba.master_state = {
+        "state": {
+            "reported": {
+                "cleanMissionStatus": {"notReady": not_ready},
+                "pmaps": [{"abc": "v1"}],
+            }
+        }
+    }
+    return RoombaMapSavingStatus(roomba, "test_blid")
+
+
+# ── Constant ──────────────────────────────────────────────────────────────────
+
+class TestNotReadyConstant:
+    def test_value_is_64(self):
+        assert _NOT_READY_MAP_SAVING == 64
+
+
+# ── is_on ─────────────────────────────────────────────────────────────────────
+
+class TestMapSavingIsOn:
+    def test_on_when_bit_6_set(self):
+        sensor = _make_sensor(not_ready=64)
+        assert sensor.is_on is True
+
+    def test_off_when_not_ready_is_zero(self):
+        sensor = _make_sensor(not_ready=0)
+        assert sensor.is_on is False
+
+    def test_off_when_cleanmissionstatus_absent(self):
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        sensor = RoombaMapSavingStatus(roomba, "blid")
+        assert sensor.is_on is False
+
+    def test_on_when_bit_6_combined_with_others(self):
+        """bit 6 set alongside other bits — still ON."""
+        sensor = _make_sensor(not_ready=64 | 1 | 4)
+        assert sensor.is_on is True
+
+    def test_off_when_other_bits_set_but_not_bit_6(self):
+        """bit 1 + bit 2 + bit 5 — no map saving."""
+        sensor = _make_sensor(not_ready=1 | 2 | 32)
+        assert sensor.is_on is False
+
+    def test_off_when_not_ready_is_none(self):
+        roomba = MagicMock()
+        roomba.master_state = {
+            "state": {"reported": {"cleanMissionStatus": {"notReady": None}}}
+        }
+        sensor = RoombaMapSavingStatus(roomba, "blid")
+        # None treated as 0 via `or 0` guard — sensor must return False
+        assert sensor.is_on is False
+
+    def test_bitmask_values(self):
+        """Exhaustive check: only multiples of 64 within reasonable range trigger ON."""
+        sensor = _make_sensor(not_ready=0)
+        for v in range(256):
+            roomba = MagicMock()
+            roomba.master_state = {
+                "state": {"reported": {"cleanMissionStatus": {"notReady": v}}}
+            }
+            sensor2 = RoombaMapSavingStatus(roomba, "blid")
+            expected = bool(v & 64)
+            assert sensor2.is_on == expected, f"Failed for notReady={v}"
+
+
+# ── extra_state_attributes ────────────────────────────────────────────────────
+
+class TestMapSavingAttributes:
+    def test_exposes_bitmask(self):
+        sensor = _make_sensor(not_ready=64)
+        assert sensor.extra_state_attributes["not_ready_bitmask"] == 64
+
+    def test_zero_bitmask_when_idle(self):
+        sensor = _make_sensor(not_ready=0)
+        assert sensor.extra_state_attributes["not_ready_bitmask"] == 0
+
+    def test_combined_bitmask_preserved(self):
+        sensor = _make_sensor(not_ready=65)
+        assert sensor.extra_state_attributes["not_ready_bitmask"] == 65
+
+
+# ── new_state_filter ──────────────────────────────────────────────────────────
+
+class TestMapSavingStateFilter:
+    def test_triggers_on_cleanmissionstatus(self):
+        sensor = _make_sensor()
+        assert sensor.new_state_filter({"cleanMissionStatus": {"notReady": 64}}) is True
+
+    def test_ignores_other_fields(self):
+        sensor = _make_sensor()
+        assert sensor.new_state_filter({"bin": {"full": True}}) is False
+        assert sensor.new_state_filter({"pose": {"x": 1}}) is False
+        assert sensor.new_state_filter({}) is False
+
+    def test_triggers_when_combined_with_other_fields(self):
+        sensor = _make_sensor()
+        assert sensor.new_state_filter({"cleanMissionStatus": {}, "bin": {}}) is True
+
+
+# ── Entity metadata ───────────────────────────────────────────────────────────
+
+class TestMapSavingMetadata:
+    def test_unique_id(self):
+        sensor = _make_sensor()
+        assert "map_saving" in sensor._attr_unique_id
+
+    def test_translation_key(self):
+        sensor = _make_sensor()
+        assert sensor.entity_description.translation_key == "map_saving"
+
+    def test_device_class_update(self):
+        from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+        sensor = _make_sensor()
+        assert sensor._attr_device_class == BinarySensorDeviceClass.UPDATE
+
+    def test_entity_category_diagnostic(self):
+        from homeassistant.const import EntityCategory
+        sensor = _make_sensor()
+        assert sensor._attr_entity_category == EntityCategory.DIAGNOSTIC
+
+
+# ── async_setup_entry routing ─────────────────────────────────────────────────
+
+class TestMapSavingSetupEntry:
+    @pytest.mark.asyncio
+    async def test_created_for_smart_map_robot(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        state = {"pmaps": [{"abc": "v1"}], "cleanMissionStatus": {"notReady": 0}}
+        entry = MagicMock()
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": state}}
+        roomba.roomba_connected = True
+        entry.runtime_data.roomba = roomba
+        entry.runtime_data.blid = "test_blid"
+
+        created = []
+        def sync_add(entities, **kw): created.extend(entities)
+
+        with patch.object(bs_mod, "roomba_reported_state", return_value=state):
+            with patch.object(bs_mod, "has_smart_map", return_value=True):
+                await bs_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        map_saving = [e for e in created if isinstance(e, RoombaMapSavingStatus)]
+        assert len(map_saving) == 1
+
+    @pytest.mark.asyncio
+    async def test_not_created_for_non_smart_map_robot(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        state = {}
+        entry = MagicMock()
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": state}}
+        roomba.roomba_connected = True
+        entry.runtime_data.roomba = roomba
+        entry.runtime_data.blid = "test_blid"
+
+        created = []
+        def sync_add(entities, **kw): created.extend(entities)
+
+        with patch.object(bs_mod, "roomba_reported_state", return_value=state):
+            with patch.object(bs_mod, "has_smart_map", return_value=False):
+                await bs_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        map_saving = [e for e in created if isinstance(e, RoombaMapSavingStatus)]
+        assert len(map_saving) == 0
+
+
+# ── Automation scenario ───────────────────────────────────────────────────────
+
+class TestMapSavingAutomationScenario:
+    """Realistic sequence: map save starts, then completes."""
+
+    def _sensor_with_state(self, not_ready: int) -> RoombaMapSavingStatus:
+        return _make_sensor(not_ready)
+
+    def test_sequence_off_on_off(self):
+        """Robot idle → map saving → map save complete."""
+        idle   = self._sensor_with_state(0)
+        saving = self._sensor_with_state(64)
+        done   = self._sensor_with_state(0)
+
+        assert idle.is_on is False
+        assert saving.is_on is True
+        assert done.is_on is False
+
+    def test_combined_with_other_not_ready_bits(self):
+        """Map saving combined with 'new map' bit (1) — still ON."""
+        sensor = self._sensor_with_state(64 | 1)
+        assert sensor.is_on is True
+        assert sensor.extra_state_attributes["not_ready_bitmask"] == 65

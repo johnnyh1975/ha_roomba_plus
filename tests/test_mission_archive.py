@@ -347,6 +347,34 @@ class TestMissionArchiveAppend:
         # Oldest (nMssn=1) should have been dropped
         assert self.archive._derived[-1]["nMssn"] == 2
 
+    def test_cumulative_sqft_increments_per_mission(self):
+        """v2.9.0 (J) — running total for total_cleaned_area, immune to
+        the FIFO eviction that summing _derived live would suffer from."""
+        self.archive._append(_raw(n_mssn=1, sqft=300.0))
+        self.archive._append(_raw(n_mssn=2, sqft=400.0))
+        assert self.archive.cumulative_sqft == 700.0
+
+    def test_cumulative_sqft_survives_fifo_eviction(self):
+        """The whole point of this field: once an old mission's record is
+        evicted by the FIFO trim, its area must still count toward the
+        running total — unlike summing _derived (the currently-held list)
+        live, which would silently lose it.
+        """
+        for i in range(1, MAX_RECORDS + 2):
+            self.archive._append(_raw(n_mssn=i, sqft=10.0))
+        # MAX_RECORDS + 1 missions appended, each contributing 10.0 sqft —
+        # the running total must reflect ALL of them, even though only
+        # MAX_RECORDS records remain in _derived after the trim.
+        assert self.archive.cumulative_sqft == (MAX_RECORDS + 1) * 10.0
+        assert self.archive.record_count == MAX_RECORDS
+
+    def test_cumulative_sqft_ignores_missing_sqft(self):
+        """A record with no usable sqft must not contribute (and must not
+        raise) — same null-safety as everywhere else sqft is summed."""
+        self.archive._append(_raw(n_mssn=1, sqft=0.0))
+        self.archive._append(_raw(n_mssn=2, sqft=300.0))
+        assert self.archive.cumulative_sqft == 300.0
+
 
 class TestMissionArchiveStorage:
     """Round-trip save/load through mocked HA Store."""
@@ -396,6 +424,95 @@ class TestMissionArchiveStorage:
             await archive.async_load(hass, "e")
         assert archive.record_count == 0
 
+    @pytest.mark.asyncio
+    async def test_cumulative_sqft_persists_across_save_load(self):
+        archive = MissionArchive()
+        archive._append(_raw(n_mssn=1, sqft=300.0))
+        archive._append(_raw(n_mssn=2, sqft=400.0))
+
+        stored: dict = {}
+
+        async def mock_save(data):
+            stored.update(data)
+
+        async def mock_load():
+            return stored if stored else None
+
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save
+        store_mock.async_load = mock_load
+
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_save(hass, "test_entry")
+
+            archive2 = MissionArchive()
+            await archive2.async_load(hass, "test_entry")
+
+        assert archive2.cumulative_sqft == 700.0
+
+    @pytest.mark.asyncio
+    async def test_cumulative_sqft_seeded_on_first_load_for_existing_installs(self):
+        """v2.9.0 (J) — MIGRATION. An existing installation already has
+        archived records from before this field existed. On first load
+        without a persisted "cumulative_sqft" key, the accumulator must
+        be SEEDED from whatever's currently held — starting at 0.0 would
+        undercount for a long time until enough NEW missions accumulate
+        to "catch up", which is worse than the old live-recompute
+        behaviour this field replaces.
+        """
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value={
+            "last_nMssn": 2,
+            "initial_load_done": True,
+            "derived": [
+                {"nMssn": 2, "sqft": 400.0},
+                {"nMssn": 1, "sqft": 300.0},
+            ],
+            "timeline": [[], []],
+            "raw": {},
+            # deliberately no "cumulative_sqft" key — simulates data
+            # persisted before this field was introduced
+        })
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        assert archive.cumulative_sqft == 700.0, (
+            "Must seed from the currently-held records on first load when "
+            "no persisted cumulative_sqft exists yet"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cumulative_sqft_not_reseeded_once_persisted(self):
+        """Once cumulative_sqft has been persisted (even as 0.0, a valid
+        value for a robot truly with no sqft data anywhere), it must be
+        loaded as-is — never re-derived from _derived on subsequent loads,
+        since that live recomputation is exactly the bug this field fixes.
+        """
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value={
+            "last_nMssn": 1,
+            "initial_load_done": True,
+            "derived": [{"nMssn": 1, "sqft": 999.0}],
+            "timeline": [[]],
+            "raw": {},
+            "cumulative_sqft": 50_000.0,  # the "true" running total
+        })
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        assert archive.cumulative_sqft == 50_000.0, (
+            "Must use the persisted value, not re-sum the (possibly "
+            "FIFO-trimmed) currently-held _derived list"
+        )
+
 
 class TestMissionArchiveDeltaUpdate:
     @pytest.mark.asyncio
@@ -423,6 +540,92 @@ class TestMissionArchiveDeltaUpdate:
             result = await archive.async_delta_update(_raw(n_mssn=5), hass, "e")
         assert result is False
         assert archive.record_count == 1
+
+    @pytest.mark.asyncio
+    async def test_nmssn_discontinuity_does_not_permanently_block_new_missions(self):
+        """v2.9.0 — DISCONTINUITY GUARD. Without this fix, a robot's nMssn
+        counter resetting (factory reset, RMA replacement, etc.) would
+        cause every future mission to silently collide with already-
+        archived nMssn values from before the reset and get dropped
+        forever, since nMssn alone is the dedup key.
+        """
+        archive = MissionArchive()
+        # Pre-reset history: missions 1 through 5 already archived.
+        for i in range(1, 6):
+            archive._append(_raw(n_mssn=i))
+        assert archive.last_nMssn == 5
+
+        hass = _make_hass()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            # Robot's counter has reset — reports "mission 1" again, but
+            # this is a genuinely NEW, different mission.
+            result = await archive.async_delta_update(_raw(n_mssn=1), hass, "e")
+
+        assert result is True, (
+            "A discontinuity must not silently block the new mission — "
+            "without the fix, n_mssn=1 would already be in "
+            "_archived_nmssns from before the reset and get skipped"
+        )
+        assert archive.record_count == 6
+
+    @pytest.mark.asyncio
+    async def test_discontinuity_warning_does_not_repeat_every_mission(self):
+        """The discontinuity check resets last_nMssn to the new (lower)
+        value — without that, every subsequent mission in the new epoch
+        would ALSO be "< last_nMssn" and re-trigger the same clear/warning
+        on every single mission until the new epoch's count organically
+        catches up to the old high-water mark.
+        """
+        archive = MissionArchive()
+        for i in range(1, 6):
+            archive._append(_raw(n_mssn=i))
+
+        hass = _make_hass()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_delta_update(_raw(n_mssn=1), hass, "e")
+            # last_nMssn must now reflect the NEW epoch, not the old one.
+            assert archive.last_nMssn == 1
+
+            with patch.object(
+                __import__(
+                    "custom_components.roomba_plus.mission_archive",
+                    fromlist=["_LOGGER"],
+                )._LOGGER,
+                "warning",
+            ) as mock_warn:
+                # Mission 2 of the new epoch — must NOT re-trigger the
+                # discontinuity warning (1 < 5 would have, 2 < 1 does not).
+                await archive.async_delta_update(_raw(n_mssn=2), hass, "e")
+            mock_warn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_sequential_missions_never_trigger_discontinuity(self):
+        """Sanity check: ordinary monotonically-increasing nMssn values
+        must never trigger the discontinuity path at all."""
+        archive = MissionArchive()
+        hass = _make_hass()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            with patch.object(
+                __import__(
+                    "custom_components.roomba_plus.mission_archive",
+                    fromlist=["_LOGGER"],
+                )._LOGGER,
+                "warning",
+            ) as mock_warn:
+                for i in range(1, 6):
+                    await archive.async_delta_update(_raw(n_mssn=i), hass, "e")
+            mock_warn.assert_not_called()
+        assert archive.record_count == 5
+        assert archive.last_nMssn == 5
 
 
 class TestMissionArchiveQueries:
