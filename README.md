@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.8.5-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.8.6-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -33,6 +33,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
   - [🔵 Presence & scheduling](#-presence--scheduling)
   - [⚪ Connectivity & advanced](#-connectivity--advanced)
 - [Room cleaning setup (HA 2026.3+)](#room-cleaning-setup-ha-20263)
+- [Events & device triggers](#events--device-triggers)
 - [Automation examples](#automation-examples)
 - [Dashboard example](#dashboard-example)
 - [Documentation](#documentation)
@@ -351,9 +352,11 @@ map_modes:
 
 **Reset learned profile:** `roomba_plus.reset_robot_profile` wipes all self-calibrated baselines (dirt thresholds, maintenance intervals, coverage baseline) so the robot starts learning fresh after a move or major layout change. Mission history is unaffected.
 
+Every reset above (button or service) writes a searchable Logbook entry and fires `roomba_plus_maintenance_reset` — see [Events & device triggers](#events--device-triggers).
+
 #### Maintenance due binary sensor
 
-`binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable).
+`binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). Also available as the `maintenance_due` device trigger. If left unaddressed for 3+ days, also raises a Repair Issue — a backstop for anyone without an automation wired to the trigger.
 
 #### Dock contact health (v2.8.0)
 
@@ -392,13 +395,17 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
 
+Every mission also writes a searchable Logbook entry and fires `roomba_plus_mission_completed` — see [Events & device triggers](#events--device-triggers).
+
 #### Mission progress (v2.6+)
 
 > ☁️ Requires cloud credentials · SMART robots only
 
-`sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and elapsed run-only seconds. The timer persists across HA restarts.
+`sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and effective mission time (wall-clock duration minus robot-confirmed recharge time — see below). The timer persists across HA restarts.
 
-Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` (null in Auto pass mode) · `room_sequence`
+Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
+
+**Time tracking (v2.9.0):** `elapsed_run_min` is now `mission_duration_min` (pure wall-clock time since mission start) minus `recharge_min` (robot-confirmed mid-mission recharge time) — no more fixed time-based cutoff. Navigation and room-to-room transitions correctly count as active mission time even when they take several minutes; only confirmed recharging is excluded. `mission_duration_min` and `recharge_min` are also exposed directly so you can see the breakdown. In **Auto pass mode**, per-room cloud estimates aren't available at all — percentage and `estimated_remaining_min` now fall back to your robot's rolling average mission duration instead of staying "Unknown" for the whole mission.
 
 **Automatic room advancement (v2.8.0):** on lewis-firmware robots (i7+/s9+), the progress sensor can occasionally get stuck reporting a completed room as still in progress. Roomba+ now detects room transitions automatically using your robot's real per-room cloud time estimates — no setup required. If it ever needs a manual nudge, use the `roomba_plus.advance_room` action.
 
@@ -480,6 +487,7 @@ Roomba+ backfills up to 365 days of mission history into HA Long-Term Statistics
 ```
 GET /api/roomba_plus/{entry_id}/mission_history?format=summary|records|hazards|export
 POST /api/roomba_plus/{entry_id}/mission_history/import
+GET /api/roomba_plus/{entry_id}/digest?date=YYYY-MM-DD
 GET /api/roomba_plus/household
 ```
 
@@ -600,6 +608,34 @@ data:
 ```
 
 `roomba_plus.clean_room` (by room name) and `vacuum.clean_area` (by HA area) are fully interchangeable for SMART robots on HA 2026.3+.
+
+---
+
+## Events & device triggers
+
+Roomba+ fires events on the HA event bus that automations can react to directly (`platform: event`), and also exposes a curated subset as **device triggers** in the Automation editor (under "Device" — no YAML needed).
+
+### Event bus (v2.8.6+)
+
+| Event | Fires when | Payload |
+|---|---|---|
+| `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` |
+| `roomba_plus_room_completed` | AUTO-ADVANCE-ROOM confirms a room finished | `entry_id`, `name`, `room_name`, `room_idx` |
+| `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
+| `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
+| `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |
+| `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean` | Presence-aware scheduling (see above) | — |
+| `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
+
+`roomba_plus_mission_completed` and `roomba_plus_maintenance_reset` also produce rich, searchable **Logbook** entries automatically — no setup needed.
+
+### Device triggers
+
+Available in the Automation editor's Device trigger picker for every Roomba+ robot:
+
+`cleaning_started` · `cleaning_finished` · `stuck` · `bin_full` · `docked` · `error` · `room_completed` · `maintenance_due` · `health_score_drop` · `map_retrain_started` · `map_retrain_completed` · `firmware_updated`
+
+`health_score_drop` only fires when the health band genuinely *worsens* (e.g. healthy → degraded) — not on every score fluctuation, and not when it improves.
 
 ---
 

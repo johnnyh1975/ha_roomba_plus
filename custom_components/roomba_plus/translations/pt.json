@@ -887,6 +887,18 @@
     "integration_health": {
       "title": "A integridade da integração está degradada",
       "description": "A pontuação de integridade da integração do Roomba+ está abaixo de 50 há pelo menos 30 minutos (pontuação atual: {score}/100). Isto combina o número de Repair Issues ativos, a idade da última mensagem MQTT e a atualidade do arquivo de missões. Verifique os atributos da entidade sensor.*_integration_health para ver qual sinal está afetado, e reveja outros Repair Issues ativos para este robô."
+    },
+    "map_retrain_in_progress": {
+      "title": "Atualização do Mapa Inteligente está demorando mais que o normal",
+      "description": "O Mapa Inteligente do robô está sendo atualizado há pelo menos {minutes} minutos. Uma atualização normal costuma ser mais rápida — isso pode acontecer após uma grande alteração no layout. Nenhuma ação necessária por agora; isso será resolvido automaticamente quando a atualização terminar."
+    },
+    "map_retrain_stuck": {
+      "title": "Atualização do Mapa Inteligente parece travada",
+      "description": "O Mapa Inteligente do robô está sendo atualizado há pelo menos {minutes} minutos sem terminar. Isso é mais do que uma atualização real deveria levar. Tente reiniciar o robô pelo app da iRobot, ou contate o suporte da iRobot se persistir."
+    },
+    "maintenance_due": {
+      "title": "A manutenção está atrasada",
+      "description": "Os seguintes consumíveis estão pendentes de substituição há pelo menos 3 dias: {items}. Veja os atributos do sensor binário maintenance_due para as horas exatas de atraso, e use o botão de reset correspondente ou a ação roomba_plus.reset_* após a substituição."
     }
   },
   "device_automation": {
@@ -896,7 +908,13 @@
       "stuck": "Robô bloqueado",
       "bin_full": "Contentor cheio",
       "docked": "Na base",
-      "error": "Erro reportado"
+      "error": "Erro reportado",
+      "room_completed": "Cómodo concluído",
+      "maintenance_due": "Manutenção necessária",
+      "health_score_drop": "Pontuação de saúde caiu",
+      "map_retrain_started": "Reaprendizagem do mapa iniciada",
+      "map_retrain_completed": "Reaprendizagem do mapa concluída",
+      "firmware_updated": "Firmware atualizado"
     }
   },
   "services": {

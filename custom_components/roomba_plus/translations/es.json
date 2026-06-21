@@ -887,6 +887,18 @@
     "integration_health": {
       "title": "El estado de la integración está degradado",
       "description": "La puntuación de salud de la integración de Roomba+ ha estado por debajo de 50 durante al menos 30 minutos (puntuación actual: {score}/100). Esto combina el número de Repair Issues activos, la antigüedad del último mensaje MQTT y la actualidad del archivo de misiones. Consulte los atributos de la entidad sensor.*_integration_health para ver qué señal está afectada, y revise otros Repair Issues activos para este robot."
+    },
+    "map_retrain_in_progress": {
+      "title": "La actualización del mapa inteligente tarda más de lo normal",
+      "description": "El mapa inteligente del robot lleva actualizándose al menos {minutes} minutos. Una actualización normal suele ser más rápida — puede ocurrir tras un cambio grande en la distribución. Aún no se requiere ninguna acción; se resolverá automáticamente al terminar."
+    },
+    "map_retrain_stuck": {
+      "title": "La actualización del mapa inteligente parece bloqueada",
+      "description": "El mapa inteligente del robot lleva actualizándose al menos {minutes} minutos sin terminar. Esto es más de lo que debería tardar una actualización real. Reinicia el robot desde la app de iRobot, o contacta con soporte de iRobot si persiste."
+    },
+    "maintenance_due": {
+      "title": "El mantenimiento está atrasado",
+      "description": "Los siguientes consumibles llevan al menos 3 días pendientes de sustitución: {items}. Consulta los atributos del sensor binario maintenance_due para ver las horas exactas de retraso, y usa el botón de reinicio correspondiente o la acción roomba_plus.reset_* tras sustituirlos."
     }
   },
   "device_automation": {
@@ -896,7 +908,13 @@
       "stuck": "Robot atascado",
       "bin_full": "Depósito lleno",
       "docked": "En base",
-      "error": "Error reportado"
+      "error": "Error reportado",
+      "room_completed": "Habitación completada",
+      "maintenance_due": "Mantenimiento pendiente",
+      "health_score_drop": "Puntuación de salud bajó",
+      "map_retrain_started": "Reentrenamiento de mapa iniciado",
+      "map_retrain_completed": "Reentrenamiento de mapa completado",
+      "firmware_updated": "Firmware actualizado"
     }
   },
   "services": {

@@ -31,6 +31,7 @@ Unauthorized requests receive a `401` from the HA framework (`{"message": "Unaut
 |---|---|---|
 | `GET` | `/api/roomba_plus/{entry_id}/mission_history` | Mission history (summary / records / hazards / export) |
 | `POST` | `/api/roomba_plus/{entry_id}/mission_history/import` | Import a history export bundle |
+| `GET` | `/api/roomba_plus/{entry_id}/digest` | One-day summary for a single robot (v2.9.0) |
 | `GET` | `/api/roomba_plus/household` | Household aggregate across all robots |
 
 ### HTTP status codes
@@ -245,6 +246,42 @@ curl -X POST \
      -H "Content-Type: application/json" \
      -d @roomba_backup.json \
      "https://<ha>/api/roomba_plus/<entry_id>/mission_history/import"
+```
+
+---
+
+## GET /digest
+
+Compact one-day summary for a single robot — built for a card's "Today" status slot.
+
+```
+GET /api/roomba_plus/{entry_id}/digest?date=2026-06-16
+```
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `date` | string (`YYYY-MM-DD`) | today | Robot's local timezone |
+
+```json
+{
+  "missions": 2,
+  "area_m2": 72.1,
+  "stuck_events": 0,
+  "demand_cleans": 1,
+  "filter_hours_today": 1.4,
+  "battery_cycles_today": 2
+}
+```
+
+`filter_hours_today` and `battery_cycles_today` are the genuine increase in
+the robot's lifetime hour/charge-cycle counters attributable to that
+specific day — not an estimate. Both are `null` (never a guessed `0`) when
+there's no earlier mission to compare against, e.g. the very first day this
+robot has any recorded history.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/digest?date=2026-06-16"
 ```
 
 ---

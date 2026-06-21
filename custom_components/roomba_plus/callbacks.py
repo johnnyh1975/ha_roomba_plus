@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
+from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -247,6 +247,13 @@ async def async_record_mission(
     runtime = reported.get("runtimeStats", {})
     bbrun_hr = bbrun.get("hr") or runtime.get("hr") or 0
 
+    # v2.9.0 DAILY-DIGEST — chemistry-aware lifetime charge-cycle snapshot at
+    # mission end, mirrors bbrun_hr above: a per-mission absolute-counter
+    # snapshot, not a delta. api_views.py computes the cross-day delta the
+    # same way it already does for bbrun_hr (filter_hours_today). None when
+    # bbchg3 is absent (600-series has no battery_stats at all).
+    battery_cycles = active_charge_cycles(reported.get("bbchg3", {}))
+
     # F8b — capture error context at mission end
     # pose is None for firmware 3.20+ and 600-series; absent when null.
     error_position_mm: dict | None = None
@@ -290,6 +297,7 @@ async def async_record_mission(
         "zones": zones,
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
+        "battery_cycles": battery_cycles,   # v2.9.0 DAILY-DIGEST
         "recharge_min": recharge_min if recharge_min > 0 else None,  # F4e
         # F8b — error context fields (None when no error or no pose data)
         "error_position_mm": error_position_mm,
@@ -299,6 +307,22 @@ async def async_record_mission(
 
     await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
+
+    # v2.9.0 EVENT-BUS — fire roomba_plus_mission_completed for automations.
+    # entry_id + name included (unlike the older L6 presence events) so
+    # multi-robot installs can filter without a separate lookup.
+    hass.bus.async_fire(
+        EVENT_MISSION_COMPLETED,
+        {
+            "entry_id": entry.entry_id,
+            "name": entry.title,
+            "rooms_cleaned": len(zones),
+            "area_sqft": record["area_sqft"],
+            "stuck_count": nstuck_delta,
+            "result": result,
+        },
+    )
+
 
     # F6g — reset consecutive skip counter on any successful completion
     if result == "completed" and data.maintenance_store is not None:
@@ -361,9 +385,18 @@ def make_mission_callback(
     # The time gate ensures the signal must have been present for at least
     # 2 s, which a burst cannot satisfy but a genuinely-docked robot can.
     end_signal_first_ts: float = 0.0
-    # F4e — accumulate recharge minutes across mid-mission recharge phases
+    # F4e — accumulate recharge minutes across mid-mission recharge phases.
+    # recharge_min_accumulator = total from COMPLETED legs only.
+    # current_leg_rechrgM = live (overwritten, not added) value for the
+    # IN-PROGRESS leg — rechrgM is already cumulative for that one leg, so
+    # repeated hmMidMsn messages within the same leg must SET this, not add
+    # to it, or every message would double-count the same leg's minutes.
     recharge_min_accumulator: int = 0
+    current_leg_rechrgM: int = 0
     last_recharge_phase_ts: float = 0.0
+    # v2.9.0 — tracks the last value mirrored into MissionTimerStore.recharge_min,
+    # so we only write/save when it actually changes (not on every message).
+    _last_mirrored_recharge_min: int = 0
     # F6h — stuck recovery tracking
     had_stuck_event: bool = False
     stuck_cleared_ts: float = 0.0
@@ -376,6 +409,8 @@ def make_mission_callback(
     def _on_mission_message(json_data: dict[str, Any]) -> None:
         nonlocal last_phase, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
+        nonlocal current_leg_rechrgM
+        nonlocal _last_mirrored_recharge_min
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
         nonlocal end_signal_streak, end_signal_first_ts
 
@@ -420,7 +455,9 @@ def make_mission_callback(
             bbrun = reported.get("bbrun", {})
             nstuck_at_start = bbrun.get("nStuck", 0)
             recharge_min_accumulator = 0
+            current_leg_rechrgM = 0
             last_recharge_phase_ts = 0.0
+            _last_mirrored_recharge_min = 0
             had_stuck_event = False
             stuck_cleared_ts = 0.0
             _LOGGER.debug(
@@ -459,17 +496,42 @@ def make_mission_callback(
         if phase == "hmMidMsn":
             rechrgM = reported.get("cleanMissionStatus", {}).get("rechrgM")
             if rechrgM is not None:
-                # rechrgM is already cumulative for this charge leg
-                recharge_min_accumulator += int(rechrgM)
+                # rechrgM is cumulative for THIS leg — SET, don't add, or
+                # repeated messages during the same leg would double-count
+                # (e.g. 1, 2, 3 across three messages summing to 6 instead
+                # of the correct 3).
+                current_leg_rechrgM = int(rechrgM)
             elif last_recharge_phase_ts == 0.0:
                 # Fallback: record timestamp to compute elapsed on phase exit
                 last_recharge_phase_ts = _time_mod.monotonic()
 
-        # F4e fallback: if rechrgM was unavailable, compute elapsed time
-        if last_phase == "hmMidMsn" and phase != "hmMidMsn" and last_recharge_phase_ts > 0.0:
-            elapsed_min = int((_time_mod.monotonic() - last_recharge_phase_ts) / 60)
-            recharge_min_accumulator += elapsed_min
-            last_recharge_phase_ts = 0.0
+        # F4e fallback: if rechrgM was unavailable, compute elapsed time.
+        # Also handles locking the rechrgM-based leg total (if that path was
+        # used instead) into the completed-legs accumulator exactly once,
+        # when the robot actually leaves hmMidMsn.
+        if last_phase == "hmMidMsn" and phase != "hmMidMsn":
+            if last_recharge_phase_ts > 0.0:
+                elapsed_min = int((_time_mod.monotonic() - last_recharge_phase_ts) / 60)
+                recharge_min_accumulator += elapsed_min
+                last_recharge_phase_ts = 0.0
+            elif current_leg_rechrgM > 0:
+                recharge_min_accumulator += current_leg_rechrgM
+            current_leg_rechrgM = 0
+
+        # v2.9.0 — mirror the F4e accumulator into MissionTimerStore so it's
+        # readable live (mission_progress sensor) and survives HA restarts,
+        # not just written once into the MissionStore record at mission end.
+        # Total = completed legs (recharge_min_accumulator) + the
+        # IN-PROGRESS leg's live value (current_leg_rechrgM, 0 if not
+        # currently in hmMidMsn) — only mirrors when it actually changed
+        # this message, to avoid a redundant storage write on every message.
+        _live_recharge_min = recharge_min_accumulator + current_leg_rechrgM
+        if _live_recharge_min != _last_mirrored_recharge_min:
+            _mts_for_recharge = getattr(entry.runtime_data, "mission_timer_store", None)
+            if _mts_for_recharge is not None and _mts_for_recharge.mission_id is not None:
+                _mts_for_recharge.recharge_min = float(_live_recharge_min)
+                _mts_for_recharge._schedule_save(hass, entry.entry_id)
+            _last_mirrored_recharge_min = _live_recharge_min
 
         # F6h — detect stuck event: nStuck increased during this mission.
         # v2.6.3 A — check whenever mission is active (had_cleaning_phase=True),
@@ -731,7 +793,7 @@ def make_mission_callback(
                     list(current_mission_zones),
                     start_ts=mission_start_ts,
                     nstuck_delta=nstuck_delta,
-                    recharge_min=recharge_min_accumulator,  # F4e
+                    recharge_min=recharge_min_accumulator + current_leg_rechrgM,  # F4e
                     result_override=result_override,         # F6h
                 ),
                 hass.loop,
@@ -745,7 +807,9 @@ def make_mission_callback(
             mission_start_ts = 0
             nstuck_at_start = 0
             recharge_min_accumulator = 0
+            current_leg_rechrgM = 0
             last_recharge_phase_ts = 0.0
+            _last_mirrored_recharge_min = 0
             had_stuck_event = False
             stuck_cleared_ts = 0.0
             # had_cleaning_phase already reset to False above
@@ -977,6 +1041,25 @@ def make_mission_callback(
                             _mts_upd.current_room,
                             phase,
                         )
+                        # v2.9.0 EVENT-BUS — room_completed fires for the
+                        # room just LEFT (current_room_idx already advanced
+                        # above, so current_room now refers to the NEXT
+                        # room — use idx-1 / the previous room name).
+                        _completed_idx = _mts_upd.current_room_idx - 1
+                        _completed_room = (
+                            _mts_upd.planned_rooms[_completed_idx]
+                            if 0 <= _completed_idx < len(_mts_upd.planned_rooms)
+                            else None
+                        )
+                        hass.bus.async_fire(
+                            EVENT_ROOM_COMPLETED,
+                            {
+                                "entry_id": entry.entry_id,
+                                "name": entry.title,
+                                "room_name": _completed_room,
+                                "room_idx": _completed_idx,
+                            },
+                        )
 
         last_phase = phase
 
@@ -1039,18 +1122,47 @@ def make_mission_complete_callback(
 def make_map_retrain_callback(
     hass: Any,
     cloud_coordinator: IrobotCloudCoordinator,
+    entry: RoombaConfigEntry,
 ) -> Any:
     """Return an MQTT message callback that detects Smart Map retrains.
 
     Triggers an immediate cloud coordinator refresh when user_pmapv_id
     changes in the MQTT state — earlier than the 24-hour poll interval.
+
+    v2.9.0 EVENT-BUS: also fires roomba_plus_map_retrain_started immediately
+    on detection, and roomba_plus_map_retrain_completed only after the
+    cloud refresh coroutine actually finishes (not merely "requested") —
+    via a wrapper coroutine so "completed" carries real information instead
+    of firing ~0ms after "started" every time.
     """
     last_pmapv: dict[str, str] = {}  # pmap_id → last seen pmapv_id
+
+    async def _refresh_and_report(pids: list[str]) -> None:
+        for pid in pids:
+            hass.bus.async_fire(
+                EVENT_MAP_RETRAIN_STARTED,
+                {"entry_id": entry.entry_id, "name": entry.title, "pmap_id": pid},
+            )
+        try:
+            await cloud_coordinator.async_request_refresh()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "Roomba+ cloud: map retrain refresh failed for pmap(s) %s — "
+                "no map_retrain_completed event fired",
+                [p[:12] for p in pids],
+                exc_info=True,
+            )
+            return
+        for pid in pids:
+            hass.bus.async_fire(
+                EVENT_MAP_RETRAIN_COMPLETED,
+                {"entry_id": entry.entry_id, "name": entry.title, "pmap_id": pid},
+            )
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
         pmaps: list[dict] = reported.get("pmaps", [])
-        changed = False
+        changed_pids: list[str] = []
         for pmap_entry in pmaps:
             for pid, pmapv in pmap_entry.items():
                 if last_pmapv.get(pid) not in (None, pmapv):
@@ -1059,11 +1171,51 @@ def make_map_retrain_callback(
                         "(%s → %s) — triggering cloud refresh",
                         pid[:12], last_pmapv[pid][:12], pmapv[:12],
                     )
-                    changed = True
+                    changed_pids.append(pid)
                 last_pmapv[pid] = pmapv
-        if changed:
+        if changed_pids:
             asyncio.run_coroutine_threadsafe(
-                cloud_coordinator.async_request_refresh(), hass.loop
+                _refresh_and_report(changed_pids), hass.loop
             )
+
+    return _on_roomba_message
+
+
+def make_map_updating_callback(
+    hass: Any,
+    entry: RoombaConfigEntry,
+) -> Any:
+    """Return an MQTT callback for MAP-RETRAIN-WF (v2.9.0).
+
+    Tracks cleanMissionStatus.notReady & 64 ("Smart Map updating") on every
+    message and forwards the live boolean to repairs.async_check_map_
+    retrain_workflow(), which owns the duration tracking and Repair Issue
+    escalation. No separate timer needed — the robot keeps sending regular
+    state messages for as long as map_updating stays true, so checking on
+    every message is sufficient.
+
+    SMART-tier only (registered conditionally in __init__.py) — notReady's
+    bit-64 meaning is specific to Smart Map robots.
+    """
+    from .const import MAP_UPDATING_NOT_READY_BIT
+
+    def _on_roomba_message(json_data: dict[str, Any]) -> None:
+        reported = json_data.get("state", {}).get("reported", {})
+        mission = reported.get("cleanMissionStatus")
+        if mission is None:
+            return
+        not_ready = mission.get("notReady", 0) or 0
+        map_updating = bool(not_ready & MAP_UPDATING_NOT_READY_BIT)
+
+        # v2.9.0 — this callback runs on roombapy's MQTT thread, not the
+        # event loop thread (same reason make_map_retrain_callback bridges
+        # via run_coroutine_threadsafe above). ir.async_create_issue/
+        # async_delete_issue are plain (non-coroutine) functions that touch
+        # hass's issue registry, so call_soon_threadsafe — not a direct
+        # call — is the correct bridge for a sync callable.
+        from .repairs import async_check_map_retrain_workflow
+        hass.loop.call_soon_threadsafe(
+            async_check_map_retrain_workflow, hass, entry, map_updating
+        )
 
     return _on_roomba_message

@@ -901,6 +901,18 @@
     "integration_health": {
       "title": "Integration health is degraded",
       "description": "Roomba+'s integration health score has been below 50 for at least 30 minutes (current score: {score}/100). This combines active Repair Issue count, MQTT message age, and mission archive freshness. Check the sensor.*_integration_health entity's attributes for a breakdown of which signal is affected, and review any other active Repair Issues for this robot."
+    },
+    "map_retrain_in_progress": {
+      "title": "Smart Map update taking longer than usual",
+      "description": "The robot's Smart Map has been updating for at least {minutes} minutes. A normal update is usually faster — this can happen after a large layout change. No action is needed yet; this will clear automatically once the update finishes."
+    },
+    "map_retrain_stuck": {
+      "title": "Smart Map update appears stuck",
+      "description": "The robot's Smart Map has been updating for at least {minutes} minutes without finishing. This is longer than a genuine update should take. Try restarting the robot from the iRobot app, or contact iRobot support if it persists."
+    },
+    "maintenance_due": {
+      "title": "Maintenance is overdue",
+      "description": "The following consumable(s) have been due for replacement for at least 3 days: {items}. Check the maintenance_due binary sensor's attributes for exact overdue hours, then use the matching reset button or roomba_plus.reset_* action once replaced."
     }
   },
   "device_automation": {
@@ -910,7 +922,13 @@
       "stuck": "Robot stuck",
       "bin_full": "Bin full",
       "docked": "Docked",
-      "error": "Error reported"
+      "error": "Error reported",
+      "room_completed": "Room completed",
+      "maintenance_due": "Maintenance due",
+      "health_score_drop": "Health score dropped",
+      "map_retrain_started": "Map retrain started",
+      "map_retrain_completed": "Map retrain completed",
+      "firmware_updated": "Firmware updated"
     }
   },
   "services": {

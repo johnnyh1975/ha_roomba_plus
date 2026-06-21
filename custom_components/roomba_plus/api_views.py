@@ -564,3 +564,143 @@ class HouseholdSummaryView(HomeAssistantView):
             result["floors"] = list(floors.values())
 
         return self.json(result)
+
+
+class DailyDigestView(HomeAssistantView):
+    """GET /api/roomba_plus/{entry_id}/digest?date=2026-06-16
+
+    v2.9.0 DAILY-DIGEST — compact one-day summary for the card's "Today"
+    status slot. ``date`` defaults to today (robot's local timezone) when
+    omitted.
+
+    Response shape:
+        {"missions": 2, "area_m2": 72.1, "stuck_events": 0,
+         "demand_cleans": 1, "filter_hours_today": 1.4,
+         "battery_cycles_today": 2}
+
+    filter_hours_today / battery_cycles_today are TRUE day-attributable
+    deltas of the respective lifetime counters (bbrun_hr / battery_cycles,
+    both absolute snapshots captured per-mission in MissionStore), not a
+    proxy — see _lifetime_delta_for_day() below. Both are None when there
+    is no prior record to diff against (e.g. the robot's very first day of
+    recorded history) rather than guessing a 0 baseline, which could silently
+    misreport an unknown amount as "zero used today".
+    """
+
+    url = "/api/roomba_plus/{entry_id}/digest"
+    name = "api:roomba_plus:digest"
+    requires_auth = True
+
+    async def get(self, request: web.Request, entry_id: str) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN:
+            return self.json_message("Entry not found", status_code=404)
+
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            return self.json_message("Integration initialising", status_code=503)
+
+        data: RoombaData = entry.runtime_data
+
+        date_str = request.query.get("date")
+        if date_str:
+            try:
+                target_date = datetime.date.fromisoformat(date_str)
+            except ValueError:
+                return self.json_message(
+                    f"Invalid date '{date_str}' — expected YYYY-MM-DD",
+                    status_code=400,
+                )
+        else:
+            target_date = dt_util.now().date()
+
+        if data.mission_store is None:
+            return self.json({
+                "missions": 0, "area_m2": None, "stuck_events": 0,
+                "demand_cleans": 0, "filter_hours_today": None,
+                "battery_cycles_today": None,
+            })
+
+        # MAX_RECORDS (365) is the full retention window — a large enough
+        # lookback to find both target_date's records AND the most recent
+        # record strictly before it, however far back that is.
+        from .mission_store import MAX_RECORDS
+        all_records = data.mission_store.query(MAX_RECORDS + 30)
+
+        day_records = [
+            r for r in all_records
+            if (lambda dt: dt is not None and dt_util.as_local(dt).date() == target_date)
+            (dt_util.parse_datetime(r.get("started_at", "")))
+        ]
+
+        areas = [r["area_sqft"] for r in day_records if r.get("area_sqft") is not None]
+        stuck_events = sum(
+            1 for r in day_records
+            if r.get("result") in ("stuck", "stuck_and_abandoned")
+        )
+        demand_cleans = sum(1 for r in day_records if r.get("initiator") == "demand")
+
+        filter_hours_today = self._lifetime_delta_for_day(
+            all_records, target_date, "bbrun_hr",
+        )
+        battery_cycles_today_raw = self._lifetime_delta_for_day(
+            all_records, target_date, "battery_cycles",
+        )
+
+        return self.json({
+            "missions": len(day_records),
+            "area_m2": round(sum(areas) * SQFT_TO_M2, 1) if areas else None,
+            "stuck_events": stuck_events,
+            "demand_cleans": demand_cleans,
+            "filter_hours_today": (
+                round(filter_hours_today, 1)  # bbrun_hr is already in hours
+                if filter_hours_today is not None else None
+            ),
+            "battery_cycles_today": (
+                int(round(battery_cycles_today_raw))
+                if battery_cycles_today_raw is not None else None
+            ),
+        })
+
+    @staticmethod
+    def _lifetime_delta_for_day(
+        all_records: list[dict[str, Any]],
+        target_date: datetime.date,
+        field: str,
+    ) -> float | None:
+        """Return the TRUE increase of an absolute lifetime counter field
+        attributable to target_date, or None if there's nothing to diff
+        against.
+
+        Both bbrun_hr and battery_cycles are monotonically-increasing
+        snapshots of the robot's lifetime counters, captured at mission end
+        (NOT per-mission deltas — see callbacks.py async_record_mission()).
+        Because these counters only change DURING a mission, the increase
+        over a calendar day equals (latest value among that day's records)
+        minus (latest value among all records strictly before that day) —
+        regardless of how many days back that prior record is, since the
+        counter cannot have changed in the gap. all_records must already be
+        sorted ascending by started_at (MissionStore.query()'s contract).
+        """
+        on_day: float | None = None
+        before_day: float | None = None
+        for r in all_records:
+            dt = dt_util.parse_datetime(r.get("started_at", ""))
+            if dt is None:
+                continue
+            r_date = dt_util.as_local(dt).date()
+            value = r.get(field)
+            if value is None:
+                continue
+            if r_date == target_date:
+                on_day = float(value)   # query() is ascending — last write wins
+            elif r_date < target_date:
+                before_day = float(value)
+        if on_day is None:
+            return None
+        if before_day is None:
+            # No record at all before target_date — cannot isolate this
+            # day's share of the counter (would silently understate or
+            # overstate it). Honest "unknown" rather than assuming 0.
+            return None
+        return max(0.0, on_day - before_day)

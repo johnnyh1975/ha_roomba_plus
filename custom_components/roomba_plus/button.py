@@ -266,6 +266,8 @@ class FilterResetButton(_MaintenanceResetButton):
         if store:
             store.reset_filter(hr)
             await self._save()
+            from .services import _fire_maintenance_reset_event
+            _fire_maintenance_reset_event(self.hass, self._config_entry, "filter", hr)
 
 
 class BrushResetButton(_MaintenanceResetButton):
@@ -285,6 +287,8 @@ class BrushResetButton(_MaintenanceResetButton):
         if store:
             store.reset_brush(hr)
             await self._save()
+            from .services import _fire_maintenance_reset_event
+            _fire_maintenance_reset_event(self.hass, self._config_entry, "brush", hr)
 
 
 class BatteryResetButton(_MaintenanceResetButton):
@@ -304,6 +308,8 @@ class BatteryResetButton(_MaintenanceResetButton):
         if store:
             store.reset_battery(hr)
             await self._save()
+            from .services import _fire_maintenance_reset_event
+            _fire_maintenance_reset_event(self.hass, self._config_entry, "battery", hr)
 
 
 class ZoneCleanButton(_MaintenanceResetButton):

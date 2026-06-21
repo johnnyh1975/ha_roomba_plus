@@ -174,6 +174,13 @@ class MissionArchive:
         self._archived_nmssns: set[int] = set()
         # Highest nMssn seen — used by sensors and REST API
         self._last_nMssn: int = 0
+        # v2.8.6 — startTime of the record that set the current
+        # _last_nMssn high-water mark. Needed to tell apart a genuine
+        # counter reset (a chronologically NEWER mission reporting a
+        # lower nMssn) from an ordinary re-delivery of an already-archived
+        # OLDER record (same or older startTime) — nMssn value comparison
+        # alone cannot distinguish these (see async_delta_update).
+        self._last_nMssn_start_ts: int = 0
         # Set to True once the initial load completes
         self._initial_load_done: bool = False
         # v2.9.0 (J) — CUMULATIVE-SQFT ACCUMULATOR. Summing area_sqft over
@@ -204,6 +211,7 @@ class MissionArchive:
                 int(k): v for k, v in (data.get("raw") or {}).items()
             }
             self._last_nMssn = int(data.get("last_nMssn", 0))
+            self._last_nMssn_start_ts = int(data.get("last_nMssn_start_ts", 0))
             self._initial_load_done = bool(data.get("initial_load_done", False))
             # Rebuild set from derived list (not persisted to save space)
             self._archived_nmssns = {
@@ -211,6 +219,28 @@ class MissionArchive:
                 for r in self._derived
                 if _safe_int(r.get("nMssn")) > 0
             }
+
+            # v2.8.6 — one-time migration seed for installations upgrading
+            # from a version that didn't persist last_nMssn_start_ts at
+            # all (it would load as 0 above). Without this, the very
+            # first async_delta_update() call after upgrade would see
+            # last_nMssn_start_ts=0, making is_chronologically_newer
+            # trivially True for any genuinely-new-but-older gap-filler
+            # record (start_ts > 0 alone), reintroducing the exact
+            # false-positive this version fixes for one cycle. Seed from
+            # whichever currently-held derived record actually has
+            # last_nMssn — self-healing after that.
+            if (
+                "last_nMssn_start_ts" not in data
+                and self._last_nMssn
+                and self._derived
+            ):
+                for _rec in self._derived:
+                    if _safe_int(_rec.get("nMssn")) == self._last_nMssn:
+                        _parsed = dt_util.parse_datetime(_rec.get("start_ts", ""))
+                        if _parsed is not None:
+                            self._last_nMssn_start_ts = int(_parsed.timestamp())
+                        break
 
             # v2.9.0 (J) — load the persisted accumulator, or SEED it once
             # from whatever's currently held if this is the first load
@@ -245,6 +275,7 @@ class MissionArchive:
             self._timeline = []
             self._raw = {}
             self._last_nMssn = 0
+            self._last_nMssn_start_ts = 0
             self._cumulative_sqft = 0.0
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -253,6 +284,7 @@ class MissionArchive:
         await store.async_save({
             "version": STORAGE_VERSION,
             "last_nMssn": self._last_nMssn,
+            "last_nMssn_start_ts": self._last_nMssn_start_ts,
             "initial_load_done": self._initial_load_done,
             "derived": self._derived,
             "timeline": self._timeline,
@@ -386,21 +418,49 @@ class MissionArchive:
         # return False and this guard would never run for the exact case
         # it exists to catch.
         #
-        # Fix: clear (not reseed from _derived — that would immediately
-        # reintroduce the same collision, since the old records still
-        # have the same now-recycled nMssn values) the dedup set, and
-        # reset last_nMssn to the new epoch's value (otherwise every
-        # subsequent mission would ALSO be "< last_nMssn" and re-trigger
-        # this same clear/warning on every single mission until the new
-        # epoch's count organically catches up to the old high-water
-        # mark). Known, accepted limitation: an nMssn value can now
-        # legitimately appear twice in _derived (once from each "epoch"
-        # either side of the discontinuity) — any code doing nMssn-keyed
-        # lookups should treat it as a recency-ordered list, not assume
-        # global uniqueness. This is a narrow correctness fix for the
-        # (rare) discontinuity case, not a guarantee of cross-epoch
-        # uniqueness.
-        if n_mssn < self._last_nMssn:
+        # v2.8.6 CONFIRMED BUG FIX, ROUND 1 (field report, Thonno): the
+        # original check was `n_mssn < self._last_nMssn` alone — true on
+        # every single cloud refresh whenever the upstream caller re-feeds
+        # the last ~100 cloud history records (it does — this function is
+        # NOT only called once per genuinely-new mission, despite the
+        # docstring; observed in the field re-feeding the same window on
+        # every refresh), and that window's oldest entry routinely sits
+        # below the high-water mark simply because it's an older,
+        # legitimately-never-archived gap-filler — not a reset at all.
+        # That false trigger cleared _archived_nmssns (every refresh,
+        # forever) while leaving _derived untouched, so every
+        # already-archived record in the re-fed window got silently
+        # RE-appended as a duplicate, unboundedly, on every single
+        # refresh (confirmed in the field: 109 -> 209 -> 309 records
+        # across two refreshes ~83 min apart, same robot).
+        #
+        # ROUND 2 (caught while writing the regression test for round 1):
+        # requiring nMssn to ALSO already be in _archived_nmssns is not
+        # enough either — an ordinary re-delivery of an already-archived
+        # OLDER record (ANY record below the current high-water mark,
+        # which is the common case once the archive holds more than one
+        # mission) satisfies that exact same compound condition, since
+        # its value is both lower than last_nMssn AND already archived.
+        # That's not a reset, it's just a duplicate.
+        #
+        # nMssn alone — at any single value, in any combination — cannot
+        # distinguish "counter reset" from "ordinary old duplicate",
+        # because both present as "a value at or below the high-water
+        # mark, possibly already seen before". The only available signal
+        # that actually tells them apart is TIME: a genuine reset means
+        # this report is for a mission that happened chronologically
+        # AFTER the one that set our current high-water mark, despite
+        # carrying a lower nMssn — an old duplicate's startTime is the
+        # same as (or older than) what's already on record.
+        start_ts = _safe_int(raw_record.get("startTime"))
+        is_chronologically_newer = (
+            start_ts > 0 and start_ts > self._last_nMssn_start_ts
+        )
+        if (
+            n_mssn < self._last_nMssn
+            and n_mssn in self._archived_nmssns
+            and is_chronologically_newer
+        ):
             _LOGGER.warning(
                 "MissionArchive: nMssn discontinuity detected for %s "
                 "(reported=%d, high-water mark=%d) — robot's lifetime "
@@ -410,6 +470,7 @@ class MissionArchive:
             )
             self._archived_nmssns.clear()
             self._last_nMssn = 0
+            self._last_nMssn_start_ts = 0
         elif n_mssn in self._archived_nmssns:
             return False  # already archived (exact match, same epoch)
 
@@ -453,9 +514,12 @@ class MissionArchive:
             if fin_events:
                 self._raw[int(n_mssn)] = fin_events
 
-        # Update last-seen nMssn
+        # Update last-seen nMssn (and the start_ts that goes with it — see
+        # async_delta_update's discontinuity guard for why these two must
+        # always move together).
         if n_mssn and int(n_mssn) > self._last_nMssn:
             self._last_nMssn = int(n_mssn)
+            self._last_nMssn_start_ts = _safe_int(raw.get("startTime"))
 
         # FIFO trim
         if len(self._derived) > MAX_RECORDS:

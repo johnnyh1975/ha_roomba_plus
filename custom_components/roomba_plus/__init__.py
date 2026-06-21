@@ -30,7 +30,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .callbacks import make_map_retrain_callback, make_mission_callback, make_mission_complete_callback
+from .callbacks import make_map_retrain_callback, make_map_updating_callback, make_mission_callback, make_mission_complete_callback
 from .const import (
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
@@ -56,7 +56,7 @@ from .const import (
     has_pose,
     has_smart_map,
 )
-from .api_views import MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
+from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
 from .grid_store import GridStore
 from .mission_store import MissionStore
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
@@ -2779,6 +2779,7 @@ async def async_setup_entry(
         hass.http.register_view(MissionHistoryView())
         hass.http.register_view(HouseholdSummaryView())
         hass.http.register_view(MissionHistoryImportView())
+        hass.http.register_view(DailyDigestView())
         hass.data["_roomba_plus_view_registered"] = True
 
     # ── Register services ──────────────────────────────────────────────────
@@ -2793,9 +2794,17 @@ async def async_setup_entry(
         )
 
     # ── MQTT callbacks ─────────────────────────────────────────────────────
+    # v2.9.0 MAP-RETRAIN-WF — local-MQTT-only signal (notReady bit), so this
+    # is registered independent of cloud_coordinator presence, unlike the
+    # block below.
+    if map_capability == MapCapability.SMART:
+        roomba.register_on_message_callback(
+            make_map_updating_callback(hass, config_entry)
+        )
+
     if cloud_coordinator is not None:
         roomba.register_on_message_callback(
-            make_map_retrain_callback(hass, cloud_coordinator)
+            make_map_retrain_callback(hass, cloud_coordinator, config_entry)
         )
         # F4b -- trigger cloud refresh at mission end to eliminate 24h staleness
         roomba.register_on_message_callback(

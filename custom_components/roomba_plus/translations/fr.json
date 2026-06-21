@@ -887,6 +887,18 @@
     "integration_health": {
       "title": "L'état de santé de l'intégration est dégradé",
       "description": "Le score de santé de l'intégration Roomba+ est inférieur à 50 depuis au moins 30 minutes (score actuel : {score}/100). Ce score combine le nombre de Repair Issues actifs, l'ancienneté du dernier message MQTT et la fraîcheur de l'archive des missions. Consultez les attributs de l'entité sensor.*_integration_health pour savoir quel signal est concerné, et vérifiez les autres Repair Issues actifs pour ce robot."
+    },
+    "map_retrain_in_progress": {
+      "title": "La mise à jour de la carte intelligente prend plus de temps que d'habitude",
+      "description": "La carte intelligente du robot est en cours de mise à jour depuis au moins {minutes} minutes. Une mise à jour normale est généralement plus rapide — cela peut arriver après un changement important d'agencement. Aucune action n'est nécessaire pour l'instant ; cela se résoudra automatiquement une fois la mise à jour terminée."
+    },
+    "map_retrain_stuck": {
+      "title": "La mise à jour de la carte intelligente semble bloquée",
+      "description": "La carte intelligente du robot est en cours de mise à jour depuis au moins {minutes} minutes sans se terminer. C'est plus long qu'une mise à jour normale. Essayez de redémarrer le robot depuis l'application iRobot, ou contactez le support iRobot si cela persiste."
+    },
+    "maintenance_due": {
+      "title": "L'entretien est en retard",
+      "description": "Les consommables suivants doivent être remplacés depuis au moins 3 jours : {items}. Consultez les attributs du capteur binaire maintenance_due pour les heures de retard exactes, puis utilisez le bouton de réinitialisation correspondant ou l'action roomba_plus.reset_* après remplacement."
     }
   },
   "device_automation": {
@@ -896,7 +908,13 @@
       "stuck": "Robot bloqué",
       "bin_full": "Bac plein",
       "docked": "En station",
-      "error": "Erreur signalée"
+      "error": "Erreur signalée",
+      "room_completed": "Pièce terminée",
+      "maintenance_due": "Entretien requis",
+      "health_score_drop": "Score de santé en baisse",
+      "map_retrain_started": "Réapprentissage de la carte démarré",
+      "map_retrain_completed": "Réapprentissage de la carte terminé",
+      "firmware_updated": "Firmware mis à jour"
     }
   },
   "services": {

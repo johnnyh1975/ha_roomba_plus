@@ -66,6 +66,20 @@ DEFAULT_AWAY_DELAY_MIN: Final = 5
 EVENT_ALL_AWAY: Final = f"{DOMAIN}_all_away"
 EVENT_PERSON_DETECTED_DURING_CLEAN: Final = f"{DOMAIN}_person_detected_during_clean"
 
+# v2.9.0 — EVENT-BUS. Unlike the L6 events above, these carry entry_id + name
+# in their payload so multi-robot installs can distinguish the source robot
+# without a separate lookup. The L6 events are intentionally left as-is
+# (out of scope for this pass — see v2.8.6 session notes).
+EVENT_MISSION_COMPLETED: Final = f"{DOMAIN}_mission_completed"
+EVENT_ROOM_COMPLETED: Final = f"{DOMAIN}_room_completed"
+EVENT_HEALTH_CHANGE: Final = f"{DOMAIN}_health_change"
+EVENT_MAP_RETRAIN_STARTED: Final = f"{DOMAIN}_map_retrain_started"
+EVENT_MAP_RETRAIN_COMPLETED: Final = f"{DOMAIN}_map_retrain_completed"
+# v2.9.0 LOGBOOK — fired by services.py's shared reset helper, called from
+# both the roomba_plus.reset_* services AND the Filter/Brush/Battery reset
+# buttons (button.py) — one event regardless of which path the user took.
+EVENT_MAINTENANCE_RESET: Final = f"{DOMAIN}_maintenance_reset"
+
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
 # F11 — demand-based cleaning (DirtThresholdManager)
 CONF_DEMAND_CLEANING_ENABLED: Final = "demand_cleaning_enabled"
@@ -397,6 +411,37 @@ INTEGRATION_HEALTH_MQTT_STALE_HOURS: Final[float] = 24.0
 # coordinator's OWN refresh call is succeeding, not whether new missions are
 # actually making it into the archive).
 INTEGRATION_HEALTH_ARC1_STALE_HOURS: Final[float] = 48.0
+# v2.9.0 EVENT-BUS — band split for health_change event (band-crossing only,
+# not raw delta, to avoid event spam on minor score jitter). Three bands:
+# critical (<50, shares INTEGRATION_HEALTH_LOW_THRESHOLD), degraded
+# (50-79), healthy (>=80).
+INTEGRATION_HEALTH_GOOD_THRESHOLD: Final[int] = 80
+# v2.9.0 TRIGGER+ — ordinal ranking of sensor.py's _health_band() output
+# strings, shared here (not duplicated in device_trigger.py) so the
+# health_score_drop device trigger's "did it get worse" comparison can
+# never silently diverge from the band names _health_band() actually
+# returns. Higher = healthier.
+HEALTH_BAND_RANK: Final[dict[str, int]] = {"critical": 0, "degraded": 1, "healthy": 2}
+
+# v2.9.0 MAP-RETRAIN-WF — cleanMissionStatus.notReady is a bitmask; bit 64
+# means "Smart Map updating" (services.py's clean_room guard already checks
+# this exact bit — named here so both call sites share one source instead
+# of two independent magic-number "64"s silently drifting apart).
+MAP_UPDATING_NOT_READY_BIT: Final[int] = 64
+# Escalation thresholds for the map_retrain_workflow Repair Issue: WARNING
+# once notReady&64 has been continuously set for this long (a normal retrain
+# is usually done within a few minutes; this is a conservative first-pass
+# value, not derived from field data), ERROR if it's still set after the
+# longer threshold (genuinely stuck, not just slow).
+MAP_RETRAIN_WARN_MINUTES: Final[int] = 15
+MAP_RETRAIN_STUCK_MINUTES: Final[int] = 45
+# v2.9.0 — maintenance_due Repair Issue grace period. Unlike health_change
+# (a noisy signal needing a sustained-duration gate to reject jitter),
+# hours-since-reset is monotonic and never flickers once "due" — the grace
+# period here is purely about not nagging the user for a marginal overage
+# (filter hours are a heuristic threshold, not safety-critical), not about
+# rejecting noise.
+MAINTENANCE_DUE_GRACE_DAYS: Final[int] = 3
 
 # Human-readable phase labels (from rest980 — extended)
 
@@ -680,6 +725,27 @@ def has_clean_base(state: dict) -> bool:
     """Return True if a Clean Base dock is present and communicating."""
     dock = state.get("dock") or {}
     return "fwVer" in dock or isinstance(dock.get("state"), int)
+
+
+def active_charge_cycles(bbchg3: dict) -> int | None:
+    """v2.9.0 DAILY-DIGEST — chemistry-aware lifetime charge-cycle count.
+
+    Extracted from sensor.py's _total_energy_consumed_kwh()/
+    _estimated_battery_eol() duplication (third call site — callbacks.py
+    needed the same logic at mission end — made this the moment to share
+    one implementation instead of adding a third copy).
+
+    Same heuristic as sensor.py: nNimhChrg > 0 means a NiMH aftermarket
+    battery is currently installed (even if nLithChrg > 0 from an earlier
+    OEM Li-ion period) — NiMH wins when present. Falls back to nLithChrg,
+    then nAvail for older firmware that predates the chemistry split.
+    Returns None when bbchg3 has none of these fields at all.
+    """
+    nimh_cycles = bbchg3.get("nNimhChrg") or 0
+    if nimh_cycles > 0:
+        return int(nimh_cycles)
+    cycles = bbchg3.get("nLithChrg") or bbchg3.get("nAvail")
+    return int(cycles) if cycles else None
 
 # ── F7g — Region type icons ───────────────────────────────────────────────────
 # Single source of truth for MDI icon names per iRobot region_type string.

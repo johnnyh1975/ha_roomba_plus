@@ -91,6 +91,27 @@ class MissionTimerStore:
         # Entry is None where no GOOD_CONFIDENCE estimate exists (e.g. Auto
         # pass mode, or new/uncalibrated room) — falls back to uniform split.
         self.room_estimates_sec: list[float | None] = []
+        # v2.9.0 — wall-clock Unix timestamp of mission start, set once when
+        # a new mission_id is first detected in on_phase_run(). Deliberately
+        # SEPARATE from run_sec: total mission duration (now - this) is
+        # always correct by construction (plain wall-clock subtraction, no
+        # phase-tracking or gap-clamping involved) — used to show a smoothly
+        # ticking "total elapsed" alongside the chunkier, gap-clamped
+        # "effective cleaning time" (run_sec), instead of one value trying
+        # to be both smooth AND accurate and occasionally visibly
+        # overshooting-then-correcting when those two goals conflict (see
+        # the Thonno field report this was introduced to resolve).
+        self.mission_started_wall_ts: float = 0.0
+        # v2.9.0 — live mirror of callbacks.py's F4e recharge_min_accumulator
+        # (mid-mission hmMidMsn recharge minutes, robot-reported via rechrgM).
+        # Previously only ever written ONCE at mission end into the
+        # MissionStore record — never readable live, never persisted across
+        # an HA restart mid-mission. Mirrored here on every update so
+        # mission_progress can show (mission_duration_min - recharge_min) =
+        # effective mission duration WITHOUT any time-based gap clamp or
+        # heuristic: charging time is something the robot tells us directly,
+        # not something we infer from MQTT silence.
+        self.recharge_min: float = 0.0
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -117,6 +138,8 @@ class MissionTimerStore:
             self.recharge_positions   = data.get("recharge_positions") or []
             self.room_entered_run_sec = float(data.get("room_entered_run_sec", 0))
             self.room_estimates_sec  = data.get("room_estimates_sec") or []
+            self.mission_started_wall_ts = float(data.get("mission_started_wall_ts", 0))
+            self.recharge_min          = float(data.get("recharge_min", 0))
             self.snapshot_ts          = snapshot_ts
             _LOGGER.debug(
                 "MissionTimerStore: resumed mission=%s run_sec=%.0f rooms=%s idx=%d",
@@ -138,6 +161,8 @@ class MissionTimerStore:
             "recharge_positions":  self.recharge_positions,
             "room_entered_run_sec": self.room_entered_run_sec,
             "room_estimates_sec":  self.room_estimates_sec,
+            "mission_started_wall_ts": self.mission_started_wall_ts,
+            "recharge_min":        self.recharge_min,
             "snapshot_ts":         time.time(),
         })
 
@@ -254,6 +279,10 @@ class MissionTimerStore:
             self.mission_id      = mission_id
             self.run_sec         = 0.0
             self._last_phase_ts  = now
+            # v2.9.0 — wall-clock anchor for mission_duration_min, and reset
+            # the live recharge_min mirror for the new mission.
+            self.mission_started_wall_ts = time.time()
+            self.recharge_min    = 0.0
             self._schedule_save(hass, entry_id)
             return
 
@@ -337,6 +366,8 @@ class MissionTimerStore:
         self.recharge_positions  = []
         self.room_entered_run_sec = 0.0
         self.room_estimates_sec  = []
+        self.mission_started_wall_ts = 0.0
+        self.recharge_min        = 0.0
         self.snapshot_ts         = 0.0
         self._last_phase_ts      = 0.0
         self._schedule_save(hass, entry_id)
@@ -353,6 +384,41 @@ class MissionTimerStore:
         if not self.mission_id:
             return None
         return round(self.run_sec / 60, 1)
+
+    @property
+    def mission_duration_min(self) -> float | None:
+        """v2.9.0 — Gesamtdauer: pure wall-clock minutes since mission start.
+
+        Deliberately independent of run_sec/phase-tracking — just
+        time.time() - mission_started_wall_ts. Always correct by
+        construction, never affected by the gap-clamp/discontinuity issues
+        that elapsed_run_min and the percentage sensor have historically had
+        (see Thonno's v2.8.6 field reports). Ticks smoothly via the
+        mission_progress sensor's existing 30s periodic refresh.
+        """
+        if not self.mission_id or self.mission_started_wall_ts <= 0:
+            return None
+        return round(max(0.0, time.time() - self.mission_started_wall_ts) / 60, 1)
+
+    @property
+    def effective_elapsed_min(self) -> float | None:
+        """v2.9.0 — Effektive Mission-Dauer: mission_duration_min minus
+        robot-confirmed recharge_min. Replaces the old gap-clamped run_sec
+        as the basis for mission_progress's percentage/elapsed_run_min/
+        estimated_remaining_min attributes.
+
+        No time-based clamp or heuristic — recharge_min comes directly from
+        the robot's own hmMidMsn/rechrgM reporting (see callbacks.py F4e),
+        so genuine non-charging gaps (navigation, room
+        localisation/"Reading room in progress" — confirmed by Thonno's
+        field observation to NOT be a charge/dock/pause/error state) are
+        correctly included as effective mission time instead of being
+        silently excluded by a fixed-duration guess.
+        """
+        duration = self.mission_duration_min
+        if duration is None:
+            return None
+        return max(0.0, round(duration - self.recharge_min, 1))
 
     @property
     def current_room(self) -> str | None:

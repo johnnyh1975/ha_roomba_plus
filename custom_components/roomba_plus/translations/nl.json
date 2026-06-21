@@ -887,6 +887,18 @@
     "integration_health": {
       "title": "Integratiegezondheid is verminderd",
       "description": "De integratiegezondheidsscore van Roomba+ ligt al minstens 30 minuten onder 50 (huidige score: {score}/100). Dit combineert het aantal actieve Repair Issues, de leeftijd van het laatste MQTT-bericht en de actualiteit van het missiearchief. Controleer de attributen van de entiteit sensor.*_integration_health voor een uitsplitsing van welk signaal is beïnvloed, en bekijk andere actieve Repair Issues voor deze robot."
+    },
+    "map_retrain_in_progress": {
+      "title": "Smart Map-update duurt langer dan normaal",
+      "description": "De Smart Map van de robot wordt al minstens {minutes} minuten bijgewerkt. Een normale update is meestal sneller — dit kan gebeuren na een grote indelingswijziging. Nog geen actie nodig; dit verdwijnt automatisch zodra de update klaar is."
+    },
+    "map_retrain_stuck": {
+      "title": "Smart Map-update lijkt vast te lopen",
+      "description": "De Smart Map van de robot wordt al minstens {minutes} minuten bijgewerkt zonder te voltooien. Dit duurt langer dan een echte update zou moeten duren. Probeer de robot opnieuw te starten via de iRobot-app, of neem contact op met iRobot-support als dit aanhoudt."
+    },
+    "maintenance_due": {
+      "title": "Onderhoud is achterstallig",
+      "description": "De volgende verbruiksonderdelen moeten al minstens 3 dagen vervangen worden: {items}. Bekijk de attributen van de maintenance_due-binaire sensor voor de exacte achterstallige uren, en gebruik na vervanging de bijbehorende reset-knop of de roomba_plus.reset_*-actie."
     }
   },
   "device_automation": {
@@ -896,7 +908,13 @@
       "stuck": "Robot vast",
       "bin_full": "Bak vol",
       "docked": "Gedockt",
-      "error": "Fout gemeld"
+      "error": "Fout gemeld",
+      "room_completed": "Kamer voltooid",
+      "maintenance_due": "Onderhoud nodig",
+      "health_score_drop": "Gezondheidsscore gedaald",
+      "map_retrain_started": "Kaart-herleren gestart",
+      "map_retrain_completed": "Kaart-herleren voltooid",
+      "firmware_updated": "Firmware bijgewerkt"
     }
   },
   "services": {

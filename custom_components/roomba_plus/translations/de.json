@@ -883,6 +883,18 @@
     "integration_health": {
       "title": "Integrationsgesundheit beeinträchtigt",
       "description": "Der Integrationsgesundheits-Score von Roomba+ liegt seit mindestens 30 Minuten unter 50 (aktueller Wert: {score}/100). Dieser kombiniert die Anzahl aktiver Repair Issues, das Alter der letzten MQTT-Nachricht und die Frische des Missionsarchivs. Prüfen Sie die Attribute der Entity sensor.*_integration_health für eine Aufschlüsselung, welches Signal betroffen ist, und sehen Sie sich weitere aktive Repair Issues für diesen Roboter an."
+    },
+    "map_retrain_in_progress": {
+      "title": "Smart-Map-Update dauert länger als üblich",
+      "description": "Die Smart Map des Roboters wird seit mindestens {minutes} Minuten aktualisiert. Ein normales Update ist meist schneller — das kann nach einer größeren Layout-Änderung passieren. Noch keine Aktion nötig; verschwindet automatisch, sobald das Update fertig ist."
+    },
+    "map_retrain_stuck": {
+      "title": "Smart-Map-Update scheint hängen zu bleiben",
+      "description": "Die Smart Map des Roboters wird seit mindestens {minutes} Minuten aktualisiert, ohne fertig zu werden. Das ist länger als ein echtes Update dauern sollte. Roboter über die iRobot-App neu starten, oder iRobot-Support kontaktieren, falls das anhält."
+    },
+    "maintenance_due": {
+      "title": "Wartung ist überfällig",
+      "description": "Folgende Verschleißteile sind seit mindestens 3 Tagen zum Austausch fällig: {items}. Die genaue Überfälligkeit in Stunden steht in den Attributen des maintenance_due-Binärsensors. Nach dem Austausch den passenden Reset-Button oder die roomba_plus.reset_*-Aktion nutzen."
     }
   },
   "device_automation": {
@@ -892,7 +904,13 @@
       "stuck": "Roboter feststeckend",
       "bin_full": "Behälter voll",
       "docked": "Angedockt",
-      "error": "Fehler gemeldet"
+      "error": "Fehler gemeldet",
+      "room_completed": "Raum abgeschlossen",
+      "maintenance_due": "Wartung fällig",
+      "health_score_drop": "Gesundheitswert gesunken",
+      "map_retrain_started": "Karten-Neutraining gestartet",
+      "map_retrain_completed": "Karten-Neutraining abgeschlossen",
+      "firmware_updated": "Firmware aktualisiert"
     }
   },
   "services": {

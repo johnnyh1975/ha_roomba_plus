@@ -67,7 +67,10 @@ from .const import (
     DOMAIN,
     ERROR_CATALOGUE,
     ERROR_CODE_LABELS,
+    EVENT_HEALTH_CHANGE,
     INTEGRATION_HEALTH_ARC1_STALE_HOURS,
+    INTEGRATION_HEALTH_GOOD_THRESHOLD,
+    INTEGRATION_HEALTH_LOW_THRESHOLD,
     INTEGRATION_HEALTH_MQTT_STALE_HOURS,
     INTEGRATION_HEALTH_TICK_SECONDS,
     JOB_INITIATOR_LABELS,
@@ -76,6 +79,7 @@ from .const import (
     PAD_LABELS,
     PHASE_LABELS,
     SQFT_TO_M2,
+    active_charge_cycles,
     has_carpet_boost,
     has_clean_base,
     has_pose,
@@ -571,6 +575,21 @@ def _raw_wifi_quality_pct(records: list[dict]) -> StateType:
     return round((sum(means) / len(means)) / 4 * 100, 1)
 
 
+def _health_band(score: int) -> str:
+    """v2.9.0 EVENT-BUS — classify a score into one of three bands.
+
+    Used only for health_change event band-crossing detection, not for the
+    Repair Issue (which uses its own sustained-duration check against
+    INTEGRATION_HEALTH_LOW_THRESHOLD directly). Band-crossing rather than
+    raw score delta avoids firing an event on every minor score wobble.
+    """
+    if score >= INTEGRATION_HEALTH_GOOD_THRESHOLD:
+        return "healthy"
+    if score >= INTEGRATION_HEALTH_LOW_THRESHOLD:
+        return "degraded"
+    return "critical"
+
+
 def _compute_integration_health(hass: Any, entry: Any) -> tuple[int, dict[str, Any]]:
     """Return (score 0-100, breakdown) for the integration_health sensor.
 
@@ -889,15 +908,9 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
     if actual_mah is None:
         return None
 
-    # Select cycle count matching the detected chemistry (same logic as _estcap_to_mah)
-    nimh_cycles = entity.battery_stats.get("nNimhChrg") or 0
-    if nimh_cycles > 0:
-        cycles = nimh_cycles          # NiMH battery — use NiMH cycle counter
-    else:
-        cycles = (
-            entity.battery_stats.get("nLithChrg")   # Li-ion primary
-            or entity.battery_stats.get("nAvail")    # fallback for old firmware
-        )
+    # v2.9.0 — now shared with callbacks.py (DAILY-DIGEST) via
+    # const.active_charge_cycles(); same chemistry-aware priority as before.
+    cycles = active_charge_cycles(entity.battery_stats)
 
     if not cycles:
         return None
@@ -3726,9 +3739,18 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         return {}
 
     planned_order: list[str] = _get_planned_room_order(data)
-    # v2.7.2 (MP-ELAPSED-FIX): use live-delta elapsed so elapsed_run_min
-    # and current_room/next_room stay smooth between MQTT messages.
-    elapsed = RoombaMissionProgress._elapsed_sec(mts, phase)
+    # v2.9.0 — elapsed is now (mission_duration_min - recharge_min) * 60,
+    # i.e. wall-clock time since mission start MINUS robot-confirmed
+    # recharge minutes (hmMidMsn/rechrgM, F4e) — no time-based gap clamp.
+    # Falls back to the old live-delta clamp-based calculation only for a
+    # mission that was already in progress when this code shipped (its
+    # mission_started_wall_ts is 0 since that field didn't exist yet) —
+    # this fallback naturally stops mattering once that one mission ends.
+    effective_min = mts.effective_elapsed_min
+    elapsed = (
+        effective_min * 60 if effective_min is not None
+        else RoombaMissionProgress._elapsed_sec(mts, phase)
+    )
     estimates = (
         _compute_room_time_estimates(config_entry, planned_order)
         if planned_order else []
@@ -3757,6 +3779,23 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
             # All rooms elapsed — in final room
             current_room = planned_order[-1]
 
+    if estimated_remaining_min is None:
+        # v2.9.0 — fallback for whenever the per-room estimate calculation
+        # above didn't produce a value: no planned_order at all, OR a
+        # planned_order with one or more None per-room estimates (e.g. Auto
+        # pass mode, where TE1 cloud data has no per-room times at all —
+        # confirmed via Thonno's field report). Mirrors native_value()'s
+        # same fallback rather than leaving estimated_remaining_min (and
+        # therefore the whole "Unknown" percentage) stuck for the entire
+        # mission whenever per-room estimates aren't available.
+        rps = getattr(data, "robot_profile_store", None)
+        mean_sec = (
+            round((rps.mission_duration_mean or 0) * 60)
+            if rps is not None else 0
+        )
+        if mean_sec > 0:
+            estimated_remaining_min = max(0, round((mean_sec - elapsed) / 60))
+
     return {
         # Prefer estimate-based room when the calculation succeeded (all
         # estimates available and elapsed > 0). MTS value is the fallback
@@ -3766,6 +3805,12 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         "elapsed_run_min": round(elapsed / 60, 1),
         "estimated_remaining_min": estimated_remaining_min,
         "room_sequence": planned_order,
+        # v2.9.0 — Gesamtdauer (always-correct wall-clock) and Charging-Zeit
+        # (robot-confirmed via F4e), shown alongside elapsed_run_min so the
+        # difference between "total time" and "effective time" is visible
+        # rather than silently disappearing.
+        "mission_duration_min": mts.mission_duration_min,
+        "recharge_min": round(mts.recharge_min, 1),
     }
 
 
@@ -3860,8 +3905,15 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         if mts is None or mts.mission_id is None:
             return None
 
-        # Live elapsed via shared helper — same calculation used by extra_state_attributes.
-        elapsed = self._elapsed_sec(mts, phase)
+        # v2.9.0 — elapsed is now wall-clock mission duration minus
+        # robot-confirmed recharge_min (F4e), not the old gap-clamped
+        # live-delta. Same fallback as _resolve_smart_tier_room_state() for
+        # a mission already in progress when this code shipped.
+        effective_min = mts.effective_elapsed_min
+        elapsed = (
+            effective_min * 60 if effective_min is not None
+            else self._elapsed_sec(mts, phase)
+        )
 
         planned_order: list[str] = _get_planned_room_order(data)
 
@@ -3898,7 +3950,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             total_rooms = len(planned_order)
             # Estimate current room from elapsed vs. mean-per-room
             total_known = sum(e for e in estimates if e is not None)
-            avg_sec = total_known / max(len([e for e in estimates if e is not None]), 1)
+            known_count = len([e for e in estimates if e is not None])
+            avg_sec = total_known / max(known_count, 1)
             if avg_sec > 0:
                 completed_rooms = min(total_rooms - 1, int(elapsed / avg_sec))
                 _LOGGER.debug(
@@ -3908,6 +3961,21 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                     min(99, round(completed_rooms / total_rooms * 100)),
                 )
                 return min(99, round(completed_rooms / total_rooms * 100))
+            # v2.9.0 — known_count==0 here (ALL per-room estimates are None,
+            # e.g. Auto pass mode — TE1 cloud data has no per-room times for
+            # that mode at all, confirmed via Thonno's field report). Falls
+            # through to the SAME mission_duration_mean rolling-average
+            # fallback as the "no room sequence" branch above, instead of
+            # returning None — previously this meant percentage/remaining
+            # time stayed "Unknown" for the entire mission whenever Auto
+            # mode was used, not just transiently.
+            rps = getattr(data, "robot_profile_store", None)
+            mean_sec = (
+                round((rps.mission_duration_mean or 0) * 60)
+                if rps is not None else 0
+            )
+            if mean_sec > 0:
+                return min(99, round(elapsed / mean_sec * 100))
             return None
 
         total_sec = sum(estimates)  # type: ignore[arg-type]
@@ -4582,6 +4650,13 @@ class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
     score has been below INTEGRATION_HEALTH_LOW_THRESHOLD (50) for at
     least INTEGRATION_HEALTH_SUSTAINED_MINUTES (30 min) — a single bad
     reading should not alarm the user; a sustained one should.
+
+    v2.9.0 EVENT-BUS: the same 60-second tick also fires
+    roomba_plus_health_change, but only on BAND-crossing (healthy/degraded/
+    critical — see _health_band()), not on every score recompute. Deliberately
+    NOT done in native_value, since that property is read on every poll
+    (including polls triggered by other entities/HA internals) and would
+    fire far more often than the score meaningfully changes.
     """
 
     entity_description = SensorEntityDescription(
@@ -4599,6 +4674,10 @@ class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
         self._entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_integration_health"
         self._unsub_tick: Any | None = None
+        # v2.9.0 EVENT-BUS — None until the first tick so the very first
+        # evaluation never fires a "change" (there is no prior band yet).
+        self._last_health_band: str | None = None
+        self._last_health_score: int | None = None
 
     async def async_added_to_hass(self) -> None:
         """Start the 60-second periodic tick that drives the Repair Issue."""
@@ -4622,6 +4701,27 @@ class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
         """Re-evaluate health on a timer and fire/clear the Repair Issue."""
         from .repairs import async_check_integration_health
         async_check_integration_health(self.hass, self._entry)
+
+        # v2.9.0 EVENT-BUS — band-crossing health_change event. First tick
+        # only seeds _last_health_band (no prior state to compare against,
+        # so no event fires on startup).
+        score, _ = _compute_integration_health(self.hass, self._entry)
+        band = _health_band(score)
+        if self._last_health_band is not None and band != self._last_health_band:
+            self.hass.bus.async_fire(
+                EVENT_HEALTH_CHANGE,
+                {
+                    "entry_id": self._entry.entry_id,
+                    "name": self._entry.title,
+                    "score": score,
+                    "previous_score": self._last_health_score,
+                    "band": band,
+                    "previous_band": self._last_health_band,
+                },
+            )
+        self._last_health_band = band
+        self._last_health_score = score
+
         self.schedule_update_ha_state(force_refresh=True)
 
     @property

@@ -887,6 +887,18 @@
     "integration_health": {
       "title": "Lo stato di salute dell'integrazione è degradato",
       "description": "Il punteggio di salute dell'integrazione Roomba+ è inferiore a 50 da almeno 30 minuti (punteggio attuale: {score}/100). Questo combina il numero di Repair Issue attivi, l'età dell'ultimo messaggio MQTT e l'aggiornamento dell'archivio missioni. Controlla gli attributi dell'entità sensor.*_integration_health per vedere quale segnale è interessato, e controlla altri Repair Issue attivi per questo robot."
+    },
+    "map_retrain_in_progress": {
+      "title": "L'aggiornamento della Smart Map richiede più tempo del solito",
+      "description": "La Smart Map del robot è in aggiornamento da almeno {minutes} minuti. Un aggiornamento normale è solitamente più rapido — può succedere dopo un grande cambiamento nella disposizione degli ambienti. Nessuna azione necessaria per ora; si risolverà automaticamente al termine dell'aggiornamento."
+    },
+    "map_retrain_stuck": {
+      "title": "L'aggiornamento della Smart Map sembra bloccato",
+      "description": "La Smart Map del robot è in aggiornamento da almeno {minutes} minuti senza completarsi. Questo è più lungo di quanto dovrebbe durare un aggiornamento reale. Provare a riavviare il robot dall'app iRobot, oppure contattare il supporto iRobot se il problema persiste."
+    },
+    "maintenance_due": {
+      "title": "La manutenzione è in ritardo",
+      "description": "I seguenti consumabili sono in attesa di sostituzione da almeno 3 giorni: {items}. Controlla gli attributi del sensore binario maintenance_due per le ore esatte di ritardo, poi usa il pulsante di reset corrispondente o l'azione roomba_plus.reset_* dopo la sostituzione."
     }
   },
   "device_automation": {
@@ -896,7 +908,13 @@
       "stuck": "Robot bloccato",
       "bin_full": "Contenitore pieno",
       "docked": "In base",
-      "error": "Errore segnalato"
+      "error": "Errore segnalato",
+      "room_completed": "Stanza completata",
+      "maintenance_due": "Manutenzione necessaria",
+      "health_score_drop": "Punteggio di salute peggiorato",
+      "map_retrain_started": "Ri-addestramento mappa avviato",
+      "map_retrain_completed": "Ri-addestramento mappa completato",
+      "firmware_updated": "Firmware aggiornato"
     }
   },
   "services": {

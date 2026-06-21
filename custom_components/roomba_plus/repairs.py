@@ -26,6 +26,9 @@ from .const import (
     DOMAIN,
     INTEGRATION_HEALTH_LOW_THRESHOLD,
     INTEGRATION_HEALTH_SUSTAINED_MINUTES,
+    MAINTENANCE_DUE_GRACE_DAYS,
+    MAP_RETRAIN_STUCK_MINUTES,
+    MAP_RETRAIN_WARN_MINUTES,
     SQFT_TO_M2,
 )
 
@@ -1262,3 +1265,137 @@ def async_check_integration_health(
     else:
         _health_low_since.pop(entry_id, None)
         ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+# v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady&64 ("Smart
+# Map updating") was FIRST observed continuously set for this entry. Not
+# persisted — matches _health_low_since's in-memory pattern; a fresh HA
+# restart simply restarts the duration timer.
+_map_updating_since: dict[str, float] = {}
+
+
+def async_check_map_retrain_workflow(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+    map_updating: bool,
+) -> None:
+    """MAP-RETRAIN-WF (v2.9.0) — escalating Repair Issue while the robot's
+    Smart Map is updating (cleanMissionStatus.notReady & 64).
+
+    Three stages:
+      1. map_updating just turned True — no issue yet. Brief map updates
+         (e.g. after a single piece of furniture moved) are normal and not
+         actionable; raising an issue immediately would just be noise.
+      2. Still set after MAP_RETRAIN_WARN_MINUTES — WARNING issue. Longer
+         than a typical retrain, worth the user's awareness but not urgent.
+      3. Still set after MAP_RETRAIN_STUCK_MINUTES — escalated to ERROR.
+         Genuinely stuck, not just slow.
+
+    Called from make_map_updating_callback() (callbacks.py) on every MQTT
+    message — no separate timer needed, since the robot keeps sending
+    regular state messages for as long as map_updating stays true.
+
+    Deliberately does NOT fire any EVENT-BUS event. roomba_plus_map_retrain_
+    started/completed already exist (cloud user_pmapv_id-driven, see
+    make_map_retrain_callback) and are what TRIGGER+'s map_retrain_started/
+    completed device triggers listen to — this Repair Issue tracks a
+    DIFFERENT signal (the live notReady bit) for a different purpose
+    (informing the user in the Repairs UI), and must not duplicate the same
+    automation-facing signal under a different mechanism.
+    """
+    issue_id = f"map_retrain_workflow_{config_entry.entry_id}"
+    entry_id = config_entry.entry_id
+    now = dt_util.utcnow().timestamp()
+
+    if not map_updating:
+        _map_updating_since.pop(entry_id, None)
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+
+    updating_since = _map_updating_since.setdefault(entry_id, now)
+    elapsed_minutes = (now - updating_since) / 60.0
+
+    if elapsed_minutes >= MAP_RETRAIN_STUCK_MINUTES:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="map_retrain_stuck",
+            translation_placeholders={"minutes": str(int(elapsed_minutes))},
+        )
+    elif elapsed_minutes >= MAP_RETRAIN_WARN_MINUTES:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="map_retrain_in_progress",
+            translation_placeholders={"minutes": str(int(elapsed_minutes))},
+        )
+    # else: stage 1 (just started) — no issue yet, by design.
+
+
+# v2.9.0 — wall-clock timestamp of when at least one consumable was FIRST
+# observed continuously due for this entry. Not persisted — same in-memory
+# pattern as _health_low_since / _map_updating_since.
+_maintenance_due_since: dict[str, float] = {}
+
+
+def async_check_maintenance_due(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+    due_items: list[str],
+) -> None:
+    """maintenance_due Repair Issue (v2.9.0) — backstop for users without
+    automations wired to the maintenance_due device trigger / binary_sensor.
+
+    Unlike integration_health's sustained-duration gate (which exists to
+    reject a noisy, fluctuating signal), hours-since-reset is monotonic —
+    once a consumable is due it STAYS due until reset, it never flickers.
+    The MAINTENANCE_DUE_GRACE_DAYS delay here is purely about not nagging
+    the user in the Repairs UI for a marginal, just-crossed-the-threshold
+    overage (the hour thresholds are heuristics, not safety-critical) — the
+    binary_sensor and device trigger already give instant awareness to
+    anyone who wants it via automation; this is the UI-visible backstop for
+    everyone else.
+
+    due_items is the live list from RoombaMaintenanceDue._due_items() (e.g.
+    ["filter", "brush"]) — passed in directly rather than recomputed here,
+    since the binary sensor entity already has vacuum_state/options/store
+    wired and recomputing the same logic a second time would risk the two
+    silently diverging.
+
+    Note: the "since" timestamp tracks since ANY item first became due, not
+    per-component — if the user resets one overdue consumable while another
+    remains due, the timer does not restart. Coarser than ideal, but matches
+    the same simplicity tradeoff already accepted for _health_low_since.
+    """
+    issue_id = f"maintenance_due_{config_entry.entry_id}"
+    entry_id = config_entry.entry_id
+    now = dt_util.utcnow().timestamp()
+
+    if not due_items:
+        _maintenance_due_since.pop(entry_id, None)
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+
+    due_since = _maintenance_due_since.setdefault(entry_id, now)
+    days = (now - due_since) / 86400.0
+
+    if days >= MAINTENANCE_DUE_GRACE_DAYS:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="maintenance_due",
+            translation_placeholders={"items": ", ".join(due_items)},
+        )
+    # else: within the grace period — no issue yet, by design.

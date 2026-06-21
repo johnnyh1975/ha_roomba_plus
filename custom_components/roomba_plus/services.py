@@ -33,6 +33,8 @@ from .const import (
     ATTR_TWO_PASS,
     CONF_SMART_ZONE_DATA,
     DOMAIN,
+    EVENT_MAINTENANCE_RESET,
+    MAP_UPDATING_NOT_READY_BIT,
     SERVICE_CLEAN_ROOM,
     SERVICE_CLEAN_SEQUENCE,
     SERVICE_RESET_BATTERY,
@@ -253,6 +255,35 @@ def _async_signal_entities(
                 break
 
 
+def _fire_maintenance_reset_event(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+    component: str,
+    hours: int | None,
+) -> None:
+    """v2.9.0 LOGBOOK — fire roomba_plus_maintenance_reset.
+
+    Shared by BOTH call paths that perform a maintenance reset: the
+    roomba_plus.reset_* services (this module, below) and the Filter/Brush/
+    Battery reset buttons (button.py — imports this helper, same pattern
+    as button.py's existing import of _resolve_pmapv_id from here). One
+    event regardless of which path the user took, so the Logbook entry
+    appears consistently either way.
+
+    hours is None for the calendar-based inspect resets (wheel/contact/bin
+    cleaning) — those have no hr-counter baseline to report.
+    """
+    hass.bus.async_fire(
+        EVENT_MAINTENANCE_RESET,
+        {
+            "entry_id": config_entry.entry_id,
+            "name": config_entry.title,
+            "component": component,
+            "hours": hours,
+        },
+    )
+
+
 # ── Service handlers ──────────────────────────────────────────────────────────
 
 async def async_handle_clean_room(call: ServiceCall) -> None:
@@ -341,7 +372,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 )
 
         not_ready: int = (state.get("cleanMissionStatus") or {}).get("notReady", 0)
-        if not_ready & 64:
+        if not_ready & MAP_UPDATING_NOT_READY_BIT:
             raise ServiceValidationError(
                 "The robot is currently updating its Smart Map. "
                 "Wait for the update to complete (readiness sensor shows 'Ready'), "
@@ -487,6 +518,7 @@ async def _handle_reset_service(
         current_hr: int = _bbrun.get("hr") or _runtime.get("hr") or 0
         getattr(data.maintenance_store, f"reset_{part}")(current_hr)
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
+        _fire_maintenance_reset_event(hass, config_entry, part, current_hr)
         _async_signal_entities(hass, config_entry.entry_id, [
             "filter_last_replaced",
             "brush_last_replaced",
@@ -534,6 +566,7 @@ async def _handle_inspect_reset_service(
 
         getattr(data.maintenance_store, f"reset_{component}_cleaning")()
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
+        _fire_maintenance_reset_event(hass, config_entry, component, None)
         _async_signal_entities(hass, config_entry.entry_id, [
             "wheel_last_cleaned",
             "contact_last_cleaned",

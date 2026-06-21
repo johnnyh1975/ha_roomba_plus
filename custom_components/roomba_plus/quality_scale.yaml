@@ -115,11 +115,12 @@ rules:
   test-coverage:
     status: done
     comment: >
-      1548 unit tests across 33 test files. Stub-based — no HA install
+      2705 unit tests across 45 test files (was 1548/33 — stale since
+      before v2.8.0; corrected v2.8.6). Stub-based — no HA install
       required. Covers all stores, sensors, cloud coordinator, services,
       callbacks, migration (v1→v13), classification, REST API, backfill,
-      UmfAligner, and wiring. Integration tests (11) in tests_integration/
-      with pytest-homeassistant-custom-component.
+      UmfAligner, device triggers, logbook, and wiring. Integration tests (11)
+      in tests_integration/ with pytest-homeassistant-custom-component.
 
   # ── Gold ──────────────────────────────────────────────────────────────────
   devices:

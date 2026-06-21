@@ -485,6 +485,25 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bbrun" in new_state
 
+    def on_message(self, json_data: dict[str, Any]) -> None:
+        """v2.9.0 — also forwards the live due-items list to repairs.py's
+        sustained-duration check, on top of the normal state-write handling.
+
+        Runs on roombapy's MQTT thread (same as IRobotEntity.on_message
+        itself) — call_soon_threadsafe bridges to the event loop thread for
+        the same reason make_map_updating_callback does in callbacks.py.
+        """
+        super().on_message(json_data)
+        if not self.enabled:
+            return
+        state = json_data.get("state", {}).get("reported", {})
+        if "bbrun" not in state:
+            return
+        from .repairs import async_check_maintenance_due
+        self.hass.loop.call_soon_threadsafe(
+            async_check_maintenance_due, self.hass, self._entry, self._due_items()
+        )
+
 
 class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
     """ON while a smart_start is queued waiting for blocking sensors to clear.
