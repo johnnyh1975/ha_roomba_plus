@@ -115,7 +115,7 @@ rules:
   test-coverage:
     status: done
     comment: >
-      2705 unit tests across 45 test files (was 1548/33 — stale since
+      2712 unit tests across 45 test files (was 1548/33 — stale since
       before v2.8.0; corrected v2.8.6). Stub-based — no HA install
       required. Covers all stores, sensors, cloud coordinator, services,
       callbacks, migration (v1→v13), classification, REST API, backfill,

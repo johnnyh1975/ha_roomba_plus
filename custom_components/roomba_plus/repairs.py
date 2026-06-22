@@ -1035,7 +1035,7 @@ async def async_check_smberr(
     presence check is the natural gate).
     """
     data = config_entry.runtime_data
-    vacuum_state = (data.vacuum.master_state.get("state") or {}).get("reported") or {}
+    vacuum_state = data.roomba_reported_state()  # v2.9.0 — was data.vacuum (AttributeError: no such attribute on RoombaData)
     bbchg = vacuum_state.get("bbchg", {}) or {}
 
     if "smberr" not in bbchg:
@@ -1111,7 +1111,7 @@ async def async_check_dock_health(
     communication faults rather than physical dock contact wear.
     """
     data = config_entry.runtime_data
-    vacuum_state = (data.vacuum.master_state.get("state") or {}).get("reported") or {}
+    vacuum_state = data.roomba_reported_state()  # v2.9.0 — was data.vacuum (AttributeError: no such attribute on RoombaData)
     bbchg = vacuum_state.get("bbchg", {}) or {}
 
     # Gate: at least one dock health field present

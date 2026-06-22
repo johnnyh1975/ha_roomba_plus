@@ -145,8 +145,9 @@ def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     """Convert a local MissionStore record to the unified per-mission shape.
 
     After v2.1.3 CR1/CR2: dirt_events, wifi_signal, and evacuations are
-    populated when the record has been enriched by backfill_from_cloud() or
-    merge_latest_from_cloud(). recharges stays None (no local accumulator).
+    populated when the record has been enriched by backfill_from_cloud()
+    (v2.9.0 — now called on every cloud refresh, not just at HA startup).
+    recharges stays None (no local accumulator).
     source remains "local" — reflects origin, not field provenance.
     """
     return {

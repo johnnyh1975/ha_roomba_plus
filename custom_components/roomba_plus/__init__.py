@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import timedelta
 from functools import partial
 import logging
 from typing import Any
@@ -28,6 +29,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .callbacks import make_map_retrain_callback, make_map_updating_callback, make_mission_callback, make_mission_complete_callback
@@ -2830,7 +2832,23 @@ async def async_setup_entry(
             ms = config_entry.runtime_data.mission_store
             if ms is None:
                 return
-            if ms.merge_latest_from_cloud(cloud_coordinator.raw_records):
+            # v2.9.0 — was merge_latest_from_cloud() (single-shot, only ever
+            # tried the newest record once, no retry). If that one attempt
+            # missed — e.g. local ended_at drifted outside the ±120s match
+            # tolerance because mission-end confirmation was delayed (see
+            # the v2.8.7 stuck-mission fix) — the record's timeline/
+            # analytics fields were stuck missing FOREVER, since nothing
+            # else ever looked at that record again until the next HA
+            # restart's one-time backfill_from_cloud() pass. Confirmed root
+            # cause of Thonno's stale last_cleaned_rooms report: it reads
+            # timeline.finEvents from MissionStore.latest(), which depends
+            # entirely on this merge having succeeded for the newest record.
+            # backfill_from_cloud() is the same logic but re-checks EVERY
+            # record on EVERY refresh — cheap (dict lookups against ~100
+            # cloud records) and gives every record a fresh chance, not
+            # just one.
+            _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
+            if _bf.corrected or _bf.enriched:
                 hass.async_create_task(
                     ms.async_save(hass, config_entry.entry_id),
                     name="roomba_plus_cloud_merge_save",
@@ -2904,8 +2922,21 @@ async def async_setup_entry(
             cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)
         )
 
-    roomba.register_on_message_callback(
-        make_mission_callback(hass, config_entry)
+    _mission_cb = make_mission_callback(hass, config_entry)
+    roomba.register_on_message_callback(_mission_cb)
+
+    # v2.9.0 — periodic safety net for the end-phase confirmation logic
+    # (see _async_recheck_stuck_end_state docstring in callbacks.py for the
+    # full root-cause explanation). Every 30s so a stuck mission closes
+    # within 30s of crossing the 90s UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
+    # cap, instead of potentially staying open indefinitely if the robot
+    # stops sending cleanMissionStatus changes once docked.
+    config_entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            _mission_cb.recheck_stuck_end_state,
+            timedelta(seconds=30),
+        )
     )
 
     # Reload on options change (continuous/delay require reconnect)

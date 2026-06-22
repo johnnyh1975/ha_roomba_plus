@@ -406,7 +406,7 @@ def make_mission_callback(
     #   D) stuck → run does NOT re-fire mission start (no false reset)
     had_cleaning_phase: bool = False
 
-    def _on_mission_message(json_data: dict[str, Any]) -> None:
+    def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
         nonlocal last_phase, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal current_leg_rechrgM
@@ -420,7 +420,12 @@ def make_mission_callback(
 
         # v2.8.3 — MQTT-watchdog: stamp every message so RoombaMqttStale
         # binary sensor can detect silence during phase=run.
-        entry.runtime_data.last_mqtt_message_ts = _time_mod.time()
+        # v2.9.0 — skipped for synthetic re-checks (see
+        # _async_recheck_stuck_end_state below): those re-inject the
+        # cached state on a timer, not a real MQTT arrival, and stamping
+        # this here would mask genuine MQTT staleness from the watchdog.
+        if not _synthetic:
+            entry.runtime_data.last_mqtt_message_ts = _time_mod.time()
 
         # v2.8.3 — FW-SENSOR: track softwareVer changes for binary_sensor.*_firmware_updated.
         # Only fires once per actual firmware upgrade (not on every message).
@@ -1063,6 +1068,50 @@ def make_mission_callback(
 
         last_phase = phase
 
+    def _async_recheck_stuck_end_state(_now: Any = None) -> None:
+        """v2.9.0 — periodic safety-net re-evaluation of the end-phase
+        confirmation logic, independent of new MQTT traffic.
+
+        Root cause this addresses (confirmed via Thonno's field log):
+        _on_mission_message bails out immediately whenever a message's
+        diff doesn't include 'cleanMissionStatus'. Once the robot settles
+        into steady-state charging (only bbchg3/batPct/etc. keep arriving
+        — no further cleanMissionStatus *changes*), the entire end-phase
+        confirmation block — including the 90s UNVISITED_ROOMS_MAX_
+        SUPPRESSION_SECONDS safety cap meant to force-close exactly this
+        scenario — never runs again. The mission then stays "active"
+        indefinitely (elapsed_run_min keeps climbing at the dock), and a
+        SEPARATE consequence: the next genuine clean_room command sees
+        had_cleaning_phase still True and skips re-capturing mission_start_ts,
+        inheriting the stale timer from the never-closed mission.
+
+        Verified against the field log: a 28.96s real gap with zero
+        cleanMissionStatus messages froze time_held at its last value —
+        the underlying time_held math itself is correct (real monotonic
+        time), it simply never gets a chance to re-run.
+
+        This re-injects the CACHED last-known reported state (not a new
+        MQTT message — _synthetic=True skips the MQTT-staleness stamp) so
+        the same code path re-evaluates time_held against real wall-clock
+        time on every tick, regardless of whether the robot sends anything.
+        No-ops cheaply when no mission is currently held open.
+
+        Attached as an attribute on the returned callable (see bottom of
+        make_mission_callback) rather than scheduled here directly —
+        scheduling a real async_track_time_interval at closure-creation
+        time would require a fully-functional hass.loop, breaking the many
+        existing tests that call make_mission_callback() with a lightweight
+        stub hass. The caller in __init__.py (where a real hass exists)
+        reads this attribute and registers the timer itself.
+        """
+        if not had_cleaning_phase:
+            return
+        cached_state = entry.runtime_data.roomba_reported_state()
+        if "cleanMissionStatus" not in cached_state:
+            return
+        _on_mission_message({"state": {"reported": cached_state}}, _synthetic=True)
+
+    _on_mission_message.recheck_stuck_end_state = _async_recheck_stuck_end_state
     return _on_mission_message
 
 
