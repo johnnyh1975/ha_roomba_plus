@@ -143,9 +143,7 @@ def _make_config_entry(bbchg: dict):
     """Build a mock config_entry whose vacuum has the given bbchg state."""
     entry = MagicMock()
     entry.entry_id = "test_entry"
-    entry.runtime_data.vacuum.master_state = {
-        "state": {"reported": {"bbchg": bbchg}}
-    }
+    entry.runtime_data.roomba_reported_state.return_value = {"bbchg": bbchg}
     return entry
 
 
@@ -760,9 +758,7 @@ class TestSmberr:
         entry = MagicMock()
         entry.entry_id = "test_entry"
         vacuum_state = {"bbchg": {"smberr": smberr_value}}
-        entry.runtime_data.vacuum.master_state = {
-            "state": {"reported": vacuum_state}
-        }
+        entry.runtime_data.roomba_reported_state.return_value = vacuum_state
         return entry
 
     @pytest.mark.asyncio
@@ -930,8 +926,8 @@ class TestDockHealthRepairIssue:
         """No bbchg key at all → function returns early."""
         entry = MagicMock()
         entry.entry_id = "test"
-        entry.runtime_data.vacuum.master_state = {
-            "state": {"reported": {"bbchg3": {"estCap": 2488}}}
+        entry.runtime_data.roomba_reported_state.return_value = {
+            "bbchg3": {"estCap": 2488}
         }
         hass = MagicMock()
         with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:

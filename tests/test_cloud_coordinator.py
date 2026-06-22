@@ -850,6 +850,59 @@ class TestF11WiringInInit:
         assert kwargs.get("name") == "roomba_plus_demand_clean_eval"
 
 
+class TestPerRefreshBackfillWiring:
+    """v2.9.0 — _on_cloud_refresh_complete must call backfill_from_cloud()
+    on EVERY cloud refresh, not merge_latest_from_cloud() (single-shot,
+    only ever tried the newest record once, no retry). Root cause of
+    Thonno's stale last_cleaned_rooms report: if that one attempt missed
+    (e.g. local ended_at drifted outside the ±120s match tolerance — more
+    likely while a mission's end confirmation was delayed, see the v2.8.7
+    stuck-mission fix), the record's timeline/analytics fields stayed
+    missing forever, since nothing else ever revisited that record until
+    the next HA restart's one-time backfill_from_cloud() pass.
+
+    __init__.py's _on_cloud_refresh_complete is a closure nested inside
+    async_setup_entry — not independently importable/callable — so this
+    is a source-text check (same technique already used in
+    test_presence_manager.py's record_clean_event placement test) rather
+    than an execution test.
+    """
+
+    def _init_source(self) -> str:
+        import inspect
+        import custom_components.roomba_plus as init_mod
+        return inspect.getsource(init_mod)
+
+    def _refresh_handler_body(self) -> str:
+        src = self._init_source()
+        idx = src.find("def _on_cloud_refresh_complete()")
+        assert idx != -1, "_on_cloud_refresh_complete definition not found in __init__.py"
+        return src[idx:idx + 3000]
+
+    def test_backfill_from_cloud_is_called_in_refresh_handler(self):
+        body = self._refresh_handler_body()
+        assert "ms.backfill_from_cloud(" in body, (
+            "backfill_from_cloud() must be called on every cloud refresh — "
+            "merge_latest_from_cloud()'s single-shot-no-retry design left "
+            "records permanently missing their timeline/analytics fields "
+            "whenever its one match attempt failed (Thonno's stale "
+            "last_cleaned_rooms report)"
+        )
+
+    def test_merge_latest_from_cloud_no_longer_called_in_refresh_handler(self):
+        """The narrower, no-retry function must not have crept back in."""
+        body = self._refresh_handler_body()
+        assert "ms.merge_latest_from_cloud(" not in body
+
+    def test_save_gated_on_corrected_or_enriched(self):
+        """Must check BOTH corrected and enriched (matching the existing
+        startup backfill_from_cloud() call's check) — not just one,
+        otherwise a timestamp-only correction with no field enrichment
+        would silently never get persisted."""
+        body = self._refresh_handler_body()
+        assert "_bf.corrected or _bf.enriched" in body
+
+
 class TestDailyDirtDensityCache:
     def test_empty_on_init(self):
         """daily_dirt_density must be an empty dict on a fresh coordinator."""

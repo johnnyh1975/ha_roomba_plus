@@ -2807,3 +2807,172 @@ class TestEndDebounceV281:
             "planned_rooms must not be corrupted/re-derived by a transient "
             "end-look blip that did not actually end the mission"
         )
+
+
+class TestPeriodicStuckMissionRecheck:
+    """v2.9.0 — recheck_stuck_end_state() periodic safety-net regression
+    tests. Confirmed via Thonno's field log: once the robot stops sending
+    cleanMissionStatus *changes* (steady-state charging — only bbchg3/
+    batPct/etc. keep arriving), the end-phase confirmation logic — including
+    the 90s UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS safety cap — never runs
+    again, since _on_mission_message bails out immediately on any message
+    that doesn't include 'cleanMissionStatus'. This attribute, attached to
+    the callback returned by make_mission_callback(), re-injects the cached
+    last-known state on a timer so the safety cap gets a chance to fire
+    even during total cleanMissionStatus silence.
+    """
+
+    def _make_clock(self, start: float = 0.0):
+        clock = [start]
+        def _fake_monotonic():
+            return clock[0]
+        return clock, _fake_monotonic
+
+    def test_noop_when_no_mission_active(self):
+        """No mission currently held open — must not even touch
+        roomba_reported_state(), let alone crash."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+
+        cb = make_mission_callback(hass, entry)
+        cb.recheck_stuck_end_state()
+
+        entry.runtime_data.roomba_reported_state.assert_not_called()
+
+    def test_force_closes_after_safety_cap_with_zero_new_messages(self):
+        """The exact field scenario: a 2-room mission stuck at
+        current_room_idx=0 (unvisited_rooms=True), past the 90s safety cap,
+        with NO new cleanMissionStatus message ever arriving — only the
+        periodic recheck, using the cached state, must still force-close it.
+        """
+        from custom_components.roomba_plus.const import (
+            UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS,
+        )
+
+        mts = _make_mts_v280_inter_room_recharge()
+        mts.planned_rooms = ["Bagno Studio", "Studio"]
+        mts.current_room_idx = 0  # stuck — never advanced past room 1
+        mts.total_estimated_sec = 200.0  # _has_any_estimate must be True
+        entry = _make_entry(mts)
+        entry.runtime_data.roomba_reported_state = MagicMock(return_value={})
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        clock, fake_monotonic = self._make_clock(0.0)
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            tmock.monotonic.side_effect = fake_monotonic
+            tmock.time.return_value = 1000.0
+
+            cb = make_mission_callback(hass, entry)
+            run_msg = _msg_v280_inter_room_recharge("run", cycle="clean")
+            charge_msg = _msg_v280_inter_room_recharge("charge", cycle="none")
+
+            clock[0] = 0.0
+            _run_callback(cb, run_msg)
+
+            clock[0] = 1.0
+            _run_callback(cb, charge_msg)   # streak 0→1, end_signal_first_ts=1.0
+            clock[0] = 1.05
+            _run_callback(cb, charge_msg)   # streak 1→2, time_held=0.05s — rejected
+                                             # (unvisited_rooms True, time<90s)
+
+            assert mts.mission_id is not None, "must still be open before the cap"
+
+            # Cache the last-known reported state, exactly as
+            # entry.runtime_data.roomba_reported_state() would return it —
+            # this is what the periodic recheck reads instead of a new
+            # MQTT message.
+            entry.runtime_data.roomba_reported_state.return_value = (
+                charge_msg["state"]["reported"]
+            )
+
+            # Simulate real time passing well beyond the 90s cap — with
+            # ZERO further cleanMissionStatus messages, only the periodic
+            # recheck firing.
+            clock[0] = 1.0 + UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS + 5
+            cb.recheck_stuck_end_state()
+
+        assert mts.mission_id is None, (
+            "periodic recheck must force-close the mission once the 90s "
+            "safety cap is exceeded, even with zero new MQTT messages"
+        )
+
+    def test_recheck_does_not_disturb_mqtt_staleness_watchdog(self):
+        """_synthetic=True must skip the last_mqtt_message_ts stamp — a
+        periodic synthetic re-check must not mask genuine MQTT silence
+        from the RoombaMqttStale binary sensor."""
+        mts = _make_mts_v280_inter_room_recharge()
+        mts.planned_rooms = ["A", "B"]
+        mts.current_room_idx = 0
+        mts.total_estimated_sec = 200.0
+        entry = _make_entry(mts)
+        entry.runtime_data.last_mqtt_message_ts = 12345.0
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        clock, fake_monotonic = self._make_clock(0.0)
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            tmock.monotonic.side_effect = fake_monotonic
+            tmock.time.return_value = 99999.0  # would be the new stamp if NOT skipped
+
+            cb = make_mission_callback(hass, entry)
+            clock[0] = 0.0
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+            real_ts_after_real_message = entry.runtime_data.last_mqtt_message_ts
+            assert real_ts_after_real_message == 99999.0  # real message DOES stamp it
+
+            # Reset to a sentinel, then run the synthetic recheck — it must
+            # NOT re-stamp this, even though _time_mod.time() would return
+            # the same 99999.0 if it were (wrongly) called.
+            entry.runtime_data.last_mqtt_message_ts = 12345.0
+            entry.runtime_data.roomba_reported_state = MagicMock(
+                return_value=_msg_v280_inter_room_recharge("run", cycle="clean")
+                ["state"]["reported"]
+            )
+            cb.recheck_stuck_end_state()
+
+        assert entry.runtime_data.last_mqtt_message_ts == 12345.0, (
+            "synthetic recheck must not touch the MQTT-staleness timestamp"
+        )
+
+    def test_recheck_attribute_is_idempotent_no_op_after_close(self):
+        """Calling the recheck again after the mission already closed must
+        be a harmless no-op (had_cleaning_phase is now False)."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+
+        cb = make_mission_callback(hass, entry)
+        # No mission ever started — had_cleaning_phase is False from init.
+        cb.recheck_stuck_end_state()
+        cb.recheck_stuck_end_state()  # call twice — still a no-op, no crash
+
+        entry.runtime_data.roomba_reported_state.assert_not_called()

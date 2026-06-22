@@ -193,7 +193,14 @@ def _make_coordinator_with_archive(mission_archive) -> IrobotCloudCoordinator:
 def _entry(master_state: dict) -> MagicMock:
     entry = MagicMock()
     entry.entry_id = "e"
-    entry.runtime_data.vacuum.master_state = master_state
+    # v2.9.0 — repairs.py now reads data.roomba_reported_state() instead of
+    # the removed data.vacuum.master_state attribute (AttributeError fix).
+    # Replicates the exact same (state or {}).get("reported") or {} chain
+    # here so every existing call site below keeps testing the SAME
+    # scenarios (missing bbchg, corrupted smberr, explicit state=None,
+    # etc.) without needing to change any of them individually.
+    reported = (master_state.get("state") or {}).get("reported") or {}
+    entry.runtime_data.roomba_reported_state.return_value = reported
     return entry
 
 
@@ -1119,9 +1126,7 @@ class TestDockHealthTypeSafety:
     def _entry(self, bbchg: dict) -> MagicMock:
         entry = MagicMock()
         entry.entry_id = "e"
-        entry.runtime_data.vacuum.master_state = {
-            "state": {"reported": {"bbchg": bbchg}}
-        }
+        entry.runtime_data.roomba_reported_state.return_value = {"bbchg": bbchg}
         return entry
 
     @pytest.mark.asyncio
