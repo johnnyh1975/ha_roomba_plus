@@ -14,6 +14,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_DELAY, CONF_HOST, CONF_NAME, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
@@ -105,6 +106,74 @@ async def validate_input(
         CONF_NAME: info[CONF_NAME],
         CONF_HOST: data[CONF_HOST],
     }
+
+
+# ── REST980-MIGRATE (v2.9.0) ───────────────────────────────────────────────────
+# Migration helper for users switching from ia74/roomba_rest980. Reads room
+# names from that integration's own select.* entities (read-only access to
+# the state machine — no write interaction with the foreign integration) and
+# pre-fills our smart_zone_labels/smart_zone_data options, so the user
+# doesn't have to re-discover and manually re-type every room name through
+# our own naming Repair Issue workflow.
+
+REST980_DOMAIN = "roomba_rest980"
+
+
+def _resolve_current_pmap_id(state: dict) -> str:
+    """Best-effort current pmap_id from live local MQTT state.
+
+    Same priority order used by the existing smart_zones naming step
+    (lastCommand > cleanSchedule2 > first entry in state.pmaps) — not
+    extracted into a shared helper there to avoid touching working code
+    outside this feature's scope; reused here for the new migration step.
+    """
+    last = state.get("lastCommand", {})
+    if last.get("pmap_id"):
+        return last["pmap_id"]
+    for entry in state.get("cleanSchedule2", []):
+        cmd = entry.get("cmd", {})
+        if cmd.get("pmap_id"):
+            return cmd["pmap_id"]
+    pmaps: list[dict] = state.get("pmaps", [])
+    if pmaps:
+        return next(iter(pmaps[0]), "")
+    return ""
+
+
+def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
+    """Read room names from an existing roomba_rest980 installation.
+
+    Returns {region_id: name}. roomba_rest980's CleanRoomPasses select
+    entities expose a `room_data` attribute containing the raw cloud
+    region/zone dict — {"id": region_id, "name": ..., "region_type"/"zone_type": ...}.
+    pmap_id is NOT exposed there (it's a private attribute on the rest980
+    entity, never written to state) — callers must resolve pmap_id themselves
+    from their own live state, same as any other newly-discovered room.
+
+    Pure read access to the state machine and entity registry — never writes
+    to or calls services on the foreign integration.
+    """
+    rooms: dict[str, str] = {}
+    rest980_entries = hass.config_entries.async_entries(REST980_DOMAIN)
+    if not rest980_entries:
+        return rooms
+
+    ent_reg = er.async_get(hass)
+    for entry in rest980_entries:
+        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+            if entity.domain != "select":
+                continue
+            state = hass.states.get(entity.entity_id)
+            if state is None:
+                continue
+            room_data = state.attributes.get("room_data")
+            if not isinstance(room_data, dict):
+                continue
+            rid = room_data.get("id")
+            name = room_data.get("name")
+            if rid and name:
+                rooms[str(rid)] = str(name)
+    return rooms
 
 
 # ── Config Flow ───────────────────────────────────────────────────────────────
@@ -467,6 +536,15 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.append("rooms")
 
+        # REST980-MIGRATE (v2.9.0): only offered when there's something to
+        # migrate — a roomba_rest980 installation actually present, and a
+        # Smart Map robot (the only tier with named-room cleaning here).
+        if (
+            data.map_capability == MapCapability.SMART
+            and self.hass.config_entries.async_entries(REST980_DOMAIN)
+        ):
+            menu.append("rest980_migrate")
+
         return self.async_show_menu(
             step_id="init",
             menu_options=menu,
@@ -481,6 +559,63 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if data.map_capability == MapCapability.SMART:
             return await self.async_step_smart_zones(user_input)
         return await self.async_step_zones(user_input)
+
+    async def async_step_rest980_migrate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """REST980-MIGRATE (v2.9.0) — import room names from roomba_rest980.
+
+        Read-only: discovers room names from the foreign integration's own
+        select entities, fills in any of our smart_zone_labels/smart_zone_data
+        entries that are still missing. Never overwrites a name the user has
+        already assigned through our own naming flow.
+        """
+        discovered = _discover_rest980_rooms(self.hass)
+        existing_labels: dict = self.config_entry.options.get(
+            "smart_zone_labels", {}
+        )
+        new_rooms = {
+            rid: name for rid, name in discovered.items() if rid not in existing_labels
+        }
+
+        if user_input is not None:
+            if not user_input.get("confirm_import", False) or not new_rooms:
+                return self.async_create_entry(title="", data=self.config_entry.options)
+
+            state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+            current_pmap_id = _resolve_current_pmap_id(state)
+
+            new_labels = dict(existing_labels)
+            new_zone_data: dict = dict(
+                self.config_entry.options.get("smart_zone_data", {})
+            )
+            for rid, name in new_rooms.items():
+                new_labels[rid] = name
+                new_zone_data[rid] = {"name": name, "pmap_id": current_pmap_id}
+
+            new_options = dict(self.config_entry.options)
+            new_options["smart_zone_labels"] = new_labels
+            new_options["smart_zone_data"] = new_zone_data
+            return self.async_create_entry(
+                title="", data=new_options,
+                description_placeholders={"room_count": str(len(new_rooms))},
+            )
+
+        if not discovered:
+            return self.async_abort(reason="no_rest980_rooms_found")
+        if not new_rooms:
+            return self.async_abort(reason="rest980_rooms_already_imported")
+
+        return self.async_show_form(
+            step_id="rest980_migrate",
+            data_schema=vol.Schema({
+                vol.Required("confirm_import", default=True): bool,
+            }),
+            description_placeholders={
+                "room_count": str(len(new_rooms)),
+                "room_names": ", ".join(sorted(new_rooms.values())),
+            },
+        )
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None

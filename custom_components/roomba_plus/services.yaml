@@ -5,7 +5,8 @@ clean_room:
   description: >
     Start a targeted clean of one or more named rooms on smart-map robots
     (i7, s9, j-series). Room names must match the labels assigned in the
-    Roomba+ options. All rooms must be on the same floor.
+    Roomba+ options. All rooms must be on the same floor. Provide either
+    room_name or room_passes — not both.
   target:
     entity:
       integration: roomba_plus
@@ -16,8 +17,9 @@ clean_room:
       description: >
         Name of the room to clean, or a list of room names to clean in
         sequence. Names are matched case-insensitively against the labels
-        you assigned in the Roomba+ options.
-      required: true
+        you assigned in the Roomba+ options. Use room_passes instead if you
+        need a different two-pass setting per room in the same sequence.
+      required: false
       example: "Kitchen"
       selector:
         text:
@@ -36,10 +38,23 @@ clean_room:
       description: >
         When true, the robot makes two cleaning passes over each room.
         When omitted (default), the robot's current two-pass setting is
-        inherited. Overrides the global setting for this job only.
+        inherited. Overrides the global setting for this job only. Ignored
+        for any room that specifies its own two_pass via room_passes.
       required: false
       selector:
         boolean:
+    room_passes:
+      name: Rooms with individual pass settings
+      description: >
+        Alternative to room_name — a list of rooms to clean in sequence,
+        each with its own optional two-pass setting. Rooms without an
+        explicit two_pass fall back to the global two_pass field, then to
+        the robot's current setting. Example:
+        [{name: Kitchen, two_pass: true}, {name: Hallway}]
+      required: false
+      example: '[{"name": "Kitchen", "two_pass": true}, {"name": "Hallway"}]'
+      selector:
+        object:
 
 reset_filter:
   name: Reset filter

@@ -77,7 +77,8 @@
           "map_management": "Zonenverwaltung",
           "presence_scheduling": "Anwesenheitsbasierte Planung",
           "demand_cleaning": "Bedarfsreinigung",
-          "rooms": "Räume & Zonen"
+          "rooms": "Räume & Zonen",
+          "rest980_migrate": "Räume von roomba_rest980 importieren"
         }
       },
       "zones": {
@@ -180,6 +181,13 @@
       "test_cloud_connection": {
         "title": "Verbindung testen",
         "description": "Ihre iRobot-Cloud-Zugangsdaten werden überprüft…"
+      },
+      "rest980_migrate": {
+        "title": "Räume von roomba_rest980 importieren",
+        "description": "{room_count} Raum/Räume in deiner roomba_rest980-Installation gefunden, die in Roomba+ noch nicht benannt sind: {room_names}. Jetzt importieren? Bereits hier benannte Räume bleiben unverändert.",
+        "data": {
+          "confirm_import": "Diese Räume importieren"
+        }
       }
     },
     "errors": {
@@ -193,7 +201,9 @@
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
-      "demand_cleaning_not_supported": "Bedarfsgesteuerte Reinigung erfordert einen SMART-Roboter mit konfigurierten Cloud-Zugangsdaten."
+      "demand_cleaning_not_supported": "Bedarfsgesteuerte Reinigung erfordert einen SMART-Roboter mit konfigurierten Cloud-Zugangsdaten.",
+      "no_rest980_rooms_found": "Keine Räume in deiner roomba_rest980-Installation gefunden.",
+      "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt."
     }
   },
   "entity": {
@@ -895,6 +905,18 @@
     "maintenance_due": {
       "title": "Wartung ist überfällig",
       "description": "Folgende Verschleißteile sind seit mindestens 3 Tagen zum Austausch fällig: {items}. Die genaue Überfälligkeit in Stunden steht in den Attributen des maintenance_due-Binärsensors. Nach dem Austausch den passenden Reset-Button oder die roomba_plus.reset_*-Aktion nutzen."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "Roboter-MQTT-Verbindung während Mission verloren",
+      "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: verbunden — spricht für ein lokales/HA-seitiges Problem, nicht für WLAN-Ausfall am Roboter. Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "Roboter-MQTT-Verbindung während Mission verloren",
+      "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: getrennt — deutet auf WLAN-Ausfall am Roboter selbst hin. Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "Roboter-MQTT-Verbindung während Mission verloren",
+      "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: unbekannt (Feld fehlt auf dieser Firmware). Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
     }
   },
   "device_automation": {
@@ -959,6 +981,12 @@
     },
     "config_entry_not_found": {
       "message": "No config entry found for {entity_id}. Try reloading the integration."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Provide either room_name or room_passes, not both."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Provide either room_name or room_passes."
     }
   }
 }

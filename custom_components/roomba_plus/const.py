@@ -107,6 +107,13 @@ SERVICE_CLEAN_ROOM: Final = "clean_room"
 ATTR_ROOM_NAME: Final = "room_name"
 ATTR_ORDERED: Final = "ordered"
 ATTR_TWO_PASS: Final = "two_pass"
+# CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0) — optional structured field for
+# individual pass control per room within the same multi-room sequence.
+# Mutually exclusive with ATTR_ROOM_NAME at the service-call level.
+# NOTE: named "room_passes", not "rooms" — ATTR_ROOMS ("rooms") already
+# exists below for smart_start's plain string list; reusing that name would
+# have collided with a different schema shape (list[str] vs list[dict]).
+ATTR_ROOM_PASSES: Final = "room_passes"
 # Options key — stores {region_id: {name, pmap_id}} for smart-map robots.
 # Replaces the older flat smart_zone_labels dict; both are written on save
 # so that a rollback to an older version still sees the label names.
@@ -390,6 +397,25 @@ CLOUD_STALE_MINUTES: Final[int] = 60
 # 300 s (5 min) is conservative — the robot normally sends multiple messages
 # per minute while cleaning.
 MQTT_WATCHDOG_SECONDS: Final[int] = 300
+
+# v2.9.0 BUGFIX (field reports: boutXIII, Jean-Christoph — both observed the
+# Repair Issue firing with minutes≈5, i.e. right at MQTT_WATCHDOG_SECONDS)
+# — a genuine, common MQTT gap of a few minutes right after undocking
+# (Wi-Fi reassociation while the robot physically moves away from the
+# router, motor startup interference; the 980 OG with its aftermarket
+# NiMH battery is more prone to this than newer i/s/j-series robots) was
+# being misreported as a sustained connectivity problem. The watchdog's
+# last-received message already showed phase=="run" before the gap, so it
+# fired the instant the 5-minute silence threshold was crossed, regardless
+# of how recently the mission had actually started.
+# 420 s (7 min) chosen with margin above the observed ~5 min reports —
+# exact gap duration wasn't precisely measured in either field report, so
+# this errs slightly generous rather than risk re-introducing false
+# positives at a tighter value. Suppresses the watchdog entirely (not just
+# resets the silence clock) until this many seconds after mssnStrtTm — a
+# genuine outage starting early in the mission is still caught once both
+# this grace window AND the normal silence threshold have elapsed.
+MQTT_WATCHDOG_START_GRACE_SECONDS: Final[int] = 420
 
 # v2.9.0 — INTEG-HEALTH meta-sensor thresholds.
 # Score (0-100) combines: active Repair Issue count, MQTT message age, and

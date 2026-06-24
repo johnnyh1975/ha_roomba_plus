@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.8.7-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.9.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,372 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,750 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -116,9 +116,11 @@ After installation, five steps to get the most out of Roomba+:
 
 ### From roomba_rest980
 
-1. Remove roomba_rest980 and stop the rest980 Docker container
+1. **Keep roomba_rest980 installed for now** — don't remove it yet
 2. Add Roomba+ — it connects directly to the robot without middleware
 3. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
+4. Settings → Devices → Roomba+ → Configure → **Import rooms from roomba_rest980** (only shown when an existing roomba_rest980 installation is detected on a Smart Map robot) — reads room names straight from its `select.*` entities and fills in any of your Roomba+ room labels that aren't set yet. Never overwrites a name you've already assigned through Roomba+'s own naming workflow.
+5. Once you're happy with the result, remove roomba_rest980 and stop the rest980 Docker container
 
 ### Multiple robots
 
@@ -218,7 +220,24 @@ data:
     - Kitchen
     - Hallway
   ordered: true   # clean in sequence rather than most-efficient order
+  two_pass: true  # optional — overrides the robot's current setting for this job
 ```
+
+**Individual pass count per room (v2.9.0+):** use `room_passes` instead of `room_name` when different rooms in the same sequence need different two-pass settings:
+
+```yaml
+action: roomba_plus.clean_room
+target:
+  entity_id: vacuum.roomba
+data:
+  room_passes:
+    - name: Kitchen
+      two_pass: true
+    - name: Hallway   # no two_pass — falls back to the global two_pass field, then the robot's current setting
+  ordered: true
+```
+
+`room_name` and `room_passes` are mutually exclusive — provide one or the other, not both.
 
 #### Smart Start with blocking sensor gate
 
@@ -284,7 +303,7 @@ show_state: false
 
 #### Rooms map — Smart Map robots (v2.3+)
 
-`image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). On robots without local pose data (lewis firmware 22.52.10+), alignment now bootstraps automatically from cloud traversal events — no action required.
+`image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). On robots without local pose data (lewis firmware 22.52.10+), alignment now bootstraps automatically from cloud traversal events — no action required. Each room renders in its own colour from a rotating 8-colour palette (v2.9.0) for easy visual distinction; rendering uses an embedded font for crisp labels (v2.9.0) and is cached per map version (v2.9.0) so it isn't re-rendered from scratch on every poll.
 
 Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[docs/xiaomi-vacuum-map-card.md](docs/xiaomi-vacuum-map-card.md)** for the full setup guide.
 
@@ -573,6 +592,8 @@ Settings → Devices → Roomba+ → Configure
 | ⚙ Connection | Settings · iRobot cloud credentials |
 | 🗓 Scheduling | Blocking sensors · Presence-aware scheduling · Demand cleaning |
 | 🗺 Map | Zone management · Rooms & zones |
+
+*Smart Map robots also show a conditional* **Import rooms from roomba_rest980** *entry (v2.9.0+) when an existing roomba_rest980 installation is detected — see [Migration](#migration).*
 
 #### Diagnostics download
 

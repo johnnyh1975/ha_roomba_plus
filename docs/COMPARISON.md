@@ -2,7 +2,9 @@
 
 # Roomba Integrations — Feature Comparison
 
-> Based on source code analysis · June 2026  
+> Based on source code analysis · last verified June 2026 against
+> Roomba+ **v2.9.0** and roomba_rest980 **v1.19.1**
+> (manifest version; quality_scale.yaml self-declares **bronze**).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
 **Legend:** ✅ Supported &nbsp;·&nbsp; ⚠️ Partial / limited &nbsp;·&nbsp; ❌ Not available &nbsp;·&nbsp; ★ Best in class
@@ -18,7 +20,7 @@
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, mission log | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 1996 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 2750 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -56,7 +58,7 @@
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6 ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ 1996 tests ★ | ✅ | ❌ |
+| Unit tests | ✅ 2750 tests ★ | ✅ | ❌ |
 | Quality Scale | **Gold ★** | Silver | **Bronze** |
 | Translations | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only | ⚠️ EN only |
 
@@ -124,7 +126,7 @@
 | Floor plan map | ✅ local MQTT `pose` stream ¹ | ❌ | ✅ UMF from iRobot cloud (static) ³ |
 | Live cleaning path during mission | ✅ local MQTT `pose` stream ★ | ❌ | ❌ |
 | Map survives HA restart | ✅ hass.storage persistence ★ | ❌ | ❌ |
-| Room outline — Smart Map robots | ✅ UMF polygon overlay (v2.3+) | ❌ | ✅ rendered on UMF floor plan ★ |
+| Room outline — Smart Map robots | ✅ UMF polygon overlay, per-room colour palette, embedded font, cached per map version (v2.9.0) | ❌ | ✅ rendered on UMF floor plan ³ |
 | Room outline — 900-series | ✅ progressive edge detection (v2.4+) ★ | ❌ | ❌ |
 | Zone / room selection | ✅ local via `region_id` | ❌ | ✅ select per room with real names ★ |
 | Zone selection — fully local | ✅ ★ | ❌ | ❌ cloud required |
@@ -164,7 +166,7 @@
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| Quality Scale | **Gold ★** | Silver | **Bronze** |
+| Quality Scale | **Gold ★** | Silver | **Bronze** — self-declared; `quality_scale.yaml` marks `config-flow-test-coverage`, `test-before-configure`, `test-before-setup`, `has-entity-name`, `unique-config-entry`, `docs-installation-instructions`, `docs-removal-instructions` as `todo`, even within Bronze tier |
 | `async_migrate_entry` | ✅ v1→v22 ★ | ✅ | ❌ |
 | `reconfiguration-flow` | ✅ ★ | ✅ | ❌ |
 | `icon-translations` | ✅ 98 icons ★ | ✅ | ❌ |
@@ -174,7 +176,7 @@
 | Repair Issues | ✅ 10 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
-| Integration tests | ✅ 1996 pytest tests ★ | ✅ | ❌ |
+| Integration tests | ✅ 2712 pytest tests ★ | ✅ | ❌ |
 | GitHub Actions CI | ✅ ★ | ❌ | ✅ push + PR + nightly hassfest + HACS validation |
 
 ---
@@ -190,6 +192,8 @@
 **⁴ ha-rest980** (jeremywillans/ha-rest980) is a separate project from roomba_rest980. It used the rest980 Node.js container as middleware to provide a live cleaning path, but has been broken since firmware 3.20+ removed local `pose` reporting.
 
 **⁵ iRobot / Picea Robotics cloud** — iRobot was acquired by Picea Robotics in January 2026. Both Roomba+ and roomba_rest980 use the same Gigya→AWS Cognito authentication flow against iRobot's API endpoints.
+
+**⁶ roomba_rest980 repo also bundles `runjailed`**, a separate, unrelated side-project (not part of the HA custom component, not invoked by it) documenting a root-access exploit for `lewis`-firmware (i/j-series) robots via an MQTT input-sanitization vulnerability. It is out of scope for this comparison — included here only for completeness, since it ships in the same repository. No part of Roomba+ relies on, recommends, or interacts with this.
 
 ---
 

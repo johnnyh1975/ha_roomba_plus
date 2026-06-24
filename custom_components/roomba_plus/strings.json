@@ -81,7 +81,8 @@
           "map_management": "Zone management",
           "presence_scheduling": "Presence-aware scheduling",
           "demand_cleaning": "Demand cleaning",
-          "rooms": "Rooms & zones"
+          "rooms": "Rooms & zones",
+          "rest980_migrate": "Import rooms from roomba_rest980"
         }
       },
       "zones": {
@@ -196,6 +197,13 @@
       "test_cloud_connection": {
         "title": "Testing connection",
         "description": "Verifying your iRobot cloud credentials…"
+      },
+      "rest980_migrate": {
+        "title": "Import rooms from roomba_rest980",
+        "description": "Found {room_count} room(s) in your roomba_rest980 installation that aren't named yet in Roomba+: {room_names}. Import them now? Rooms you've already named here are left untouched.",
+        "data": {
+          "confirm_import": "Import these rooms"
+        }
       }
     },
     "errors": {
@@ -209,7 +217,9 @@
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
-      "demand_cleaning_not_supported": "Demand cleaning requires a SMART robot with cloud credentials configured."
+      "demand_cleaning_not_supported": "Demand cleaning requires a SMART robot with cloud credentials configured.",
+      "no_rest980_rooms_found": "No rooms found in your roomba_rest980 installation.",
+      "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+."
     }
   },
   "entity": {
@@ -913,6 +923,18 @@
     "maintenance_due": {
       "title": "Maintenance is overdue",
       "description": "The following consumable(s) have been due for replacement for at least 3 days: {items}. Check the maintenance_due binary sensor's attributes for exact overdue hours, then use the matching reset button or roomba_plus.reset_* action once replaced."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "Robot MQTT connection lost during mission",
+      "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: connected — this points to a local/Home Assistant-side problem, not a Wi-Fi outage at the robot itself. If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "Robot MQTT connection lost during mission",
+      "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: disconnected — this suggests a Wi-Fi outage at the robot itself. If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "Robot MQTT connection lost during mission",
+      "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: unknown (this field isn't available on this firmware). If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
     }
   },
   "device_automation": {
@@ -1019,6 +1041,12 @@
     },
     "config_entry_not_found": {
       "message": "No config entry found for {entity_id}. Try reloading the integration."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Provide either room_name or room_passes, not both."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Provide either room_name or room_passes."
     }
   }
 }

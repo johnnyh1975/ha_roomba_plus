@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_FILTER_HOURS,
     DOMAIN,
     MQTT_WATCHDOG_SECONDS,
+    MQTT_WATCHDOG_START_GRACE_SECONDS,
     has_smart_map,
     is_mop,
 )
@@ -844,11 +845,16 @@ _FIRMWARE_UPDATED_WINDOW_SECONDS: float = 86400.0  # 24 h
 
 class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
     """MQTT-WATCHDOG (v2.8.3; phase set broadened then reverted v2.9.0,
-    see _MISSION_ACTIVE_PHASES) — silence detection during an active
-    mission.
+    see _MISSION_ACTIVE_PHASES; start-grace added v2.9.0, see
+    MQTT_WATCHDOG_START_GRACE_SECONDS) — silence detection during an
+    active mission.
 
     ON when phase=="run" (see _MISSION_ACTIVE_PHASES) AND no MQTT message
-    has been received for MQTT_WATCHDOG_SECONDS (5 min). Checked on a
+    has been received for MQTT_WATCHDOG_SECONDS (5 min) AND the mission
+    has been running for at least MQTT_WATCHDOG_START_GRACE_SECONDS
+    (7 min) — the first few minutes after undocking can have a genuine,
+    benign Wi-Fi gap (reassociation while the robot moves away from the
+    router) that isn't a real connectivity problem. Checked on a
     60-second periodic tick.
 
     When ON:
@@ -935,16 +941,28 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
             # raw self.hass.states.get(f"binary_sensor.{...}") guess could
             # silently miss and always report "unknown". Mirrors exactly
             # the same field RoombaCloudConnected.is_on reads.
+            #
+            # BUGFIX (community report, boutXIII, v2.9.0) — this used to
+            # build the cloud-connectivity hint as a hardcoded German
+            # sentence fragment and insert it into the {cloud_hint}
+            # placeholder of an otherwise-correctly-localized description,
+            # so every non-German user saw a German clause stitched into
+            # their own language's sentence. _async_watchdog_tick is a
+            # @callback (synchronous, can't await a translation lookup), so
+            # the fix is three separate, fully-localized translation_keys
+            # instead of one key with a server-side-substituted hint value —
+            # ir.async_create_issue resolves translation_key per the user's
+            # locale the same way it already does for {minutes}/{last_phase}.
             wifistat = roomba_reported_state(self.vacuum).get("wifistat")
             cloud_val = (
                 wifistat.get("cloud") if isinstance(wifistat, dict) else None
             )
             if wifistat is None or cloud_val is None:
-                cloud_hint = "unbekannt (Feld fehlt auf dieser Firmware)"
+                watchdog_translation_key = "mqtt_watchdog_cloud_unknown"
             elif bool(cloud_val):
-                cloud_hint = "verbunden — spricht für ein lokales/HA-seitiges Problem, nicht für WLAN-Ausfall am Roboter"
+                watchdog_translation_key = "mqtt_watchdog_cloud_connected"
             else:
-                cloud_hint = "getrennt — deutet auf WLAN-Ausfall am Roboter selbst hin"
+                watchdog_translation_key = "mqtt_watchdog_cloud_disconnected"
 
             ir.async_create_issue(
                 self.hass,
@@ -953,11 +971,10 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
                 is_fixable=False,
                 is_persistent=False,
                 severity=ir.IssueSeverity.ERROR,
-                translation_key="mqtt_watchdog",
+                translation_key=watchdog_translation_key,
                 translation_placeholders={
                     "minutes": str(silence_min),
                     "last_phase": last_phase,
-                    "cloud_hint": cloud_hint,
                 },
             )
         elif not now_stale and self._was_stale:
@@ -999,13 +1016,25 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
         ts = data.last_mqtt_message_ts
         if ts == 0.0:
             return False  # No message received yet since HA startup
-        phase = (
-            roomba_reported_state(self.vacuum)
-            .get("cleanMissionStatus", {})
-            .get("phase", "")
+        clean_mission_status = roomba_reported_state(self.vacuum).get(
+            "cleanMissionStatus", {}
         )
+        phase = clean_mission_status.get("phase", "")
         if phase not in self._MISSION_ACTIVE_PHASES:
             return False
+        # v2.9.0 BUGFIX — see MQTT_WATCHDOG_START_GRACE_SECONDS. Read
+        # mssnStrtTm from the same dict already fetched above (NOT via the
+        # self.last_mission property — that depends on self.vacuum_state,
+        # a CoordinatorEntity-style accessor this entity doesn't wire up;
+        # roomba_reported_state(self.vacuum) is the access path this class
+        # already uses everywhere else). 0/missing mssnStrtTm means there's
+        # nothing to gate on — fall through to the normal silence check
+        # rather than suppressing indefinitely.
+        mission_start_ts = clean_mission_status.get("mssnStrtTm") or 0
+        if mission_start_ts:
+            mission_age_sec = _time_mod.time() - mission_start_ts
+            if mission_age_sec < MQTT_WATCHDOG_START_GRACE_SECONDS:
+                return False
         return (_time_mod.time() - ts) > MQTT_WATCHDOG_SECONDS
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:

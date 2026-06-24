@@ -65,6 +65,21 @@ from .zone_store import GAP_THRESHOLD_MM, MAX_DOOR_WIDTH_MM, MIN_DOOR_WIDTH_MM, 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
+# ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
+# Muted/desaturated tones chosen to read clearly against the dark (30,30,30)
+# canvas background while staying visually distinct from each other and from
+# the fixed outline colour (100,149,237). 8 entries — rotates via index % 8.
+ROOM_FILL_PALETTE: list[tuple[int, int, int]] = [
+    (61, 74, 94),    # slate blue   (close to the old single uniform fill)
+    (74, 94, 61),    # olive green
+    (94, 61, 74),    # muted maroon
+    (94, 86, 61),    # warm ochre
+    (61, 94, 91),    # teal
+    (86, 61, 94),    # muted purple
+    (94, 75, 61),    # burnt orange
+    (61, 79, 94),    # steel blue
+]
+
 # CLEANING_PHASES and MISSION_END_PHASES moved to const.py (v2.3.0 Step 1)
 
 _MAP_STORAGE_VERSION = 1
@@ -1156,6 +1171,17 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         # set the transform parameters correctly (avoids wrong coords at startup).
         self._rendered_once: bool = False
 
+        # ZONE-LAYER-CACHE (v2.9.0): room polygons only change on map retrain
+        # (new pmap_version_id) or alignment-state transitions — re-running
+        # the full PIL render on every async_image() call (every frontend
+        # poll/refresh) was wasted work the overwhelming majority of the time.
+        # Cache key captures everything that affects the rendered output;
+        # _last_x_min/_max/_y_min/_y_max/_last_size are restored from the
+        # cache entry too, since other code (calibration_points, _to_px_last)
+        # depends on them matching whatever PNG was actually returned.
+        self._room_render_cache_key: tuple[Any, ...] | None = None
+        self._room_render_cache: dict[str, Any] | None = None
+
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
@@ -1199,6 +1225,38 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             return self._blank_png()
 
         aligned = aligner.aligned
+
+        # ZONE-LAYER-CACHE (v2.9.0): room polygons are identical between
+        # calls unless the map was retrained (pmap_version_id changes) or
+        # alignment state flipped (fallback → aligned after enough missions).
+        # Restore both the cached PNG and the transform parameters it was
+        # computed with — calibration_points/_to_px_last depend on them
+        # matching the returned image exactly.
+        cache_key = (aligner.pmap_version_id, aligned)
+        # Known limitation: this assumes umf_to_pose()'s rotation/translation
+        # is stable for a given pmap_version_id once aligned=True is reached.
+        # If a later alignment run meaningfully refines the transform for the
+        # same map (not currently expected to happen, but not structurally
+        # prevented either), the cached image would be stale until the next
+        # map retrain changes pmap_version_id. Matches the scope agreed for
+        # ZONE-LAYER-CACHE: invalidate on map retrain, not on every render.
+        if (
+            self._room_render_cache_key == cache_key
+            and self._room_render_cache is not None
+        ):
+            cached = self._room_render_cache
+            self._last_x_min = cached["x_min"]
+            self._last_x_max = cached["x_max"]
+            self._last_y_min = cached["y_min"]
+            self._last_y_max = cached["y_max"]
+            self._last_size  = cached["size"]
+            if aligned:
+                self._rendered_once = True
+            else:
+                self._rendered_fallback = True
+            return cached["png"]
+
+
 
         if aligned:
             # Pose-space path: transform UMF → pose coordinates
@@ -1263,19 +1321,35 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         draw = ImageDraw.Draw(img)
         rid_to_name = aligner.rid_to_name()
 
-        for rid, poly_umf in polygons_umf.items():
+        # ROOM-PALETTE (v2.9.0) — rotating per-room fill instead of a single
+        # uniform colour, so adjacent rooms are visually distinguishable even
+        # without the XVMC card's own room-name overlay. Outline stays fixed
+        # (matches existing card highlight colour); only fill rotates.
+        # Muted tones chosen to read clearly against the dark (30,30,30) canvas.
+        for idx, (rid, poly_umf) in enumerate(polygons_umf.items()):
             resolved = resolve_poly(poly_umf)
             if not resolved:
                 continue
             poly_px = [to_px(x, y) for x, y in resolved]
-            draw.polygon(poly_px, outline=(100, 149, 237), fill=(45, 55, 72))
+            fill = ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)]
+            draw.polygon(poly_px, outline=(100, 149, 237), fill=fill)
             # v2.7.3: labels removed from PNG — XVMC card renders its own
             # labels from predefined_selections.label.text; drawing them here
             # produced duplicate overlapping labels in the card (veronoicc #2).
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        return buf.getvalue()
+        png_bytes = buf.getvalue()
+
+        # ZONE-LAYER-CACHE (v2.9.0): store for the next call.
+        self._room_render_cache_key = cache_key
+        self._room_render_cache = {
+            "png": png_bytes,
+            "x_min": x_min, "x_max": x_max,
+            "y_min": y_min, "y_max": y_max,
+            "size": size,
+        }
+        return png_bytes
 
     def _to_px_last(self, x_mm: float, y_mm: float) -> tuple[int, int]:
         """Reproduce to_px() using persisted transform for attribute consistency."""

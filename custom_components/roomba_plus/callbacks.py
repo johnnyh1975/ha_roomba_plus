@@ -1056,7 +1056,23 @@ def make_mission_callback(
                             if 0 <= _completed_idx < len(_mts_upd.planned_rooms)
                             else None
                         )
-                        hass.bus.async_fire(
+                        # v2.9.0 BUGFIX (field report Thonno, v2.8.7) —
+                        # _on_mission_message runs on roombapy's MQTT thread,
+                        # not the event loop thread. hass.bus.async_fire is a
+                        # plain (non-coroutine) function that touches hass's
+                        # event bus — call_soon_threadsafe is the correct
+                        # bridge, same pattern already used for
+                        # async_check_map_retrain_workflow below. Calling it
+                        # directly raised RuntimeError on every room
+                        # transition on newer/stricter HA core versions,
+                        # crashing the entire paho-mqtt message thread —
+                        # which then explained the "mission never closes"
+                        # symptom: no further MQTT messages were ever
+                        # processed after the first room transition, so the
+                        # v2.9.0 stuck-end-state recheck kept re-evaluating
+                        # the same frozen cached state forever.
+                        hass.loop.call_soon_threadsafe(
+                            hass.bus.async_fire,
                             EVENT_ROOM_COMPLETED,
                             {
                                 "entry_id": entry.entry_id,

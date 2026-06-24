@@ -81,7 +81,8 @@
           "map_management": "Zonebeheer",
           "presence_scheduling": "Aanwezigheidsgestuurde planning",
           "demand_cleaning": "Reinigen op aanvraag",
-          "rooms": "Kamers en zones"
+          "rooms": "Kamers en zones",
+          "rest980_migrate": "Kamers importeren uit roomba_rest980"
         }
       },
       "zones": {
@@ -184,6 +185,13 @@
       "test_cloud_connection": {
         "title": "Verbinding testen",
         "description": "Uw iRobot cloud-gegevens worden geverifieerd…"
+      },
+      "rest980_migrate": {
+        "title": "Kamers importeren uit roomba_rest980",
+        "description": "{room_count} kamer(s) gevonden in je roomba_rest980-installatie die nog geen naam hebben in Roomba+: {room_names}. Nu importeren? Kamers die hier al een naam hebben, blijven ongewijzigd.",
+        "data": {
+          "confirm_import": "Deze kamers importeren"
+        }
       }
     },
     "errors": {
@@ -197,7 +205,9 @@
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
-      "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens."
+      "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens.",
+      "no_rest980_rooms_found": "Geen kamers gevonden in je roomba_rest980-installatie.",
+      "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+."
     }
   },
   "entity": {
@@ -899,6 +909,18 @@
     "maintenance_due": {
       "title": "Onderhoud is achterstallig",
       "description": "De volgende verbruiksonderdelen moeten al minstens 3 dagen vervangen worden: {items}. Bekijk de attributen van de maintenance_due-binaire sensor voor de exacte achterstallige uren, en gebruik na vervanging de bijbehorende reset-knop of de roomba_plus.reset_*-actie."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: verbonden — dit wijst op een lokaal/Home Assistant-probleem, niet op een wifi-storing bij de robot zelf. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: verbroken — dit wijst op een wifi-storing bij de robot zelf. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: onbekend (dit veld is niet beschikbaar op deze firmware). Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     }
   },
   "device_automation": {
@@ -963,6 +985,12 @@
     },
     "config_entry_not_found": {
       "message": "No config entry found for {entity_id}. Try reloading the integration."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Provide either room_name or room_passes, not both."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Provide either room_name or room_passes."
     }
   }
 }

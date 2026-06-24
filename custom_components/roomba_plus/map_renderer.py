@@ -33,15 +33,43 @@ import io
 import logging
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
     from .geometry_store import GeometryStore
     from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
+
+# ── MAP-FONT (v2.9.0) — embedded TTF instead of PIL's tiny bitmap default ────
+# DejaVu Sans, Bitstream Vera License (see fonts/LICENSE.txt) — freely
+# redistributable, no attribution requirement beyond keeping the license file.
+_FONT_PATH = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load the bundled DejaVu Sans font at the given pixel size.
+
+    Falls back to PIL's bitmap default if the font file is somehow missing
+    (e.g. a packaging error) so rendering never hard-crashes over a label font.
+    """
+    try:
+        return ImageFont.truetype(str(_FONT_PATH), size)
+    except OSError:
+        _LOGGER.warning(
+            "MAP-FONT: could not load bundled font at %s — falling back to "
+            "PIL default bitmap font", _FONT_PATH,
+        )
+        return ImageFont.load_default()
+
+
+# Pre-loaded at module import so each render call doesn't re-read the font
+# file from disk. 12px for compact labels (door/obstacle), 13px default.
+LABEL_FONT      = _load_font(13)
+LABEL_FONT_SMALL = _load_font(12)
 
 # ── Colours (RGBA) ────────────────────────────────────────────────────────────
 BG_COLOUR       = (255, 255, 255, 255)  # White background (floor)
@@ -699,7 +727,7 @@ class MapRenderer:
                     (zone.x_min + zone.x_max) / 2,
                     (zone.y_min + zone.y_max) / 2,
                 )
-                draw.text((lx, ly), zone.name, fill=SUGGEST_LABEL, anchor="mm")
+                draw.text((lx, ly), zone.name, fill=SUGGEST_LABEL, anchor="mm", font=LABEL_FONT)
 
         # Door crossing markers (filled circles)
         if self._geometry_store:
@@ -734,7 +762,7 @@ class MapRenderer:
             draw.line([x1, y1, x2, y2], fill=WALL_CENTRE, width=WALL_CENTRE_WIDTH)
             if wall.label:
                 mx, my = (x1 + x2) // 2, (y1 + y2) // 2
-                draw.text((mx, my - 8), wall.label, fill=WALL_FILL, anchor="mm")
+                draw.text((mx, my - 8), wall.label, fill=WALL_FILL, anchor="mm", font=LABEL_FONT_SMALL)
 
         for door in self._geometry_store.doors:
             cx, cy = self._mm_to_px_fit(door.cx, door.cy)
@@ -750,7 +778,7 @@ class MapRenderer:
             # Swing arc — quarter circle from gap end, radius = door width
             self._draw_door_arc(draw, cx - dx, cy + dy, half_w_px * 2, door.theta_deg)
             if door.label:
-                draw.text((cx, cy - 10), door.label, fill=DOOR_FILL, anchor="mm")
+                draw.text((cx, cy - 10), door.label, fill=DOOR_FILL, anchor="mm", font=LABEL_FONT_SMALL)
 
         for obs in self._geometry_store.obstacles:
             x1, y1 = self._mm_to_px_fit(obs.x, obs.y + obs.h)   # top-left in image
@@ -766,7 +794,7 @@ class MapRenderer:
             self._draw_hatch(draw, x1, y1, x2, y2, OBSTACLE_OUTLINE)
             if obs.label:
                 lx, ly = (x1 + x2) // 2, (y1 + y2) // 2
-                draw.text((lx, ly), obs.label, fill=OBSTACLE_OUTLINE, anchor="mm")
+                draw.text((lx, ly), obs.label, fill=OBSTACLE_OUTLINE, anchor="mm", font=LABEL_FONT_SMALL)
 
     # ── Geometry drawing primitives ───────────────────────────────────────────
 

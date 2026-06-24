@@ -29,6 +29,7 @@ from .const import (
     ATTR_ORDERED,
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
+    ATTR_ROOM_PASSES,
     ATTR_ROOMS,
     ATTR_TWO_PASS,
     CONF_SMART_ZONE_DATA,
@@ -296,11 +297,37 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
     """
     hass = call.hass
     entity_ids: list[str] = call.data["entity_id"]
-    room_names: list[str] = (
-        [call.data[ATTR_ROOM_NAME]]
-        if isinstance(call.data[ATTR_ROOM_NAME], str)
-        else call.data[ATTR_ROOM_NAME]
-    )
+
+    # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): exactly one of room_name / room_passes.
+    raw_room_name = call.data.get(ATTR_ROOM_NAME)
+    raw_room_passes: list[dict] | None = call.data.get(ATTR_ROOM_PASSES)
+
+    if raw_room_name is not None and raw_room_passes is not None:
+        raise ServiceValidationError(
+            "Provide either room_name or room_passes, not both.",
+            translation_domain=DOMAIN,
+            translation_key="room_name_and_room_passes_conflict",
+        )
+    if raw_room_name is None and raw_room_passes is None:
+        raise ServiceValidationError(
+            "Provide either room_name or room_passes.",
+            translation_domain=DOMAIN,
+            translation_key="room_name_or_room_passes_required",
+        )
+
+    if raw_room_passes is not None:
+        room_names: list[str] = [r["name"] for r in raw_room_passes]
+        # Per-room override, aligned by index with room_names/resolved order.
+        # None where the caller didn't specify two_pass for that particular room.
+        per_room_two_pass: list[bool | None] = [
+            r.get(ATTR_TWO_PASS) for r in raw_room_passes
+        ]
+    else:
+        room_names = (
+            [raw_room_name] if isinstance(raw_room_name, str) else raw_room_name
+        )
+        per_room_two_pass = [None] * len(room_names)
+
     ordered: bool = call.data[ATTR_ORDERED]
 
     ent_reg = er.async_get(hass)
@@ -400,11 +427,20 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         no_auto = bool(state.get("noAutoPasses", False))
         # v2.7.3: optional two_pass parameter overrides the robot's current state.
         # None = inherit from robot state (default); True/False = explicit override.
+        # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): per-room override (room_passes)
+        # takes priority over the global two_pass override, which in turn
+        # takes priority over the robot's current state. Resolved independently
+        # per room, so a partial room_passes list (some rooms specify two_pass,
+        # others don't) still resolves sensibly.
         caller_two_pass: bool | None = call.data.get(ATTR_TWO_PASS)
-        two_pass = (
-            caller_two_pass if caller_two_pass is not None
-            else bool(state.get("twoPass", False))
-        )
+        robot_two_pass = bool(state.get("twoPass", False))
+
+        def _resolve_two_pass(per_room: bool | None) -> bool:
+            if per_room is not None:
+                return per_room
+            if caller_two_pass is not None:
+                return caller_two_pass
+            return robot_two_pass
 
         params = {
             "ordered": 1 if ordered else 0,
@@ -414,9 +450,14 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 {
                     "region_id": rid,
                     "type": "rid",
-                    "params": {"noAutoPasses": no_auto, "twoPass": two_pass},
+                    "params": {
+                        "noAutoPasses": no_auto,
+                        "twoPass": _resolve_two_pass(
+                            per_room_two_pass[i] if i < len(per_room_two_pass) else None
+                        ),
+                    },
                 }
-                for rid, _ in resolved
+                for i, (rid, _) in enumerate(resolved)
             ],
         }
 
@@ -721,11 +762,32 @@ def async_register_services(hass: HomeAssistant) -> None:
             async_handle_clean_room,
             schema=vol.Schema({
                 vol.Required("entity_id"): cv.entity_ids,
-                vol.Required(ATTR_ROOM_NAME): vol.Any(
+                # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): room_name is now optional
+                # at the schema level — the handler enforces "exactly one of
+                # room_name / rooms" so the error message can be specific.
+                vol.Optional(ATTR_ROOM_NAME): vol.Any(
                     cv.string,
                     vol.All(cv.ensure_list, [cv.string]),
                 ),
+                # Bugfix (found while implementing CLEAN-ROOM-PER-ROOM-PASSES):
+                # two_pass was read by the handler and documented in
+                # services.yaml, but missing from this schema entirely — any
+                # caller passing it via hass.services.async_call() with
+                # validation enabled (the normal path for YAML automations
+                # and the Developer Tools UI) was rejected with "extra keys
+                # not allowed @ data['two_pass']". Untested — test_services.py
+                # had no coverage that went through real schema validation.
+                vol.Optional(ATTR_TWO_PASS): cv.boolean,
                 vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
+                # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): individual pass count
+                # per room within the same sequence, e.g.
+                #   room_passes: [{name: Kitchen, two_pass: true}, {name: Hallway}]
+                vol.Optional(ATTR_ROOM_PASSES): vol.All(cv.ensure_list, [
+                    vol.Schema({
+                        vol.Required("name"): cv.string,
+                        vol.Optional(ATTR_TWO_PASS): cv.boolean,
+                    })
+                ]),
             }),
             supports_response=SupportsResponse.OPTIONAL,
         )

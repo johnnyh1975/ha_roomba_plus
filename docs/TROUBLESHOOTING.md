@@ -200,4 +200,10 @@ The iRobot cloud cache may take up to 24 hours to clear. Re-save the cloud crede
 
 ---
 
+**"Robot MQTT connection lost during mission" fires right after starting a mission**
+
+Fixed in v2.9.0. A genuine, benign Wi-Fi gap of a few minutes right after undocking (the robot reassociating with your router while it physically moves away) was previously misreported as a sustained connectivity problem — this affected any robot, but was more common on older robots with weaker Wi-Fi hardware or an aftermarket battery. The watchdog now waits at least 7 minutes after a mission starts before it can fire at all, regardless of silence duration; a genuine outage later in the mission is still caught normally. If you still see this fire within the first 7 minutes of a mission on v2.9.0 or later, that's unexpected — please open an issue with the last known phase and silence duration shown in the message.
+
+---
+
 *[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

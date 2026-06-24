@@ -81,7 +81,8 @@
           "map_management": "Gestione zone",
           "presence_scheduling": "Pianificazione in base alla presenza",
           "demand_cleaning": "Pulizia su richiesta",
-          "rooms": "Stanze e zone"
+          "rooms": "Stanze e zone",
+          "rest980_migrate": "Importa stanze da roomba_rest980"
         }
       },
       "zones": {
@@ -184,6 +185,13 @@
       "test_cloud_connection": {
         "title": "Test connessione",
         "description": "Verifica delle credenziali iRobot cloud…"
+      },
+      "rest980_migrate": {
+        "title": "Importa stanze da roomba_rest980",
+        "description": "Trovate {room_count} stanza/e nella tua installazione roomba_rest980 non ancora denominate in Roomba+: {room_names}. Importarle ora? Le stanze già denominate qui non verranno modificate.",
+        "data": {
+          "confirm_import": "Importa queste stanze"
+        }
       }
     },
     "errors": {
@@ -197,7 +205,9 @@
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
-      "demand_cleaning_not_supported": "La pulizia su richiesta richiede un robot SMART con credenziali cloud configurate."
+      "demand_cleaning_not_supported": "La pulizia su richiesta richiede un robot SMART con credenziali cloud configurate.",
+      "no_rest980_rooms_found": "Nessuna stanza trovata nella tua installazione roomba_rest980.",
+      "rest980_rooms_already_imported": "Tutte le stanze di roomba_rest980 sono già denominate in Roomba+."
     }
   },
   "entity": {
@@ -899,6 +909,18 @@
     "maintenance_due": {
       "title": "La manutenzione è in ritardo",
       "description": "I seguenti consumabili sono in attesa di sostituzione da almeno 3 giorni: {items}. Controlla gli attributi del sensore binario maintenance_due per le ore esatte di ritardo, poi usa il pulsante di reset corrispondente o l'azione roomba_plus.reset_* dopo la sostituzione."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "Connessione MQTT del robot persa durante la missione",
+      "description": "Roomba+ non ha ricevuto messaggi MQTT dal robot per {minutes} minuti mentre era attiva una missione di pulizia. Ultima fase nota prima del silenzio: {last_phase}. Connettività cloud del robot: connesso — questo indica un problema locale/lato Home Assistant, non un'interruzione Wi-Fi sul robot stesso. Se il robot sembra essere fisicamente bloccato o in pausa, potrebbe non trattarsi di un vero problema di rete: controlla prima il robot di persona."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "Connessione MQTT del robot persa durante la missione",
+      "description": "Roomba+ non ha ricevuto messaggi MQTT dal robot per {minutes} minuti mentre era attiva una missione di pulizia. Ultima fase nota prima del silenzio: {last_phase}. Connettività cloud del robot: disconnesso — questo suggerisce un'interruzione Wi-Fi sul robot stesso. Se il robot sembra essere fisicamente bloccato o in pausa, potrebbe non trattarsi di un vero problema di rete: controlla prima il robot di persona."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "Connessione MQTT del robot persa durante la missione",
+      "description": "Roomba+ non ha ricevuto messaggi MQTT dal robot per {minutes} minuti mentre era attiva una missione di pulizia. Ultima fase nota prima del silenzio: {last_phase}. Connettività cloud del robot: sconosciuto (questo campo non è disponibile su questo firmware). Se il robot sembra essere fisicamente bloccato o in pausa, potrebbe non trattarsi di un vero problema di rete: controlla prima il robot di persona."
     }
   },
   "device_automation": {
@@ -963,6 +985,12 @@
     },
     "config_entry_not_found": {
       "message": "No config entry found for {entity_id}. Try reloading the integration."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Provide either room_name or room_passes, not both."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Provide either room_name or room_passes."
     }
   }
 }

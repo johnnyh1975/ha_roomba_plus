@@ -81,7 +81,8 @@
           "map_management": "Gestión de zonas",
           "presence_scheduling": "Programación según presencia",
           "demand_cleaning": "Limpieza por demanda",
-          "rooms": "Habitaciones y zonas"
+          "rooms": "Habitaciones y zonas",
+          "rest980_migrate": "Importar habitaciones desde roomba_rest980"
         }
       },
       "zones": {
@@ -184,6 +185,13 @@
       "test_cloud_connection": {
         "title": "Probando conexión",
         "description": "Verificando sus credenciales iRobot cloud…"
+      },
+      "rest980_migrate": {
+        "title": "Importar habitaciones desde roomba_rest980",
+        "description": "Se encontraron {room_count} habitación(es) en tu instalación de roomba_rest980 que aún no tienen nombre en Roomba+: {room_names}. ¿Importarlas ahora? Las habitaciones ya nombradas aquí no se modificarán.",
+        "data": {
+          "confirm_import": "Importar estas habitaciones"
+        }
       }
     },
     "errors": {
@@ -197,7 +205,9 @@
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
-      "demand_cleaning_not_supported": "La limpieza bajo demanda requiere un robot SMART con credenciales de nube configuradas."
+      "demand_cleaning_not_supported": "La limpieza bajo demanda requiere un robot SMART con credenciales de nube configuradas.",
+      "no_rest980_rooms_found": "No se encontraron habitaciones en tu instalación de roomba_rest980.",
+      "rest980_rooms_already_imported": "Todas las habitaciones de roomba_rest980 ya están nombradas en Roomba+."
     }
   },
   "entity": {
@@ -899,6 +909,18 @@
     "maintenance_due": {
       "title": "El mantenimiento está atrasado",
       "description": "Los siguientes consumibles llevan al menos 3 días pendientes de sustitución: {items}. Consulta los atributos del sensor binario maintenance_due para ver las horas exactas de retraso, y usa el botón de reinicio correspondiente o la acción roomba_plus.reset_* tras sustituirlos."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "Conexión MQTT del robot perdida durante la misión",
+      "description": "Roomba+ no ha recibido mensajes MQTT del robot durante {minutes} minutos mientras había una misión de limpieza activa. Última fase conocida antes del silencio: {last_phase}. Conectividad en la nube del robot: conectado — esto apunta a un problema local/de Home Assistant, no a un fallo de Wi-Fi en el propio robot. Si el robot parece estar fisicamente atascado o en pausa, esto puede no ser un problema de red real -- compruebe primero el robot en persona."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "Conexión MQTT del robot perdida durante la misión",
+      "description": "Roomba+ no ha recibido mensajes MQTT del robot durante {minutes} minutos mientras había una misión de limpieza activa. Última fase conocida antes del silencio: {last_phase}. Conectividad en la nube del robot: desconectado — esto sugiere un fallo de Wi-Fi en el propio robot. Si el robot parece estar fisicamente atascado o en pausa, esto puede no ser un problema de red real -- compruebe primero el robot en persona."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "Conexión MQTT del robot perdida durante la misión",
+      "description": "Roomba+ no ha recibido mensajes MQTT del robot durante {minutes} minutos mientras había una misión de limpieza activa. Última fase conocida antes del silencio: {last_phase}. Conectividad en la nube del robot: desconocido (este campo no está disponible en este firmware). Si el robot parece estar fisicamente atascado o en pausa, esto puede no ser un problema de red real -- compruebe primero el robot en persona."
     }
   },
   "device_automation": {
@@ -963,6 +985,12 @@
     },
     "config_entry_not_found": {
       "message": "No config entry found for {entity_id}. Try reloading the integration."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Provide either room_name or room_passes, not both."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Provide either room_name or room_passes."
     }
   }
 }
