@@ -1044,6 +1044,84 @@ class TestRoomCompletedEvent:
         fired_events = [c.args[0] for c in hass.bus.async_fire.call_args_list]
         assert EVENT_ROOM_COMPLETED not in fired_events
 
+    def test_room_completed_fire_is_thread_safe(self):
+        """BUGFIX (field report Thonno, v2.8.7) regression test.
+
+        Reproduces the real failure mode exactly: roombapy invokes the
+        mission callback directly from its own paho-mqtt background thread,
+        never from the event loop thread. Before the fix, the room-transition
+        branch called hass.bus.async_fire() directly from that foreign
+        thread — on real HA core (frame.py thread-safety enforcement) this
+        raised RuntimeError and crashed the entire paho-mqtt message thread,
+        which then explained the "mission never closes" symptom: no further
+        MQTT messages were ever processed after the first room transition.
+
+        This test calls the callback from a genuinely separate OS thread
+        (not just a different asyncio context) and asserts no exception
+        propagates — proving the call_soon_threadsafe bridge is used instead
+        of a direct cross-thread hass.bus.async_fire() call. Draining the
+        loop afterward on the *test* thread additionally proves the event
+        still actually fires once handed off correctly.
+        """
+        import threading
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
+
+        hass, entry, _, _ = _make_callback_env()
+        mts = self._make_real_mts(entry)
+        entry.runtime_data.mission_timer_store = mts
+        cb = make_mission_callback(hass, entry)
+
+        errors: list[BaseException] = []
+
+        def _run_on_foreign_thread():
+            try:
+                cb(self._transition_msg("run"))
+                cb(self._transition_msg("charge"))  # triggers AUTO-ADVANCE-ROOM
+            except BaseException as exc:  # noqa: BLE001 — want to see ANY exception
+                errors.append(exc)
+
+        worker = threading.Thread(target=_run_on_foreign_thread)
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not errors, (
+            f"Callback raised from a foreign thread (the exact failure mode "
+            f"that crashed Thonno's paho-mqtt thread): {errors}"
+        )
+        assert mts.current_room_idx == 1, "advance_room() must still have run for real"
+
+        # Structural check — this is what actually distinguishes the fix
+        # from the bug. hass.bus.async_fire here is just a MagicMock, so it
+        # can't reproduce HA core's real frame.py thread-safety RuntimeError
+        # by itself; calling it directly from the worker thread wouldn't
+        # raise in this test environment either way. What we CAN verify
+        # structurally: immediately after the foreign thread finishes — i.e.
+        # before the event loop has had any chance to run — async_fire must
+        # NOT have been invoked yet. That's only true if the call was
+        # deferred via hass.loop.call_soon_threadsafe() rather than executed
+        # inline on the foreign thread. Before the fix, this assertion fails
+        # (async_fire.called is already True at this point).
+        assert not hass.bus.async_fire.called, (
+            "hass.bus.async_fire was invoked synchronously on the foreign "
+            "thread instead of being deferred via call_soon_threadsafe — "
+            "this is exactly the unsafe direct-call pattern that crashed "
+            "the paho-mqtt thread on real HA core."
+        )
+
+        # Now drain the loop on the test thread — proves call_soon_threadsafe
+        # correctly handed the fire off, it isn't just silently swallowed.
+        hass.loop.run_until_complete(asyncio.sleep(0))
+        hass.bus.async_fire.assert_any_call(
+            EVENT_ROOM_COMPLETED,
+            {
+                "entry_id": entry.entry_id,
+                "name": entry.title,
+                "room_name": "Kitchen",
+                "room_idx": 0,
+            },
+        )
+
 
 class TestStuckBypassMissionCallback:
     """Bug A — make_mission_callback must fire for stuck → stop/charge."""

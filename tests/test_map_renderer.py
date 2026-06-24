@@ -904,3 +904,39 @@ class TestRenderForOutline:
         colour = _pixel_at(png, *expected_px)
         assert colour[:3] == CLEANED_COLOUR[:3]
 
+
+
+# ── MAP-FONT (v2.9.0) ────────────────────────────────────────────────────────
+
+class TestMapFont:
+    """MAP-FONT — embedded DejaVu Sans TTF instead of PIL's tiny bitmap default."""
+
+    def test_load_font_returns_freetype_font(self):
+        from PIL import ImageFont
+        from custom_components.roomba_plus.map_renderer import _load_font
+        font = _load_font(13)
+        assert isinstance(font, ImageFont.FreeTypeFont)
+
+    def test_load_font_falls_back_to_default_when_file_missing(self, monkeypatch, caplog):
+        from custom_components.roomba_plus import map_renderer
+
+        monkeypatch.setattr(
+            map_renderer, "_FONT_PATH", map_renderer._FONT_PATH.parent / "missing.ttf"
+        )
+        # Must not raise — and must log a warning so a packaging error is visible.
+        font = map_renderer._load_font(13)
+        assert font is not None
+        assert hasattr(font, "getbbox")  # usable as a PIL font object
+        assert any("MAP-FONT" in r.message for r in caplog.records)
+
+    def test_wall_label_renders_with_embedded_font_without_error(self):
+        """Integration check: a labelled UserWall must render via LABEL_FONT_SMALL
+        without exception, producing valid, non-trivial PNG bytes."""
+        gs = GeometryStore()
+        gs.walls = [UserWall(id="w1", x1=-500, y1=0, x2=500, y2=0, label="Kitchen wall")]
+        r = _make_renderer_with_stores(geometry_store=gs)
+        r.add_pose(0, 0, 0)
+        png = r.render()
+        assert png is not None
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"  # valid PNG signature
+        assert len(png) > 100

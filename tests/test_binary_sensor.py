@@ -119,7 +119,7 @@ class TestMissionActiveSensor:
         assert recharge.is_on is False
 
 
-def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None):
+def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None, mssn_strt_tm=None):
     """Build a minimal RoombaMqttStale with stubbed hass/vacuum/entry state.
 
     v2.9.0 — covers the enriched mqtt_watchdog Repair Issue (last known
@@ -129,6 +129,8 @@ def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None):
     from custom_components.roomba_plus.binary_sensor import RoombaMqttStale
 
     reported = {"cleanMissionStatus": {"phase": phase}}
+    if mssn_strt_tm is not None:
+        reported["cleanMissionStatus"]["mssnStrtTm"] = mssn_strt_tm
     if wifistat is not None:
         reported["wifistat"] = wifistat
 
@@ -181,7 +183,15 @@ class TestMqttWatchdogRepairIssue:
 
     def test_cloud_hint_unknown_when_wifistat_absent(self):
         """9-series firmware (incl. the 980 OG test robot) never sends
-        wifistat at all — must report "unknown", never guess connected."""
+        wifistat at all — must select the 'unknown' translation_key, never
+        guess connected.
+
+        BUGFIX (boutXIII report, v2.9.0): previously asserted on a hardcoded
+        German substring in translation_placeholders["cloud_hint"] — itself
+        a symptom of the bug (the hint text was hardcoded in German
+        regardless of the user's locale). Now asserts on the selected
+        translation_key, which HA resolves per-locale on its own.
+        """
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
         now = 1_000_000.0
@@ -192,8 +202,8 @@ class TestMqttWatchdogRepairIssue:
             tmock.time.return_value = now
             s._async_watchdog_tick(None)
 
-        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-        assert "unbekannt" in placeholders["cloud_hint"]
+        assert mock_create.call_args.kwargs["translation_key"] == "mqtt_watchdog_cloud_unknown"
+        assert "cloud_hint" not in mock_create.call_args.kwargs["translation_placeholders"]
 
     def test_cloud_hint_connected_points_to_local_issue(self):
         from custom_components.roomba_plus import binary_sensor as bs_mod
@@ -208,8 +218,7 @@ class TestMqttWatchdogRepairIssue:
             tmock.time.return_value = now
             s._async_watchdog_tick(None)
 
-        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-        assert "lokale" in placeholders["cloud_hint"] or "lokal" in placeholders["cloud_hint"]
+        assert mock_create.call_args.kwargs["translation_key"] == "mqtt_watchdog_cloud_connected"
 
     def test_cloud_hint_disconnected_points_to_robot_wifi(self):
         from custom_components.roomba_plus import binary_sensor as bs_mod
@@ -224,8 +233,7 @@ class TestMqttWatchdogRepairIssue:
             tmock.time.return_value = now
             s._async_watchdog_tick(None)
 
-        placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-        assert "WLAN-Ausfall am Roboter" in placeholders["cloud_hint"]
+        assert mock_create.call_args.kwargs["translation_key"] == "mqtt_watchdog_cloud_disconnected"
 
     def test_issue_cleared_on_recovery(self):
         from custom_components.roomba_plus import binary_sensor as bs_mod
@@ -301,6 +309,72 @@ class TestMqttWatchdogRepairIssue:
                 tmock.time.return_value = now
                 s._async_watchdog_tick(None)
             assert not mock_create.called, f"phase={phase} must not fire the watchdog"
+
+
+class TestMqttWatchdogStartGrace:
+    """BUGFIX (field reports: boutXIII, Jean-Christoph — both v2.9.0):
+    a genuine, benign MQTT gap of a few minutes right after undocking
+    (Wi-Fi reassociation while the robot moves away from the router) was
+    being misreported as a sustained connectivity problem, since the last
+    received message already showed phase=="run" before the gap. The
+    watchdog now suppresses entirely for MQTT_WATCHDOG_START_GRACE_SECONDS
+    after mssnStrtTm, regardless of silence duration.
+    """
+
+    def test_suppressed_within_grace_period_even_with_long_silence(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        # Mission started 1 minute ago (well within the 420s/7min grace
+        # window) but MQTT has been silent for 10 minutes — exactly the
+        # field-reported scenario. Must NOT fire.
+        s = _mqtt_stale_sensor(
+            phase="run", last_mqtt_message_ts=now - 600, mssn_strt_tm=now - 60,
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        assert not mock_create.called, (
+            "Watchdog must not fire within the start-grace window, "
+            "regardless of silence duration"
+        )
+
+    def test_fires_once_grace_period_has_elapsed(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        # Mission started 16 minutes ago (well past the 7min grace window),
+        # silent for the last 10 minutes — a genuine mid-mission outage,
+        # must still be caught.
+        s = _mqtt_stale_sensor(
+            phase="run", last_mqtt_message_ts=now - 600, mssn_strt_tm=now - 960,
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        assert mock_create.called, (
+            "Watchdog must still fire for a genuine outage once the "
+            "start-grace window has elapsed"
+        )
+
+    def test_no_grace_suppression_when_mssn_strt_tm_missing(self):
+        """If the robot doesn't report mssnStrtTm at all, there's nothing
+        to gate on — must fall through to the normal silence check
+        unaffected (this is the pre-fix behaviour, must stay intact)."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 600)
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue") as mock_create:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        assert mock_create.called, (
+            "Without mssnStrtTm there's nothing to gate on — must behave "
+            "exactly as before this fix"
+        )
 
 
 # ── RoombaMapSavingStatus tests (merged from test_map_saving_sensor.py) ───────

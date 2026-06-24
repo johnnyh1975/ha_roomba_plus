@@ -313,6 +313,8 @@ class TestRoombaRoomsImage:
         entity._last_y_min = 0.0
         entity._last_y_max = 5000.0
         entity._last_size  = 600
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
         return entity
 
     def test_no_aligner_returns_blank(self):
@@ -901,3 +903,156 @@ class TestMissionCheckpointV282:
 
         assert mock_run.call_count == 0
 
+
+
+# ── ROOM-PALETTE (v2.9.0) ────────────────────────────────────────────────────
+
+class TestRoomPalette:
+    """ROOM-PALETTE — rotating per-room fill colours in _render_rooms_png()."""
+
+    def _entity_with_rooms(self, room_polygons: dict) -> Any:
+        from custom_components.roomba_plus.image import RoombaRoomsImage
+        entity = object.__new__(RoombaRoomsImage)
+        aligner = _make_aligner(aligned=True)
+        aligner._room_polygons = room_polygons
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._last_x_min = entity._last_y_min = 0.0
+        entity._last_x_max = entity._last_y_max = 5000.0
+        entity._last_size = 600
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
+        return entity
+
+    def test_two_rooms_get_different_fill_colours(self):
+        from custom_components.roomba_plus.image import ROOM_FILL_PALETTE
+        import io
+        from PIL import Image as PILImage
+
+        room_polygons = {
+            "r1": [(0, 0), (1000, 0), (1000, 1000), (0, 1000)],
+            "r2": [(2500, 0), (3500, 0), (3500, 1000), (2500, 1000)],
+        }
+        entity = self._entity_with_rooms(room_polygons)
+        png = entity._render_rooms_png()
+        img = PILImage.open(io.BytesIO(png)).convert("RGB")
+
+        # Sample a pixel well inside each room's polygon (avoiding the outline).
+        px_r1 = entity._to_px_last(500, 500)
+        px_r2 = entity._to_px_last(3000, 500)
+        colour_r1 = img.getpixel(px_r1)
+        colour_r2 = img.getpixel(px_r2)
+
+        assert colour_r1 == ROOM_FILL_PALETTE[0]
+        assert colour_r2 == ROOM_FILL_PALETTE[1]
+        assert colour_r1 != colour_r2
+
+    def test_palette_wraps_around_after_eight_rooms(self):
+        from custom_components.roomba_plus.image import ROOM_FILL_PALETTE
+        import io
+        from PIL import Image as PILImage
+
+        # 9 small, non-overlapping rooms spaced along the x-axis — the 9th
+        # (index 8) must reuse palette[0] via modulo wraparound.
+        room_polygons = {
+            f"r{i}": [
+                (i * 400, 0), (i * 400 + 100, 0),
+                (i * 400 + 100, 100), (i * 400, 100),
+            ]
+            for i in range(9)
+        }
+        entity = self._entity_with_rooms(room_polygons)
+        entity._last_x_min, entity._last_x_max = 0.0, 9 * 400 + 100
+        entity._last_y_min, entity._last_y_max = 0.0, 100.0
+        png = entity._render_rooms_png()
+        img = PILImage.open(io.BytesIO(png)).convert("RGB")
+
+        px_first = entity._to_px_last(50, 50)
+        px_ninth = entity._to_px_last(8 * 400 + 50, 50)
+        assert img.getpixel(px_first) == ROOM_FILL_PALETTE[0]
+        assert img.getpixel(px_ninth) == ROOM_FILL_PALETTE[8 % len(ROOM_FILL_PALETTE)]
+
+
+# ── ZONE-LAYER-CACHE (v2.9.0) ────────────────────────────────────────────────
+
+class TestZoneLayerCache:
+    """Room polygon render is cached per (pmap_version_id, aligned) instead
+    of re-rendering on every async_image() call."""
+
+    def _entity_with_rooms(self, room_polygons: dict, pmap_version_id="v1") -> Any:
+        from custom_components.roomba_plus.image import RoombaRoomsImage
+        entity = object.__new__(RoombaRoomsImage)
+        aligner = _make_aligner(aligned=True)
+        aligner._room_polygons = room_polygons
+        aligner.pmap_version_id = pmap_version_id
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._last_x_min = entity._last_y_min = 0.0
+        entity._last_x_max = entity._last_y_max = 5000.0
+        entity._last_size = 600
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
+        return entity, aligner
+
+    ROOMS = {"r1": [(0, 0), (1000, 0), (1000, 1000), (0, 1000)]}
+
+    def test_second_call_returns_identical_bytes_without_recomputing(self):
+        entity, aligner = self._entity_with_rooms(self.ROOMS)
+        png1 = entity._render_rooms_png()
+        # Sabotage the live data with a different (still non-empty) room set
+        # under the SAME cache key — emptying it instead would legitimately
+        # hit the separate "no polygons → blank image" early-return, which
+        # tests nothing about the cache. If the cache is working, the second
+        # call must still return the original png unchanged.
+        aligner._room_polygons = {
+            "r1": [(0, 0), (9000, 0), (9000, 9000), (0, 9000)]
+        }
+        png2 = entity._render_rooms_png()
+        assert png2 == png1
+
+    def test_cache_key_set_after_first_render(self):
+        entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
+        entity._render_rooms_png()
+        assert entity._room_render_cache_key == ("v1", True)
+        assert entity._room_render_cache is not None
+
+    def test_pmap_version_change_invalidates_cache(self):
+        entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
+        entity._render_rooms_png()
+        x_max_v1 = entity._last_x_max
+
+        # Map retrain: new version id, a much larger room (different
+        # bounding box) — proves the cache was actually bypassed and the
+        # transform recomputed from the new data, not just key bookkeeping.
+        aligner.pmap_version_id = "v2"
+        aligner._room_polygons = {
+            "r1": [(0, 0), (9000, 0), (9000, 9000), (0, 9000)]
+        }
+        entity._render_rooms_png()
+
+        assert entity._room_render_cache_key == ("v2", True)
+        assert entity._last_x_max != x_max_v1
+
+    def test_alignment_state_change_invalidates_cache(self):
+        entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
+        entity._render_rooms_png()
+        assert entity._room_render_cache_key == ("v1", True)
+
+        aligner._aligned = False  # falls back to UMF-space rendering mode
+        entity._render_rooms_png()
+        assert entity._room_render_cache_key == ("v1", False)
+
+    def test_cached_transform_parameters_restored_on_cache_hit(self):
+        entity, _ = self._entity_with_rooms(self.ROOMS)
+        entity._render_rooms_png()
+        x_min_after_first = entity._last_x_min
+        size_after_first = entity._last_size
+
+        # Corrupt the live transform fields to prove the second call restores
+        # them from the cache entry rather than leaving stale/wrong values.
+        entity._last_x_min = -99999.0
+        entity._last_size = 1
+        entity._render_rooms_png()
+
+        assert entity._last_x_min == x_min_after_first
+        assert entity._last_size == size_after_first

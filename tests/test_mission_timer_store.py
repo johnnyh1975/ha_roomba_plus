@@ -1579,7 +1579,7 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = None
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
@@ -1611,7 +1611,7 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = None
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
@@ -2082,7 +2082,7 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = None
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
             "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
@@ -2118,7 +2118,7 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = None
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         fake_estimates = [600, 400]  # Kitchen=600s, Hall=400s
         with patch(

@@ -11,13 +11,25 @@ def pytest_configure(config):
     Shim 1 (existing): AddConfigEntryEntitiesCallback — HA 2024.4.
     Shim 2 (v2.4.0): Segment dataclass — HA 2026.3 vacuum.clean_area.
     Shim 3 (v2.4.0): VacuumEntityFeature.CLEAN_AREA — HA 2026.3.
+    Shim 4 (v2.9.0, REST980-MIGRATE): helpers.service_info.dhcp/zeroconf —
+    these submodules were introduced after HA 2025.1.4, the newest version
+    installable in a Python 3.12 test environment (everything past 2025.1.4
+    requires Python ≥3.13). config_flow.py imports DhcpServiceInfo/
+    ZeroconfServiceInfo from there; on 2025.1.4 the same classes still exist,
+    just under homeassistant.components.dhcp/zeroconf. Needed the first time
+    a test imports config_flow.py directly (test_rest980_migrate.py) — every
+    prior config_flow test used a hand-copied reference implementation
+    instead, which is exactly the kind of drift risk this shim avoids going
+    forward.
 
-    When to remove shims 2 & 3: once CI is pinned to pytest-homeassistant-
-    custom-component built against HA 2026.3+.
+    When to remove shims 2, 3 & 4: once CI is pinned to pytest-homeassistant-
+    custom-component built against a matching newer HA version.
     """
     import dataclasses
     import enum
     import importlib
+    import sys
+    import types
 
     # Shim 1: AddConfigEntryEntitiesCallback
     try:
@@ -52,6 +64,23 @@ def pytest_configure(config):
             vacuum_mod.VacuumEntityFeature = new_cls
     except ImportError:
         pass
+
+    # Shim 4: helpers.service_info.dhcp / .zeroconf
+    for sub, source_mod, cls_name in (
+        ("dhcp", "homeassistant.components.dhcp", "DhcpServiceInfo"),
+        ("zeroconf", "homeassistant.components.zeroconf", "ZeroconfServiceInfo"),
+    ):
+        full_name = f"homeassistant.helpers.service_info.{sub}"
+        if full_name in sys.modules:
+            continue
+        try:
+            source = importlib.import_module(source_mod)
+            cls = getattr(source, cls_name)
+        except (ImportError, AttributeError):
+            continue
+        shim_mod = types.ModuleType(full_name)
+        setattr(shim_mod, cls_name, cls)
+        sys.modules[full_name] = shim_mod
 
 
 import pytest

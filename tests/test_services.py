@@ -308,3 +308,209 @@ class TestHandleInspectResetServiceFiresEvent:
             EVENT_MAINTENANCE_RESET,
             {"entry_id": "e1", "name": "Roomba 980", "component": "wheel", "hours": None},
         )
+
+
+# ── CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0) ──────────────────────────────────────
+
+class TestCleanRoomTwoPassSchema:
+    """Bugfix found while implementing CLEAN-ROOM-PER-ROOM-PASSES: two_pass
+    was documented in services.yaml and read by the handler, but missing
+    from the registered voluptuous schema entirely — any caller going
+    through real schema validation (YAML automations, Developer Tools UI)
+    was rejected with 'extra keys not allowed @ data[\"two_pass\"]'.
+    """
+
+    def _captured_schema(self):
+        """Register services against a hass stub that records the real
+        schema objects, so we can validate payloads against them directly."""
+        from custom_components.roomba_plus.services import async_register_services
+        from custom_components.roomba_plus.const import DOMAIN
+
+        schemas = {}
+
+        class _Services:
+            def has_service(self, domain, name):
+                return (domain, name) in schemas
+
+            def async_register(self, domain, name, handler, schema=None,
+                               supports_response=None):
+                schemas[(domain, name)] = schema
+
+        class _FakeHass:
+            services = _Services()
+
+        async_register_services(_FakeHass())
+        return schemas[(DOMAIN, "clean_room")]
+
+    def test_two_pass_accepted_by_real_schema(self):
+        schema = self._captured_schema()
+        # Must not raise — this is the exact payload shape services.yaml
+        # has always documented as valid.
+        result = schema({
+            "entity_id": "vacuum.test",
+            "room_name": "Kitchen",
+            "two_pass": True,
+        })
+        assert result["two_pass"] is True
+
+    def test_room_passes_accepted_by_real_schema(self):
+        schema = self._captured_schema()
+        result = schema({
+            "entity_id": "vacuum.test",
+            "room_passes": [
+                {"name": "Kitchen", "two_pass": True},
+                {"name": "Hallway"},
+            ],
+        })
+        assert result["room_passes"][0]["name"] == "Kitchen"
+        assert result["room_passes"][0]["two_pass"] is True
+        assert "two_pass" not in result["room_passes"][1]
+
+    def test_room_name_no_longer_required_at_schema_level(self):
+        """room_passes is now a valid alternative to room_name."""
+        schema = self._captured_schema()
+        result = schema({
+            "entity_id": "vacuum.test",
+            "room_passes": [{"name": "Kitchen"}],
+        })
+        assert "room_name" not in result
+
+
+def _make_clean_room_call(hass, entity_id="vacuum.test", **data):
+    """Build a minimal ServiceCall-like object for async_handle_clean_room."""
+    call = MagicMock()
+    call.hass = hass
+    call.data = {"entity_id": [entity_id], "ordered": True, **data}
+    return call
+
+
+def _make_smart_config_entry(*, zone_data, two_pass_state=False, global_two_pass=None):
+    from custom_components.roomba_plus.models import MapCapability
+
+    config_entry = MagicMock()
+    config_entry.options = {"smart_zone_data": zone_data}
+    data = config_entry.runtime_data
+    data.map_capability = MapCapability.SMART
+    data.has_cloud = False
+    data.roomba_reported_state.return_value = {
+        "lastCommand": {"pmap_id": "map_a", "user_pmapv_id": "ts1"},
+        "cleanMissionStatus": {"notReady": 0},
+        "noAutoPasses": False,
+        "twoPass": two_pass_state,
+    }
+    data.roomba.send_command = MagicMock()
+    return config_entry
+
+
+class TestCleanRoomPerRoomPasses:
+    """End-to-end coverage for the room_passes per-room two_pass resolution,
+    exercised against the real async_handle_clean_room handler."""
+
+    ZONE_DATA = {
+        "3": {"name": "Kitchen", "pmap_id": "map_a"},
+        "5": {"name": "Hallway", "pmap_id": "map_a"},
+    }
+
+    def _make_hass(self, config_entry):
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+
+        async def _run_executor(func, *args):
+            return func(*args)
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_executor)
+        return hass
+
+    @pytest.mark.asyncio
+    async def test_room_name_and_room_passes_conflict_raises(self):
+        from custom_components.roomba_plus.services import async_handle_clean_room
+
+        hass = MagicMock()
+        call = _make_clean_room_call(
+            hass, room_name="Kitchen",
+            room_passes=[{"name": "Hallway"}],
+        )
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_room(call)
+        assert "room_name_and_room_passes_conflict" in str(
+            getattr(exc_info.value, "translation_key", "")
+        ) or "room_name" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_neither_room_name_nor_room_passes_raises(self):
+        from custom_components.roomba_plus.services import async_handle_clean_room
+
+        hass = MagicMock()
+        call = _make_clean_room_call(hass)
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_room(call)
+        assert "room_name_or_room_passes_required" in str(
+            getattr(exc_info.value, "translation_key", "")
+        ) or "room_name" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_per_room_two_pass_applied_independently(self):
+        from custom_components.roomba_plus.services import async_handle_clean_room
+
+        config_entry = _make_smart_config_entry(zone_data=self.ZONE_DATA, two_pass_state=False)
+        hass = self._make_hass(config_entry)
+        ent_reg_entry = MagicMock()
+        ent_reg_entry.config_entry_id = "ce1"
+
+        call = _make_clean_room_call(
+            hass,
+            room_passes=[
+                {"name": "Kitchen", "two_pass": True},
+                {"name": "Hallway"},
+            ],
+        )
+        with patch("custom_components.roomba_plus.services.er.async_get") as mock_er:
+            mock_er.return_value.async_get.return_value = ent_reg_entry
+            await async_handle_clean_room(call)
+
+        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        regions_by_id = {r["region_id"]: r for r in sent_params["regions"]}
+        assert regions_by_id["3"]["params"]["twoPass"] is True   # Kitchen — explicit override
+        assert regions_by_id["5"]["params"]["twoPass"] is False  # Hallway — falls back to robot state
+
+    @pytest.mark.asyncio
+    async def test_global_two_pass_fallback_when_room_omits_override(self):
+        from custom_components.roomba_plus.services import async_handle_clean_room
+
+        config_entry = _make_smart_config_entry(zone_data=self.ZONE_DATA, two_pass_state=False)
+        hass = self._make_hass(config_entry)
+        ent_reg_entry = MagicMock()
+        ent_reg_entry.config_entry_id = "ce1"
+
+        call = _make_clean_room_call(
+            hass,
+            two_pass=True,  # global override
+            room_passes=[{"name": "Kitchen"}, {"name": "Hallway"}],
+        )
+        with patch("custom_components.roomba_plus.services.er.async_get") as mock_er:
+            mock_er.return_value.async_get.return_value = ent_reg_entry
+            await async_handle_clean_room(call)
+
+        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        for region in sent_params["regions"]:
+            assert region["params"]["twoPass"] is True
+
+    @pytest.mark.asyncio
+    async def test_per_room_override_takes_priority_over_global(self):
+        from custom_components.roomba_plus.services import async_handle_clean_room
+
+        config_entry = _make_smart_config_entry(zone_data=self.ZONE_DATA, two_pass_state=False)
+        hass = self._make_hass(config_entry)
+        ent_reg_entry = MagicMock()
+        ent_reg_entry.config_entry_id = "ce1"
+
+        call = _make_clean_room_call(
+            hass,
+            two_pass=True,  # global override says True...
+            room_passes=[{"name": "Kitchen", "two_pass": False}],  # ...but Kitchen explicitly says False
+        )
+        with patch("custom_components.roomba_plus.services.er.async_get") as mock_er:
+            mock_er.return_value.async_get.return_value = ent_reg_entry
+            await async_handle_clean_room(call)
+
+        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        assert sent_params["regions"][0]["params"]["twoPass"] is False
