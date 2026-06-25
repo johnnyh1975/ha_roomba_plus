@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
+from homeassistant.helpers.event import async_call_later
 
 from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles
 import time as _time_mod
@@ -42,6 +43,15 @@ _ACTIVE_CLEANING_PHASES: frozenset[str] = frozenset({"run", "hmMidMsn", "evac"})
 _MISSION_END_PHASES: frozenset[str] = frozenset(
     {"charge", "hmPostMsn", "stop", "completed", "cancelled"}
 )
+
+# v2.9.1 CLOUD-CATCHUP — see make_mission_complete_callback(). Two fixed
+# checkpoints rather than an open-ended backoff series: the first covers
+# the common case (cloud ingestion lag of a few seconds to a few minutes)
+# without spending an API call at the moment mission-end fires, which is
+# always too early; the second is a single fallback for slower cases. If
+# neither catches up, the existing 24h idle poll remains the backstop.
+CLOUD_CATCHUP_FIRST_DELAY_SEC = 90
+CLOUD_CATCHUP_SECOND_DELAY_SEC = 600
 
 # v2.8.0 AUTO-ADVANCE-ROOM — phases that may represent an inter-room transition
 # on lewis firmware (i7+/s9+) rather than a genuine mission end or recharge.
@@ -142,6 +152,39 @@ def _room_transition_confidence_ok(
     return _ok
 
 
+# ── Partial-message-safe top-level key lookup ───────────────────────────────
+
+def _merged_top_level(
+    entry: RoombaConfigEntry,
+    reported: dict[str, Any],
+    key: str,
+) -> dict[str, Any]:
+    """Return reported[key], falling back to the cached master_state's
+    same key when this message's `reported` doesn't carry it at all.
+
+    MQTT messages are deltas — a message that updates cleanMissionStatus
+    (e.g. a phase transition) is not guaranteed to also carry bbrun,
+    runtimeStats, bbchg3, pose, or lastCommand, since those are separate
+    top-level keys. Reading reported.get(key, {}) directly on exactly the
+    message that triggered a phase-transition handler silently substitutes
+    an empty/zero default for the robot's actual last-known value.
+
+    Harmless for "this round only" reads that get a fresh chance on the
+    next message. Wrong for BASELINE/SNAPSHOT reads — nStuck-at-start,
+    zone names captured at mission start, or per-mission analytics
+    recorded exactly once at mission end — where a wrong default becomes
+    a permanent, never-self-correcting error (e.g. a clean mission
+    misclassified as stuck_and_resumed because nStuck's baseline was
+    wrongly read as 0 instead of the robot's true lifetime count).
+    """
+    value = reported.get(key)
+    if value:
+        return value
+    roomba = getattr(entry.runtime_data, "roomba", None)
+    master = getattr(roomba, "master_state", None) or {}
+    return ((master.get("state") or {}).get("reported") or {}).get(key) or {}
+
+
 # ── Zone-name capture ─────────────────────────────────────────────────────────
 
 def _capture_zone_names(
@@ -155,7 +198,7 @@ def _capture_zone_names(
     if data.zone_store:                          # EPHEMERAL
         return [z.name for z in data.zone_store.zones if z.confirmed]
     if data.map_capability == MapCapability.SMART:
-        last_cmd = reported.get("lastCommand", {})
+        last_cmd = _merged_top_level(entry, reported, "lastCommand")
         region_ids = [
             r.get("region_id")
             for r in (last_cmd.get("regions") or [])
@@ -243,8 +286,8 @@ async def async_record_mission(
 
     # Merge bbrun + runtimeStats — mirrors entity.py run_stats.
     # On i-series (lewis firmware) hr lives in runtimeStats, not bbrun.
-    bbrun = reported.get("bbrun", {})
-    runtime = reported.get("runtimeStats", {})
+    bbrun = _merged_top_level(entry, reported, "bbrun")
+    runtime = _merged_top_level(entry, reported, "runtimeStats")
     bbrun_hr = bbrun.get("hr") or runtime.get("hr") or 0
 
     # v2.9.0 DAILY-DIGEST — chemistry-aware lifetime charge-cycle snapshot at
@@ -252,13 +295,14 @@ async def async_record_mission(
     # snapshot, not a delta. api_views.py computes the cross-day delta the
     # same way it already does for bbrun_hr (filter_hours_today). None when
     # bbchg3 is absent (600-series has no battery_stats at all).
-    battery_cycles = active_charge_cycles(reported.get("bbchg3", {}))
+    battery_cycles = active_charge_cycles(_merged_top_level(entry, reported, "bbchg3"))
 
     # F8b — capture error context at mission end
     # pose is None for firmware 3.20+ and 600-series; absent when null.
     error_position_mm: dict | None = None
     if error_code:
-        pose_point = reported.get("pose", {}).get("point") if reported.get("pose") else None
+        _pose = _merged_top_level(entry, reported, "pose")
+        pose_point = _pose.get("point") if _pose else None
         if pose_point:
             try:
                 # v2.9.0 — firmware reports cm, not mm. See POSE_POINT_CM_TO_MM
@@ -457,7 +501,7 @@ def make_mission_callback(
             had_cleaning_phase = True
             current_mission_zones = _capture_zone_names(entry, reported)
             mission_start_ts = mission.get("mssnStrtTm") or 0
-            bbrun = reported.get("bbrun", {})
+            bbrun = _merged_top_level(entry, reported, "bbrun")
             nstuck_at_start = bbrun.get("nStuck", 0)
             recharge_min_accumulator = 0
             current_leg_rechrgM = 0
@@ -769,7 +813,7 @@ def make_mission_callback(
             had_cleaning_phase = False
             end_signal_streak = 0
             end_signal_first_ts = 0.0
-            bbrun_end = reported.get("bbrun", {})
+            bbrun_end = _merged_top_level(entry, reported, "bbrun")
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
 
             # F6h — classify stuck recovery outcome
@@ -1134,6 +1178,7 @@ def make_mission_callback(
 def make_mission_complete_callback(
     hass: Any,
     cloud_coordinator: IrobotCloudCoordinator,
+    entry: RoombaConfigEntry,
 ) -> Any:
     """Return an MQTT callback that triggers a cloud refresh at mission end.
 
@@ -1143,9 +1188,70 @@ def make_mission_complete_callback(
 
     v2.6.3 A — uses had_cleaning_phase flag instead of last_phase guard so
     stuck → stop/charge (stuck_and_abandoned missions) also trigger a refresh.
+
+    v2.9.1 CLOUD-CATCHUP — F4b originally fired async_request_refresh()
+    immediately on the mission-end phase transition, exactly when iRobot's
+    own cloud has had the LEAST possible time to ingest the mission. When
+    that one attempt missed, nothing retried until the next 24h idle poll —
+    confirmed root cause of Thonno's "last_cleaned_rooms stuck on unknown"
+    report (latest_cleaned_rooms() depends entirely on timeline.finEvents
+    having been merged into the newest local record).
+
+    Now a two-checkpoint approach instead of one immediate attempt or an
+    open-ended backoff series: delay the first attempt to
+    _CLOUD_CATCHUP_FIRST_DELAY_SEC after mission end (covers the common
+    case without spending an API call at a moment already known to be too
+    early), and if the newest local record still has no `timeline` after
+    that, exactly one more attempt at _CLOUD_CATCHUP_SECOND_DELAY_SEC. If
+    that also doesn't catch up, give up — logged, not silent — and fall
+    back to the existing 24h idle rhythm.
     """
     last_phase: str = ""
     had_cleaning_phase: bool = False
+    _cancel_checkpoint: Any = None
+
+    def _cancel_pending(*_args: Any) -> None:
+        nonlocal _cancel_checkpoint
+        if _cancel_checkpoint is not None:
+            _cancel_checkpoint()
+            _cancel_checkpoint = None
+
+    def _latest_has_timeline() -> bool:
+        """True when there's nothing to wait for, or the newest local
+        mission record already has cloud timeline data merged in."""
+        ms = getattr(entry.runtime_data, "mission_store", None)
+        if ms is None:
+            return True
+        latest = ms.latest()
+        return bool(latest and isinstance(latest.get("timeline"), dict))
+
+    async def _attempt(checkpoint: int) -> None:
+        nonlocal _cancel_checkpoint
+        _cancel_checkpoint = None
+        await cloud_coordinator.async_request_refresh()
+        if _latest_has_timeline():
+            return
+        if checkpoint == 1:
+            _schedule(2, CLOUD_CATCHUP_SECOND_DELAY_SEC)
+        else:
+            _LOGGER.warning(
+                "Roomba+ cloud: newest mission still missing cloud timeline "
+                "data %ds after mission end (last_cleaned_rooms and similar "
+                "attributes will stay unavailable until the next scheduled "
+                "refresh) — giving up for this mission",
+                CLOUD_CATCHUP_FIRST_DELAY_SEC + CLOUD_CATCHUP_SECOND_DELAY_SEC,
+            )
+
+    def _schedule(checkpoint: int, delay: int) -> None:
+        nonlocal _cancel_checkpoint
+        _cancel_pending()
+
+        async def _action(_now: Any) -> None:
+            await _attempt(checkpoint)
+
+        _cancel_checkpoint = async_call_later(hass, delay, _action)
+
+    entry.async_on_unload(_cancel_pending)
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         nonlocal last_phase, had_cleaning_phase
@@ -1173,11 +1279,12 @@ def make_mission_complete_callback(
             ):
                 had_cleaning_phase = False
                 _LOGGER.debug(
-                    "Roomba+ cloud: mission ended (phase %s → %s) — requesting refresh",
-                    last_phase, phase,
+                    "Roomba+ cloud: mission ended (phase %s → %s) — "
+                    "scheduling delayed refresh in %ds",
+                    last_phase, phase, CLOUD_CATCHUP_FIRST_DELAY_SEC,
                 )
-                asyncio.run_coroutine_threadsafe(
-                    cloud_coordinator.async_request_refresh(), hass.loop
+                hass.loop.call_soon_threadsafe(
+                    _schedule, 1, CLOUD_CATCHUP_FIRST_DELAY_SEC
                 )
         last_phase = phase
 

@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.9.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.9.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,750 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,776 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -238,6 +238,21 @@ data:
 ```
 
 `room_name` and `room_passes` are mutually exclusive — provide one or the other, not both.
+
+#### Cloud zone selector attributes (Smart Map robots)
+
+`select.{name}_cloud_zone_{map}` (one per floor/map, shown when cloud
+credentials are configured) carries per-room metadata as entity
+attributes rather than separate entities, the same way `region_icons`
+already worked before this table existed:
+
+| Attribute | Type | Notes |
+|---|---|---|
+| `region_icons` | `dict[str, str]` | Room name → MDI icon |
+| `region_areas_m2` | `dict[str, float]` | Room name → floor area in m² *(v2.9.1)*. Computed once from the same UMF geometry used for map rendering — doesn't update on its own; a map retrain reloads the config entry and recomputes it. Present only for whichever floor/map this integration's UMF aligner was built for (the active map at setup) — absent, not zero, on other floors. |
+| `learning_percentage` | `int` | Map-learning progress for this floor |
+| `region_count` / `zone_count` | `int` | Counts for this map |
+| `is_active_map` | `bool` | Whether this is the robot's currently active map |
 
 #### Smart Start with blocking sensor gate
 

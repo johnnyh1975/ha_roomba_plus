@@ -2810,7 +2810,7 @@ async def async_setup_entry(
         )
         # F4b -- trigger cloud refresh at mission end to eliminate 24h staleness
         roomba.register_on_message_callback(
-            make_mission_complete_callback(hass, cloud_coordinator)
+            make_mission_complete_callback(hass, cloud_coordinator, config_entry)
         )
 
         # CR2 — after each post-mission cloud refresh, merge latest cloud

@@ -118,6 +118,23 @@ class UmfAligner:
         """Per-room polygon vertices in UMF space. Empty until align() called."""
         return dict(self._room_polygons)
 
+    @property
+    def room_areas_m2(self) -> dict[str, float]:
+        """ROOM-SIZE (v2.9.1) — per-room floor area in m², keyed by region id.
+
+        Pure shoelace-formula area on room_polygons_umf's mm-space vertices.
+        Does NOT require pose alignment to have succeeded — room_polygons_umf
+        is populated by _resolve_room_polygons() before the alignment step,
+        so this is accurate even when `aligned` is False (see align()).
+        Rooms with fewer than 3 resolved vertices are omitted.
+        """
+        areas: dict[str, float] = {}
+        for rid, vertices_mm in self._room_polygons.items():
+            area = _polygon_area_m2(vertices_mm)
+            if area is not None:
+                areas[rid] = area
+        return areas
+
     # ── Public methods ────────────────────────────────────────────────────────
 
     def align(self) -> float:
@@ -472,6 +489,26 @@ class UmfAligner:
 
 
 # ── Module-level utilities ────────────────────────────────────────────────────
+
+def _polygon_area_m2(vertices_mm: list[tuple[float, float]]) -> float | None:
+    """Return polygon area in m² via the shoelace formula.
+
+    ROOM-SIZE (v2.9.1, moved here from sensor.py so both UmfAligner.room_areas_m2
+    and any future consumer share one implementation) — vertices are already
+    in mm (UMF metres × UMF_TO_MM). Needs >= 3 vertices; returns None
+    otherwise (mirrors the same >= 3 guard _resolve_room_polygons() applies
+    before storing a room polygon at all).
+    """
+    if len(vertices_mm) < 3:
+        return None
+    area_mm2 = 0.0
+    n = len(vertices_mm)
+    for i in range(n):
+        x1, y1 = vertices_mm[i]
+        x2, y2 = vertices_mm[(i + 1) % n]
+        area_mm2 += x1 * y2 - x2 * y1
+    return round(abs(area_mm2) / 2.0 / 1_000_000.0, 1)
+
 
 def _point_in_polygon(
     x: float, y: float, polygon: list[tuple[float, float]]

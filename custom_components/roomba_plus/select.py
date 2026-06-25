@@ -724,6 +724,30 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         except Exception:
             pass
 
+        # ROOM-SIZE (v2.9.1) -- region_areas_m2: maps each zone display name
+        # to its floor area in m^2, from UmfAligner.room_areas_m2. Only
+        # populated for whichever pmap UmfAligner was actually built for
+        # (the active map at config-entry setup, see __init__.py) -- other
+        # floors' CloudSmartZoneSelect instances simply get an empty dict,
+        # same graceful-degradation pattern as region_icons/learning_pct.
+        region_areas_m2: dict[str, float] = {}
+        try:
+            aligner = self._config_entry.runtime_data.umf_aligner
+            if aligner is not None:
+                areas_by_rid = aligner.room_areas_m2
+                for r in self._regions:
+                    rid = str(r.get("id", ""))
+                    if rid not in areas_by_rid:
+                        continue
+                    name = next(
+                        (i["name"] for i in items if str(i.get("id")) == rid),
+                        r.get("name", ""),
+                    )
+                    if name:
+                        region_areas_m2[name] = areas_by_rid[rid]
+        except Exception:
+            pass
+
         attrs = {
             "map_name": self._map_name,
             "pmap_id": self._pmap_id,
@@ -736,6 +760,8 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         }
         if learning_pct is not None:
             attrs["learning_percentage"] = learning_pct
+        if region_areas_m2:
+            attrs["region_areas_m2"] = region_areas_m2
 
         # v2.3.0 Gap A (Amendment 4 v2.2 backfill) — keepout zone visibility
         try:

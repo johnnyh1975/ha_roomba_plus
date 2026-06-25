@@ -3,7 +3,7 @@
 # Roomba Integrations — Feature Comparison
 
 > Based on source code analysis · last verified June 2026 against
-> Roomba+ **v2.9.0** and roomba_rest980 **v1.19.1**
+> Roomba+ **v2.9.1** and roomba_rest980 **v1.19.1**
 > (manifest version; quality_scale.yaml self-declares **bronze**).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
