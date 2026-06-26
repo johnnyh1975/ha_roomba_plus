@@ -160,9 +160,10 @@ async def async_setup_entry(
         BatteryResetButton(roomba, blid, config_entry),
     ])
 
-    # Zone clean button: EPHEMERAL only, appears after first zone detected
+    # Zone clean button: EPHEMERAL only, appears after first room detected.
+    # ROOM-SEG Stage 3 — gated on room_seg_store now, not zone_store.
     data = config_entry.runtime_data
-    if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+    if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
         entities.append(ZoneCleanButton(roomba, blid, config_entry))
 
     # Repeat last mission: whenever lastCommand is present in state
@@ -323,9 +324,12 @@ class ZoneCleanButton(_MaintenanceResetButton):
     selected a zone, the robot will start its normal coverage clean. The
     zone selection is informational — it does not steer the robot.
 
-    The button is intentionally kept because the zone infrastructure
-    (ZoneStore, ZoneSelect) is still useful for zone visualization,
-    zone-aware automations, and the future serial OI navigation path.
+    The button is intentionally kept because the room infrastructure
+    (RoomSegStore, ZoneSelect) is still useful for room visualization,
+    room-aware automations, and the future serial OI navigation path.
+
+    ROOM-SEG Stage 3 — backed by RoomSegStore, not ZoneStore (see
+    ROOM_SEGMENTATION_NOTES.md). unique_id/entity_id unchanged.
     """
 
     _attr_translation_key = "clean_zone"
@@ -338,14 +342,14 @@ class ZoneCleanButton(_MaintenanceResetButton):
 
     async def async_press(self) -> None:
         """Start a clean. Zone selection is informational on 900-series robots."""
-        zone_store = self._config_entry.runtime_data.zone_store
-        if not zone_store or not zone_store.zones:
-            _LOGGER.warning("ZoneCleanButton: no zones available yet")
+        room_seg_store = self._config_entry.runtime_data.room_seg_store
+        if not room_seg_store or not room_seg_store.rooms:
+            _LOGGER.warning("ZoneCleanButton: no rooms available yet")
             return
 
-        confirmed = [z for z in zone_store.zones if z.confirmed]
+        confirmed = [r for r in room_seg_store.rooms.values() if r.confirmed]
         if not confirmed:
-            _LOGGER.warning("ZoneCleanButton: no confirmed zones yet — run more missions")
+            _LOGGER.warning("ZoneCleanButton: no confirmed rooms yet — run more missions")
             return
 
         # Find selected zone name via ZoneSelect entity state
@@ -361,18 +365,19 @@ class ZoneCleanButton(_MaintenanceResetButton):
             if state:
                 selected_name = state.state
 
-        zone = next(
-            (z for z in confirmed if z.name == selected_name),
+        room = next(
+            (r for r in confirmed if r.name == selected_name),
             confirmed[0],
         )
 
+        x_min, x_max, y_min, y_max = room.bbox
         _LOGGER.info(
             "ZoneCleanButton: starting clean (900-series — no coordinate targeting). "
-            "Selected zone: '%s' bbox %.0f,%.0f – %.0f,%.0f mm",
-            zone.name, zone.x_min, zone.y_min, zone.x_max, zone.y_max,
+            "Selected room: '%s' bbox %.0f,%.0f – %.0f,%.0f mm",
+            room.name, x_min, y_min, x_max, y_max,
         )
         # 900-series: send plain start — robot navigates using its own logic.
-        # The zone parameter is noted in the log but cannot be passed to the robot.
+        # The room parameter is noted in the log but cannot be passed to the robot.
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start"
         )

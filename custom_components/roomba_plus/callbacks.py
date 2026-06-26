@@ -191,12 +191,17 @@ def _capture_zone_names(
     entry: RoombaConfigEntry,
     reported: dict[str, Any],
 ) -> list[str]:
-    """Resolve zone names at mission start for all robot types."""
+    """Resolve zone names at mission start for all robot types.
+
+    ROOM-SEG Stage 6 — EPHEMERAL branch backed by RoomSegStore, not
+    ZoneStore (deleted — gap heuristic proved unreliable, see
+    ROOM_SEGMENTATION_NOTES.md).
+    """
     from .models import MapCapability
 
     data: RoombaData = entry.runtime_data
-    if data.zone_store:                          # EPHEMERAL
-        return [z.name for z in data.zone_store.zones if z.confirmed]
+    if data.room_seg_store:                      # EPHEMERAL
+        return [r.name for r in data.room_seg_store.rooms.values() if r.confirmed]
     if data.map_capability == MapCapability.SMART:
         last_cmd = _merged_top_level(entry, reported, "lastCommand")
         region_ids = [
@@ -1209,6 +1214,9 @@ def make_mission_complete_callback(
     last_phase: str = ""
     had_cleaning_phase: bool = False
     _cancel_checkpoint: Any = None
+    # v2.10.1 CLOUD-CATCHUP fix — see _latest_has_timeline()'s docstring.
+    _baseline_latest_record: dict[str, Any] | None = None
+    _baseline_had_timeline: bool = False
 
     def _cancel_pending(*_args: Any) -> None:
         nonlocal _cancel_checkpoint
@@ -1217,13 +1225,49 @@ def make_mission_complete_callback(
             _cancel_checkpoint = None
 
     def _latest_has_timeline() -> bool:
-        """True when there's nothing to wait for, or the newest local
-        mission record already has cloud timeline data merged in."""
+        """True when there's nothing to wait for, or a genuinely NEW
+        mission record — appended since this checkpoint sequence started,
+        confirmed by object identity rather than ms.latest() merely having
+        SOME timeline — already has cloud timeline data merged in.
+
+        v2.10.1 fix — the previous check ("does ms.latest() have a
+        timeline dict, whatever record that happens to be") could be
+        satisfied by an unrelated, independently-running backfill pass
+        enriching the PREVIOUS mission's record while THIS mission's own
+        local recording was still pending (confirmed root cause of
+        Thonno's "last_cleaned_rooms ends up null" report, v2.9.1 retest:
+        a stuck-and-abandoned attempt's record got backfilled at almost
+        exactly the same moment checkpoint 1 ran its done-check, against
+        the genuinely-completed mission that hadn't been locally recorded
+        yet — checkpoint 1 wrongly concluded "done" and checkpoint 2,
+        which would have caught the real mission once it WAS recorded,
+        never got scheduled).
+
+        Comparing by object identity (`is`), not by an id string: backfill_
+        from_cloud() mutates matched records in place (same dict object,
+        fields updated) — only async_append() creating and appending a
+        genuinely new dict changes what `latest is _baseline_latest_record`
+        evaluates to.
+
+        If `latest` is still the SAME object as the baseline, its timeline
+        is judged against `_baseline_had_timeline` — its state FROZEN at
+        capture time, not re-read live. Re-reading it live would reopen
+        exactly the bug above: an unrelated backfill pass enriching that
+        same old baseline object in place, after capture, would otherwise
+        look identical to "our own mission's record was already correct
+        from the start" (the legitimate fast path this same frozen check
+        also has to allow for, when the relevant record already existed
+        with valid data before this checkpoint sequence even began).
+        """
         ms = getattr(entry.runtime_data, "mission_store", None)
         if ms is None:
             return True
         latest = ms.latest()
-        return bool(latest and isinstance(latest.get("timeline"), dict))
+        if latest is None:
+            return False
+        if latest is _baseline_latest_record:
+            return _baseline_had_timeline
+        return isinstance(latest.get("timeline"), dict)
 
     async def _attempt(checkpoint: int) -> None:
         nonlocal _cancel_checkpoint
@@ -1243,8 +1287,22 @@ def make_mission_complete_callback(
             )
 
     def _schedule(checkpoint: int, delay: int) -> None:
-        nonlocal _cancel_checkpoint
+        nonlocal _cancel_checkpoint, _baseline_latest_record, _baseline_had_timeline
         _cancel_pending()
+        if checkpoint == 1:
+            # Captured only when a NEW checkpoint sequence starts
+            # (checkpoint 1, called once per mission-end event from
+            # _on_roomba_message below) — checkpoint 2's own _schedule()
+            # call (from within _attempt(1) above) must NOT recapture, or
+            # it would baseline against whatever is latest() at THAT
+            # point, which could by then already be the very record this
+            # whole mechanism exists to wait for.
+            ms = getattr(entry.runtime_data, "mission_store", None)
+            _baseline_latest_record = ms.latest() if ms is not None else None
+            _baseline_had_timeline = bool(
+                _baseline_latest_record
+                and isinstance(_baseline_latest_record.get("timeline"), dict)
+            )
 
         async def _action(_now: Any) -> None:
             await _attempt(checkpoint)

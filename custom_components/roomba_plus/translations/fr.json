@@ -89,13 +89,6 @@
         "title": "Nommer les pièces détectées",
         "description": "{zone_count} nouvelle(s) zone(s) détectée(s). Attribuez des noms pour pouvoir les nettoyer individuellement :"
       },
-      "calibration": {
-        "title": "Calibration de la carte",
-        "description": "Les passages de portes ont mesuré une largeur moyenne de {measured_cm} cm. Sélectionnez la largeur réelle de vos portes intérieures :",
-        "data": {
-          "door_width_mm": "Largeur de porte"
-        }
-      },
       "smart_zones": {
         "title": "Nommer les zones Smart Map",
         "description": "{zone_count} zone(s) sans nom (IDs : {zone_ids}). Attribuez des noms pour pouvoir les nettoyer individuellement :"
@@ -837,6 +830,10 @@
     "battery_recharge_high": {
       "title": "Recharges fréquentes avec batterie dégradée",
       "description": "Capacité batterie sous 75 % avec recharges fréquentes. Envisagez le remplacement."
+    },
+    "battery_contact_suspect": {
+      "title": "Problème possible de contact batterie/base",
+      "description": "Problème de contact ou de communication détecté (cause : {cause}). Pics récents par cycle de charge : {recent_peaks}. Un saut soudain invraisemblable ou une tendance à la baisse du maximum atteint indique généralement un contact desserré ou corrodé, pas la batterie elle-même — nettoyez les contacts avant de suspecter la batterie."
     },
     "mixed_schedule": {
       "title": "Sources de planification concurrentes",

@@ -89,13 +89,6 @@
         "title": "Nomina le stanze rilevate",
         "description": "{zone_count} nuova/e area/e rilevata/e. Assegna i nomi per pulirle singolarmente:"
       },
-      "calibration": {
-        "title": "Calibrazione mappa",
-        "description": "I passaggi delle porte hanno misurato una larghezza media di {measured_cm} cm. Seleziona la larghezza reale delle tue porte interne:",
-        "data": {
-          "door_width_mm": "Larghezza porta"
-        }
-      },
       "smart_zones": {
         "title": "Nomina le zone Smart Map",
         "description": "{zone_count} zona/e senza nome (ID: {zone_ids}). Assegna i nomi per pulirle singolarmente:"
@@ -837,6 +830,10 @@
     "battery_recharge_high": {
       "title": "Ricariche frequenti con batteria degradata",
       "description": "Capacità sotto il 75 % con ricariche frequenti. Valuta la sostituzione."
+    },
+    "battery_contact_suspect": {
+      "title": "Possibile problema di contatto batteria/base",
+      "description": "Rilevato un possibile problema di contatto o comunicazione (causa: {cause}). Picchi recenti per ciclo di carica: {recent_peaks}. Un salto improvviso implausibile o una tendenza al ribasso del massimo raggiunto indica solitamente un contatto lasco o corroso, non la batteria stessa — pulisci i contatti prima di sospettare della batteria."
     },
     "mixed_schedule": {
       "title": "Fonti di pianificazione concorrenti",

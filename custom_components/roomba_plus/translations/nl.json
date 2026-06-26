@@ -89,13 +89,6 @@
         "title": "Gevonden kamers een naam geven",
         "description": "{zone_count} nieuw(e) gebied(en) gevonden. Geef ze een naam zodat je ze afzonderlijk kunt schoonmaken:"
       },
-      "calibration": {
-        "title": "Kaartcalibratie",
-        "description": "Deurovergangen hebben een gemiddelde breedte van {measured_cm} cm gemeten. Selecteer de werkelijke breedte van je binnendeur(en):",
-        "data": {
-          "door_width_mm": "Deurbreedte"
-        }
-      },
       "smart_zones": {
         "title": "Smart Map-zones een naam geven",
         "description": "{zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Geef ze een naam zodat je ze afzonderlijk kunt schoonmaken:"
@@ -837,6 +830,10 @@
     "battery_recharge_high": {
       "title": "Frequent tussentijds laden",
       "description": "Accucapaciteit onder 75 % met frequent tussentijds laden. Overweeg vervanging."
+    },
+    "battery_contact_suspect": {
+      "title": "Mogelijk contactprobleem accu/dock",
+      "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt."
     },
     "mixed_schedule": {
       "title": "Concurrerende planningsbronnen",

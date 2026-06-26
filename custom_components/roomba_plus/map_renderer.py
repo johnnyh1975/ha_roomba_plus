@@ -40,7 +40,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
     from .geometry_store import GeometryStore
-    from .zone_store import ZoneStore
+    from .room_seg_store import RoomSegStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,11 +183,11 @@ class MapRenderer:
         self,
         config: RendererConfig,
         geometry_store: GeometryStore | None = None,
-        zone_store: ZoneStore | None = None,
+        room_seg_store: "RoomSegStore | None" = None,
     ) -> None:
         self._cfg = config
         self._geometry_store = geometry_store
-        self._zone_store = zone_store
+        self._room_seg_store = room_seg_store
         self._points: list[tuple[int, int]] = []      # pixel coordinates
         self._stuck_px: list[tuple[int, int]] = []    # pixel coordinates
         self._robot_px: tuple[int, int] | None = None # current robot position
@@ -676,7 +676,8 @@ class MapRenderer:
 
     @property
     def points_mm(self) -> list[tuple[float, float]]:
-        """Return pose points in mm (for ZoneStore gap segmentation)."""
+        """Return pose points in mm (used by diagnostics.py for
+        last_mission_trajectory_mm)."""
         cx = cy = self._cfg.size_px // 2
         scale = self._cfg.scale
         return [
@@ -703,31 +704,42 @@ class MapRenderer:
     # ── Geometry layers ───────────────────────────────────────────────────────
 
     def _draw_inference_suggestions(self, draw: ImageDraw.ImageDraw) -> None:
-        """Layer 1.5 — dashed zone outlines and door crossing markers.
+        """Layer 1.5 — dashed room outlines and door crossing markers.
 
-        Draws the zone bounding boxes from ZoneStore (expanded by wall_offset_mm)
-        as dashed grey rectangles, and each DoorMarker as a small filled circle.
-        Suppressed entirely when user geometry already exists — the two layers
-        must never overlap to avoid confusion.
+        Draws room bounding boxes from RoomSegStore (expanded by
+        wall_offset_mm) as dashed grey rectangles, and each DoorMarker as a
+        small filled circle. Suppressed entirely when user geometry already
+        exists — the two layers must never overlap to avoid confusion.
+
+        ROOM-SEG Stage 5 — room outlines backed by RoomSegStore, not
+        ZoneStore (the gap heuristic proved unreliable — see
+        ROOM_SEGMENTATION_NOTES.md). The door-marker drawing below was
+        ALREADY unaffected by this swap: GeometryStore.door_markers is fed
+        from RoomSegStore.doors since the earlier door-marker-source
+        change (update_from_room_seg_store), so this method's marker loop
+        needed no changes at all.
         """
-        if self._zone_store is None:
+        if self._room_seg_store is None:
             return
         if self._geometry_store is not None and self._geometry_store.has_user_geometry:
             return  # user has confirmed layout — suggestions no longer shown
 
-        # Zone outline rectangles (dashed)
+        # Room outline rectangles (dashed)
         offset = self._geometry_store.wall_offset_mm if self._geometry_store else 200
-        for zone in self._zone_store.zones:
-            x1, y1 = self._mm_to_px_fit(zone.x_min - offset, zone.y_max + offset)
-            x2, y2 = self._mm_to_px_fit(zone.x_max + offset, zone.y_min - offset)
+        for room in self._room_seg_store.rooms.values():
+            if room.hidden:
+                continue
+            x_min, x_max, y_min, y_max = room.bbox
+            x1, y1 = self._mm_to_px_fit(x_min - offset, y_max + offset)
+            x2, y2 = self._mm_to_px_fit(x_max + offset, y_min - offset)
             self._draw_dashed_rect(draw, x1, y1, x2, y2, SUGGEST_OUTLINE, SUGGEST_DASH)
-            # Zone name label at bbox centroid
-            if zone.name:
+            # Room name label at bbox centroid
+            if room.name:
                 lx, ly = self._mm_to_px_fit(
-                    (zone.x_min + zone.x_max) / 2,
-                    (zone.y_min + zone.y_max) / 2,
+                    (x_min + x_max) / 2,
+                    (y_min + y_max) / 2,
                 )
-                draw.text((lx, ly), zone.name, fill=SUGGEST_LABEL, anchor="mm", font=LABEL_FONT)
+                draw.text((lx, ly), room.name, fill=SUGGEST_LABEL, anchor="mm", font=LABEL_FONT)
 
         # Door crossing markers (filled circles)
         if self._geometry_store:

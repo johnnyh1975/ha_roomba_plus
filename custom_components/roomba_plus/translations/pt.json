@@ -89,13 +89,6 @@
         "title": "Nomear divisões detetadas",
         "description": "{zone_count} nova(s) área(s) detetada(s). Atribui nomes para as limpar individualmente:"
       },
-      "calibration": {
-        "title": "Calibração do mapa",
-        "description": "As passagens de portas mediram uma largura média de {measured_cm} cm. Seleciona a largura real das tuas portas interiores:",
-        "data": {
-          "door_width_mm": "Largura da porta"
-        }
-      },
       "smart_zones": {
         "title": "Nomear zonas Smart Map",
         "description": "{zone_count} zona(s) sem nome (IDs: {zone_ids}). Atribui nomes para as limpar individualmente:"
@@ -837,6 +830,10 @@
     "battery_recharge_high": {
       "title": "Recargas frequentes com bateria degradada",
       "description": "Capacidade abaixo de 75 % com recargas frequentes. Considera substituir a bateria."
+    },
+    "battery_contact_suspect": {
+      "title": "Possível problema de contacto bateria/base",
+      "description": "Detetado um possível problema de contacto ou comunicação (causa: {cause}). Picos recentes por ciclo de carga: {recent_peaks}. Um salto súbito implausível ou uma tendência decrescente no máximo atingido geralmente indica um contacto solto ou corroído, não a bateria em si — limpe os contactos antes de suspeitar da bateria."
     },
     "mixed_schedule": {
       "title": "Fontes de agendamento concorrentes",

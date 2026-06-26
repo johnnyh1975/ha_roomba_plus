@@ -60,6 +60,7 @@ from .const import (
 )
 from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
 from .grid_store import GridStore
+from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
@@ -79,7 +80,6 @@ from .map_renderer import (
 )
 from .models import MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
-from .zone_store import ZoneStore
 from .geometry_store import GeometryStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -2400,7 +2400,6 @@ async def async_setup_entry(
     state = roomba_reported_state(roomba)
     map_capability = MapCapability.NONE
     renderer: MapRenderer | None = None
-    zone_store: ZoneStore | None = None
     geometry_store: GeometryStore | None = None
 
     map_enabled = config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)
@@ -2413,12 +2412,13 @@ async def async_setup_entry(
             map_capability = MapCapability.EPHEMERAL
             _LOGGER.debug("Roomba+ map: EPHEMERAL (900-series pose, no pmaps)")
 
-        if map_capability == MapCapability.EPHEMERAL:
-            zone_store = ZoneStore()
-            await zone_store.async_load(hass, config_entry.entry_id)
+        # ROOM-SEG Stage 6 — ZoneStore (gap-heuristic room detection)
+        # removed entirely; RoomSegStore (created further below) is the
+        # sole room/door source for EPHEMERAL robots now.
 
-        # GeometryStore is needed for both EPHEMERAL (door markers from ZoneStore)
-        # and SMART (UmfAligner door marker accumulation for alignment confidence).
+        # GeometryStore is needed for both EPHEMERAL (door markers, now fed
+        # from RoomSegStore -- see update_from_room_seg_store) and SMART
+        # (UmfAligner door marker accumulation for alignment confidence).
         if map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             geometry_store = GeometryStore()
             await geometry_store.async_load(hass, config_entry.entry_id)
@@ -2441,7 +2441,6 @@ async def async_setup_entry(
                 robot_diameter_mm=_robot_diameter_mm,
             ),
             geometry_store=geometry_store,
-            zone_store=zone_store,
         )
     else:
         _LOGGER.debug(
@@ -2458,6 +2457,51 @@ async def async_setup_entry(
             "Roomba+ GridStore: loaded %d cell(s) for %s",
             grid_store.cell_count, config_entry.data[CONF_BLID],
         )
+
+    # ROOM-SEG — watershed-based room/door segmentation on GridStore data.
+    # EPHEMERAL only: SMART robots already get authoritative room data
+    # from the cloud (UmfAligner). Sole room/door source for EPHEMERAL
+    # since Stage 6 — ZoneStore itself was removed (gap heuristic proved
+    # unreliable, see ROOM_SEGMENTATION_NOTES.md); only a minimal
+    # read-only migration shim (legacy_zone_migration.py) remains, used
+    # exactly once below.
+    room_seg_store: RoomSegStore | None = None
+    if map_capability == MapCapability.EPHEMERAL and map_enabled:
+        room_seg_store = RoomSegStore()
+        await room_seg_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "Roomba+ RoomSegStore: loaded %d room(s) for %s",
+            len(room_seg_store.rooms), config_entry.data[CONF_BLID],
+        )
+
+        # Stage 2/6 — one-shot migration of names/confirmed/hidden from
+        # whatever a pre-ROOM-SEG installation already saved under the old
+        # ZoneStore storage key, so existing installations with months of
+        # GridStore history don't have to wait for a fresh mission to get
+        # rooms, and don't lose user-assigned names from the old
+        # gap-heuristic system. async_load_legacy_zones() returns []
+        # for fresh installs that never had ZoneStore data at all.
+        if not room_seg_store.migrated_from_zonestore:
+            if grid_store is not None and grid_store.cell_count > 0 and not room_seg_store.rooms:
+                room_seg_store.maybe_recompute(grid_store.cells)
+            from .legacy_zone_migration import async_load_legacy_zones
+            legacy_zones = await async_load_legacy_zones(hass, config_entry.entry_id)
+            if legacy_zones:
+                _n_migrated = room_seg_store.migrate_from_zone_store(legacy_zones)
+                _LOGGER.debug(
+                    "Roomba+ RoomSegStore: migrated %d room name(s) from "
+                    "legacy ZoneStore data for %s",
+                    _n_migrated, config_entry.data[CONF_BLID],
+                )
+            else:
+                room_seg_store.migrated_from_zonestore = True
+            await room_seg_store.async_save(hass, config_entry.entry_id)
+
+        # ROOM-SEG Stage 5 — late-attach to the renderer constructed
+        # earlier (above, before room_seg_store existed). See
+        # MapRenderer.__init__'s room_seg_store parameter and
+        # _draw_inference_suggestions().
+        renderer._room_seg_store = room_seg_store
 
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
@@ -2699,7 +2743,6 @@ async def async_setup_entry(
         blid=config_entry.data[CONF_BLID],
         map_capability=map_capability,
         renderer=renderer,
-        zone_store=zone_store,
         geometry_store=geometry_store,
         maintenance_store=maintenance_store,
         cloud_coordinator=cloud_coordinator,
@@ -2709,6 +2752,7 @@ async def async_setup_entry(
         last_error_at=last_error_at,
         last_error_zone=last_error_zone,
         grid_store=grid_store,
+        room_seg_store=room_seg_store,
         floor_label=config_entry.options.get(CONF_FLOOR, ""),
         umf_aligner=umf_aligner,
         dirt_threshold_manager=dirt_threshold_manager,

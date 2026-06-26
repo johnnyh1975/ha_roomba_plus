@@ -13,6 +13,7 @@ or a return-to-base mission).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import voluptuous as vol
@@ -429,6 +430,114 @@ async def async_check_battery_recharge(
         severity=ir.IssueSeverity.WARNING,
         translation_key="battery_recharge_high",
     )
+
+
+# F6f — battery contact / bus-communication anomaly thresholds.
+# Deliberately generous: both NiMH and Li-ion charge/discharge far slower
+# than these limits under any realistic scenario, so a reading that
+# violates them is evidence of a communication glitch (BMS link dropping
+# and recovering), not real chemistry change.
+_BATPCT_JUMP_MIN_DELTA = 25.0     # percentage points
+_BATPCT_JUMP_MAX_MINUTES = 10.0   # within this short a window
+_CONTACT_ANOMALY_DEBOUNCE = 2     # consecutive anomalous readings before firing
+_CHARGE_PEAK_HISTORY_LEN = 5      # bounded rolling window of recent cycle peaks
+_CHARGE_PEAK_DECLINE_CYCLES = 3   # consecutive declining peaks to flag a trend
+
+
+async def async_check_battery_contact_issue(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+) -> None:
+    """F6f — fire a Repair Issue on evidence of a battery/dock contact or
+    BMS bus-communication problem, via two independent signals:
+
+    1. Implausible instantaneous jump in batPct (>= _BATPCT_JUMP_MIN_DELTA
+       percentage points within < _BATPCT_JUMP_MAX_MINUTES minutes, either
+       direction). No real battery changes charge state this fast — this
+       is the BMS communication link dropping and recovering, not the
+       battery itself. Debounced over _CONTACT_ANOMALY_DEBOUNCE consecutive
+       occurrences to avoid firing on one isolated MQTT glitch.
+
+    2. The per-charge-cycle peak batPct declining over
+       _CHARGE_PEAK_DECLINE_CYCLES consecutive charge cycles. Intermittent
+       contact can reduce how much charge is actually transferred each
+       cycle even when no single jump looks anomalous on its own — this
+       catches the gradual version of the same underlying problem.
+
+    Works for any firmware variant (reads only batPct + cleanMissionStatus.
+    phase, both universally present), unlike async_check_dock_health which
+    depends on nChatters/nKnockoffs/nAborts fields some firmware versions
+    don't report at all (see that function's gate-debug log).
+    """
+    data = config_entry.runtime_data
+    state = data.roomba_reported_state()
+    batpct = state.get("batPct")
+    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+
+    if batpct is None:
+        return
+    batpct = float(batpct)
+    now = time.monotonic()
+
+    # ── Signal 1: implausible instantaneous jump ────────────────────────
+    jump_detected = False
+    if data.last_batpct_value is not None and data.last_batpct_at is not None:
+        delta_pct = abs(batpct - data.last_batpct_value)
+        delta_min = (now - data.last_batpct_at) / 60.0
+        if delta_pct >= _BATPCT_JUMP_MIN_DELTA and delta_min < _BATPCT_JUMP_MAX_MINUTES:
+            jump_detected = True
+            _LOGGER.debug(
+                "F6f: implausible batPct jump for %s: %.0f -> %.0f within %.1f min",
+                config_entry.entry_id, data.last_batpct_value, batpct, delta_min,
+            )
+
+    data.consecutive_battery_contact_anomaly = (
+        data.consecutive_battery_contact_anomaly + 1 if jump_detected else 0
+    )
+    data.consecutive_battery_contact_anomaly = min(data.consecutive_battery_contact_anomaly, 10)
+
+    data.last_batpct_value = batpct
+    data.last_batpct_at = now
+
+    # ── Signal 2: declining peak-per-charge-cycle trend ─────────────────
+    is_charging = phase == "charge"
+    if is_charging:
+        data.current_charge_cycle_peak = max(
+            batpct, data.current_charge_cycle_peak
+            if data.current_charge_cycle_peak is not None else batpct,
+        )
+    if data.was_charging and not is_charging and data.current_charge_cycle_peak is not None:
+        # Charge cycle just ended — finalize this cycle's peak into history.
+        data.charge_cycle_peaks.append(data.current_charge_cycle_peak)
+        data.charge_cycle_peaks = data.charge_cycle_peaks[-_CHARGE_PEAK_HISTORY_LEN:]
+        data.current_charge_cycle_peak = None
+    data.was_charging = is_charging
+
+    declining_trend = False
+    peaks = data.charge_cycle_peaks
+    if len(peaks) >= _CHARGE_PEAK_DECLINE_CYCLES:
+        recent = peaks[-_CHARGE_PEAK_DECLINE_CYCLES:]
+        declining_trend = all(recent[i] < recent[i - 1] for i in range(1, len(recent)))
+
+    issue_id = f"battery_contact_suspect_{config_entry.entry_id}"
+
+    if data.consecutive_battery_contact_anomaly >= _CONTACT_ANOMALY_DEBOUNCE or declining_trend:
+        cause = "jump" if data.consecutive_battery_contact_anomaly >= _CONTACT_ANOMALY_DEBOUNCE else "declining_trend"
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="battery_contact_suspect",
+            translation_placeholders={
+                "cause": cause,
+                "recent_peaks": ", ".join(f"{p:.0f}%" for p in peaks),
+            },
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 async def async_check_mixed_schedule(
@@ -1116,6 +1225,13 @@ async def async_check_dock_health(
 
     # Gate: at least one dock health field present
     if not any(k in bbchg for k in ("nChatters", "nKnockoffs", "nAborts")):
+        _LOGGER.debug(
+            "dock_health check: none of nChatters/nKnockoffs/nAborts present "
+            "in bbchg for %s (firmware reports keys: %s) — check inactive for "
+            "this firmware variant. See async_check_battery_contact_issue for "
+            "a firmware-version-independent alternative signal.",
+            config_entry.entry_id, sorted(bbchg.keys()),
+        )
         return
 
     chatters: int = _safe_int_repairs(bbchg.get("nChatters"))

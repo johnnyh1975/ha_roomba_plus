@@ -6,9 +6,9 @@ Design principles
 -----------------
 * The inference engine produces only what trajectory data reliably supports:
     - DoorMarker: gap-crossing midpoint clusters across missions.
-    - Zone outline suggestions: EMA bounding boxes from ZoneStore, expanded by
-      wall_offset_mm — offered to the editor as starting shapes, never stored
-      as walls themselves.
+    - Zone outline suggestions: room bounding boxes from RoomSegStore,
+      expanded by wall_offset_mm — offered to the editor as starting
+      shapes, never stored as walls themselves.
 * User-authored geometry (UserWall, UserDoor, UserObstacle) is the only
   authoritative source. Once written via apply_user_edit(), inference never
   overwrites it.
@@ -27,13 +27,10 @@ import math
 import statistics
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
-
-if TYPE_CHECKING:
-    from .zone_store import ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -227,17 +224,14 @@ class GeometryStore:
         await store.async_load(hass, entry_id)
 
         # After each mission (called from image.py _handle_mission_end):
-        store.update_from_mission(zone_store)
-        exceeded = store.record_drift(dx, dy)   # from check_dock_drift()
+        store.update_from_room_seg_store(room_seg_store)
+        exceeded = store.record_drift(dx, dy)   # from image.py's _check_dock_drift()
         await store.async_save(hass, entry_id)
 
         # From Options Flow / service handler:
         store.apply_user_edit(payload_dict)
         store.reset_drift()
         await store.async_save(hass, entry_id)
-
-        # At render time:
-        suggestions = store.get_inference_suggestions(zone_store)
     """
 
     def __init__(self) -> None:
@@ -317,13 +311,46 @@ class GeometryStore:
                     marker_id, cx, cy,
                 )
 
-    def update_from_mission(self, zone_store: ZoneStore) -> None:
-        """EPHEMERAL path — delegate to update_from_midpoints.
+    def update_from_room_seg_store(self, room_seg_store: Any) -> None:
+        """EPHEMERAL path — sync door_markers 1:1 from RoomSegStore.doors.
 
-        Called after zone_store.process_mission() so that
-        zone_store.last_mission_gap_midpoints is already populated.
+        Deliberately bypasses update_from_midpoints()'s own spatial-
+        proximity clustering (_find_close_marker / DOOR_CLUSTER_TOL_MM):
+        RoomSegStore's doors are already identity-stable by room-pair
+        (see room_seg_store.py's _match_doors), which is more precise
+        than re-clustering by raw distance — going through the midpoint
+        path here would re-introduce exactly the imprecision this data
+        doesn't have. Each SegDoor's own median-of-recent-observations
+        (cx, cy) — the same robustness-to-door-angle-variation mechanism
+        as DoorMarker.update() — carries over directly.
+
+        Replaces door_markers wholesale each call rather than appending:
+        RoomSegStore.doors is already the complete, deduplicated current
+        set, unlike the incremental per-mission midpoint stream
+        update_from_midpoints() was designed for.
         """
-        self.update_from_midpoints(zone_store.last_mission_gap_midpoints)
+        existing_by_id = {m.id: m for m in self.door_markers}
+        synced: list[DoorMarker] = []
+        for seg_door in room_seg_store.doors:
+            gm_id = f"rs_{seg_door.id}"  # namespaced — can't collide with dm_N ids
+            existing = existing_by_id.get(gm_id)
+            if existing is not None:
+                existing.cx, existing.cy = seg_door.cx, seg_door.cy
+                existing.mission_count = len(seg_door.observations)
+                existing.observations = [list(p) for p in seg_door.observations]
+                synced.append(existing)
+            else:
+                marker = DoorMarker(
+                    id=gm_id, cx=seg_door.cx, cy=seg_door.cy,
+                    mission_count=len(seg_door.observations),
+                    observations=[list(p) for p in seg_door.observations],
+                )
+                synced.append(marker)
+                _LOGGER.info(
+                    "GeometryStore: new door marker %s (from RoomSegStore) at (%.0f, %.0f)",
+                    gm_id, marker.cx, marker.cy,
+                )
+        self.door_markers = synced
 
     def record_drift(self, dx: float, dy: float) -> bool:
         """Accumulate drift magnitude. Returns True if threshold exceeded.
@@ -376,35 +403,6 @@ class GeometryStore:
         )
 
     # ── Renderer support ──────────────────────────────────────────────────────
-
-    def get_inference_suggestions(self, zone_store: ZoneStore | None) -> dict[str, Any]:
-        """Return expanded zone bboxes and current door markers for the editor/renderer.
-
-        Zone outlines are the EMA bounding boxes from ZoneStore, expanded by
-        wall_offset_mm on all four sides to approximate actual wall positions.
-        This is an honest suggestion — the expansion is visible to the user
-        and they control wall_offset_mm.
-        """
-        if zone_store is None:
-            return {"zone_outlines": [], "door_markers": []}
-
-        outlines = []
-        for zone in zone_store.zones:
-            outlines.append({
-                "zone_id": zone.id,
-                "zone_name": zone.name,
-                "x_min": zone.x_min - self.wall_offset_mm,
-                "x_max": zone.x_max + self.wall_offset_mm,
-                "y_min": zone.y_min - self.wall_offset_mm,
-                "y_max": zone.y_max + self.wall_offset_mm,
-                "confidence": round(zone.confidence, 3),
-            })
-
-        markers = [
-            {"id": m.id, "cx": m.cx, "cy": m.cy, "mission_count": m.mission_count}
-            for m in self.door_markers
-        ]
-        return {"zone_outlines": outlines, "door_markers": markers}
 
     # ── Properties ────────────────────────────────────────────────────────────
 

@@ -18,12 +18,12 @@ if TYPE_CHECKING:
     from .const import RobotProfile
     from .geometry_store import GeometryStore
     from .grid_store import GridStore                # v2.2.0 F9
+    from .room_seg_store import RoomSegStore          # ROOM-SEG
     from .umf_aligner import UmfAligner              # v2.3.0 F8
     from .maintenance_store import MaintenanceStore
     from .mission_store import MissionStore          # v1.8.0 L1
     from .map_renderer import MapRenderer
     from .presence_manager import PresenceManager    # v1.8.0 L6
-    from .zone_store import ZoneStore
     from .dirt_threshold_manager import DirtThresholdManager  # v2.4 F11
     from .outline_store import OutlineStore                    # v2.4 F-EPHEMERAL
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
@@ -35,7 +35,8 @@ class MapCapability(Enum):
 
     NONE:      600-series bump-and-run — no pose data, no map.
     EPHEMERAL: 900-series VSLAM — pose data available, map is per-mission only,
-               no persistent pmaps. ZoneStore accumulates zones across missions.
+               no persistent pmaps. RoomSegStore accumulates rooms/doors
+               across missions (watershed segmentation on GridStore).
     SMART:     i/s/j/m-series — pose data + persistent pmaps/regions.
                Cloud coordinator is created when credentials are available.
     """
@@ -53,7 +54,6 @@ class RoombaData:
     blid: str
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
-    zone_store: ZoneStore | None = None
     geometry_store: GeometryStore | None = None
     maintenance_store: MaintenanceStore | None = None
     # Optional cloud coordinator — None when no credentials or non-SMART robot
@@ -80,8 +80,23 @@ class RoombaData:
     recharge_fraction_value: float | None = None
     battery_retention_value: float | None = None
 
+    # F6f — battery contact/bus-communication anomaly detection. A real
+    # contact problem can both (a) cause an implausible instantaneous
+    # jump in batPct (the BMS link drops and recovers, not the chemistry
+    # changing) and (b) manifest as the per-charge-cycle peak declining
+    # over successive cycles (intermittent contact reduces effective
+    # charge transferred each cycle). Both feed the same repair issue —
+    # see repairs.py::async_check_battery_contact_issue.
+    last_batpct_value: float | None = None
+    last_batpct_at: float | None = None   # time.monotonic() of last_batpct_value
+    consecutive_battery_contact_anomaly: int = 0
+    current_charge_cycle_peak: float | None = None
+    charge_cycle_peaks: list = field(default_factory=list)   # bounded, most-recent-last
+    was_charging: bool = False   # edge-detect charge-cycle start/end
+
     # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
     grid_store: GridStore | None = None
+    room_seg_store: RoomSegStore | None = None
     # v2.3.0 — UMF spatial fusion aligner (SMART + EPHEMERAL when Q7 confirmed)
     umf_aligner: UmfAligner | None = None
     # v2.4.0 — Demand-based cleaning trigger (F11, SMART + cloud only)

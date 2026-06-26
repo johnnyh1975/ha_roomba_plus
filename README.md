@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.9.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.10.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,776 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,825 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -301,9 +301,15 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 - Each saved iRobot app routine appears as a button entity
 - `clean_room` uses cloud names directly; map version changes trigger an immediate refresh
 
-#### Zone detection — 900-series
+#### Room detection — 900-series (v2.10.0)
 
-Automatic room segmentation from travel data across missions. Doorway crossings detected, clustered after ≥2 sightings, and persisted across restarts. User naming via Options Flow.
+Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
+
+If you're updating from an earlier version and had already named zones, those names are carried over automatically the first time this version starts up — no action needed.
+
+#### Battery / dock contact monitoring (v2.10.0)
+
+A Repair Issue (`battery_contact_suspect`) fires on two independent signals that usually mean a loose or corroded battery/dock contact rather than a failing battery: an implausible jump in reported battery level (more than ~25 percentage points within under 10 minutes — no real battery changes that fast), or the highest battery level reached declining over three consecutive charge cycles. Clean the contacts on the robot and dock before assuming the battery itself needs replacing.
 
 #### Cleaning map
 

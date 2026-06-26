@@ -85,13 +85,6 @@
         "title": "Erkannte Räume benennen",
         "description": "{zone_count} neue Bereiche wurden erkannt. Bitte vergib Namen damit du Bereiche gezielt reinigen kannst:"
       },
-      "calibration": {
-        "title": "Karten-Kalibrierung",
-        "description": "Anhand von Türdurchquerungen wurde eine Türbreite von {measured_cm} cm gemessen. Wie breit sind die Innentüren deiner Wohnung tatsächlich?",
-        "data": {
-          "door_width_mm": "Türbreite"
-        }
-      },
       "smart_zones": {
         "title": "Smart-Map-Zonen benennen",
         "description": "{zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Bitte Namen vergeben:"
@@ -822,6 +815,10 @@
     "battery_recharge_high": {
       "title": "Häufiges Zwischenladen bei schwachem Akku",
       "description": "Der Roboter lädt häufig zwischen, während die Akkukapazität unter 75 % gesunken ist. Akkutausch empfohlen."
+    },
+    "battery_contact_suspect": {
+      "title": "Mögliches Batterie- oder Kontaktproblem",
+      "description": "Hinweis auf ein Akku-/Kontaktproblem erkannt (Ursache: {cause}). Letzte Ladezyklus-Höchstwerte: {recent_peaks}. Ein plötzlicher, unplausibler Sprung im Ladestand oder ein sinkender Höchstwert je Ladung deutet meist auf einen wackligen oder korrodierten Kontakt hin, nicht auf den Akku selbst — Kontakte an Roboter und Ladestation reinigen, bevor der Akku verdächtigt wird."
     },
     "mixed_schedule": {
       "title": "Konkurrierende Zeitplanquellen erkannt",

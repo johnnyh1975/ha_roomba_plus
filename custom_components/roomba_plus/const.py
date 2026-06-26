@@ -154,6 +154,15 @@ DEFAULT_CLEAN_DELAY_MIN: Final = 0         # minutes
 # once given genuine millimetres.
 POSE_POINT_CM_TO_MM: Final = 10.0
 
+# ── ROOM-SEG Stage 6 — relocated from zone_store.py (deleted) ────────────────
+# Used by image.py's SMART-tier door-marker detection (inline gap-distance
+# check on the raw pose trajectory, independent of EPHEMERAL's RoomSegStore
+# pipeline) and by the historical comment above documenting the
+# POSE_POINT_CM_TO_MM unit-mismatch bug.
+GAP_THRESHOLD_MM: Final = 800     # > 80 cm gap -> doorway crossing
+MIN_DOOR_WIDTH_MM: Final = 600.0  # Narrower -> likely furniture gap, not a door
+MAX_DOOR_WIDTH_MM: Final = 1200.0 # Wider -> likely open archway
+
 # ── v2.2.0 — new service ──────────────────────────────────────────────────────
 SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when robot A finishes
 

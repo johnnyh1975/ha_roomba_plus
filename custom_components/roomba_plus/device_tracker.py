@@ -12,10 +12,16 @@ coordinates are needed at all; HA core was already built for exactly this
   the SAME function RoombaMissionProgress's current_room attribute uses,
   so the two entities always agree.
 - EPHEMERAL robots (900-series, e.g. the 980): room/zone-level detection
-  is NOT yet reliable enough to surface here — ZoneStore's gap-based zone
-  splitting was found structurally limited for robots with dense MQTT
-  pose sampling (confirmed: max inter-sample step 340mm, far short of the
-  800mm door-gap threshold — see project notes, June 2026). Deliberately
+  is NOT yet wired in here. ZoneStore's gap-based zone splitting (the
+  original room-detection mechanism) was found structurally limited for
+  robots with dense MQTT pose sampling (confirmed: max inter-sample step
+  340mm, far short of the 800mm door-gap threshold — see project notes,
+  June 2026) and has since been removed entirely (ROOM-SEG, see
+  ROOM_SEGMENTATION_NOTES.md). RoomSegStore (watershed segmentation on
+  GridStore) replaced it for room naming/the live map, and could in
+  principle fill this extension point too — resolving "which room is the
+  robot in right now" from RoomSegStore's room cells + live pose is a
+  reasonable next step, just not implemented yet. Deliberately
   isolated in its own function (_resolve_ephemeral_tier_room) so that once
   EPHEMERAL room/zone detection improves, only that one function needs to
   change — nothing else in this platform.
@@ -129,15 +135,19 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
     def _resolve_ephemeral_tier_room(self, data: Any) -> str | None:
         """EPHEMERAL-tier room/zone resolution — EXTENSION POINT.
 
-        Currently always returns None: ZoneStore's gap-based zone
-        detection was found structurally limited for robots with dense
-        MQTT pose sampling (confirmed June 2026: max inter-sample step
-        340mm vs. the 800mm door-gap threshold — a real doorway is
-        crossed in many small steps, never one qualifying gap). Once
-        EPHEMERAL room/zone detection is fixed (a separate, larger piece
-        of work — see project notes), fill in here. Nothing else in this
-        platform needs to change: location_name, the docked check, and
-        the attribute exposure below are all tier-agnostic already.
+        Currently always returns None. The original mechanism this would
+        have used (ZoneStore's gap-based zone detection) was found
+        structurally limited for robots with dense MQTT pose sampling
+        (confirmed June 2026: max inter-sample step 340mm vs. the 800mm
+        door-gap threshold — a real doorway is crossed in many small
+        steps, never one qualifying gap) and has since been removed
+        entirely (ROOM-SEG, see ROOM_SEGMENTATION_NOTES.md). RoomSegStore
+        replaced it for room naming/the live map and could fill this
+        extension point too (resolve current room from RoomSegStore's
+        room cells + live pose) — a reasonable next step, not yet done.
+        Nothing else in this platform needs to change: location_name, the
+        docked check, and the attribute exposure below are all
+        tier-agnostic already.
         """
         return None
 

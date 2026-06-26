@@ -51,6 +51,9 @@ from .const import (
     DOMAIN,
     END_SIGNAL_DEBOUNCE_COUNT,
     END_SIGNAL_MIN_HOLD_SECONDS,
+    GAP_THRESHOLD_MM,
+    MAX_DOOR_WIDTH_MM,
+    MIN_DOOR_WIDTH_MM,
     MISSION_END_PHASES,
     POSE_POINT_CM_TO_MM,
     REGION_TYPE_ICONS,
@@ -60,7 +63,6 @@ from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
 from .models import MapCapability, RoombaConfigEntry
-from .zone_store import GAP_THRESHOLD_MM, MAX_DOOR_WIDTH_MM, MIN_DOOR_WIDTH_MM, ZoneStore
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -152,7 +154,6 @@ async def async_setup_entry(
             roomba=data.roomba,
             blid=data.blid,
             renderer=data.renderer,
-            zone_store=data.zone_store,
             map_capability=data.map_capability,
             config_entry=config_entry,
         )
@@ -188,6 +189,30 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def _check_dock_drift(final_position_mm: tuple[float, float]) -> tuple[float, float]:
+    """Detect coordinate drift by comparing final position to dock origin.
+
+    The Roomba always returns to the dock (0,0) after a successful mission.
+    If final_position_mm significantly differs from origin, this is drift.
+    Returns a (dx, dy) correction offset; (0,0) if within threshold.
+
+    ROOM-SEG Stage 6 — relocated from ZoneStore.check_dock_drift() (deleted
+    along with the rest of ZoneStore). Always was a pure function of its
+    one argument with no dependency on ZoneStore's own state; only ever
+    called from this module, so it lives here now rather than anywhere
+    that needs a ZoneStore instance just to reach it.
+    """
+    dx, dy = final_position_mm
+    threshold = 300.0  # mm — 30 cm drift is detectable
+    if abs(dx) > threshold or abs(dy) > threshold:
+        _LOGGER.debug(
+            "Map: dock drift detected — final pos (%.0f, %.0f), threshold %.0f mm",
+            dx, dy, threshold,
+        )
+        return (-dx, -dy)
+    return (0.0, 0.0)
+
+
 class RoombaMapImage(IRobotEntity, ImageEntity):
     """Live cleaning map as an ImageEntity.
 
@@ -212,7 +237,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         roomba: Any,
         blid: str,
         renderer: MapRenderer | None,
-        zone_store: ZoneStore | None,
         map_capability: MapCapability,
         config_entry: RoombaConfigEntry,
     ) -> None:
@@ -224,7 +248,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self.access_tokens: collections.deque = collections.deque([], 2)
 
         self._renderer = renderer
-        self._zone_store = zone_store
         self._map_capability = map_capability
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_map"
@@ -586,30 +609,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # drift vectors and inflated cumulative_drift_mm to >900 mm.
         _dock_return = ending_phase in {"charge", "hmPostMsn"}
 
+        # ROOM-SEG Stage 6 — ZoneStore's process_mission()/room detection
+        # removed entirely (gap heuristic, unreliable — see
+        # ROOM_SEGMENTATION_NOTES.md). Dock-drift detection itself is
+        # unrelated to room detection, so it's kept as a standalone
+        # function (_check_dock_drift, below) rather than removed with it.
         if (self._map_capability == MapCapability.EPHEMERAL
-                and self._zone_store
+                and _dock_return
                 and len(self._mission_points) >= 20):
-            # Compute drift once — used by both ZoneStore log and GeometryStore.
-            drift_vector = (0.0, 0.0)
-            if _dock_return:
-                drift_vector = self._zone_store.check_dock_drift(self._mission_points[-1])
+            drift_vector = _check_dock_drift(self._mission_points[-1])
             if drift_vector != (0.0, 0.0):
                 _LOGGER.info("Map: drift %.0f,%.0f mm", *drift_vector)
 
-            ts = dt_util.now(datetime.timezone.utc).timestamp()
-            new_zones = self._zone_store.process_mission(self._mission_points, ts)
-            if new_zones:
-                asyncio.run_coroutine_threadsafe(self._trigger_zone_issue(), loop)
-            asyncio.run_coroutine_threadsafe(
-                self._zone_store.async_save(self.hass, self._config_entry.entry_id),
-                loop,
-            )
-
-            # Update geometry store from this mission's gap midpoints.
-            # Must run after process_mission() so last_mission_gap_midpoints is set.
             data = self._config_entry.runtime_data
             if data.geometry_store:
-                data.geometry_store.update_from_mission(self._zone_store)
                 if drift_vector != (0.0, 0.0):
                     threshold_exceeded = data.geometry_store.record_drift(*drift_vector)
                     if threshold_exceeded:
@@ -718,6 +731,54 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     ),
                     loop,
                 )
+
+                # ROOM-SEG — recompute room/door segmentation from the
+                # just-updated GridStore. EPHEMERAL only (SMART robots get
+                # authoritative room data from the cloud already). Runs
+                # synchronously on THIS thread, not the event loop — this
+                # whole method is already off-loop (see the
+                # asyncio.run_coroutine_threadsafe calls throughout), so
+                # the CPU-bound segmentation work here doesn't block HA.
+                if (
+                    self._map_capability == MapCapability.EPHEMERAL
+                    and _gdata.room_seg_store is not None
+                ):
+                    _unconfirmed_before = len(_gdata.room_seg_store.unconfirmed_rooms)
+                    _recomputed = _gdata.room_seg_store.maybe_recompute(
+                        _gdata.grid_store.cells
+                    )
+                    if _recomputed:
+                        # ROOM-SEG — fire the same naming-wizard Repair Issue
+                        # ZoneStore used to trigger, only when the count of
+                        # unconfirmed rooms actually grew (mirrors `if
+                        # new_zones:` above — a fresh genuinely-new room was
+                        # found, not just an existing unconfirmed one
+                        # persisting across this recompute).
+                        if len(_gdata.room_seg_store.unconfirmed_rooms) > _unconfirmed_before:
+                            asyncio.run_coroutine_threadsafe(self._trigger_zone_issue(), loop)
+                        asyncio.run_coroutine_threadsafe(
+                            _gdata.room_seg_store.async_save(
+                                self.hass, self._config_entry.entry_id
+                            ),
+                            loop,
+                        )
+                        # ROOM-SEG — sync GeometryStore's door_markers from
+                        # the just-recomputed RoomSegStore.doors, replacing
+                        # the old zone_store-fed update_from_mission() path
+                        # (gap heuristic, unreliable — see
+                        # ROOM_SEGMENTATION_NOTES.md). Only when rooms
+                        # actually changed this mission, same gating as the
+                        # recompute itself above.
+                        if _gdata.geometry_store is not None:
+                            _gdata.geometry_store.update_from_room_seg_store(
+                                _gdata.room_seg_store
+                            )
+                            asyncio.run_coroutine_threadsafe(
+                                _gdata.geometry_store.async_save(
+                                    self.hass, self._config_entry.entry_id
+                                ),
+                                loop,
+                            )
                 _LOGGER.debug(
                     "GridStore: updated from mission — %d pose pts, %d stuck pts",
                     len(self._mission_points), len(self._stuck_mission_points),

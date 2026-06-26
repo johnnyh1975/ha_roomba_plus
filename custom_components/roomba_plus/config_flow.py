@@ -58,7 +58,7 @@ from .const import (
 )
 from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
 from .models import MapCapability, RoombaConfigEntry
-from .zone_store import ZoneStore
+from .room_seg_store import RoomSegStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -888,20 +888,23 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         opts: list[dict] = []
 
-        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
-            for zone in data.zone_store.zones:
-                pending = self._pending_zone_edits.get(str(zone.id), {})
-                name = pending.get("display_name") or zone.name
-                hidden = pending.get("hidden", zone.hidden)
+        # ROOM-SEG Stage 4 — EPHEMERAL branch backed by RoomSegStore, not
+        # ZoneStore (the gap heuristic proved unreliable — see
+        # ROOM_SEGMENTATION_NOTES.md). SMART branch below is untouched.
+        if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
+            for room in data.room_seg_store.rooms.values():
+                pending = self._pending_zone_edits.get(str(room.id), {})
+                name = pending.get("display_name") or room.name
+                hidden = pending.get("hidden", room.hidden)
                 tags: list[str] = []
                 if hidden:
                     tags.append("hidden")
-                if not zone.confirmed:
+                if not room.confirmed:
                     tags.append("unconfirmed")
-                if str(zone.id) in self._pending_zone_edits:
+                if str(room.id) in self._pending_zone_edits:
                     tags.append("*")
                 label = name + (f" [{', '.join(tags)}]" if tags else "")
-                opts.append({"value": str(zone.id), "label": label})
+                opts.append({"value": str(room.id), "label": label})
 
         elif data.map_capability == MapCapability.SMART:
             aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
@@ -941,10 +944,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     def _resolve_current_zone_name(self, zone_id: str, data: Any, options: dict) -> str:
         """Resolve the best current display name for zone_id."""
 
-        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
-            for zone in data.zone_store.zones:
-                if str(zone.id) == zone_id:
-                    return zone.name
+        if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
+            room = data.room_seg_store.rooms.get(zone_id)
+            if room is not None:
+                return room.name
             return f"Zone {zone_id}"
 
         aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
@@ -962,10 +965,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     def _resolve_current_zone_hidden(self, zone_id: str, data: Any, options: dict) -> bool:
         """Return the current hidden state for zone_id."""
 
-        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
-            for zone in data.zone_store.zones:
-                if str(zone.id) == zone_id:
-                    return zone.hidden
+        if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
+            room = data.room_seg_store.rooms.get(zone_id)
+            if room is not None:
+                return room.hidden
             return False
         return zone_id in options.get(CONF_SMART_ZONE_HIDDEN, [])
 
@@ -975,19 +978,22 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         data = self.config_entry.runtime_data
         options = dict(self.config_entry.options)
 
-        if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
-            for zone_id_str, edit in self._pending_zone_edits.items():
-                zone_id = int(zone_id_str)
+        if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
+            # ROOM-SEG Stage 4 — RoomSegStore.SegRoom.id is already a string
+            # ("room_1", ...), unlike ZoneStore.Zone.id which was an int.
+            # No int(zone_id_str) cast here — that would raise on a string
+            # id like "room_1" if it were still present from the old code.
+            for room_id, edit in self._pending_zone_edits.items():
                 if edit.get("hidden"):
-                    data.zone_store.hide_zone(zone_id)
+                    data.room_seg_store.hide_room(room_id)
                 else:
-                    data.zone_store.unhide_zone(zone_id)
+                    data.room_seg_store.unhide_room(room_id)
                     name = edit.get("display_name", "").strip()
                     if name:
-                        data.zone_store.rename_zone(zone_id, name)
+                        data.room_seg_store.rename_room(room_id, name)
             self.hass.async_create_task(
-                data.zone_store.async_save(self.hass, self.config_entry.entry_id),
-                name="roomba_plus_zone_store_save",
+                data.room_seg_store.async_save(self.hass, self.config_entry.entry_id),
+                name="roomba_plus_room_seg_store_save",
             )
         else:
             # SMART: alias layer in options
@@ -1032,24 +1038,27 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Zone naming step — triggered by the Repair Issue after mission end.
 
-        Dynamically generates one text field per unconfirmed zone.
+        Dynamically generates one text field per unconfirmed room.
+
+        ROOM-SEG Stage 4 — backed by RoomSegStore, not ZoneStore (the gap
+        heuristic proved unreliable — see ROOM_SEGMENTATION_NOTES.md).
         """
 
         data = self.config_entry.runtime_data
-        if data.map_capability != MapCapability.EPHEMERAL or not data.zone_store:
+        if data.map_capability != MapCapability.EPHEMERAL or not data.room_seg_store:
             return self.async_create_entry(title="", data=self.config_entry.options)
 
-        zone_store: ZoneStore = data.zone_store
-        unconfirmed = zone_store.unconfirmed_zones
+        room_seg_store: RoomSegStore = data.room_seg_store
+        unconfirmed = room_seg_store.unconfirmed_rooms
 
         if user_input is not None:
-            for zone in unconfirmed:
-                name = user_input.get(f"zone_{zone.id}", "").strip()
+            for room in unconfirmed:
+                name = user_input.get(f"zone_{room.id}", "").strip()
                 if name:
-                    zone_store.rename_zone(zone.id, name)
+                    room_seg_store.rename_room(room.id, name)
             # Persist
             self.hass.async_create_task(
-                zone_store.async_save(self.hass, self.config_entry.entry_id)
+                room_seg_store.async_save(self.hass, self.config_entry.entry_id)
             )
             return self.async_create_entry(title="", data=self.config_entry.options)
 
@@ -1057,8 +1066,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=self.config_entry.options)
 
         schema = vol.Schema({
-            vol.Optional(f"zone_{z.id}", default=z.name): str
-            for z in unconfirmed
+            vol.Optional(f"zone_{r.id}", default=r.name): str
+            for r in unconfirmed
         })
         return self.async_show_form(
             step_id="zones",
@@ -1296,51 +1305,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={},
             errors=errors,
             last_step=False,
-        )
-
-    async def async_step_calibration(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Door-width calibration — adjusts map scale from measured door-gap widths."""
-
-        data = self.config_entry.runtime_data
-        if data.map_capability == MapCapability.NONE or not data.zone_store:
-            return self.async_create_entry(title="", data=self.config_entry.options)
-
-        zone_store = data.zone_store
-        renderer = data.renderer
-
-        # Use the last known mission points from the renderer
-        points_mm = renderer.points_mm if renderer else []
-        measured = None
-        if points_mm:
-            measured = zone_store.calibrate_from_gaps(points_mm)
-
-        if user_input is not None:
-            known_width = float(user_input.get("door_width_mm", 875))
-            if points_mm:
-                zone_store.calibrate_from_gaps(points_mm, known_width)
-            # Apply scale to renderer config
-            new_options = dict(self.config_entry.options)
-            new_options[CONF_MAP_SCALE] = zone_store._scale_factor * DEFAULT_MAP_SCALE
-            return self.async_create_entry(title="", data=new_options)
-
-        placeholders = {
-            "measured_cm": (
-                f"{measured * zone_store._scale_factor / 10:.0f}"
-                if measured else "—"
-            ),
-        }
-        return self.async_show_form(
-            step_id="calibration",
-            data_schema=vol.Schema({
-                vol.Optional("door_width_mm", default=875): vol.In(
-                    {875: "Standard (875 mm, DIN 18101)",
-                     750: "Narrow (750 mm)",
-                     1000: "Wide (1000 mm)"}
-                ),
-            }),
-            description_placeholders=placeholders,
         )
 
     async def async_step_cloud_credentials(

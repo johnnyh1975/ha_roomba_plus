@@ -322,6 +322,18 @@ class GridStore:
         return len(self._cells)
 
     @property
+    def cells(self) -> dict[tuple[int, int], float]:
+        """Read-only snapshot of (gx, gy) -> EMA weight for active cells.
+
+        ROOM-SEG — exposed for room_seg_store.py's segmentation pipeline,
+        which needs the actual visited-cell set, not just a count. Returns
+        a shallow copy: callers must not rely on seeing live updates, and
+        GridStore's own internal mutation is never affected by what a
+        caller does with the returned dict.
+        """
+        return dict(self._cells)
+
+    @property
     def stuck_event_count(self) -> int:
         """Total stuck events recorded."""
         return sum(v["count"] for v in self._stuck.values())

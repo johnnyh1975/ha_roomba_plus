@@ -89,13 +89,6 @@
         "title": "Nombrar habitaciones detectadas",
         "description": "{zone_count} área(s) nueva(s) detectada(s). Asigna nombres para limpiarlas individualmente:"
       },
-      "calibration": {
-        "title": "Calibración del mapa",
-        "description": "Los cruces de puertas han medido un ancho promedio de {measured_cm} cm. Selecciona el ancho real de tus puertas interiores:",
-        "data": {
-          "door_width_mm": "Ancho de puerta"
-        }
-      },
       "smart_zones": {
         "title": "Nombrar zonas Smart Map",
         "description": "{zone_count} zona(s) sin nombre (IDs: {zone_ids}). Asigna nombres para limpiarlas individualmente:"
@@ -837,6 +830,10 @@
     "battery_recharge_high": {
       "title": "Recargas frecuentes con batería degradada",
       "description": "El robot recarga frecuentemente mientras la capacidad ha caído bajo el 75 %. Considera reemplazar la batería."
+    },
+    "battery_contact_suspect": {
+      "title": "Posible problema de contacto de batería o base",
+      "description": "Se detectó un posible problema de contacto o comunicación (causa: {cause}). Picos recientes por ciclo de carga: {recent_peaks}. Un salto repentino implausible o una tendencia a la baja en el máximo alcanzado suele indicar un contacto flojo o corroído, no la batería en sí — limpia los contactos antes de sospechar de la batería."
     },
     "mixed_schedule": {
       "title": "Fuentes de programación concurrentes",

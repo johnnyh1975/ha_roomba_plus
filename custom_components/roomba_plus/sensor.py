@@ -2388,6 +2388,17 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                     name="roomba_plus_f6b_battery_retention_check",
                 )
 
+        # F6f — battery contact / bus-communication anomaly check, fed
+        # directly from the same batPct value this sensor exposes (no
+        # separate caching needed — the check function reads state itself).
+        elif key == "battery":
+            if hasattr(self.hass, "is_running") and self.hass.is_running:
+                from .repairs import async_check_battery_contact_issue
+                self.hass.async_create_task(
+                    async_check_battery_contact_issue(self.hass, self._config_entry),
+                    name="roomba_plus_f6f_battery_contact_check",
+                )
+
         return value
 
     @property

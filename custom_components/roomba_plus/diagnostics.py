@@ -80,10 +80,10 @@ async def async_get_config_entry_diagnostics(
             "ready": _outline.ready,
         }
 
-    # ── Zone subsystem ─────────────────────────────────────────────────────────
-    zone_diag: dict[str, Any] = {"available": data.zone_store is not None}
-    if data.zone_store is not None:
-        zone_diag.update(data.zone_store.diagnostic_info())
+    # ── Room subsystem (ROOM-SEG Stage 6 — RoomSegStore, not ZoneStore) ─────────
+    room_diag: dict[str, Any] = {"available": data.room_seg_store is not None}
+    if data.room_seg_store is not None:
+        room_diag.update(data.room_seg_store.diagnostic_info())
 
     diag: dict[str, Any] = {
         "integration": DOMAIN,
@@ -210,7 +210,7 @@ async def async_get_config_entry_diagnostics(
 
         # Map and zone subsystem
         "map": map_diag,
-        "zones": zone_diag,
+        "rooms": room_diag,
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

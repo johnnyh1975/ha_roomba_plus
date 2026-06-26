@@ -97,8 +97,11 @@ async def async_setup_entry(
     if has_carpet_boost(state):
         entities.append(CarpetBoostSelect(roomba, blid))
 
-    # Zone select: only for EPHEMERAL (900-series with detected zones)
-    if data.map_capability == MapCapability.EPHEMERAL and data.zone_store:
+    # Zone select: only for EPHEMERAL (900-series with detected rooms).
+    # ROOM-SEG Stage 3 — backed by RoomSegStore now, not ZoneStore (the
+    # gap heuristic proved unreliable; same unique_id/entity_id kept for
+    # a seamless transition, see ROOM_SEGMENTATION_NOTES.md).
+    if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
         entities.append(ZoneSelect(roomba, blid, config_entry))
 
     # Smart Zone select: for Smart Map robots (i/s/j/m) with pmaps.
@@ -191,14 +194,21 @@ class CleaningPassesSelect(IRobotEntity, SelectEntity):
 
 
 class ZoneSelect(IRobotEntity, SelectEntity):
-    """Select entity for choosing which detected zone to clean next.
+    """Select entity for choosing which detected room to clean next.
 
     Only created for EPHEMERAL map robots (900-series) after at least one
-    zone has been detected and confirmed by the user. The option list is
-    rebuilt whenever the ZoneStore changes.
+    room has been detected and confirmed by the user. The option list is
+    rebuilt whenever RoomSegStore changes.
 
-    Selecting a zone does not immediately start cleaning — the user presses
+    Selecting a room does not immediately start cleaning — the user presses
     the ZoneCleanButton (button.py) to trigger the actual mission.
+
+    ROOM-SEG Stage 3 — backed by RoomSegStore's watershed-based room
+    segmentation, not ZoneStore's gap-heuristic zones (the latter proved
+    unreliable in practice — see ROOM_SEGMENTATION_NOTES.md). unique_id/
+    entity_id/translation_key are all unchanged from the ZoneStore-backed
+    version, so existing dashboards and automations keep working without
+    any user-visible reconfiguration.
 
     Inherits from IRobotEntity for correct DeviceInfo (multi-Roomba safe).
     """
@@ -219,19 +229,22 @@ class ZoneSelect(IRobotEntity, SelectEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_zone_select"
 
     @property
-    def _zone_store(self) -> Any:
-        return self._config_entry.runtime_data.zone_store
+    def _room_seg_store(self) -> Any:
+        return self._config_entry.runtime_data.room_seg_store
 
     @property
     def options(self) -> list[str]:
-        """Return confirmed, non-hidden zone names as options.
+        """Return confirmed, non-hidden room names as options.
 
-        Hidden zones are excluded so they don't appear in selectors or
+        Hidden rooms are excluded so they don't appear in selectors or
         trigger the clean_zone automation surface.
         """
-        if not self._zone_store:
+        if not self._room_seg_store:
             return []
-        return [z.name for z in self._zone_store.zones if z.confirmed and not z.hidden]
+        return [
+            r.name for r in self._room_seg_store.rooms.values()
+            if r.confirmed and not r.hidden
+        ]
 
     @property
     def current_option(self) -> str | None:

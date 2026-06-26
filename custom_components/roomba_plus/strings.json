@@ -89,13 +89,6 @@
         "title": "Name detected rooms",
         "description": "{zone_count} new area(s) detected. Assign names so you can clean them individually:"
       },
-      "calibration": {
-        "title": "Map calibration",
-        "description": "Door crossings measured an average width of {measured_cm} cm. Select the actual width of your interior doors:",
-        "data": {
-          "door_width_mm": "Door width"
-        }
-      },
       "smart_zones": {
         "title": "Name Smart Map zones",
         "description": "{zone_count} zone(s) have no name yet (IDs: {zone_ids}). Assign names so you can clean them individually:"
@@ -851,6 +844,10 @@
     "battery_recharge_high": {
       "title": "High mid-mission recharging with degraded battery",
       "description": "Your robot is spending a significant proportion of cleaning time recharging mid-mission while battery capacity has dropped below 75% of its original value. Consider replacing the battery."
+    },
+    "battery_contact_suspect": {
+      "title": "Possible battery or dock contact problem",
+      "description": "Roomba+ detected evidence of a battery/dock contact or communication issue (cause: {cause}). Recent charge-cycle peak battery levels: {recent_peaks}. A sudden implausible jump in reported battery level, or a declining trend in how high it gets each charge, usually points to a loose or corroded contact rather than the battery itself — clean the contacts on the robot and dock before assuming the battery has failed."
     },
     "mixed_schedule": {
       "title": "Competing schedule sources detected",
