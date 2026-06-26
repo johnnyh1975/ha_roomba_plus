@@ -25,8 +25,6 @@ from custom_components.roomba_plus.geometry_store import DoorMarker
 from custom_components.roomba_plus.geometry_store import UserWall
 from custom_components.roomba_plus.geometry_store import UserDoor
 from custom_components.roomba_plus.geometry_store import UserObstacle
-from custom_components.roomba_plus.zone_store import Zone
-from custom_components.roomba_plus.zone_store import ZoneStore
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 from custom_components.roomba_plus.umf_aligner import UmfAligner
@@ -41,18 +39,27 @@ def _make_renderer(**kwargs) -> MapRenderer:
     return MapRenderer(cfg)
 
 
-def _make_renderer_with_stores(geometry_store=None, zone_store=None, **kwargs):
+def _make_renderer_with_stores(geometry_store=None, room_seg_store=None, **kwargs):
     cfg = RendererConfig(**kwargs)
-    return MapRenderer(cfg, geometry_store=geometry_store, zone_store=zone_store)
+    return MapRenderer(
+        cfg, geometry_store=geometry_store, room_seg_store=room_seg_store,
+    )
 
 
-def _zone_store_with_zone(x_min, x_max, y_min, y_max, zone_id=1, name="Room 1"):
-    zs = ZoneStore()
-    z = Zone(id=zone_id, name=name, confirmed=False,
-             x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
-             confidence=0.5)
-    zs.zones.append(z)
-    return zs
+def _room_seg_store_with_room(x_min, x_max, y_min, y_max, room_id="room_1",
+                               name="Room 1", hidden=False):
+    """ROOM-SEG Stage 5 test helper -- builds a RoomSegStore with a single
+    SegRoom whose bbox exactly matches the given mm rectangle, via a
+    rectangular cell block at CELL_MM resolution (SegRoom.bbox is derived
+    from actual cells, not stored directly -- see room_seg_store.py)."""
+    from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom, CELL_MM
+
+    rss = RoomSegStore()
+    gx0, gx1 = int(x_min // CELL_MM), int(x_max // CELL_MM)
+    gy0, gy1 = int(y_min // CELL_MM), int(y_max // CELL_MM)
+    cells = {(x, y) for x in range(gx0, gx1 + 1) for y in range(gy0, gy1 + 1)}
+    rss.rooms = {room_id: SegRoom(id=room_id, name=name, hidden=hidden, cells=cells)}
+    return rss
 
 
 def _render_is_valid_png(renderer) -> bool:
@@ -447,14 +454,16 @@ class TestMapRendererConstructorSignature:
     def test_no_stores_creates_renderer(self):
         r = MapRenderer(RendererConfig())
         assert r._geometry_store is None
-        assert r._zone_store is None
+        assert r._room_seg_store is None
 
     def test_stores_stored_as_attributes(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
         gs = GeometryStore()
-        zs = ZoneStore()
-        r = MapRenderer(RendererConfig(), geometry_store=gs, zone_store=zs)
+        rs = RoomSegStore()
+        r = MapRenderer(RendererConfig(), geometry_store=gs, room_seg_store=rs)
         assert r._geometry_store is gs
-        assert r._zone_store is zs
+        assert r._room_seg_store is rs
 
     def test_render_with_no_stores_returns_valid_png(self):
         r = _make_renderer_with_stores()
@@ -463,44 +472,103 @@ class TestMapRendererConstructorSignature:
 
     def test_render_with_none_stores_no_exception(self):
         """render() must never raise when stores are None."""
-        r = _make_renderer_with_stores(geometry_store=None, zone_store=None)
+        r = _make_renderer_with_stores(geometry_store=None, room_seg_store=None)
         r.render()  # no points, no stores — should return None or bytes, not raise
 
 
 class TestInferenceSuggestionsLayer:
     def test_suggestion_produces_non_white_pixels(self):
-        """With a zone, some pixels should differ from background white."""
-        zs = _zone_store_with_zone(-1000, 1000, -1000, 1000, name="Living")
+        """With a room, some pixels should differ from background white.
+
+        ROOM-SEG Stage 5 — uses room_seg_store=, not zone_store=, since
+        _draw_inference_suggestions now reads RoomSegStore for the outline.
+        (Previously this test passed "vacuously" via the unrelated pose-
+        trail pixels even when zone_store's outline code path had nothing
+        to draw — same risk applies here if room_seg_store ever stops
+        actually being read, so the dedicated outline-pixel test below is
+        the one that would actually catch that.)
+        """
+        rs = _room_seg_store_with_room(-1000, 1000, -1000, 1000, name="Living")
         gs = GeometryStore()
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=zs)
+        r = _make_renderer_with_stores(geometry_store=gs, room_seg_store=rs)
         r.add_pose(100, 100, 0)
         png = r.render()
         assert png[:4] == PNG_MAGIC
-        # The rendered image should not be entirely white —
-        # zone outline or cleaned area should have coloured pixels
         from PIL import Image
         import io
         img = Image.open(io.BytesIO(png)).convert("RGBA")
         pixels = list(img.getdata())
-        # getdata() returns a sequence of (r,g,b,a) tuples
-        # Check that not every pixel is white (255,255,255,255)
         white_pixel = (255, 255, 255, 255)
         all_white = all(p == white_pixel for p in pixels)
         assert not all_white
 
+    def test_room_outline_drawn_room_with_no_outline_not_drawn(self):
+        """Direct regression check that the outline pixels themselves
+        come from RoomSegStore, not merely from the unrelated pose dot.
+
+        Auto-fit scales the canvas to the POSE TRAIL's bounds only (see
+        _compute_fit -- unchanged, pre-existing behaviour, not affected by
+        this ROOM-SEG swap), not to any room/zone bbox. So the pose trail
+        here must itself span the same area as the room, or the room's
+        outline rectangle would fall outside the auto-fitted canvas and
+        this comparison would (mis)report "no difference" for that reason
+        instead of actually testing whether the outline draws.
+        """
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        def _add_spanning_trail(r):
+            for x, y in [(-900, -900), (900, 900), (-900, 900), (900, -900), (100, 100)]:
+                r.add_pose(x, y, 0)
+
+        gs = GeometryStore()
+        r_empty = _make_renderer_with_stores(geometry_store=gs, room_seg_store=RoomSegStore())
+        _add_spanning_trail(r_empty)
+        png_empty = r_empty.render()
+
+        rs = _room_seg_store_with_room(-1000, 1000, -1000, 1000, name="Living")
+        gs2 = GeometryStore()
+        r_with_room = _make_renderer_with_stores(geometry_store=gs2, room_seg_store=rs)
+        _add_spanning_trail(r_with_room)
+        png_with_room = r_with_room.render()
+
+        assert png_empty != png_with_room
+
+    def test_hidden_room_outline_not_drawn(self):
+        """ROOM-SEG Stage 5 — hidden rooms are excluded from the map
+        overlay (a deliberate fix: the old ZoneStore-backed code drew
+        hidden zones' outlines too, inconsistently with hidden zones
+        already being excluded from selectors/repair issues)."""
+        def _add_spanning_trail(r):
+            for x, y in [(-900, -900), (900, 900), (-900, 900), (900, -900), (100, 100)]:
+                r.add_pose(x, y, 0)
+
+        gs = GeometryStore()
+        rs_hidden = _room_seg_store_with_room(-1000, 1000, -1000, 1000, hidden=True)
+        r_hidden = _make_renderer_with_stores(geometry_store=gs, room_seg_store=rs_hidden)
+        _add_spanning_trail(r_hidden)
+        png_hidden = r_hidden.render()
+
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+        gs2 = GeometryStore()
+        r_empty = _make_renderer_with_stores(geometry_store=gs2, room_seg_store=RoomSegStore())
+        _add_spanning_trail(r_empty)
+        png_empty = r_empty.render()
+
+        assert png_hidden == png_empty
+
     def test_suggestion_suppressed_when_user_geometry_exists(self):
         """When user walls exist, suggestions should not be drawn.
-        We verify this by checking the zone_store suggestion is suppressed
-        (no exception, valid PNG, user geometry takes over).
+        We verify this by checking the room_seg_store suggestion is
+        suppressed (no exception, valid PNG, user geometry takes over).
         """
-        zs = _zone_store_with_zone(-1000, 1000, -1000, 1000)
+        rs = _room_seg_store_with_room(-1000, 1000, -1000, 1000)
         gs = GeometryStore()
         gs.apply_user_edit({
             "walls": [{"id": "w1", "x1": -500.0, "y1": 500.0,
                        "x2": 500.0, "y2": 500.0, "label": ""}],
             "doors": [], "obstacles": [],
         })
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=zs)
+        r = _make_renderer_with_stores(geometry_store=gs, room_seg_store=rs)
         r.add_pose(100, 100, 0)
         png = r.render()
         assert png[:4] == PNG_MAGIC
@@ -512,7 +580,7 @@ class TestInferenceSuggestionsLayer:
         m = DoorMarker(id="dm_1", cx=0.0, cy=0.0, mission_count=1,
                        observations=[[0.0, 0.0]])
         gs.door_markers.append(m)
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=ZoneStore())
+        r = _make_renderer_with_stores(geometry_store=gs)
         r.add_pose(100, 100, 0)
         png = r.render()
         assert png[:4] == PNG_MAGIC  # no crash, valid output
@@ -523,15 +591,15 @@ class TestInferenceSuggestionsLayer:
         m = DoorMarker(id="dm_1", cx=0.0, cy=100.0, mission_count=2,
                        observations=[[0.0, 100.0], [0.0, 100.0]])
         gs.door_markers.append(m)
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=ZoneStore())
+        r = _make_renderer_with_stores(geometry_store=gs)
         r.add_pose(100, 100, 0)
         png = r.render()
         assert png[:4] == PNG_MAGIC
 
-    def test_no_zone_store_no_suggestion_no_crash(self):
-        """With zone_store=None, suggestions are skipped silently."""
+    def test_no_room_seg_store_no_suggestion_no_crash(self):
+        """With room_seg_store=None, suggestions are skipped silently."""
         gs = GeometryStore()
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=None)
+        r = _make_renderer_with_stores(geometry_store=gs, room_seg_store=None)
         r.add_pose(100, 200, 0)
         assert _render_is_valid_png(r)
 
@@ -631,9 +699,9 @@ class TestLayerOrdering:
         that pose position to find at least one non-white pixel from the
         cleaned-area circle (radius = 15px at scale=10mm/px).
         """
-        zs = _zone_store_with_zone(-2000, 2000, -2000, 2000, name="Big Room")
+        rs = _room_seg_store_with_room(-2000, 2000, -2000, 2000, name="Big Room")
         gs = GeometryStore()
-        r = _make_renderer_with_stores(geometry_store=gs, zone_store=zs)
+        r = _make_renderer_with_stores(geometry_store=gs, room_seg_store=rs)
         # Pose at (500, 500) mm — clearly away from dock and canvas edges
         r.add_pose(500, 500, 0)
         png = r.render()

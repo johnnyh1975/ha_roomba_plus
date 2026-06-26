@@ -49,13 +49,13 @@ def _make_store():
     return store
 
 
-def _make_entry(store, map_capability_val="none", zone_store=None,
+def _make_entry(store, map_capability_val="none", room_seg_store=None,
                 cloud_coordinator=None):
     """Build a minimal config entry stub for callback tests."""
     from custom_components.roomba_plus.models import MapCapability
 
     cap = MapCapability(map_capability_val)
-    _zone_store = zone_store
+    _room_seg_store = room_seg_store
     _cloud_coordinator = cloud_coordinator
 
     class _FakeData:
@@ -70,8 +70,8 @@ def _make_entry(store, map_capability_val="none", zone_store=None,
         maintenance_store = _FakeMaintenanceStore()
 
         @property
-        def zone_store(self):
-            return _zone_store
+        def room_seg_store(self):
+            return _room_seg_store
 
         @property
         def cloud_coordinator(self):
@@ -174,7 +174,7 @@ def _make_callback_env():
     runtime_data.demand_triggered_ts = None
     runtime_data.mission_timer_store = None
     runtime_data.presence_manager = None
-    runtime_data.zone_store = None
+    runtime_data.room_seg_store = None
     runtime_data.map_capability = MagicMock()
 
     entry = MagicMock()
@@ -727,6 +727,105 @@ class TestMissionCompleteCallback:
         with patch("custom_components.roomba_plus.callbacks.async_call_later"):
             make_mission_complete_callback(hass, cc, entry)
         entry.async_on_unload.assert_called_once()
+
+    def test_v2_10_1_unrelated_backfill_of_old_record_does_not_fool_checkpoint_1(self):
+        """Regression test for Thonno's v2.9.1 retest report: an unrelated
+        backfill pass enriching the OLD (previous mission's) record in
+        place, at almost exactly the moment checkpoint 1 runs its
+        done-check, must not be mistaken for OUR mission's own record
+        being ready -- checkpoint 2 must still get scheduled, and must
+        correctly still report "not done" if the real mission's record
+        hasn't itself been enriched yet by the time checkpoint 2 runs.
+
+        Mirrors the exact sequence from the real log: old_record (a prior
+        stuck-and-abandoned mission) has NO timeline when checkpoint 1 is
+        scheduled, gains one via an unrelated in-place mutation before
+        checkpoint 1's done-check runs (simulating the coincidental
+        12:30:13-style backfill), while the real mission's own record
+        (new_record) isn't appended until checkpoint 2 is already pending.
+        """
+        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
+
+        old_record = {"id": "m_old", "timeline": None}
+        new_record = {"id": "m_new", "timeline": None}
+        state = {"latest": old_record}
+
+        cc = MagicMock()
+        cc.async_request_refresh = AsyncMock()
+        hass = MagicMock()
+        hass.loop = asyncio.new_event_loop()
+        entry = MagicMock()
+        entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
+
+        captured: list = []
+        with patch("custom_components.roomba_plus.callbacks.async_call_later",
+                    side_effect=self._fake_later(captured)):
+            cb = make_mission_complete_callback(hass, cc, entry)
+            cb(self._msg("run"))
+            cb(self._msg("charge"))  # mission-end -> checkpoint 1 scheduled
+            self._drain(hass)
+            assert len(captured) == 1
+
+            # Unrelated backfill enriches the OLD record in place, BEFORE
+            # checkpoint 1's done-check runs -- this is the exact moment
+            # that fooled the pre-fix logic.
+            old_record["timeline"] = {"finEvents": []}
+
+            # Checkpoint 1 fires: old_record now superficially "has a
+            # timeline", but it is NOT a new record -- must not be
+            # mistaken for success.
+            hass.loop.run_until_complete(captured[0][1](None))
+            assert len(captured) == 2, (
+                "checkpoint 2 must still be scheduled -- an unrelated "
+                "record's in-place enrichment must not look like success"
+            )
+
+            # The real mission finally gets recorded as a genuinely NEW
+            # object, still without a timeline of its own yet.
+            state["latest"] = new_record
+
+            # Checkpoint 2 fires before the real backfill catches up:
+            # must correctly still report "not done" and warn, not crash.
+            with patch("custom_components.roomba_plus.callbacks._LOGGER") as mock_logger:
+                hass.loop.run_until_complete(captured[1][1](None))
+                mock_logger.warning.assert_called_once()
+
+    def test_v2_10_1_real_mission_succeeds_via_checkpoint_2(self):
+        """Same scenario as above, but the real backfill DOES catch up by
+        checkpoint 2 -- this must be recognized as success."""
+        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
+
+        old_record = {"id": "m_old", "timeline": None}
+        new_record = {"id": "m_new", "timeline": None}
+        state = {"latest": old_record}
+
+        cc = MagicMock()
+        cc.async_request_refresh = AsyncMock()
+        hass = MagicMock()
+        hass.loop = asyncio.new_event_loop()
+        entry = MagicMock()
+        entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
+
+        captured: list = []
+        with patch("custom_components.roomba_plus.callbacks.async_call_later",
+                    side_effect=self._fake_later(captured)):
+            cb = make_mission_complete_callback(hass, cc, entry)
+            cb(self._msg("run"))
+            cb(self._msg("charge"))
+            self._drain(hass)
+
+            old_record["timeline"] = {"finEvents": []}  # unrelated enrichment
+            hass.loop.run_until_complete(captured[0][1](None))  # checkpoint 1
+            assert len(captured) == 2
+
+            # Real mission recorded AND backfilled by the time checkpoint
+            # 2 runs.
+            new_record["timeline"] = {"finEvents": [{"type": "room"}]}
+            state["latest"] = new_record
+
+            with patch("custom_components.roomba_plus.callbacks._LOGGER") as mock_logger:
+                hass.loop.run_until_complete(captured[1][1](None))
+                mock_logger.warning.assert_not_called()
 
 
 class TestErrorContextFields:
@@ -1683,7 +1782,7 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
         from custom_components.roomba_plus.models import MapCapability
 
         entry = MagicMock()
-        entry.runtime_data.zone_store = None
+        entry.runtime_data.room_seg_store = None
         entry.runtime_data.map_capability = MapCapability.SMART
         entry.runtime_data.cloud_coordinator.regions = [
             {"id": "1", "name": "Kitchen"},
@@ -1703,7 +1802,7 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
         from custom_components.roomba_plus.models import MapCapability
 
         entry = MagicMock()
-        entry.runtime_data.zone_store = None
+        entry.runtime_data.room_seg_store = None
         entry.runtime_data.map_capability = MapCapability.SMART
         entry.runtime_data.cloud_coordinator.regions = [{"id": "1", "name": "Kitchen"}]
         entry.runtime_data.roomba.master_state = {
@@ -1713,4 +1812,21 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
             "cleanMissionStatus": {"phase": "run"},
             "lastCommand": {"regions": [{"region_id": "1"}]},
         }
+        assert _capture_zone_names(entry, reported) == ["Kitchen"]
+
+    def test_ephemeral_returns_confirmed_room_seg_store_names(self):
+        """ROOM-SEG Stage 6 — EPHEMERAL branch now reads RoomSegStore,
+        not the deleted ZoneStore."""
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        rss = RoomSegStore()
+        rss.rooms = {
+            "room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True),
+            "room_2": SegRoom(id="room_2", name="", confirmed=False),
+        }
+        entry = MagicMock()
+        entry.runtime_data.room_seg_store = rss
+        reported = {"cleanMissionStatus": {"phase": "run"}}
+
         assert _capture_zone_names(entry, reported) == ["Kitchen"]

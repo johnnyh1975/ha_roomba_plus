@@ -30,10 +30,9 @@ from custom_components.roomba_plus.geometry_store import GeometryStore
 from custom_components.roomba_plus.geometry_store import UserDoor
 from custom_components.roomba_plus.geometry_store import UserObstacle
 from custom_components.roomba_plus.geometry_store import UserWall
-from custom_components.roomba_plus.zone_store import GAP_THRESHOLD_MM
-from custom_components.roomba_plus.zone_store import MAX_DOOR_WIDTH_MM
-from custom_components.roomba_plus.zone_store import MIN_DOOR_WIDTH_MM
-from custom_components.roomba_plus.zone_store import ZoneStore
+from custom_components.roomba_plus.const import GAP_THRESHOLD_MM
+from custom_components.roomba_plus.const import MAX_DOOR_WIDTH_MM
+from custom_components.roomba_plus.const import MIN_DOOR_WIDTH_MM
 
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -42,31 +41,6 @@ ha_core.HomeAssistant = object
 _store_cls = MagicMock()
 ha_storage = types.ModuleType("homeassistant.helpers.storage")
 ha_storage.Store = _store_cls
-
-
-def _make_zone_store_with_midpoints(
-    midpoints: list[tuple[float, float]],
-) -> ZoneStore:
-    """Return a ZoneStore whose last_mission_gap_midpoints is pre-set."""
-    zs = ZoneStore()
-    zs.last_mission_gap_midpoints = list(midpoints)
-    return zs
-
-
-def _linear_points(
-    n: int = 30, x_start: float = 0, y_start: float = 0, step: float = 100
-) -> list[tuple[float, float]]:
-    """Return n evenly-spaced points along the x-axis."""
-    return [(x_start + i * step, y_start) for i in range(n)]
-
-
-def _mission_with_gap(
-    gap_mm: float,
-) -> list[tuple[float, float]]:
-    """30 points in one segment, gap_mm jump, 30 more points."""
-    seg1 = _linear_points(30, x_start=0)
-    seg2 = _linear_points(30, x_start=seg1[-1][0] + gap_mm)
-    return seg1 + seg2
 
 
 def _make_gs() -> GeometryStore:
@@ -148,77 +122,6 @@ def _record_with_traversals(rids):
     }
 
 
-class TestZoneStoreGapMidpoints:
-    def test_field_exists_and_is_list(self):
-        zs = ZoneStore()
-        assert isinstance(zs.last_mission_gap_midpoints, list)
-        assert zs.last_mission_gap_midpoints == []
-
-    def test_midpoint_recorded_for_door_width_gap(self):
-        zs = ZoneStore()
-        gap = (MIN_DOOR_WIDTH_MM + MAX_DOOR_WIDTH_MM) / 2  # 900 mm — in range
-        points = _mission_with_gap(gap)
-        zs.process_mission(points, 0.0)
-        assert len(zs.last_mission_gap_midpoints) == 1
-        mx, my = zs.last_mission_gap_midpoints[0]
-        # Midpoint x should be halfway across the gap
-        seg1_end_x = _linear_points(30)[-1][0]
-        expected_x = seg1_end_x + gap / 2
-        assert abs(mx - expected_x) < 1.0
-        assert my == 0.0
-
-    def test_no_midpoint_for_gap_below_door_min(self):
-        zs = ZoneStore()
-        gap = MIN_DOOR_WIDTH_MM - 50  # 550 mm — narrower than a door
-        # This gap is also below GAP_THRESHOLD_MM so no split at all
-        points = _mission_with_gap(gap)
-        zs.process_mission(points, 0.0)
-        assert zs.last_mission_gap_midpoints == []
-
-    def test_no_midpoint_for_gap_above_door_max(self):
-        zs = ZoneStore()
-        gap = MAX_DOOR_WIDTH_MM + 100  # 1300 mm — too wide for a door
-        points = _mission_with_gap(gap)
-        zs.process_mission(points, 0.0)
-        # gap > GAP_THRESHOLD_MM so split occurs, but gap > MAX_DOOR_WIDTH_MM
-        # so no midpoint is recorded
-        assert zs.last_mission_gap_midpoints == []
-
-    def test_midpoints_reset_between_missions(self):
-        zs = ZoneStore()
-        gap = 900.0
-        points = _mission_with_gap(gap)
-        zs.process_mission(points, 0.0)
-        assert len(zs.last_mission_gap_midpoints) == 1
-        # Second mission with no qualifying gap — midpoints must reset to []
-        zs.process_mission(_linear_points(30), 1.0)
-        assert zs.last_mission_gap_midpoints == []
-
-    def test_multiple_gaps_in_one_mission(self):
-        zs = ZoneStore()
-        gap = 900.0
-        seg = _linear_points(30, x_start=0)
-        seg2 = _linear_points(30, x_start=seg[-1][0] + gap)
-        seg3 = _linear_points(30, x_start=seg2[-1][0] + gap)
-        points = seg + seg2 + seg3
-        zs.process_mission(points, 0.0)
-        assert len(zs.last_mission_gap_midpoints) == 2
-
-    def test_midpoints_not_persisted(self):
-        """last_mission_gap_midpoints must not appear in ZoneStore serialisation."""
-        zs = ZoneStore()
-        zs.last_mission_gap_midpoints = [(100.0, 200.0)]
-        # Manually check _zone_to_dict doesn't include it
-        # (ZoneStore serialises zones list, not the field itself)
-        zs_dict = {
-            "next_id": zs._next_id,
-            "gap_threshold_mm": zs._gap_threshold_mm,
-            "scale_factor": zs._scale_factor,
-            "zones": [ZoneStore._zone_to_dict(z) for z in zs.zones],
-        }
-        assert "last_mission_gap_midpoints" not in zs_dict
-
-
 class TestDoorMarker:
     def test_initial_state(self):
         m = DoorMarker(id="dm_1", cx=100.0, cy=200.0)
@@ -278,67 +181,6 @@ class TestDoorMarker:
         m = DoorMarker.from_dict({"id": "dm_1", "cx": 10.0, "cy": 20.0})
         assert m.observations == []
         assert m.mission_count == 0
-
-
-class TestGeometryStoreUpdateFromMission:
-    def test_single_midpoint_creates_marker(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(500.0, 300.0)])
-        gs.update_from_mission(zs)
-        assert len(gs.door_markers) == 1
-        assert gs.door_markers[0].cx == pytest.approx(500.0)
-        assert gs.door_markers[0].cy == pytest.approx(300.0)
-        assert gs.door_markers[0].mission_count == 1
-
-    def test_two_close_midpoints_update_same_marker(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(500.0, 300.0)])
-        gs.update_from_mission(zs)
-        # Second mission, close midpoint
-        zs2 = _make_zone_store_with_midpoints([(520.0, 310.0)])
-        gs.update_from_mission(zs2)
-        assert len(gs.door_markers) == 1
-        assert gs.door_markers[0].mission_count == 2
-
-    def test_two_far_midpoints_create_separate_markers(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(500.0, 300.0)])
-        gs.update_from_mission(zs)
-        zs2 = _make_zone_store_with_midpoints([(500.0 + DOOR_CLUSTER_TOL_MM + 100, 300.0)])
-        gs.update_from_mission(zs2)
-        assert len(gs.door_markers) == 2
-
-    def test_exactly_at_cluster_tolerance_is_same_marker(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(0.0, 0.0)])
-        gs.update_from_mission(zs)
-        # Strictly less than DOOR_CLUSTER_TOL_MM — should cluster
-        zs2 = _make_zone_store_with_midpoints([(DOOR_CLUSTER_TOL_MM - 1, 0.0)])
-        gs.update_from_mission(zs2)
-        assert len(gs.door_markers) == 1
-
-    def test_no_midpoints_no_markers(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([])
-        gs.update_from_mission(zs)
-        assert gs.door_markers == []
-
-    def test_marker_ids_are_stable_and_unique(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([
-            (100.0, 0.0),
-            (2000.0, 0.0),
-        ])
-        gs.update_from_mission(zs)
-        ids = [m.id for m in gs.door_markers]
-        assert len(set(ids)) == 2
-
-    def test_markers_not_overwritten_by_apply_user_edit(self):
-        gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(500.0, 300.0)])
-        gs.update_from_mission(zs)
-        gs.apply_user_edit({"walls": [], "doors": [], "obstacles": []})
-        assert len(gs.door_markers) == 1
 
 
 class TestGeometryStoreDrift:
@@ -438,8 +280,10 @@ class TestGeometryStoreApplyUserEdit:
 
     def test_door_markers_unchanged(self):
         gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(500.0, 300.0)])
-        gs.update_from_mission(zs)
+        gs.door_markers.append(
+            DoorMarker(id="dm_1", cx=500.0, cy=300.0, mission_count=1,
+                       observations=[[500.0, 300.0]])
+        )
         gs.apply_user_edit({"walls": [self._wall()], "doors": [], "obstacles": []})
         assert len(gs.door_markers) == 1
 
@@ -453,67 +297,6 @@ class TestGeometryStoreApplyUserEdit:
         assert len(gs.walls) == 2
         assert len(gs.doors) == 1
         assert len(gs.obstacles) == 3
-
-
-class TestGeometryStoreInferenceSuggestions:
-    def _zone_store_with_zone(
-        self, x_min, x_max, y_min, y_max, zone_id=1, name="Room 1", confidence=0.5
-    ):
-        from custom_components.roomba_plus.zone_store import Zone
-        zs = ZoneStore()
-        z = Zone(id=zone_id, name=name, confirmed=False,
-                 x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
-                 confidence=confidence)
-        zs.zones.append(z)
-        return zs
-
-    def test_expansion_applied_correctly(self):
-        gs = GeometryStore()
-        gs.wall_offset_mm = 200
-        zs = self._zone_store_with_zone(0, 1000, 0, 1000)
-        s = gs.get_inference_suggestions(zs)
-        outline = s["zone_outlines"][0]
-        assert outline["x_min"] == -200
-        assert outline["x_max"] == 1200
-        assert outline["y_min"] == -200
-        assert outline["y_max"] == 1200
-
-    def test_zero_offset_returns_exact_bbox(self):
-        gs = GeometryStore()
-        gs.wall_offset_mm = 0
-        zs = self._zone_store_with_zone(100, 500, 200, 800)
-        s = gs.get_inference_suggestions(zs)
-        o = s["zone_outlines"][0]
-        assert o["x_min"] == 100
-        assert o["x_max"] == 500
-        assert o["y_min"] == 200
-        assert o["y_max"] == 800
-
-    def test_no_zones_returns_empty_outlines(self):
-        gs = GeometryStore()
-        zs = ZoneStore()
-        s = gs.get_inference_suggestions(zs)
-        assert s["zone_outlines"] == []
-
-    def test_none_zone_store_returns_empty(self):
-        gs = GeometryStore()
-        s = gs.get_inference_suggestions(None)
-        assert s == {"zone_outlines": [], "door_markers": []}
-
-    def test_door_markers_included(self):
-        gs = GeometryStore()
-        zs_mission = _make_zone_store_with_midpoints([(400.0, 300.0)])
-        gs.update_from_mission(zs_mission)
-        zs = ZoneStore()
-        s = gs.get_inference_suggestions(zs)
-        assert len(s["door_markers"]) == 1
-        assert s["door_markers"][0]["cx"] == pytest.approx(400.0)
-
-    def test_confidence_rounded(self):
-        gs = GeometryStore()
-        zs = self._zone_store_with_zone(0, 1000, 0, 1000, confidence=0.123456)
-        s = gs.get_inference_suggestions(zs)
-        assert s["zone_outlines"][0]["confidence"] == pytest.approx(0.123, abs=0.001)
 
 
 class TestHasUserGeometry:
@@ -537,16 +320,20 @@ class TestHasUserGeometry:
 
     def test_markers_alone_do_not_count(self):
         gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(100.0, 200.0)])
-        gs.update_from_mission(zs)
+        gs.door_markers.append(
+            DoorMarker(id="dm_1", cx=100.0, cy=200.0, mission_count=1,
+                       observations=[[100.0, 200.0]])
+        )
         assert gs.has_user_geometry is False
 
 
 class TestGeometryStoreSerialisaion:
     def _populated_store(self) -> GeometryStore:
         gs = GeometryStore()
-        zs = _make_zone_store_with_midpoints([(400.0, 300.0)])
-        gs.update_from_mission(zs)
+        gs.door_markers.append(
+            DoorMarker(id="dm_1", cx=400.0, cy=300.0, mission_count=1,
+                       observations=[[400.0, 300.0]])
+        )
         gs.apply_user_edit({
             "walls": [{"id": "w1", "x1": -2400.0, "y1": 3200.0,
                        "x2": 1900.0, "y2": 3200.0, "label": "north wall"}],
@@ -777,24 +564,6 @@ class TestUpdateFromMidpoints:
         assert ids == ["dm_1", "dm_2"]
 
 
-class TestUpdateFromMissionDelegates:
-
-    def test_ephemeral_path_still_works_via_zone_store(self):
-        """update_from_mission must remain functional after refactor."""
-        gs = _make_gs()
-        zone_store = MagicMock()
-        zone_store.last_mission_gap_midpoints = [(800.0, 400.0), (3000.0, 100.0)]
-        gs.update_from_mission(zone_store)
-        assert len(gs.door_markers) == 2
-
-    def test_empty_zone_store_midpoints_is_noop(self):
-        gs = _make_gs()
-        zone_store = MagicMock()
-        zone_store.last_mission_gap_midpoints = []
-        gs.update_from_mission(zone_store)
-        assert len(gs.door_markers) == 0
-
-
 class TestSmartPathGapDetection:
 
     def test_door_width_gap_produces_one_midpoint(self):
@@ -932,3 +701,88 @@ class TestExtractTraversalPositions:
         result = _extract_traversal_umf_positions(records, aligner, min_missions=3)
         assert len(result) == len(candidates)
         assert set(result) == set(candidates)
+
+
+class TestGeometryStoreUpdateFromRoomSegStore:
+    """ROOM-SEG — replaces update_from_mission(zone_store) for the
+    production mission-end flow. See ROOM_SEGMENTATION_NOTES.md."""
+
+    def _make_room_seg_store_with_door(self, cx, cy, door_id="door_1", n_obs=1):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegDoor
+
+        rss = RoomSegStore()
+        door = SegDoor(id=door_id, room_a="room_1", room_b="room_2",
+                        cell=(0, 0), saddle_mm=150.0)
+        for _ in range(n_obs):
+            door.cx, door.cy = cx, cy
+            door.observations.append([cx, cy])
+        rss.doors = [door]
+        return rss
+
+    def test_single_door_creates_marker(self):
+        gs = GeometryStore()
+        rss = self._make_room_seg_store_with_door(500.0, 300.0)
+        gs.update_from_room_seg_store(rss)
+        assert len(gs.door_markers) == 1
+        assert gs.door_markers[0].cx == pytest.approx(500.0)
+        assert gs.door_markers[0].cy == pytest.approx(300.0)
+
+    def test_marker_id_uses_rs_namespace_prefix(self):
+        """Confirms the namespacing itself, rather than artificially
+        mixing both paths in one call sequence -- in production only one
+        of update_from_mission()/update_from_room_seg_store() is ever
+        active per robot (the whole point of the ROOM-SEG switch), so
+        actual dm_N/rs_N coexistence never happens. What matters is that
+        the prefix exists so it COULDN'T collide if it ever did."""
+        gs = GeometryStore()
+        rss = self._make_room_seg_store_with_door(500.0, 300.0, door_id="door_1")
+        gs.update_from_room_seg_store(rss)
+        assert gs.door_markers[0].id == "rs_door_1"
+
+    def test_resync_with_same_door_id_updates_existing_marker_in_place(self):
+        gs = GeometryStore()
+        rss = self._make_room_seg_store_with_door(500.0, 300.0)
+        gs.update_from_room_seg_store(rss)
+        first_marker = gs.door_markers[0]
+
+        rss2 = self._make_room_seg_store_with_door(520.0, 310.0)  # same door_1, moved slightly
+        gs.update_from_room_seg_store(rss2)
+
+        assert len(gs.door_markers) == 1
+        assert gs.door_markers[0].id == first_marker.id  # same marker, updated not duplicated
+        assert gs.door_markers[0].cx == pytest.approx(520.0)
+
+    def test_door_no_longer_present_is_removed_not_kept_stale(self):
+        """RoomSegStore.doors is the complete current set -- a door that
+        disappears (e.g. rooms merged) must not leave a stale marker
+        behind, unlike the old incremental midpoint-stream behaviour."""
+        gs = GeometryStore()
+        rss = self._make_room_seg_store_with_door(500.0, 300.0)
+        gs.update_from_room_seg_store(rss)
+        assert len(gs.door_markers) == 1
+
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+        empty_rss = RoomSegStore()
+        gs.update_from_room_seg_store(empty_rss)
+        assert gs.door_markers == []
+
+    def test_mission_count_reflects_observation_count(self):
+        gs = GeometryStore()
+        rss = self._make_room_seg_store_with_door(500.0, 300.0, n_obs=4)
+        gs.update_from_room_seg_store(rss)
+        assert gs.door_markers[0].mission_count == 4
+
+    def test_multiple_doors_create_multiple_markers(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegDoor
+
+        gs = GeometryStore()
+        rss = RoomSegStore()
+        d1 = SegDoor(id="door_1", room_a="r1", room_b="r2", cell=(0, 0), saddle_mm=150.0)
+        d1.cx, d1.cy = 500.0, 300.0
+        d2 = SegDoor(id="door_2", room_a="r2", room_b="r3", cell=(0, 0), saddle_mm=150.0)
+        d2.cx, d2.cy = 1500.0, 800.0
+        rss.doors = [d1, d2]
+        gs.update_from_room_seg_store(rss)
+        assert len(gs.door_markers) == 2
+        cxs = {m.cx for m in gs.door_markers}
+        assert cxs == {500.0, 1500.0}

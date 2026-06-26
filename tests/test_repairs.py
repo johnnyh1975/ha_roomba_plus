@@ -20,6 +20,7 @@ from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.repairs import async_check_bbrun_reset
 from custom_components.roomba_plus.repairs import async_check_performance_degradation
 from custom_components.roomba_plus.repairs import async_check_battery_recharge
+from custom_components.roomba_plus.repairs import async_check_battery_contact_issue
 from custom_components.roomba_plus.repairs import async_check_mixed_schedule
 from custom_components.roomba_plus.repairs import async_check_accident_detection
 from custom_components.roomba_plus.repairs import async_check_consecutive_skips
@@ -208,6 +209,182 @@ class TestBatteryRecharge:
                 await async_check_battery_recharge(hass, entry)
             mock_ir.async_create_issue.assert_called_once()
             assert mock_ir.async_create_issue.call_args[1]["translation_key"] == "battery_recharge_high"
+
+
+def _make_contact_entry(batpct=50.0, phase="run"):
+    """F6f test helper -- _make_entry()'s data is a MagicMock, so the new
+    last_batpct_value/charge_cycle_peaks/etc. fields need explicit
+    realistic starting values (None/0/[]/False), or accessing them on the
+    unconfigured mock returns another MagicMock instead of a real default,
+    which would crash the actual comparison logic in the check function."""
+    entry = _make_entry()
+    data = entry.runtime_data
+    data.roomba_reported_state = MagicMock(
+        return_value={"batPct": batpct, "cleanMissionStatus": {"phase": phase}}
+    )
+    data.last_batpct_value = None
+    data.last_batpct_at = None
+    data.consecutive_battery_contact_anomaly = 0
+    data.current_charge_cycle_peak = None
+    data.charge_cycle_peaks = []
+    data.was_charging = False
+    return entry
+
+
+class TestBatteryContactIssue:
+    @pytest.mark.asyncio
+    async def test_no_batpct_returns_without_error(self):
+        hass = _make_hass()
+        entry = _make_contact_entry()
+        entry.runtime_data.roomba_reported_state = MagicMock(return_value={})
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_create_issue.assert_not_called()
+            mock_ir.async_delete_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_first_reading_establishes_baseline_no_issue(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=50.0)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_create_issue.assert_not_called()
+        assert entry.runtime_data.last_batpct_value == 50.0
+
+    @pytest.mark.asyncio
+    async def test_gradual_change_is_not_flagged(self):
+        """A normal, plausible charge progression must never fire."""
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=20.0, phase="charge")
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            for pct in [20.0, 25.0, 30.0, 35.0, 40.0]:
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": pct, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_create_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_implausible_jump_within_window_flagged_after_debounce(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=28.0)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)  # baseline=28
+            entry.runtime_data.roomba_reported_state.return_value = {
+                "batPct": 100.0, "cleanMissionStatus": {"phase": "charge"},
+            }
+            await async_check_battery_contact_issue(hass, entry)  # jump #1 (28->100)
+            entry.runtime_data.roomba_reported_state.return_value = {
+                "batPct": 30.0, "cleanMissionStatus": {"phase": "charge"},
+            }
+            await async_check_battery_contact_issue(hass, entry)  # jump #2 (100->30)
+            mock_ir.async_create_issue.assert_called_once()
+            call_kwargs = mock_ir.async_create_issue.call_args[1]
+            assert call_kwargs["translation_key"] == "battery_contact_suspect"
+            assert call_kwargs["translation_placeholders"]["cause"] == "jump"
+
+    @pytest.mark.asyncio
+    async def test_single_isolated_jump_does_not_fire_below_debounce(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=28.0)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)
+            entry.runtime_data.roomba_reported_state.return_value = {
+                "batPct": 100.0, "cleanMissionStatus": {"phase": "charge"},
+            }
+            await async_check_battery_contact_issue(hass, entry)  # only ONE jump so far
+            mock_ir.async_create_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_jump_outside_time_window_not_flagged(self):
+        """A large change is plausible if enough real time passed."""
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=10.0)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)
+            # Simulate a lot of elapsed time by directly backdating last_batpct_at
+            entry.runtime_data.last_batpct_at -= 3600  # 1 hour ago
+            entry.runtime_data.roomba_reported_state.return_value = {
+                "batPct": 90.0, "cleanMissionStatus": {"phase": "charge"},
+            }
+            await async_check_battery_contact_issue(hass, entry)
+        assert entry.runtime_data.consecutive_battery_contact_anomaly == 0
+
+    @pytest.mark.asyncio
+    async def test_declining_peak_trend_fires_issue(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=10.0, phase="run")
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)  # not charging yet
+
+            for peak in [85.0, 60.0, 40.0, 28.0]:
+                # enter a charge cycle, ramp to the peak, then leave it
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "run"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+
+            assert entry.runtime_data.charge_cycle_peaks[-3:] == [60.0, 40.0, 28.0]
+            mock_ir.async_create_issue.assert_called()
+            call_kwargs = mock_ir.async_create_issue.call_args[1]
+            assert call_kwargs["translation_placeholders"]["cause"] in ("declining_trend", "jump")
+
+    @pytest.mark.asyncio
+    async def test_stable_peaks_do_not_fire(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=10.0, phase="run")
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            for peak in [98.0, 99.0, 100.0, 98.0]:
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "run"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_create_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_charge_cycle_peaks_history_is_bounded(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=10.0, phase="run")
+        with patch("custom_components.roomba_plus.repairs.ir"):
+            for i in range(10):
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": 50.0 + i, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": 50.0 + i, "cleanMissionStatus": {"phase": "run"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+        assert len(entry.runtime_data.charge_cycle_peaks) == 5  # _CHARGE_PEAK_HISTORY_LEN
+
+    @pytest.mark.asyncio
+    async def test_recovers_and_clears_issue(self):
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=28.0)
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)
+            for pct in [100.0, 30.0]:
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": pct, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_create_issue.assert_called_once()
+
+            # Stable readings afterward must clear the issue.
+            for pct in [30.0, 31.0, 32.0]:
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": pct, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+            mock_ir.async_delete_issue.assert_called()
 
 
 class TestMixedSchedule:

@@ -36,7 +36,7 @@ def _make_entry(reported: dict) -> MagicMock:
     entry.options = {}
     entry.runtime_data.map_capability.value = "ephemeral"
     entry.runtime_data.renderer = None
-    entry.runtime_data.zone_store = None
+    entry.runtime_data.room_seg_store = None
     entry.runtime_data.robot_profile = None
     entry.runtime_data.mission_store = None
     entry.runtime_data.cloud_coordinator = None

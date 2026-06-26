@@ -170,37 +170,76 @@ class TestResolveZoneName:
 
 
 class TestZoneSelectHiddenFilter:
-    """Verify the logic used in ZoneSelect.options (hidden filtering)."""
+    """Verify the logic used in ZoneSelect.options (hidden filtering).
 
-    def test_hidden_zone_excluded_from_options(self):
-        from custom_components.roomba_plus.zone_store import Zone
+    ROOM-SEG Stage 3 — ZoneSelect now reads from RoomSegStore/SegRoom, not
+    ZoneStore/Zone (the gap heuristic proved unreliable — see
+    ROOM_SEGMENTATION_NOTES.md). unique_id/entity_id are unchanged.
+    """
 
-        zones = [
-            Zone(id=1, name="Kitchen", confirmed=True, hidden=False),
-            Zone(id=2, name="Bedroom", confirmed=True, hidden=True),
+    def test_hidden_room_excluded_from_options(self):
+        from custom_components.roomba_plus.room_seg_store import SegRoom
+
+        rooms = [
+            SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
+            SegRoom(id="room_2", name="Bedroom", confirmed=True, hidden=True),
         ]
-        visible = [z.name for z in zones if z.confirmed and not z.hidden]
+        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
         assert visible == ["Kitchen"]
 
-    def test_unconfirmed_zone_excluded_from_options(self):
-        from custom_components.roomba_plus.zone_store import Zone
+    def test_unconfirmed_room_excluded_from_options(self):
+        from custom_components.roomba_plus.room_seg_store import SegRoom
 
-        zones = [
-            Zone(id=1, name="Confirmed", confirmed=True, hidden=False),
-            Zone(id=2, name="Unconfirmed", confirmed=False, hidden=False),
+        rooms = [
+            SegRoom(id="room_1", name="Confirmed", confirmed=True, hidden=False),
+            SegRoom(id="room_2", name="Unconfirmed", confirmed=False, hidden=False),
         ]
-        visible = [z.name for z in zones if z.confirmed and not z.hidden]
+        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
         assert visible == ["Confirmed"]
 
-    def test_all_visible_zones_in_options(self):
-        from custom_components.roomba_plus.zone_store import Zone
+    def test_all_visible_rooms_in_options(self):
+        from custom_components.roomba_plus.room_seg_store import SegRoom
 
-        zones = [
-            Zone(id=1, name="Kitchen", confirmed=True, hidden=False),
-            Zone(id=2, name="Living room", confirmed=True, hidden=False),
+        rooms = [
+            SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
+            SegRoom(id="room_2", name="Living room", confirmed=True, hidden=False),
         ]
-        visible = [z.name for z in zones if z.confirmed and not z.hidden]
+        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
         assert len(visible) == 2
+
+    def test_real_entity_options_reads_room_seg_store(self):
+        """Exercises the actual ZoneSelect.options property, not just a
+        mirrored expression -- catches a wrong attribute name or wrong
+        store reference that the logic-mirror tests above cannot."""
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.select import ZoneSelect
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        rss = RoomSegStore()
+        rss.rooms = {
+            "room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
+            "room_2": SegRoom(id="room_2", name="Bedroom", confirmed=True, hidden=True),
+            "room_3": SegRoom(id="room_3", name="", confirmed=False, hidden=False),
+        }
+        config_entry = MagicMock()
+        config_entry.runtime_data.room_seg_store = rss
+
+        entity = ZoneSelect.__new__(ZoneSelect)
+        entity._config_entry = config_entry
+
+        assert entity.options == ["Kitchen"]
+
+    def test_real_entity_options_empty_without_room_seg_store(self):
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.select import ZoneSelect
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.room_seg_store = None
+
+        entity = ZoneSelect.__new__(ZoneSelect)
+        entity._config_entry = config_entry
+
+        assert entity.options == []
 
 
 class TestUnlabelledRegionIdsHiddenExclusion:
