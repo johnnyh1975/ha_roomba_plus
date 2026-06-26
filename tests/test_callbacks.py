@@ -900,6 +900,156 @@ class TestErrorContextFields:
         assert error_position_mm["x"] == 1200.0
 
 
+class TestCloudRoomFallback:
+    """v2.10.1 CLOUD-ROOM-FALLBACK — current_room_idx structurally can
+    never advance into the LAST planned room (AUTO-ADVANCE-ROOM's
+    confidence gate requires cycle in (clean, quick), which flips to
+    none/dock at exactly the moment the robot enters its last room).
+    cloud_coordinator.raw_records' finEvents (already-cached, no new
+    fetch) is checked as an opportunistic override before committing to
+    the full 90s safety-cap wait.
+    """
+
+    def _run(
+        self,
+        phases_nstuck: list[tuple[str, int]],
+        planned_rooms: list[str],
+        planned_region_ids: list[str],
+        cloud_room_events: list[dict] | None,
+        current_room_idx: int = 1,
+    ) -> list[dict]:
+        hass, entry, recorded, _ = _make_callback_env()
+        mts = MagicMock()
+        mts.planned_rooms = planned_rooms
+        mts.current_room_idx = current_room_idx
+        mts.room_estimates_sec = [600.0] * len(planned_rooms)
+        mts.total_estimated_sec = 999.0
+        entry.runtime_data.mission_timer_store = mts
+
+        entry.runtime_data.roomba.master_state = {
+            "state": {
+                "reported": {
+                    "lastCommand": {
+                        "regions": [{"rid": rid} for rid in planned_region_ids],
+                    },
+                },
+            },
+        }
+
+        cc = MagicMock()
+        if cloud_room_events is None:
+            cc.raw_records = []
+        else:
+            cc.raw_records = [{
+                "startTime": 1700000000,  # matches _msg()'s fixed mssnStrtTm
+                "timeline": {"finEvents": cloud_room_events},
+            }]
+        entry.runtime_data.cloud_coordinator = cc
+
+        cb = make_mission_callback(hass, entry)
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+            captured_kwargs: list[dict] = []
+
+            async def _capture(*args, **kwargs):
+                captured_kwargs.append(kwargs)
+
+            mock_record.side_effect = _capture
+            for phase, nstuck in phases_nstuck:
+                cb(_msg(phase, nstuck=nstuck))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+        return captured_kwargs
+
+    def test_cloud_confirms_all_rooms_done_overrides_stale_index(self):
+        """current_room_idx=0 of 2 (looks like room 2 still unvisited --
+        the realistic case, since the index can never reach the last
+        room), but the cloud's finEvents already show BOTH rooms done --
+        the mission must confirm immediately (within the normal 2s hold),
+        not wait out the 90s cap."""
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=[
+                {"type": "room", "room": {"rid": "19", "status": 0}},
+                {"type": "room", "room": {"rid": "21", "status": 0}},
+            ],
+            current_room_idx=0,
+        )
+        assert len(captured) == 1, "must confirm without waiting for the 90s cap"
+
+    def test_cloud_partial_completion_does_not_override(self):
+        """Only one of two planned rooms shows done in the cloud data --
+        must NOT override; falls through to the existing (unvisited)
+        behaviour."""
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=[
+                {"type": "room", "room": {"rid": "19", "status": 0}},
+            ],
+            current_room_idx=0,
+        )
+        assert len(captured) == 0, "must not confirm -- room 21 not yet done in cloud"
+
+    def test_no_matching_cloud_record_falls_through(self):
+        """No cloud record at all (e.g. no cloud credentials, or data not
+        refreshed yet) -- must behave exactly as before this feature."""
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=None,
+            current_room_idx=0,
+        )
+        assert len(captured) == 0
+
+    def test_status_6_error_recovery_also_counts_as_done(self):
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=[
+                {"type": "room", "room": {"rid": "19", "status": 0}},
+                {"type": "room", "room": {"rid": "21", "status": 6}},
+            ],
+            current_room_idx=0,
+        )
+        assert len(captured) == 1
+
+    def test_in_progress_status_1_does_not_count_as_done(self):
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=[
+                {"type": "room", "room": {"rid": "19", "status": 0}},
+                {"type": "room", "room": {"rid": "21", "status": 1}},  # in progress
+            ],
+            current_room_idx=0,
+        )
+        assert len(captured) == 0
+
+    def test_index_already_on_last_room_does_not_need_cloud_at_all(self):
+        """Sanity check: when the index-based check ALREADY says no
+        unvisited rooms (idx at the last room), the cloud fallback is
+        irrelevant and the mission confirms normally regardless of what
+        raw_records contains."""
+        captured = self._run(
+            phases_nstuck=[("run", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Bedroom"],
+            planned_region_ids=["19", "21"],
+            cloud_room_events=None,
+            current_room_idx=1,  # len(rooms)-1 == 1, so idx IS the last room
+        )
+        # current_room_idx=1 with 2 rooms means idx is already at the last
+        # room (0-indexed: room 0, room 1) -- _has_unvisited_planned_rooms
+        # should already return False via the plain index check.
+        assert len(captured) == 1
+
+
 class TestRoomIndexCorroboration:
     """v2.9.0 — ROOM-INDEX CORROBORATION.
 
