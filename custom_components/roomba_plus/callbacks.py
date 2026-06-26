@@ -706,6 +706,75 @@ def make_mission_callback(
         # (at least one usable estimate exists); otherwise skip the
         # room-index check entirely and fall back to the plain time gate
         # immediately, as before this feature existed.
+        # v2.10.1 CLOUD-ROOM-FALLBACK — structural gap found analysing a
+        # Thonno field report: AUTO-ADVANCE-ROOM can NEVER advance
+        # current_room_idx into the LAST planned room. Its own confidence
+        # gate (_room_transition_confidence_ok) requires cycle in
+        # ("clean", "quick") to fire at all — but cycle flips to "none"
+        # at exactly the moment the robot transitions out of the
+        # second-to-last room and into mission-end processing, since
+        # there's no room left for the mission to still be "clean"/
+        # "quick" about. current_room_idx is therefore permanently one
+        # room behind for the entire tail of every multi-room mission,
+        # making _has_unvisited_planned_rooms() wait out the full 90s cap
+        # on every single one — not a rare edge case, the normal case.
+        #
+        # cycle itself was already ruled out as a substitute signal here
+        # (confirmed unreliable for exactly this purpose — see the
+        # v2.8.1 END-DEBOUNCE comment on the INTER-ROOM-TRANSITION guard
+        # above: a single momentary cycle misread mid-mission caused a
+        # real progress-reset regression for Thonno previously).
+        #
+        # The one genuinely independent, reliable signal for room
+        # completion — `timeline.finEvents` room events with
+        # status in (0, 6) — comes from the cloud, not local MQTT. This
+        # function checks it OPPORTUNISTICALLY: cloud_coordinator.raw_records
+        # is whatever the existing periodic/event-triggered refreshes have
+        # already cached (read-only, no new fetch triggered here) — if it
+        # happens to already show every planned room done for the matching
+        # record, trust that over the index; if not (most of the time,
+        # since cloud data lags), fall through to the unchanged time-gated
+        # behaviour below. Never makes things WORSE: a miss here costs
+        # nothing beyond the status quo 90s wait.
+        def _cloud_confirms_all_rooms_done(planned_rids: list[str]) -> bool:
+            if not planned_rids:
+                return False
+            cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+            if cc is None:
+                return False
+            records = getattr(cc, "raw_records", None) or []
+            match: dict[str, Any] | None = None
+            for r in records:
+                start = r.get("startTime")
+                if start is not None and abs(int(start) - mission_start_ts) <= 120:
+                    match = r
+                    break
+            if match is None:
+                return False
+            timeline = match.get("timeline")
+            if not isinstance(timeline, dict):
+                return False
+            fin_events = timeline.get("finEvents") or []
+            from .mission_store import MissionStore as _MS
+            done_rids: set[str] = set()
+            for ev in fin_events:
+                if ev.get("type") != "room":
+                    continue
+                room = ev.get("room") or {}
+                if room.get("status") in (0, 6):
+                    rid = _MS._extract_rid(room)
+                    if rid:
+                        done_rids.add(rid)
+            confirmed = all(rid in done_rids for rid in planned_rids)
+            if confirmed:
+                _LOGGER.debug(
+                    "MissionStore: cloud finEvents confirm all %d planned "
+                    "room(s) done — overriding current_room_idx, which "
+                    "cannot advance into the last room by design",
+                    len(planned_rids),
+                )
+            return confirmed
+
         def _has_unvisited_planned_rooms() -> bool:
             _mts_check = getattr(entry.runtime_data, "mission_timer_store", None)
             if _mts_check is None:
@@ -727,7 +796,22 @@ def make_mission_callback(
             _idx = getattr(_mts_check, "current_room_idx", 0)
             if not isinstance(_idx, int):
                 return False
-            return _idx < len(_rooms) - 1
+            if _idx >= len(_rooms) - 1:
+                return False
+            # Index says rooms remain — but the index structurally can
+            # never reach the last room (see module note above). Give the
+            # opportunistic cloud check a chance to override before
+            # committing to the full wait.
+            _master = getattr(entry.runtime_data.roomba, "master_state", None) or {}
+            _reported = (_master.get("state") or {}).get("reported") or {}
+            _planned_regions = (_reported.get("lastCommand") or {}).get("regions") or []
+            from .mission_store import MissionStore as _MS2
+            _planned_rids = [
+                rid for rid in (_MS2._extract_rid(r) for r in _planned_regions) if rid
+            ]
+            if _cloud_confirms_all_rooms_done(_planned_rids):
+                return False
+            return True
 
         if had_cleaning_phase:
             if not _looks_like_end:

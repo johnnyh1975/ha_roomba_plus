@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.10.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-2.10.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,7 +13,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,825 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,831 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -436,6 +436,8 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Last mission duration | Duration in minutes |
 
 Every mission also writes a searchable Logbook entry and fires `roomba_plus_mission_completed` — see [Events & device triggers](#events--device-triggers).
+
+A multi-room mission waits briefly (typically up to ~90 seconds, occasionally less since v2.10.1) after the robot reports being done before recording it — this is deliberate, to avoid mistaking a pause between rooms for the mission finishing early.
 
 #### Mission progress (v2.6+)
 
