@@ -310,15 +310,22 @@ class RobotProfileStore:
     def update_mission_stats(
         self,
         records: list[dict[str, Any]],
-    ) -> None:
+    ) -> bool:
         """Recompute mission duration/area statistics from recent records.
 
-        L3/L8 — called after each mission from the callback chain.
+        L3/L8 — called after each mission from the callback chain (see
+        _async_update_robot_profile_store in __init__.py).
         Uses the last 30 days of records passed in by the caller (avoids
         direct MissionStore dependency — cleaner separation of concerns).
 
         Args:
             records: list of MissionStore record dicts from query(days=30).
+
+        Returns:
+            True if mission_duration_mean and/or mission_area_mean was
+            (re)computed this call — mirrors update_lifetime_sqft_tracking's
+            bool-return convention so the caller's `changed` tracking stays
+            consistent across all L-series update_* methods.
         """
         durations = [
             r["duration_min"]
@@ -330,13 +337,17 @@ class RobotProfileStore:
             for r in records
             if isinstance(r.get("area_sqft"), (int, float)) and r["area_sqft"] > 0
         ]
+        wrote = False
         if len(durations) >= 5:
             self.mission_duration_mean = statistics.mean(durations)
             self.mission_duration_std = (
                 statistics.stdev(durations) if len(durations) >= 2 else 0.0
             )
+            wrote = True
         if len(areas) >= 5:
             self.mission_area_mean = statistics.mean(areas)
+            wrote = True
+        return wrote
 
     def room_dirt_relative(self) -> dict[str, float]:
         """Return per-room dirtiness relative to the household average.

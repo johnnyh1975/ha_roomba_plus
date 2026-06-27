@@ -94,7 +94,21 @@ def segment_rooms(
                 for dx, dy in neighbors8:
                     nb = (x + dx, y + dy)
                     if merged_labels.get(nb) == b:
-                        v = min(dist[coord], dist[nb])
+                        # Use dist_smooth (same field merge_regions() uses
+                        # for its own boundary_saddle), not the raw dist.
+                        # On raw dist, a/b's shared boundary commonly
+                        # includes touch points that sit right at the
+                        # edge of the visited mask (dist == 1.0) but are
+                        # NOT the geometric doorway — any pair has a near
+                        # 1-in-1 chance some such point exists somewhere
+                        # along the border, and the min() over the whole
+                        # boundary collapses to that floor every time
+                        # (confirmed in the field: 9/9 doors in one real
+                        # archive all measured exactly 1 cell). The
+                        # Gaussian-smoothed field doesn't have that
+                        # integer floor, so the true narrowest point of
+                        # the connecting corridor is what actually wins.
+                        v = min(dist_smooth[coord], dist_smooth[nb])
                         if best is None or v < best[0]:
                             best = (v, coord)
             if best is not None:

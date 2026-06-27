@@ -275,6 +275,7 @@ class RoomSegStore:
         existing_by_pair: dict[tuple[str, str], SegDoor] = {
             _unordered_key(d.room_a, d.room_b): d for d in self.doors
         }
+        matched_pairs: set[tuple[str, str]] = set()
         new_doors: list[SegDoor] = []
         for d in result.doors:
             room_a = label_to_id.get(d["a"])
@@ -282,6 +283,7 @@ class RoomSegStore:
             if room_a is None or room_b is None:
                 continue
             key = _unordered_key(room_a, room_b)
+            matched_pairs.add(key)
             existing = existing_by_pair.get(key)
             if existing is not None:
                 existing.update_position(d["cell"])
@@ -296,6 +298,28 @@ class RoomSegStore:
                 door.update_position(d["cell"])
                 self._next_door_n += 1
                 new_doors.append(door)
+
+        # Mirror the room-preservation policy (module docstring + see
+        # test_unmatched_existing_room_is_kept_not_deleted): a door whose
+        # room pair wasn't re-detected this round is NOT auto-deleted.
+        # GridStore decays/prunes low-traffic cells every mission (see
+        # grid_store.py) — a narrow, infrequently-crossed doorway can
+        # drop out of the visited-cell set for one recompute without
+        # having genuinely stopped existing. Wiping the door in that
+        # case loses its entire `observations` history and stable `id`,
+        # defeating the point of update_position()'s median smoothing.
+        # Kept only while both connected rooms still exist; rooms are
+        # never auto-deleted either, so today this is effectively
+        # "kept forever" — the guard just makes that explicit in case
+        # room deletion is ever added later.
+        for key, door in existing_by_pair.items():
+            if (
+                key not in matched_pairs
+                and key[0] in self.rooms
+                and key[1] in self.rooms
+            ):
+                new_doors.append(door)
+
         self.doors = new_doors
 
     def migrate_from_zone_store(self, zones: list[Any]) -> int:

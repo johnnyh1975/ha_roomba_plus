@@ -153,6 +153,46 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def _dedup_by_nmssn(
+    derived: list[dict[str, Any]],
+    timeline: list[list[list]],
+) -> tuple[list[dict[str, Any]], list[list[list]], int]:
+    """Collapse duplicate nMssn entries in the co-indexed derived/timeline
+    lists, keeping the first occurrence of each nMssn.
+
+    DEDUP-V1 (v2.10.2) — cleans up residual corruption from the
+    discontinuity-guard bug fixed in v2.8.6 Round 1/2: before that fix,
+    a cloud-refresh re-feed could be misread as a lifetime-counter reset,
+    clearing _archived_nmssns and re-appending an already-archived window
+    as duplicates. That bug no longer fires (see async_delta_update), but
+    duplicates it already wrote to disk before the fix were never cleaned
+    up — async_load() only ever rebuilds _archived_nmssns as a *set* from
+    _derived, which silently absorbs duplicate values without touching
+    the underlying *list*.
+
+    List order is newest-first; every duplicate observed in the field is
+    byte-identical to its siblings, so which occurrence is kept is
+    immaterial. Records with no usable nMssn (<=0) are never deduped —
+    mirrors the n_mssn > 0 guard used when building _archived_nmssns.
+
+    Returns (deduped_derived, deduped_timeline, removed_count).
+    """
+    seen: set[int] = set()
+    out_derived: list[dict[str, Any]] = []
+    out_timeline: list[list[list]] = []
+    removed = 0
+    for i, rec in enumerate(derived):
+        n_mssn = _safe_int(rec.get("nMssn"))
+        if n_mssn > 0 and n_mssn in seen:
+            removed += 1
+            continue
+        if n_mssn > 0:
+            seen.add(n_mssn)
+        out_derived.append(rec)
+        out_timeline.append(timeline[i] if i < len(timeline) else [])
+    return out_derived, out_timeline, removed
+
+
 # ── MissionArchive ─────────────────────────────────────────────────────────
 
 class MissionArchive:
@@ -183,6 +223,15 @@ class MissionArchive:
         self._last_nMssn_start_ts: int = 0
         # Set to True once the initial load completes
         self._initial_load_done: bool = False
+        # v2.10.2 — DEDUP-V1. Set to True once the one-time cleanup of
+        # pre-existing duplicate nMssn entries (residual corruption from
+        # the discontinuity-guard bug fixed in v2.8.6 Round 1/2 — see the
+        # comment in async_delta_update) has run for this archive. The
+        # append-time guard has prevented NEW duplicates since v2.8.6, but
+        # never retroactively cleaned up duplicates that were already
+        # persisted before that fix shipped. Gated so the dedup pass (an
+        # O(n) scan) runs at most once per archive, not on every load.
+        self._dedup_v1_done: bool = False
         # v2.9.0 (J) — CUMULATIVE-SQFT ACCUMULATOR. Summing area_sqft over
         # the CURRENTLY-held _derived list undercounts on any robot with
         # more than MAX_RECORDS (800) lifetime missions: _append()'s FIFO
@@ -207,6 +256,31 @@ class MissionArchive:
         try:
             self._derived = list(data.get("derived", []))
             self._timeline = list(data.get("timeline", []))
+
+            # DEDUP-V1 (v2.10.2) — see _dedup_by_nmssn docstring. Runs at
+            # most once per archive (gated by _dedup_v1_done, persisted
+            # below); a no-op on every subsequent load.
+            self._dedup_v1_done = bool(data.get("dedup_v1_done", False))
+            dedup_ran = False
+            if not self._dedup_v1_done:
+                self._derived, self._timeline, removed = _dedup_by_nmssn(
+                    self._derived, self._timeline
+                )
+                self._dedup_v1_done = True
+                dedup_ran = True
+                if removed:
+                    _LOGGER.warning(
+                        "MissionArchive: DEDUP-V1 removed %d duplicate "
+                        "derived record(s) for %s (residual corruption "
+                        "from the pre-v2.8.6 discontinuity-guard bug)",
+                        removed, entry_id,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "MissionArchive: DEDUP-V1 found no duplicates for %s",
+                        entry_id,
+                    )
+
             self._raw = {
                 int(k): v for k, v in (data.get("raw") or {}).items()
             }
@@ -277,6 +351,15 @@ class MissionArchive:
             self._last_nMssn = 0
             self._last_nMssn_start_ts = 0
             self._cumulative_sqft = 0.0
+            return
+
+        if dedup_ran:
+            # Persist immediately rather than waiting for the next natural
+            # save — otherwise an unlucky restart before the next mission
+            # completes would re-run the dedup scan (harmless, but pointless)
+            # and, more importantly, would leave the corrupted file on disk
+            # for longer than necessary.
+            await self.async_save(hass, entry_id)
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current archive to hass.storage."""
@@ -286,6 +369,7 @@ class MissionArchive:
             "last_nMssn": self._last_nMssn,
             "last_nMssn_start_ts": self._last_nMssn_start_ts,
             "initial_load_done": self._initial_load_done,
+            "dedup_v1_done": self._dedup_v1_done,
             "derived": self._derived,
             "timeline": self._timeline,
             # JSON keys must be strings

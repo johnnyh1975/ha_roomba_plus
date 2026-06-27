@@ -630,6 +630,28 @@ class MissionStore:
                 wrote = True
         return wrote
 
+    @staticmethod
+    def _backfill_area_sqft(local: dict) -> bool:
+        """Set local["area_sqft"] from local["sqft"] when the canonical
+        field is still absent but the raw cloud field is present.
+
+        "sqft" is the raw cloud field name, kept as-is via
+        _CLOUD_MERGE_SCALAR; "area_sqft" is the canonical local name read
+        by RobotProfileStore.update_mission_stats() and
+        compute_rolling_stats(). The two must be kept in sync at every
+        call site that merges cloud fields — see backfill_from_cloud()
+        and merge_latest_from_cloud() for why this is a separate step
+        rather than folded into _merge_cloud_fields()/_CLOUD_MERGE_SCALAR
+        (the field NAME differs, "sqft" → "area_sqft", which that
+        generic same-name copy loop cannot express).
+
+        Returns True if area_sqft was written.
+        """
+        if local.get("area_sqft") is None and local.get("sqft") is not None:
+            local["area_sqft"] = local["sqft"]
+            return True
+        return False
+
     # ── L3 — Mission anomaly detection ────────────────────────────────────────
 
     def compute_rolling_stats(self, days: int = 30) -> dict | None:
@@ -941,7 +963,21 @@ class MissionStore:
 
             # Always merge analytics fields regardless of timestamp delta.
             merge_wrote = self._merge_cloud_fields(local, best_cr)
-            if merge_wrote:
+
+            # area_sqft is the canonical local name; "sqft" above is the
+            # raw cloud field, just merged (or already present locally).
+            # This MUST run independently of the timestamp-correction
+            # branch below: area_sqft has nothing to do with whether
+            # started_at/ended_at needed correcting. Previously this lived
+            # after the `delta_start < 300: continue`, so it only ever
+            # fired on the rare mission that ALSO had bad timestamps —
+            # leaving area_sqft permanently None on every mission whose
+            # local timestamps were already accurate (confirmed in the
+            # field: 24/24 local records, area_sqft never once populated
+            # despite "sqft" correctly carrying real cloud values).
+            area_wrote = self._backfill_area_sqft(local)
+
+            if merge_wrote or area_wrote:
                 enriched += 1
 
             # Only correct timestamps when they differ meaningfully (> 5 min).
@@ -957,10 +993,6 @@ class MissionStore:
             local["ended_at"]     = new_ended.isoformat()
             local["duration_min"] = new_duration
             local["id"]           = new_id
-
-            # area_sqft is the canonical local name; backfill only when absent.
-            if local.get("area_sqft") is None and best_cr.get("sqft") is not None:
-                local["area_sqft"] = best_cr["sqft"]
 
             corrected += 1
             _LOGGER.debug(
@@ -1022,7 +1054,9 @@ class MissionStore:
         if best_cr is None:
             return False
 
-        return self._merge_cloud_fields(local, best_cr)
+        merge_wrote = self._merge_cloud_fields(local, best_cr)
+        area_wrote = self._backfill_area_sqft(local)
+        return merge_wrote or area_wrote
 
     async def async_backfill_statistics(
         self,

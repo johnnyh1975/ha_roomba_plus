@@ -2119,6 +2119,12 @@ async def _async_update_robot_profile_store(
     v2.6.0 L5/L6 — called after each successful cloud refresh so the learned
     state stays fresh. Saves the store only when at least one value changes.
 
+    L3/L8: recomputes mission_duration_mean/_std and mission_area_mean from
+    the last 30 days of MissionStore records — the anomaly-detection
+    baseline these feed was previously never updated in production
+    (update_mission_stats() existed but had no caller anywhere; see
+    DEDUP-V1/area_sqft v2.10.2 bug-hunt notes).
+
     L5: extracts timeline.finEvents room passCount data from the most recent
     merged record and calls update_room_dirt_index() for each completed room.
 
@@ -2128,6 +2134,10 @@ async def _async_update_robot_profile_store(
     from .const import SQFT_TO_M2
 
     changed = False
+
+    # ── L3/L8: mission duration/area baseline from last 30 days ───────────────
+    if robot_profile_store.update_mission_stats(mission_store.query(days=30)):
+        changed = True
 
     # ── L5: per-room dirtiness from latest record's timeline ─────────────────
     records = mission_store.query(days=1)  # last 24 h — pick the most recent
