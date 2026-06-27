@@ -19,6 +19,7 @@ import pytest
 from custom_components.roomba_plus.mission_archive import MAX_RECORDS
 from custom_components.roomba_plus.mission_archive import MissionArchive
 from custom_components.roomba_plus.mission_archive import _classify_result
+from custom_components.roomba_plus.mission_archive import _dedup_by_nmssn
 from custom_components.roomba_plus.mission_archive import _extract_rid
 from custom_components.roomba_plus.mission_archive import _ts_to_iso
 from custom_components.roomba_plus.mission_archive import _wl_floor
@@ -465,6 +466,7 @@ class TestMissionArchiveStorage:
         }
         store_mock = MagicMock()
         store_mock.async_load = AsyncMock(return_value=old_data)
+        store_mock.async_save = AsyncMock()
 
         hass = _make_hass()
         with patch("custom_components.roomba_plus.mission_archive.Store",
@@ -537,6 +539,7 @@ class TestMissionArchiveStorage:
             # deliberately no "cumulative_sqft" key — simulates data
             # persisted before this field was introduced
         })
+        store_mock.async_save = AsyncMock()
         hass = _make_hass()
         with patch("custom_components.roomba_plus.mission_archive.Store",
                    return_value=store_mock):
@@ -564,6 +567,7 @@ class TestMissionArchiveStorage:
             "raw": {},
             "cumulative_sqft": 50_000.0,  # the "true" running total
         })
+        store_mock.async_save = AsyncMock()
         hass = _make_hass()
         with patch("custom_components.roomba_plus.mission_archive.Store",
                    return_value=store_mock):
@@ -575,7 +579,213 @@ class TestMissionArchiveStorage:
         )
 
 
-class TestMissionArchiveDeltaUpdate:
+class TestDedupByNmssn:
+    """Unit tests for the pure _dedup_by_nmssn helper (no HA fixtures)."""
+
+    def test_no_duplicates_passthrough(self):
+        derived = [{"nMssn": 2}, {"nMssn": 1}]
+        timeline = [["a"], ["b"]]
+        out_d, out_t, removed = _dedup_by_nmssn(derived, timeline)
+        assert out_d == derived
+        assert out_t == timeline
+        assert removed == 0
+
+    def test_tripled_range_collapses_to_singles(self):
+        """Mirrors the field data pattern: a contiguous nMssn range
+        appearing exactly 3x, interleaved with newer/older single
+        entries — same shape as the pre-v2.8.6-fix corruption."""
+        derived = (
+            [{"nMssn": 25}]
+            + [{"nMssn": n} for n in range(20, 10, -1)] * 3
+            + [{"nMssn": 9}]
+        )
+        timeline = [[f"t{i}"] for i in range(len(derived))]
+        out_d, out_t, removed = _dedup_by_nmssn(derived, timeline)
+
+        out_ids = [r["nMssn"] for r in out_d]
+        assert out_ids == [25] + list(range(20, 10, -1)) + [9]
+        assert removed == 20  # 10 values * 2 extra copies each
+        assert len(out_t) == len(out_d)
+
+    def test_keeps_first_occurrence_co_indexed_with_timeline(self):
+        derived = [
+            {"nMssn": 1, "marker": "first"},
+            {"nMssn": 1, "marker": "second"},
+        ]
+        timeline = [["keep-me"], ["drop-me"]]
+        out_d, out_t, removed = _dedup_by_nmssn(derived, timeline)
+        assert removed == 1
+        assert out_d == [{"nMssn": 1, "marker": "first"}]
+        assert out_t == [["keep-me"]]
+
+    def test_invalid_nmssn_never_deduped(self):
+        """Records with no usable nMssn (<=0) are passed through as-is —
+        mirrors the n_mssn > 0 guard used when building _archived_nmssns,
+        so a string of unparseable records never collapses to one."""
+        derived = [{"nMssn": 0}, {"nMssn": 0}, {"nMssn": None}]
+        timeline = [[], [], []]
+        out_d, out_t, removed = _dedup_by_nmssn(derived, timeline)
+        assert out_d == derived
+        assert removed == 0
+
+
+class TestMissionArchiveDedupV1:
+    """Integration tests: the one-time DEDUP-V1 cleanup gated inside
+    async_load(). See _dedup_by_nmssn docstring for the bug this cleans
+    up — residual corruption from the discontinuity-guard bug fixed in
+    v2.8.6 Round 1/2, never retroactively cleaned from already-persisted
+    archives."""
+
+    @staticmethod
+    def _corrupted_data(dedup_v1_done: bool = False) -> dict:
+        """Build persisted data shaped like the field report: nMssn
+        391-422 tripled, 423-425 and 386-390 single — same pattern
+        observed in Jean-Christoph's own test-device archive."""
+        derived = (
+            [{"nMssn": n, "sqft": 10.0} for n in range(425, 422, -1)]
+            + [{"nMssn": n, "sqft": 10.0} for n in range(422, 390, -1)] * 3
+            + [{"nMssn": n, "sqft": 10.0} for n in range(390, 385, -1)]
+        )
+        timeline = [[] for _ in derived]
+        return {
+            "version": 1,
+            "last_nMssn": 425,
+            "initial_load_done": True,
+            "dedup_v1_done": dedup_v1_done,
+            "derived": derived,
+            "timeline": timeline,
+            "raw": {},
+            "cumulative_sqft": sum(r["sqft"] for r in derived),
+        }
+
+    @pytest.mark.asyncio
+    async def test_first_load_collapses_tripled_records(self):
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value=self._corrupted_data())
+        store_mock.async_save = AsyncMock()
+        hass = _make_hass()
+
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        nmssns = [r["nMssn"] for r in archive._derived]
+        assert len(nmssns) == len(set(nmssns)), "duplicates must be gone"
+        assert archive.record_count == 40  # 425..386 inclusive, unique
+        assert len(archive._timeline) == archive.record_count
+
+    @pytest.mark.asyncio
+    async def test_dedup_sets_flag_and_triggers_one_save(self):
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value=self._corrupted_data())
+        store_mock.async_save = AsyncMock()
+        hass = _make_hass()
+
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        assert archive._dedup_v1_done is True
+        store_mock.async_save.assert_awaited_once()
+        saved_payload = store_mock.async_save.call_args.args[0]
+        assert saved_payload["dedup_v1_done"] is True
+        assert len({r["nMssn"] for r in saved_payload["derived"]}) == 40
+
+    @pytest.mark.asyncio
+    async def test_already_flagged_archive_is_never_rescanned(self):
+        """Once dedup_v1_done is persisted, async_load must skip the scan
+        entirely — even if (hypothetically, e.g. a manually-edited backup
+        was restored) the data still contains duplicates. The flag is a
+        hard gate, not a "rescan if dirty" check — matching the documented
+        intent that DEDUP-V1 runs at most once."""
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(
+            return_value=self._corrupted_data(dedup_v1_done=True)
+        )
+        store_mock.async_save = AsyncMock()
+        hass = _make_hass()
+
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        store_mock.async_save.assert_not_awaited()
+        nmssns = [r["nMssn"] for r in archive._derived]
+        assert len(nmssns) != len(set(nmssns)), (
+            "flag already set — duplicates must be left exactly as found, "
+            "proving the gate (not a content check) controls the scan"
+        )
+
+    @pytest.mark.asyncio
+    async def test_clean_archive_sets_flag_without_removing_anything(self):
+        """An archive with no duplicates still gets the flag set and one
+        save on first load (so it never gets rescanned later either) —
+        the gate is about having RUN once, not about whether it found
+        anything."""
+        archive = MissionArchive()
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value={
+            "last_nMssn": 2,
+            "initial_load_done": True,
+            "derived": [{"nMssn": 2, "sqft": 10.0}, {"nMssn": 1, "sqft": 10.0}],
+            "timeline": [[], []],
+            "raw": {},
+            "cumulative_sqft": 20.0,
+            # no dedup_v1_done key — simulates an upgrade from pre-v2.10.2
+        })
+        store_mock.async_save = AsyncMock()
+        hass = _make_hass()
+
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await archive.async_load(hass, "e")
+
+        assert archive.record_count == 2
+        assert archive._dedup_v1_done is True
+        store_mock.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dedup_then_normal_save_load_roundtrip_stays_clean(self):
+        """End-to-end: corrupted data in -> dedup runs and self-saves ->
+        a SECOND fresh load against that now-clean, now-flagged data
+        must not re-scan or re-save."""
+        stored: dict = {}
+
+        async def mock_save(data):
+            stored.clear()
+            stored.update(data)
+
+        async def mock_load():
+            return dict(stored) if stored else None
+
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save
+        store_mock.async_load = mock_load
+        hass = _make_hass()
+
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            stored.update(self._corrupted_data())
+
+            archive = MissionArchive()
+            await archive.async_load(hass, "e")  # triggers dedup + self-save
+            assert stored["dedup_v1_done"] is True
+            assert len(stored["derived"]) == 40
+
+            archive2 = MissionArchive()
+            with patch.object(
+                MissionArchive, "async_save", wraps=archive2.async_save
+            ) as save_spy:
+                await archive2.async_load(hass, "e")
+                save_spy.assert_not_called()
+
+        assert archive2.record_count == 40
+
+
+
     @pytest.mark.asyncio
     async def test_new_record_appended(self):
         archive = MissionArchive()

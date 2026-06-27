@@ -125,6 +125,43 @@ class TestIdentityMatchingAcrossRecomputes:
 
         assert any(d.id == first_door_id for d in store.doors)
 
+    def test_unmatched_existing_door_is_kept_not_deleted(self):
+        """Mirrors test_unmatched_existing_room_is_kept_not_deleted, for
+        doors. GridStore decays/prunes low-traffic cells every mission —
+        a narrow, infrequently-crossed doorway's connecting cells can
+        legitimately drop out of the visited-cell set for one recompute
+        even while both rooms it connects are still very much there and
+        still get re-matched to their existing persisted ids. The door
+        itself (and its observations history) must not be silently
+        deleted just because that one recompute didn't re-detect a
+        connection between them."""
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        assert len(store.doors) == 1
+        door_id = store.doors[0].id
+        room_ids = set(store.rooms.keys())
+
+        # Same two room blobs, corridor cells (6,3)/(7,3)/(8,3) removed —
+        # rooms are temporarily disconnected in this recompute's input.
+        # An unrelated, far-away rect is added purely so the growth gate
+        # in maybe_recompute() actually triggers a recompute (mirrors a
+        # realistic mission: most of the home grows/stays stable while
+        # one narrow corridor happens to decay out).
+        cells = _rect(0, 6, 0, 6)
+        cells.update(_rect(9, 15, 0, 6))
+        cells.update(_rect(30, 40, 30, 40))
+        store.maybe_recompute(cells)
+
+        # Both original rooms still matched to their existing ids...
+        assert room_ids <= set(store.rooms.keys())
+        # ...yet the original door must still be present, identity intact,
+        # even though this round found no door between that exact pair.
+        assert any(d.id == door_id for d in store.doors), (
+            "door must be preserved when its corridor temporarily drops "
+            "out of the visited-cell set, even though it wasn't "
+            "re-detected this round"
+        )
+
 
 class TestUnconfirmedRooms:
     def test_unconfirmed_room_included(self):

@@ -315,3 +315,91 @@ class TestSeedL5FromArchive:
         assert "19" in rps.room_dirt_index
         assert "21" in rps.room_dirt_index
         assert "5" in rps.room_dirt_index
+
+
+class TestUpdateRobotProfileStoreMissionStats:
+    """v2.10.2 bug-hunt fix: update_mission_stats() existed since at least
+    v2.6.0 (docstring: "L3/L8 — called after each mission from the
+    callback chain") but had no caller anywhere in the codebase — the
+    mission_duration_mean/mission_area_mean baseline this feeds never
+    populated in production regardless of how much MissionStore history
+    existed. _async_update_robot_profile_store() is that callback chain
+    (L5/L6/J already lived there); these tests cover the new L3/L8 block."""
+
+    @staticmethod
+    def _make_entry(entry_id: str = "e"):
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        entry.runtime_data.grid_store = None  # skip L6 cleanly
+        # Real dict (not a bare MagicMock) for the J section's
+        # roomba_reported_state() lookup chain — a bare MagicMock's
+        # auto-configured __float__ would otherwise make float(_sqft)
+        # silently succeed with a fake value instead of hitting the
+        # "no sqft reading" None path this test class wants.
+        entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+        return entry
+
+    @staticmethod
+    def _ms_with_records(n: int, duration_min: int = 45, area_sqft: float = 300.0):
+        ms = _make_ms()
+        ms._records = [
+            {
+                "id": f"m_{i}",
+                "started_at": "2026-06-01T07:00:00+00:00",
+                "ended_at": "2026-06-01T07:30:00+00:00",
+                "duration_min": duration_min,
+                "area_sqft": area_sqft,
+                "result": "completed",
+            }
+            for i in range(n)
+        ]
+        return ms
+
+    async def _run(self, ms, rps=None):
+        from custom_components.roomba_plus.__init__ import (
+            _async_update_robot_profile_store,
+        )
+        if rps is None:
+            rps = _make_rps()
+        hass = _make_hass()
+        entry = self._make_entry()
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        with patch("custom_components.roomba_plus.robot_profile_store.Store",
+                   return_value=store_mock):
+            await _async_update_robot_profile_store(hass, entry, ms, rps)
+        return rps, store_mock
+
+    @pytest.mark.asyncio
+    async def test_populates_mission_duration_and_area_mean(self):
+        ms = self._ms_with_records(5, duration_min=40, area_sqft=250.0)
+        rps, _ = await self._run(ms)
+        assert rps.mission_duration_mean == pytest.approx(40.0)
+        assert rps.mission_area_mean == pytest.approx(250.0)
+
+    @pytest.mark.asyncio
+    async def test_below_minimum_records_does_not_populate(self):
+        """Fewer than 5 qualifying records (the threshold inside
+        update_mission_stats itself) must leave the means untouched —
+        confirms this test isn't passing merely because any non-empty
+        query() result trivially satisfies the assertion."""
+        ms = self._ms_with_records(4)
+        rps, _ = await self._run(ms)
+        assert rps.mission_duration_mean is None
+        assert rps.mission_area_mean is None
+
+    @pytest.mark.asyncio
+    async def test_saves_when_mission_stats_populated(self):
+        ms = self._ms_with_records(5)
+        _, store_mock = await self._run(ms)
+        store_mock.async_save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_save_when_nothing_changed(self):
+        """Empty MissionStore + no GridStore + a roomba mock that yields no
+        sqft reading: none of L3/L8, L5, L6, or J should report a change,
+        so the store must not be saved at all."""
+        ms = _make_ms()
+        rps, store_mock = await self._run(ms)
+        store_mock.async_save.assert_not_called()
+

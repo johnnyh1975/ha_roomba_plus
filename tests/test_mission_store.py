@@ -1038,6 +1038,33 @@ class TestMergeLatestFromCloud:
         store._records = [{"id": "m_new", "ended_at": _ts(1700001000)}]
         assert store.merge_latest_from_cloud([]) is False
 
+    def test_backfills_area_sqft_into_last_record(self):
+        """Same field bug as backfill_from_cloud, on the post-mission
+        single-record hook — this is the path that actually runs after
+        every mission end, so the gap here was the dominant cause of
+        area_sqft never populating in practice."""
+        store = MissionStore()
+        ts = 1700001000
+        store._records = [
+            {"id": "m_new", "ended_at": _ts(ts), "result": "completed",
+             "area_sqft": None},
+        ]
+        cloud = [{"timestamp": ts, "sqft": 351, "dirt": 2}]
+        wrote = store.merge_latest_from_cloud(cloud)
+        assert wrote is True
+        assert store._records[-1]["area_sqft"] == 351
+
+    def test_does_not_overwrite_existing_area_sqft_on_latest_merge(self):
+        store = MissionStore()
+        ts = 1700001000
+        store._records = [
+            {"id": "m_new", "ended_at": _ts(ts), "result": "completed",
+             "area_sqft": 120},
+        ]
+        cloud = [{"timestamp": ts, "sqft": 999}]
+        store.merge_latest_from_cloud(cloud)
+        assert store._records[-1]["area_sqft"] == 120
+
 
 class TestCompletionRate30d:
     @pytest.mark.asyncio
@@ -1755,6 +1782,34 @@ class TestBackfillBasicCorrection:
 
         store.backfill_from_cloud([_cloud_rec(start_ts, end_ts, sqft=999)])
         assert store._records[0]["area_sqft"] == 120
+
+    def test_backfills_area_sqft_even_when_timestamps_already_accurate(self):
+        """Field bug (v2.10.1, confirmed against a real archive: 24/24
+        local records on an i/s-series-accurate-timestamp robot had
+        area_sqft permanently None despite "sqft" correctly carrying
+        real cloud values every time).
+
+        area_sqft previously only backfilled inside the timestamp-
+        correction branch (delta_start >= 300) — so a mission whose
+        local started_at/ended_at were ALREADY accurate (the common
+        case on i/s-series, and apparently even on this 980) never
+        reached the backfill line at all, regardless of how much cloud
+        data was available. area_sqft must populate independently of
+        whether a timestamp correction was needed.
+        """
+        start_ts = 1700000000
+        end_ts   = 1700003600  # local already accurate — delta_start == 0
+        local = _local_rec(started_ts=start_ts, ended_ts=end_ts, area_sqft=None)
+        store = _make_store([local])
+
+        n = store.backfill_from_cloud([_cloud_rec(start_ts, end_ts, sqft=351)])
+
+        assert n.corrected == 0, "timestamps were already accurate"
+        assert n.enriched == 1, "area_sqft backfill counts as enrichment"
+        assert store._records[0]["area_sqft"] == 351
+        assert store._records[0]["started_at"] == _utc(start_ts), (
+            "must not have gone through the timestamp-correction path"
+        )
 
 
 class TestBackfillMatching:

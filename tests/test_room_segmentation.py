@@ -135,6 +135,36 @@ class TestSegmentRoomsEndToEnd:
         door = result.doors[0]
         assert 6 <= door["cell"][0] <= 9  # door sits in the connecting corridor
 
+    def test_door_saddle_mm_reflects_corridor_width_not_one_cell_floor(self):
+        """A door's saddle_mm must scale with the actual corridor it
+        connects through. Two otherwise-identical room pairs, one joined
+        by a 1-cell-wide corridor and one by a 3-cell-wide corridor,
+        must NOT report the same saddle_mm — the old (raw-dist, min-over-
+        boundary) implementation reported exactly 150.0mm (1 cell) for
+        both, since any boundary touch point at the mask edge wins
+        regardless of true corridor width."""
+        narrow = _rect_cells(0, 6, 0, 6)
+        narrow.update(_rect_cells(9, 15, 0, 6))
+        for x in range(6, 9):
+            narrow[(x, 3)] = 1.0
+        narrow_result = segment_rooms(narrow, min_distance_cells=3.0)
+        assert len(narrow_result.doors) == 1
+
+        wide = _rect_cells(0, 6, 0, 6)
+        wide.update(_rect_cells(9, 15, 0, 6))
+        for x in range(6, 9):
+            for y in (2, 3, 4):
+                wide[(x, y)] = 1.0
+        wide_result = segment_rooms(wide, min_distance_cells=3.0)
+        assert len(wide_result.doors) == 1
+
+        narrow_saddle = narrow_result.doors[0]["saddle_mm"]
+        wide_saddle = wide_result.doors[0]["saddle_mm"]
+        assert wide_saddle > narrow_saddle, (
+            f"wide corridor ({wide_saddle}mm) must measure wider than "
+            f"narrow corridor ({narrow_saddle}mm)"
+        )
+
     def test_empty_input(self):
         result = segment_rooms({})
         assert result.rooms == {}
@@ -160,3 +190,42 @@ class TestSegmentRoomsEndToEnd:
         assert len(result.rooms) == 5
         sizes = sorted((len(c) for c in result.rooms.values()), reverse=True)
         assert sizes == [669, 420, 347, 308, 264]
+
+    def test_door_saddle_mm_does_not_collapse_to_one_cell_floor(self):
+        """Field bug (v2.10.0/2.10.1): every door's saddle_mm landed on
+        exactly 1 cell * cell_mm (150.0mm) regardless of the actual
+        doorway geometry, because the door-finding loop took min() of
+        the RAW (unsmoothed) distance transform over the entire shared
+        boundary between two rooms — and that boundary almost always
+        contains at least one touch point sitting right at the edge of
+        the visited mask (dist == 1.0 exactly), unrelated to where the
+        real doorway is. merge_regions() already solves the same
+        "min over boundary" problem correctly by operating on the
+        Gaussian-smoothed distance field instead — this fixture
+        (real anonymised grid data from a field archive) is the exact
+        shape that triggered the bug: confirmed all 5 doors collapsed to
+        precisely 150.0 before the fix.
+        """
+        import json
+        import os
+        fixture_path = os.path.join(
+            os.path.dirname(__file__), "fixtures", "sample_grid_980_og.json"
+        )
+        grid = json.load(open(fixture_path))["data"]
+        cells = {}
+        for k, w in grid["cells"].items():
+            gx, gy = map(int, k.split(","))
+            cells[(gx, gy)] = w
+        result = segment_rooms(cells, min_distance_cells=8.0)
+
+        saddles = [d["saddle_mm"] for d in result.doors]
+        assert len(saddles) == 5
+        assert len(set(saddles)) > 1, (
+            "doors must not all collapse to the same raw-distance floor "
+            f"value — got {saddles}"
+        )
+        # None should sit exactly on the 1-cell floor (150.0mm at the
+        # cell_mm=150 default) — that exact value is the symptom, not a
+        # coincidence a real, varied set of doorways would produce.
+        assert all(s != 150.0 for s in saddles), saddles
+
