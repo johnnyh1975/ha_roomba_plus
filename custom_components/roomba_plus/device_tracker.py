@@ -82,6 +82,15 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
 
     _attr_name = None
     _attr_translation_key = "position"
+    # TrackerEntity.entity_registry_enabled_default returns False when both
+    # mac_address and device_info are None — which is always the case here,
+    # since we identify the robot by BLID, not MAC, and deliberately inherit
+    # TrackerEntity's device_info=None (device tracker entities should not
+    # create device registry entries per HA core design). Without this
+    # override the entity is registered but disabled by default, so users
+    # never see it in the UI. Confirmed as the root cause of Thonno's report
+    # ("I don't seem to have that entity on my i7+") — v2.10.3.
+    _attr_entity_registry_enabled_default = True
 
     def __init__(
         self, roomba: Any, blid: str, config_entry: RoombaConfigEntry

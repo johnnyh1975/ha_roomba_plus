@@ -9,7 +9,11 @@ Query parameters:
                         always available, sourced from local MissionStore)
             records  -- per-mission array (v1.0 card format, sourced from cloud
                         raw_records when available, falls back to local
-                        MissionStore records for robots without cloud credentials)
+                        MissionStore records for robots without cloud credentials.
+                        v2.10.2 -- when cloud IS the source, any local record
+                        that never got a cloud merge match is unioned in too,
+                        so this stays consistent with format=summary's
+                        always-local total. See RECORDS-UNION.)
 
 v2.1 changes:
   F4a -- zone names injected into cloud records (120 s timestamp tolerance)
@@ -170,6 +174,23 @@ def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "room_coverage":        record.get("room_coverage"),
         "alignment_confidence": None,
     }
+
+
+def _local_record_has_cloud_merge_signal(record: dict[str, Any]) -> bool:
+    """True if this local MissionStore record was ever successfully
+    matched against a cloud record by backfill_from_cloud() or
+    merge_latest_from_cloud() — i.e. at least one cloud-only analytics
+    field landed on it.
+
+    v2.10.2 (RECORDS-UNION) — same heuristic cloud_coordinator.py's CR3
+    fallback already uses to identify enriched local records, inverted
+    here to find records that NEVER matched any cloud entry. A genuine
+    mismatch on one field while the others stayed null is not expected
+    in practice (all three are written together by the same merge
+    call), so this is a reliable proxy for "cloud never knew about
+    this mission" without needing new matching logic.
+    """
+    return any(record.get(f) is not None for f in ("dirt", "chrgM", "wlBars"))
 
 
 class MissionHistoryView(HomeAssistantView):
@@ -349,6 +370,32 @@ class MissionHistoryView(HomeAssistantView):
                 unified = [_inject_zones(r, local_zones_index) for r in unified]
             # Cloud records are newest-first -- reverse to ascending for card
             records = list(reversed(unified))
+
+            # v2.10.2 (RECORDS-UNION) -- a mission that completed locally
+            # (real MQTT state transition) but never got a matching cloud
+            # record -- for whatever reason on iRobot's side -- was
+            # previously invisible here whenever the cloud was healthy,
+            # even though format=summary's `total` (always local) counts
+            # it. Confirmed in the field: total=3 for a day while this
+            # endpoint, cloud-sourced, only had 2. Fill the gap with any
+            # local record from the same window that never got a cloud
+            # merge match (see _local_record_has_cloud_merge_signal).
+            if data.mission_store is not None:
+                try:
+                    union_days = int(request.query.get("days", 90))
+                    union_days = max(1, min(union_days, 90))
+                except (ValueError, TypeError):
+                    union_days = 90
+                unmatched_local = [
+                    _local_record_to_unified(r)
+                    for r in data.mission_store.query(union_days)
+                    if not _local_record_has_cloud_merge_signal(r)
+                ]
+                if unmatched_local:
+                    records = sorted(
+                        records + unmatched_local,
+                        key=lambda r: r.get("started_at") or "",
+                    )
         elif data.mission_store is not None:
             try:
                 days = int(request.query.get("days", 90))

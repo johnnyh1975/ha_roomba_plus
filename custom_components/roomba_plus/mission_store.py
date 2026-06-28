@@ -602,22 +602,65 @@ class MissionStore:
         """Copy missing analytics fields from a cloud record into a local record.
 
         Only copies when the local field is absent or None — never overwrites.
-        Exception: error 224 (map localisation failure) — when the cloud record
-        reveals pauseId=224 and the local result is 'stuck', correct the result
-        to 'error'. Error 224 is not a physical stuck: the robot aborts in
-        under a second and returns to dock (runM=0, sqft=0). The MQTT mission
-        end packet may not carry the error code reliably on lewis firmware.
+
+        B1 — error 224 result correction: when the cloud record reveals
+        pauseId=224 and the local result is 'stuck', correct the result to
+        'error'. Error 224 is not a physical stuck: the robot aborts in under
+        a second and returns to dock (runM=0, sqft=0). The MQTT mission end
+        packet may not carry the error code reliably on lewis firmware.
+
+        B1-EXT (v2.10.2) — generalised result correction for two further
+        cases where the local MQTT classification is demonstrably wrong once
+        the cloud record arrives:
+
+          done=='bat' (battery error) with local 'completed'/'stuck_and_resumed'
+            → local result corrected to 'error'; error_code backfilled from
+            pauseId if absent. The robot ran until the battery died — never a
+            successful completion. Confirmed in the field: a real archive had
+            completed:3 / stuck:0 for a day that contained an error_battery
+            mission, because done=='bat' was never corrected locally.
+
+          done_raw=='usrEnd' (user cancellation) with local 'completed'/
+          'stuck_and_resumed'
+            → local result corrected to 'cancelled'. 'stuck_and_resumed' means
+            "stuck, self-recovered, finished" — but if the user then cancelled
+            before the mission actually finished, that reading is wrong. The
+            stuck event itself is preserved in nstuck_delta and self_recovered;
+            only the final result changes. 'stuck_and_abandoned' is deliberately
+            not touched: the robot stopped on its own, independently of any
+            user action.
+
+        Both B1-EXT corrections use generic 'error'/'cancelled' (not granular
+        'error_battery'/'cancelled_by_user') — those granular values only exist
+        in the cloud-side vocabulary and are not in the local result enum; using
+        them here would create undocumented result strings that query_by_day(),
+        compute_rolling_stats(), and the card's result renderer don't know about.
 
         Returns True if any field was written.
         """
         wrote = False
 
         # B1 — error 224 result correction (before generic scalar merge).
-        pause_id = cloud.get("pauseId", 0) or 0
+        pause_id = int(cloud.get("pauseId", 0) or 0)
         if pause_id == 224 and local.get("result") == "stuck":
             local["result"] = "error"
             if local.get("error_code") is None:
                 local["error_code"] = 224
+            wrote = True
+
+        # B1-EXT — battery error / user cancellation result correction.
+        done = (cloud.get("done") or "").strip()
+        done_raw = (cloud.get("done_raw") or "").strip()
+        local_result = local.get("result")
+
+        if done == "bat" and local_result in ("completed", "stuck_and_resumed"):
+            local["result"] = "error"
+            if local.get("error_code") is None and pause_id > 0:
+                local["error_code"] = pause_id
+            wrote = True
+
+        elif done_raw == "usrEnd" and local_result in ("completed", "stuck_and_resumed"):
+            local["result"] = "cancelled"
             wrote = True
 
         for field in _CLOUD_MERGE_SCALAR:
