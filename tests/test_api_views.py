@@ -372,6 +372,186 @@ class TestRecordsFormat:
         assert u["error_code"] is None
 
 
+class TestLocalRecordHasCloudMergeSignal:
+    """Unit tests for the heuristic used to find local records that never
+    got matched against any cloud record (v2.10.2 RECORDS-UNION)."""
+
+    def test_no_merge_fields_means_unmatched(self):
+        from custom_components.roomba_plus.api_views import (
+            _local_record_has_cloud_merge_signal,
+        )
+        assert _local_record_has_cloud_merge_signal(_local_rec()) is False
+
+    def test_dirt_field_present_means_matched(self):
+        from custom_components.roomba_plus.api_views import (
+            _local_record_has_cloud_merge_signal,
+        )
+        rec = _local_rec()
+        rec["dirt"] = 5
+        assert _local_record_has_cloud_merge_signal(rec) is True
+
+    def test_chrgm_field_present_means_matched(self):
+        from custom_components.roomba_plus.api_views import (
+            _local_record_has_cloud_merge_signal,
+        )
+        rec = _local_rec()
+        rec["chrgM"] = 0  # zero, not None -- still counts as "present"
+        assert _local_record_has_cloud_merge_signal(rec) is True
+
+    def test_wlbars_field_present_means_matched(self):
+        from custom_components.roomba_plus.api_views import (
+            _local_record_has_cloud_merge_signal,
+        )
+        rec = _local_rec()
+        rec["wlBars"] = [1, 2, 3, 4, 5]
+        assert _local_record_has_cloud_merge_signal(rec) is True
+
+
+class TestRecordsUnionWithLocal:
+    """v2.10.2 RECORDS-UNION. format=records previously discarded ALL
+    local MissionStore records whenever the cloud was the source -- even
+    records the cloud never knew about. Confirmed in the field: a real
+    archive had format=summary's total=3 for a day while the cloud-
+    sourced format=records array for that same day only had 2; the
+    missing local record had no nMssn/dirt/chrgM/wlBars at all (never
+    matched by backfill_from_cloud() or merge_latest_from_cloud())."""
+
+    @staticmethod
+    def _make_entry(cloud_raw_records, local_records, entry_id="abc123"):
+        entry = MagicMock()
+        entry.domain = DOMAIN
+        entry.data = {"blid": "abc_blid_123"}
+        entry.entry_id = entry_id
+
+        ms = MagicMock()
+        ms._records = list(local_records)
+        ms.query = MagicMock(return_value=list(local_records))
+
+        cc = MagicMock()
+        cc.raw_records = list(cloud_raw_records)
+        cc.last_update_success = True
+
+        data = MagicMock()
+        data.has_cloud = True
+        data.cloud_coordinator = cc
+        data.mission_store = ms
+        data.umf_aligner = None
+        entry.runtime_data = data
+        return entry
+
+    @staticmethod
+    def _hass_for(entry):
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = entry
+        return hass
+
+    async def _get_records(self, cloud_records, local_records):
+        entry = self._make_entry(cloud_records, local_records)
+        hass = self._hass_for(entry)
+        view = MissionHistoryView()
+        req = _make_request(hass, fmt="records")
+        resp = await view.get(req, "abc123")
+        return json.loads(resp.body)
+
+    @pytest.mark.asyncio
+    async def test_unmatched_local_record_is_included(self):
+        """Field bug repro: cloud has 2 records for the day, local
+        MissionStore has 3 (one never matched any cloud record) --
+        format=records must return all 3, not just the 2 cloud ones."""
+        cloud_records = [
+            _cloud_rec(start_ts=1782457275, end_ts=1782458295),
+            _cloud_rec(start_ts=1782464921, end_ts=1782472921),
+        ]
+        local_records = [
+            {  # matched (cloud-merged) -- corresponds to the first cloud record
+                **_local_rec(started_at="2026-06-26T07:01:15+00:00",
+                              ended_at="2026-06-26T07:18:15+00:00"),
+                "dirt": 2, "chrgM": 0, "wlBars": [43, 57, 0, 0, 0],
+            },
+            {  # the never-matched local mission -- the actual field repro
+                "id": "m_1782462420",
+                "started_at": "2026-06-26T08:27:00+00:00",
+                "ended_at": "2026-06-26T09:05:18+00:00",
+                "duration_min": 38,
+                "area_sqft": None,
+                "result": "completed",
+                "initiator": "",
+                "zones": [],
+                "error_code": None,
+            },
+            {  # matched (cloud-merged) -- corresponds to the second cloud record
+                **_local_rec(started_at="2026-06-26T09:08:41+00:00",
+                              ended_at="2026-06-26T11:44:41+00:00"),
+                "dirt": 2, "chrgM": 90, "wlBars": [74, 24, 2, 0, 0],
+            },
+        ]
+        body = await self._get_records(cloud_records, local_records)
+
+        assert len(body) == 3
+        assert sorted(r["source"] for r in body) == ["cloud", "cloud", "local"]
+        assert any(r["id"] == "m_1782462420" for r in body)
+
+    @pytest.mark.asyncio
+    async def test_matched_local_record_not_duplicated(self):
+        """A local record that DID get a cloud merge (dirt/chrgM/wlBars
+        present) must not also appear as a separate local-source entry
+        -- it's already represented by its cloud counterpart."""
+        cloud_records = [_cloud_rec(start_ts=1700000000, end_ts=1700003600)]
+        local_records = [
+            {
+                "id": "m_1700000000",
+                "started_at": "2023-11-14T22:13:20+00:00",
+                "ended_at": "2023-11-14T23:13:20+00:00",
+                "duration_min": 60,
+                "area_sqft": 180.0,
+                "result": "completed",
+                "initiator": "schedule",
+                "zones": [],
+                "error_code": None,
+                "dirt": 12,      # merge signal present -- already matched
+                "chrgM": 0,
+                "wlBars": [70, 68, 65, 60, 62],
+            },
+        ]
+        body = await self._get_records(cloud_records, local_records)
+
+        assert len(body) == 1
+        assert body[0]["source"] == "cloud"
+
+    @pytest.mark.asyncio
+    async def test_no_unmatched_local_records_unchanged(self):
+        """No local-only records to union in -- behaviour identical to
+        before this fix (pure cloud array, untouched)."""
+        cloud_records = [_cloud_rec(start_ts=1700000000, end_ts=1700003600)]
+        body = await self._get_records(cloud_records, [])
+
+        assert len(body) == 1
+        assert body[0]["source"] == "cloud"
+
+    @pytest.mark.asyncio
+    async def test_unioned_records_sorted_ascending(self):
+        cloud_records = [_cloud_rec(start_ts=1700010000, end_ts=1700013600)]
+        local_records = [
+            {
+                "id": "m_local_earlier",
+                "started_at": "2023-11-14T20:00:00+00:00",
+                "ended_at": "2023-11-14T20:30:00+00:00",
+                "duration_min": 30,
+                "area_sqft": None,
+                "result": "completed",
+                "initiator": "",
+                "zones": [],
+                "error_code": None,
+            },
+        ]
+        body = await self._get_records(cloud_records, local_records)
+
+        assert len(body) == 2
+        assert body[0]["id"] == "m_local_earlier"
+        assert body[1]["source"] == "cloud"
+
+
+
 class TestZoneInjection:
     """F4a -- _inject_zones populates zones from local MissionStore index."""
 

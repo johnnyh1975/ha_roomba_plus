@@ -198,3 +198,32 @@ class TestSourceType:
         from homeassistant.components.device_tracker import SourceType
         tracker, _, _ = _make_tracker()
         assert tracker.source_type == SourceType.ROUTER
+
+
+class TestEntityRegistryEnabledDefault:
+    """v2.10.3 — device tracker must be enabled by default.
+
+    TrackerEntity.entity_registry_enabled_default returns False when both
+    mac_address and device_info are None. Both are always None here:
+    we use BLID for identity (no MAC), and TrackerEntity's own device_info
+    is None by design ('device tracker entities should not create device
+    registry entries'). Without _attr_entity_registry_enabled_default = True
+    the entity is registered but disabled, invisible in the UI.
+
+    Confirmed root cause of Thonno's field report: 'I don't seem to have
+    that entity on my i7+' — the entity existed in the registry but was
+    disabled by default on every installation regardless of robot tier.
+    """
+
+    def test_entity_registry_enabled_default_is_true(self):
+        """entity_registry_enabled_default must return True on instances.
+        HA's Entity base class mangles _attr_* keys internally, so the
+        class-level __dict__ key name is not reliable to test — the
+        property's runtime return value is what actually matters."""
+        tracker, _, _ = _make_tracker()
+        assert tracker.entity_registry_enabled_default is True
+
+    def test_instance_entity_registry_enabled_default_is_true(self):
+        tracker, _, _ = _make_tracker()
+        assert tracker.entity_registry_enabled_default is True
+

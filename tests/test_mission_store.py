@@ -1006,7 +1006,170 @@ class TestBackfillCloudMerge:
         assert r.enriched == 3
 
 
-class TestMergeLatestFromCloud:
+class TestMergeCloudFieldsB1Ext:
+    """v2.10.2 B1-EXT: generalised result correction from cloud done/done_raw.
+
+    B1 (existing, not touched) handles the narrow case of pauseId==224 +
+    local 'stuck'. B1-EXT covers two new correction triggers that were
+    confirmed in the field on a real archive (980 OG, 26.06.2026):
+      - done=='bat' with local 'completed' or 'stuck_and_resumed' → 'error'
+      - done_raw=='usrEnd' with local 'completed' or 'stuck_and_resumed' → 'cancelled'
+
+    'stuck_and_abandoned' is deliberately NOT corrected by either trigger
+    (own stopping criterion, independent of user/battery). Generic 'error'/
+    'cancelled' (not 'error_battery'/'cancelled_by_user') are used so that
+    the corrected values stay within the documented local result enum.
+    """
+
+    @staticmethod
+    def _merge(local_result, done="done", done_raw="done",
+               pause_id=0, local_error_code=None):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        ts = 1700001000
+        local = {
+            "id": f"m_{ts - 2400}",
+            "started_at": _ts(ts - 2400),
+            "ended_at": _ts(ts),
+            "duration_min": 40,
+            "area_sqft": None,
+            "result": local_result,
+            "error_code": local_error_code,
+        }
+        cloud = {
+            "startTime": ts - 2400,
+            "timestamp": ts,
+            "done": done,
+            "done_raw": done_raw,
+            "pauseId": pause_id,
+            "sqft": 200,
+            "dirt": 3,
+            "chrgM": 0,
+        }
+        MissionStore._merge_cloud_fields(local, cloud)
+        return local
+
+    # ── battery-error cases ───────────────────────────────────────────────────
+
+    def test_done_bat_with_completed_corrects_to_error(self):
+        """Field repro: mission 07:01, done=='bat', local 'completed'."""
+        local = self._merge("completed", done="bat", pause_id=2)
+        assert local["result"] == "error"
+
+    def test_done_bat_with_stuck_and_resumed_corrects_to_error(self):
+        """Stuck, self-recovered, then battery died before finishing."""
+        local = self._merge("stuck_and_resumed", done="bat", pause_id=2)
+        assert local["result"] == "error"
+
+    def test_done_bat_backfills_error_code_from_pause_id(self):
+        local = self._merge("completed", done="bat", pause_id=2,
+                            local_error_code=None)
+        assert local["error_code"] == 2
+
+    def test_done_bat_does_not_overwrite_existing_error_code(self):
+        local = self._merge("completed", done="bat", pause_id=2,
+                            local_error_code=99)
+        assert local["error_code"] == 99
+
+    def test_done_bat_pause_id_zero_leaves_error_code_none(self):
+        local = self._merge("completed", done="bat", pause_id=0)
+        assert local["result"] == "error"
+        assert local["error_code"] is None
+
+    # ── user-cancellation cases ───────────────────────────────────────────────
+
+    def test_done_raw_usrend_with_completed_corrects_to_cancelled(self):
+        """Field repro: mission 09:08, done_raw=='usrEnd', local 'stuck_and_resumed'."""
+        local = self._merge("completed", done_raw="usrEnd")
+        assert local["result"] == "cancelled"
+
+    def test_done_raw_usrend_with_stuck_and_resumed_corrects_to_cancelled(self):
+        """Field repro direct: stuck, recovered, then user cancelled —
+        the stuck event is already recorded in self_recovered; the
+        final result must reflect the user action."""
+        local = self._merge("stuck_and_resumed", done_raw="usrEnd")
+        assert local["result"] == "cancelled"
+
+    # ── intentional non-correction cases ─────────────────────────────────────
+
+    def test_stuck_and_abandoned_not_touched_by_bat(self):
+        """Robot stopped on its own — battery trigger must not overwrite."""
+        local = self._merge("stuck_and_abandoned", done="bat")
+        assert local["result"] == "stuck_and_abandoned"
+
+    def test_stuck_and_abandoned_not_touched_by_usrend(self):
+        local = self._merge("stuck_and_abandoned", done_raw="usrEnd")
+        assert local["result"] == "stuck_and_abandoned"
+
+    def test_stuck_not_touched_by_bat(self):
+        """Plain 'stuck' (mid-classification; not resumed/abandoned) —
+        handled only by the existing B1 (pauseId==224) path, not B1-EXT."""
+        local = self._merge("stuck", done="bat")
+        assert local["result"] == "stuck"
+
+    def test_healthy_mission_not_touched(self):
+        """Normal completion — done='done', done_raw='done' — untouched."""
+        local = self._merge("completed", done="done", done_raw="done")
+        assert local["result"] == "completed"
+
+    # ── query_by_day integration: the original field bug ─────────────────────
+
+    def test_query_by_day_completed_count_after_b1ext_correction(self):
+        """End-to-end repro of the field bug (980 OG, 26.06.2026):
+        before B1-EXT, summary showed completed:3 for a day that had one
+        error_battery and one cancelled_by_user mission, because both local
+        records had result='completed' and were never corrected.
+
+        After B1-EXT fires via backfill_from_cloud(), query_by_day() must
+        show completed:0 for that day (the third missing mission is a
+        separate RECORDS-UNION issue, not tested here)."""
+        store = MissionStore()
+        ts1 = 1782457275  # 07:01 UTC
+        ts2 = 1782464921  # 09:08 UTC — both from the real field archive
+        store._records = [
+            {
+                "id": f"m_{ts1 - 1020}",
+                "started_at": _ts(ts1 - 1020),
+                "ended_at": _ts(ts1),
+                "duration_min": 17,
+                "area_sqft": None,
+                "result": "completed",     # local — WRONG; cloud says bat
+                "error_code": None,
+            },
+            {
+                "id": f"m_{ts2 - 9360}",
+                "started_at": _ts(ts2 - 9360),
+                "ended_at": _ts(ts2),
+                "duration_min": 156,
+                "area_sqft": None,
+                "result": "stuck_and_resumed",  # local — WRONG; cloud says usrEnd
+                "error_code": None,
+            },
+        ]
+        cloud = [
+            {"startTime": ts1 - 1020, "timestamp": ts1,
+             "done": "bat", "done_raw": "bat", "pauseId": 2,
+             "sqft": 178, "dirt": 1, "chrgM": 0},
+            {"startTime": ts2 - 9360, "timestamp": ts2,
+             "done": "cncl", "done_raw": "usrEnd", "pauseId": 5,
+             "sqft": 351, "dirt": 4, "chrgM": 60},
+        ]
+        store.backfill_from_cloud(cloud)
+
+        assert store._records[0]["result"] == "error"
+        assert store._records[1]["result"] == "cancelled"
+
+        from datetime import date, timezone
+        day = date(2026, 6, 26)
+        summaries = store.query_by_day(days=28)
+        assert day in summaries, "must have a summary for 2026-06-26"
+        s = summaries[day]
+        assert s.completed == 0, (
+            f"field bug: query_by_day counted {s.completed} completed "
+            f"for a day with only error+cancelled missions"
+        )
+        assert s.total == 2
+
+
     """merge_latest_from_cloud() post-mission hook (CR2)."""
 
     def test_merges_into_last_record(self):
