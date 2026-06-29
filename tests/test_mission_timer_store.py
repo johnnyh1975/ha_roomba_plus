@@ -1,0 +1,2979 @@
+"""Consolidated domain test file (TEST-REORG).
+
+Merged by the v2.8.x test reorganisation from multiple version-named
+test files; see git history for provenance.
+"""
+
+
+from __future__ import annotations
+
+
+
+import asyncio
+from collections import defaultdict
+from datetime import datetime
+from datetime import timezone
+from datetime import timedelta
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
+import itertools
+import pytest
+from contextlib import contextmanager
+import tests.conftest
+from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+import time
+from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_CANDIDATE_PHASES
+from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_MIN_ELAPSED_RATIO
+from custom_components.roomba_plus.callbacks import _room_transition_confidence_ok
+from custom_components.roomba_plus.callbacks import make_mission_callback
+
+
+@contextmanager
+def _patch_callbacks_time():
+    """Patch callbacks._time_mod so that monotonic() returns increasing values.
+
+    Each call returns a value 10 s larger than the previous — ensures that the
+    END_SIGNAL_MIN_HOLD_SECONDS (2.0 s) time gate is always satisfied.
+    """
+    _c = itertools.count(1)
+    with patch("custom_components.roomba_plus.callbacks._time_mod") as tmock:
+        tmock.monotonic.side_effect = lambda: float(next(_c)) * 10.0
+        tmock.time.return_value = 1000.0
+        yield tmock
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _make_hass() -> MagicMock:
+    hass = MagicMock()
+    def _close_coro(*args, **kwargs):
+        import asyncio as _asyncio
+        for a in args:
+            if _asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
+    # Close any coroutines passed to async_create_task so Python does not emit
+    # "coroutine 'X' was never awaited" RuntimeWarnings during tests.
+    def _close_coro(*args, **kwargs):
+        import asyncio
+        for a in args:
+            if asyncio.iscoroutine(a):
+                a.close()
+    hass.async_create_task = _close_coro
+    return hass
+
+
+def _make_mts(
+    planned_rooms: list[str] | None = None,
+    current_room_idx: int = 0,
+    mission_id: str | None = "mission_42",
+) -> MissionTimerStore:
+    mts = object.__new__(MissionTimerStore)
+    mts.mission_id = mission_id
+    mts.run_sec = 120.0
+    mts.total_estimated_sec = 2700.0
+    # Use sentinel to distinguish None (use default) from [] (empty list)
+    mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"] if planned_rooms is None else planned_rooms
+    mts.current_room_idx = current_room_idx
+    mts.recharge_positions = []
+    mts.snapshot_ts = time.time()
+    mts._last_phase_ts = 0.0
+    return mts
+
+
+def _make_data(
+    mts: MissionTimerStore | None,
+    phase: str = "hmUsrDock",
+) -> MagicMock:
+    data = MagicMock()
+    data.mission_timer_store = mts
+    data.roomba_reported_state.return_value = {
+        "cleanMissionStatus": {"phase": phase}
+    }
+    return data
+
+
+def _make_service_call(entity_id: str = "vacuum.roomba_test") -> MagicMock:
+    call = MagicMock()
+    call.data = {"entity_id": [entity_id]}
+    call.hass = MagicMock()
+    return call
+
+
+def _msg(phase: str, cycle: str = "clean", error: int = 0, nmssn: int = 42) -> dict:
+    return {"state": {"reported": {
+        "cleanMissionStatus": {
+            "phase": phase,
+            "cycle": cycle,
+            "error": error,
+            "mssnStrtTm": 1700000000,
+            "nMssn": nmssn,
+        },
+        "bbrun": {"nStuck": 0},
+    }}}
+
+
+def _make_entry(mts: MissionTimerStore) -> MagicMock:
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {"blid": "ABC123"}
+    entry.options = {}
+    entry.runtime_data.mission_timer_store = mts
+    entry.runtime_data.mission_store = MagicMock()
+    entry.runtime_data.mission_store.async_append = AsyncMock()
+    entry.runtime_data.mission_store.async_save = AsyncMock()
+    entry.runtime_data.zone_store = None
+    entry.runtime_data.map_capability = None
+    entry.runtime_data.cloud_coordinator = None
+    entry.runtime_data.presence_manager = None
+    entry.runtime_data.demand_triggered_ts = None
+    entry.runtime_data.robot_profile_store = None
+    entry.runtime_data.roomba = MagicMock()
+    entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+    return entry
+
+
+def _make_entry_v280_auto_advance_room_live(mts: MissionTimerStore) -> MagicMock:
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {"blid": "ABC123"}
+    entry.options = {}
+    entry.runtime_data.mission_timer_store = mts
+    entry.runtime_data.mission_store = MagicMock()
+    entry.runtime_data.mission_store.async_append = AsyncMock()
+    entry.runtime_data.mission_store.async_save = AsyncMock()
+    entry.runtime_data.zone_store = None
+    entry.runtime_data.map_capability = None
+    entry.runtime_data.cloud_coordinator = None
+    entry.runtime_data.presence_manager = None
+    entry.runtime_data.demand_triggered_ts = None
+    entry.runtime_data.robot_profile_store = None
+    entry.runtime_data.roomba = MagicMock()
+    entry.runtime_data.roomba.master_state = {
+        "state": {"reported": {
+            "lastCommand": {"regions": [
+                {"region_name": "Kitchen", "region_id": "19"},
+                {"region_name": "Hall", "region_id": "21"},
+            ]},
+        }}
+    }
+    return entry
+
+
+def _msg_v280_inter_room_recharge(phase: str, cycle: str = "clean", nmssn: int = 42) -> dict:
+    """Build a minimal MQTT cleanMissionStatus message."""
+    return {"state": {"reported": {
+        "cleanMissionStatus": {
+            "phase": phase,
+            "cycle": cycle,
+            "mssnStrtTm": 1700000000,
+            "nMssn": nmssn,
+        },
+        "bbrun": {"nStuck": 0},
+    }}}
+
+
+def _make_mts_v280_inter_room_recharge() -> MissionTimerStore:
+    mts = MissionTimerStore()
+    return mts
+
+
+def _run_callback(cb, *msgs):
+    """Fire callback with each message in sequence."""
+    for msg in msgs:
+        cb(msg)
+
+
+class TestMissionTimerStore:
+
+    def test_first_phase_run_initialises_mission(self):
+        """First on_phase_run for a new mission_id resets and sets up."""
+        mts = MissionTimerStore()
+        hass = _make_hass()
+        mts.on_phase_run("m_111", hass, "entry1")
+        assert mts.mission_id == "m_111"
+        assert mts.run_sec == 0  # no delta yet — just initialised
+
+    def test_accumulates_delta_on_consecutive_calls(self):
+        """Consecutive phase-run calls accumulate elapsed seconds."""
+        mts = MissionTimerStore()
+        mts.mission_id = "m_111"
+        mts.run_sec = 0
+        mts._last_phase_ts = 90.0   # pre-set so delta=10 when monotonic()=100
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 100.0   # now=100, delta=100-90=10
+            mts.on_phase_run("m_111", hass, "entry1")
+        assert mts.run_sec == 10
+
+    def test_large_gap_clamped(self):
+        """Gaps > 120 s (HA restart, recharge) are not accumulated."""
+        mts = MissionTimerStore()
+        mts.mission_id = "m_111"
+        mts._last_phase_ts = 0.0
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 500.0
+            mts._last_phase_ts = 100.0  # 400 s gap → clamped
+            mts.on_phase_run("m_111", hass, "entry1")
+        assert mts.run_sec == 0
+
+    def test_new_mission_id_resets_counter(self):
+        """Different mission_id triggers a full reset."""
+        mts = MissionTimerStore()
+        mts.mission_id = "m_111"
+        mts.run_sec = 300
+        hass = _make_hass()
+        mts.on_phase_run("m_222", hass, "entry1")
+        assert mts.mission_id == "m_222"
+        assert mts.run_sec == 0
+
+    def test_on_phase_other_resets_timestamp(self):
+        """on_phase_other() resets _last_phase_ts to prevent gap accumulation."""
+        mts = MissionTimerStore()
+        mts._last_phase_ts = 100.0
+        mts.on_phase_other()
+        assert mts._last_phase_ts == 0.0
+
+    def test_clear_resets_all_fields(self):
+        """clear() wipes mission_id, run_sec, and timestamp."""
+        mts = MissionTimerStore()
+        mts.mission_id = "m_111"
+        mts.run_sec = 200
+        mts._last_phase_ts = 50.0
+        hass = _make_hass()
+        mts.clear(hass, "entry1")
+        assert mts.mission_id is None
+        assert mts.run_sec == 0
+        assert mts._last_phase_ts == 0.0
+
+
+class TestMissionTimerStorePersist:
+    """MissionTimerStore: extended schema persistence and derived properties."""
+
+    def _make_store(self) -> "MissionTimerStore":
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        return MissionTimerStore()
+
+    def test_elapsed_run_min_is_float(self):
+        """MP-ELAPSED: 12 seconds → 0.2 min, not 0."""
+        store = self._make_store()
+        store.mission_id = "test_mission"
+        store.run_sec = 12.0
+        assert store.elapsed_run_min == pytest.approx(0.2)
+
+    def test_current_room_from_plan(self):
+        """MP-ROOMS: current_room returns planned_rooms[current_room_idx]."""
+        store = self._make_store()
+        store.mission_id = "test"
+        store.planned_rooms = ["Bagno", "Cucina", "Salotto"]
+        store.current_room_idx = 1
+        assert store.current_room == "Cucina"
+
+    def test_next_room_from_plan(self):
+        """MP-ROOMS: next_room returns planned_rooms[current_room_idx + 1]."""
+        store = self._make_store()
+        store.mission_id = "test"
+        store.planned_rooms = ["Bagno", "Cucina", "Salotto"]
+        store.current_room_idx = 1
+        assert store.next_room == "Salotto"
+
+    def test_stale_snapshot_discards_on_load(self):
+        """Snapshot older than 7200s must be discarded on load."""
+        import asyncio
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        store = MissionTimerStore()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = asyncio.new_event_loop()
+
+        stale_ts = time.time() - 9000  # 2.5 hours ago
+
+        mock_store_data = {
+            "mission_id": "old_mission",
+            "run_sec": 300,
+            "total_estimated_sec": 4200.0,
+            "planned_rooms": ["Room1"],
+            "current_room_idx": 0,
+            "recharge_positions": [],
+            "snapshot_ts": stale_ts,
+        }
+
+        async def run_load():
+            with patch("custom_components.roomba_plus.mission_timer_store.Store") as MockStore:
+                mock_s = AsyncMock()
+                mock_s.async_load.return_value = mock_store_data
+                MockStore.return_value = mock_s
+                await store.async_load(hass, "test_entry")
+
+        hass.loop.run_until_complete(run_load())
+        hass.loop.close()
+
+        # Stale snapshot → not loaded
+        assert store.mission_id is None
+        assert store.run_sec == 0.0
+
+
+class TestElapsedSecHelper:
+    """_elapsed_sec adds live delta in run phase; returns bare run_sec otherwise."""
+
+    def _make_mts(self, run_sec: float, last_phase_ts: float = 0.0):
+        mts = MagicMock()
+        mts.run_sec = run_sec
+        mts._last_phase_ts = last_phase_ts
+        return mts
+
+    def test_adds_live_delta_during_run_phase(self):
+        """Helper adds monotonic delta when phase=run and _last_phase_ts is set."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 30)
+        elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
+        # Should be ~90 s (60 stored + ~30 live)
+        assert 85 <= elapsed <= 95
+
+    def test_no_live_delta_when_phase_not_run(self):
+        """Helper returns bare run_sec when phase is not 'run'."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        mts = self._make_mts(run_sec=120.0, last_phase_ts=time.monotonic() - 60)
+        elapsed = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
+        assert elapsed == 120.0
+
+    def test_no_live_delta_when_last_phase_ts_zero(self):
+        """Helper returns bare run_sec when _last_phase_ts == 0 (after on_phase_other)."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        mts = self._make_mts(run_sec=60.0, last_phase_ts=0.0)
+        elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
+        assert elapsed == 60.0
+
+
+class TestAttributesUseElapsedSec:
+    """extra_state_attributes uses live-delta elapsed (MP-ELAPSED-FIX)."""
+
+    def test_elapsed_run_min_reflects_live_delta(self):
+        """elapsed_run_min includes live delta beyond bare run_sec.
+
+        Uses a 5-second live delta (not 120 s) so the test passes even in
+        fresh containers where time.monotonic() < 120 s — which would make
+        _last_phase_ts negative and suppress the live-delta branch.
+        """
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._elapsed_sec = RoombaMissionProgress._elapsed_sec
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.run_sec = 60.0
+        mts._last_phase_ts = time.monotonic() - 5  # 5 s live delta (safe on fresh CI)
+        mts.current_room = "Bathroom"
+        mts.next_room = "Corridor"
+        mts.effective_elapsed_min = None  # force _elapsed_sec() fallback path
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=[],
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        # run_sec alone = 1.0 min; with live delta (>=5 s) result must exceed 1.0
+        assert attrs["elapsed_run_min"] > 1.0
+
+    def test_elapsed_run_min_uses_effective_elapsed_min_when_available(self):
+        """v2.9.0 — primary path: when mts.effective_elapsed_min is set (the
+        normal case for any mission started after this shipped), it's used
+        directly instead of the old live-delta clamp fallback."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.current_room = "Bathroom"
+        mts.next_room = "Corridor"
+        mts.effective_elapsed_min = 12.5
+        mts.mission_duration_min = 15.0
+        mts.recharge_min = 2.5
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=[],
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        assert attrs["elapsed_run_min"] == pytest.approx(12.5)
+
+    def test_new_v290_attributes_present(self):
+        """mission_duration_min and recharge_min appear alongside the
+        existing attributes, sourced directly from MissionTimerStore."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.current_room = "Bathroom"
+        mts.next_room = "Corridor"
+        mts.effective_elapsed_min = 12.5
+        mts.mission_duration_min = 15.0
+        mts.recharge_min = 2.5
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=[],
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        assert attrs["mission_duration_min"] == 15.0
+        assert attrs["recharge_min"] == 2.5
+
+    def test_native_value_uses_effective_elapsed_min(self):
+        """v2.9.0 — percentage calculation (native_value) uses the new
+        formula too, not just the elapsed_run_min attribute — both read
+        the same elapsed value internally."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [600.0, 600.0]  # 2 rooms, 10 min each
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 6.0  # 360s effective — no recharge involved
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["A", "B"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        # 360s elapsed / 1200s total = 30%
+        assert pct == 30
+
+    def test_native_value_auto_mode_all_estimates_none_falls_back_to_mean(self):
+        """v2.9.0 — Thonno's original Auto-mode field report: planned_order
+        resolves fine, but ALL per-room estimates are None (Auto pass mode
+        has no per-room TE1 data at all). Must fall back to
+        mission_duration_mean instead of returning None ("Unknown") for the
+        entire mission."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [None, None, None]  # Auto mode
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 10.0  # 600s effective elapsed
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store.mission_duration_mean = 20.0  # 20-min typical mission
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        # 600s / (20min*60=1200s) = 50%, NOT None/"Unknown"
+        assert pct == 50
+
+    def test_native_value_auto_mode_no_profile_store_stays_none(self):
+        """If there's truly no rolling-average data either (brand new
+        robot), still correctly returns None rather than crashing or
+        guessing a number."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = RoombaMissionProgress.__new__(RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = lambda order: [None, None]
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 5.0
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store = None
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["A", "B"],
+        ):
+            pct = RoombaMissionProgress.native_value.fget(sensor)
+
+        assert pct is None
+
+    def test_resolve_smart_tier_room_state_auto_mode_remaining_min_fallback(self):
+        """Same fallback for the estimated_remaining_min attribute (not
+        just the percentage native_value) — the attribute previously also
+        stayed None for the whole Auto-mode mission."""
+        from custom_components.roomba_plus.sensor import _resolve_smart_tier_room_state
+
+        config_entry = MagicMock()
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.effective_elapsed_min = 10.0  # 600s
+        mts.mission_duration_min = 10.0
+        mts.recharge_min = 0.0
+        mts.current_room = "Cabina Armadio"
+        mts.next_room = "Camera da letto"
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
+        data.mission_timer_store = mts
+        data.robot_profile_store.mission_duration_mean = 20.0  # 1200s typical
+        config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None, None],
+        ):
+            attrs = _resolve_smart_tier_room_state(config_entry)
+
+        # remaining = 1200s total - 600s elapsed = 600s = 10 min, not None
+        assert attrs["estimated_remaining_min"] == 10
+
+
+class TestCurrentRoomPrefersEstimate:
+    """estimate-based current_room wins over stale MTS when estimates available."""
+
+    def test_estimate_based_current_room_preferred_over_mts(self):
+        """When all room estimates available, current_room comes from elapsed calc."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._elapsed_sec = RoombaMissionProgress._elapsed_sec
+
+        mts = MagicMock()
+        mts.mission_id = "m1"
+        mts.run_sec = 90.0        # 90 s elapsed → past Bathroom (60 s)
+        mts._last_phase_ts = 0.0  # no live delta
+        mts.current_room = "Bathroom"   # stale MTS value
+        mts.next_room = "Corridor"
+        # v2.9.0 — force the old _elapsed_sec() fallback (see comment in
+        # TestAttributesUseElapsedSec above for why).
+        mts.effective_elapsed_min = None
+
+        state = {"cleanMissionStatus": {"phase": "run"}}
+        data = MagicMock()
+        data.roomba_reported_state.return_value = state
+        data.mission_timer_store = mts
+        data.robot_profile_store = None  # v2.9.0 — no Auto-mode-fallback path exercised here
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            return_value=["Bathroom", "Corridor"],
+        ), patch(
+            # v2.9.0 — the shared _resolve_smart_tier_room_state() function
+            # (extracted from this method) calls _compute_room_time_estimates
+            # directly, not the RoombaMissionProgress instance's
+            # _room_estimates() wrapper — patch the module-level function
+            # that's actually invoked now.
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[60, 120],  # Estimates: Bathroom=60s, Corridor=120s
+        ):
+            attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
+
+        # 90 s elapsed > 60 s (Bathroom estimate) → should be in Corridor
+        assert attrs["current_room"] == "Corridor"
+        assert attrs["next_room"] is None
+
+
+class TestOnPhaseOtherFlush:
+    """on_phase_other flushes pending delta so elapsed does not drop at transitions."""
+
+    def _make_mts(self, run_sec: float, last_phase_ts: float) -> object:
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        mts = MissionTimerStore.__new__(MissionTimerStore)
+        mts.run_sec = run_sec
+        mts._last_phase_ts = last_phase_ts
+        mts._save_task = None
+        return mts
+
+    def test_flush_adds_pending_delta_to_run_sec(self):
+        """Delta since last phase=run is flushed into run_sec on phase transition."""
+        mts = self._make_mts(run_sec=120.0, last_phase_ts=time.monotonic() - 30)
+        mts.on_phase_other()
+        # run_sec should now be ~150 s (120 stored + ~30 flushed)
+        assert 145 <= mts.run_sec <= 155
+
+    def test_last_phase_ts_reset_after_flush(self):
+        """_last_phase_ts is always 0 after on_phase_other regardless of flush."""
+        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 10)
+        mts.on_phase_other()
+        assert mts._last_phase_ts == 0.0
+
+    def test_no_flush_when_last_phase_ts_zero(self):
+        """If _last_phase_ts is already 0 (consecutive on_phase_other), no delta added."""
+        mts = self._make_mts(run_sec=60.0, last_phase_ts=0.0)
+        mts.on_phase_other()
+        assert mts.run_sec == 60.0
+
+    def test_large_delta_not_flushed(self):
+        """Delta >= 120 s is not flushed — same cap as on_phase_run."""
+        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 200)
+        mts.on_phase_other()
+        assert mts.run_sec == 60.0   # large gap rejected, run_sec unchanged
+
+    def test_elapsed_does_not_drop_at_transition(self):
+        """Simulates the bounce-back pattern: elapsed stays continuous through transition."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        now = time.monotonic()
+        mts = self._make_mts(run_sec=120.0, last_phase_ts=now - 30)
+
+        # BEFORE transition: elapsed includes live delta
+        elapsed_before = RoombaMissionProgress._elapsed_sec(mts, "run")
+        assert 145 <= elapsed_before <= 155
+
+        # Transition fires — flush pending delta
+        mts.on_phase_other()
+
+        # AFTER transition: elapsed equals flushed run_sec (no live delta, phase=hmMidMsn)
+        elapsed_after = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
+        # Should be ~150, NOT dropping back to 120
+        assert 145 <= elapsed_after <= 155
+
+
+class TestAdvanceRoomRemoved:
+    """advance_room was removed in v2.7.5 as dead code, then re-added in
+    v2.8.0 ADVANCE-ROOM-V2 as a condition-gated manual override service."""
+
+    def test_advance_room_present_as_method(self):
+        """v2.8.0 ADVANCE-ROOM-V2: advance_room is back as a guarded method."""
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        assert hasattr(MissionTimerStore, "advance_room"), (
+            "advance_room re-added in v2.8.0 ADVANCE-ROOM-V2"
+        )
+
+
+class TestGetPlannedRoomOrderFallback:
+    """_get_planned_room_order falls back to mts.planned_rooms when live data is empty."""
+
+    def _make_data(self, last_cmd_regions, cc_regions, mts_rooms):
+        from unittest.mock import MagicMock
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {"regions": last_cmd_regions}}}
+        }
+        cc = MagicMock()
+        cc.regions = cc_regions
+        data.cloud_coordinator = cc
+        mts = MagicMock()
+        mts.planned_rooms = mts_rooms
+        data.mission_timer_store = mts
+        return data
+
+    def test_falls_back_when_last_cmd_regions_empty(self):
+        """When lastCommand.regions is empty, mts.planned_rooms is returned."""
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        data = self._make_data(
+            last_cmd_regions=[],          # transitional empty lastCommand
+            cc_regions=[{"id": "1", "name": "Kitchen"}],
+            mts_rooms=["Bedroom", "Kitchen", "Lounge"],
+        )
+        result = _get_planned_room_order(data)
+        assert result == ["Bedroom", "Kitchen", "Lounge"]
+
+    def test_falls_back_when_cc_regions_empty(self):
+        """When cc.regions is empty (cloud mid-refresh), mts.planned_rooms is returned."""
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "1"}, {"rid": "4"}]
+            }}}
+        }
+        cc = MagicMock()
+        cc.regions = []   # cloud temporarily empty
+        data.cloud_coordinator = cc
+
+        mts = MagicMock()
+        mts.planned_rooms = ["Cabina Armadio", "Camera da letto", "Studio"]
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Cabina Armadio", "Camera da letto", "Studio"]
+
+    def test_normal_path_unaffected(self):
+        """When cc.regions has data, the normal id→name mapping is used."""
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "3"}, {"rid": "7"}]
+            }}}
+        }
+        cc = MagicMock()
+        cc.regions = [
+            {"id": "3", "name": "Kitchen"},
+            {"id": "7", "name": "Study"},
+        ]
+        data.cloud_coordinator = cc
+        mts = MagicMock()
+        mts.planned_rooms = ["wrong", "rooms"]   # should NOT be used
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Kitchen", "Study"]
+
+    def test_falls_back_on_partial_resolution(self):
+        """v2.9.0 — region_ids has entries, but cc.regions only resolves
+        SOME of them (e.g. cloud mid-refresh resolves room 1 of 2). The
+        pre-v2.9.0 code only fell back when `result` was COMPLETELY empty,
+        missing this partial-match case entirely — a genuine 2-room mission
+        (Thonno's exact field report: Corridoio + Camera da letto) would
+        silently shrink to 1 room mid-mission, corrupting every
+        elapsed/estimate calculation derived from planned_order. Must now
+        fall back to the full mts.planned_rooms snapshot instead of
+        returning the truncated partial result.
+        """
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "21"}, {"rid": "25"}]
+            }}}
+        }
+        cc = MagicMock()
+        # Only region 21 (Corridoio) currently resolvable — 25 missing,
+        # simulating cc.regions mid-refresh during the room transition.
+        cc.regions = [{"id": "21", "name": "Corridoio"}]
+        data.cloud_coordinator = cc
+
+        mts = MagicMock()
+        mts.planned_rooms = ["Corridoio", "Camera da letto"]
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Corridoio", "Camera da letto"], (
+            "Partial resolution must fall back to the full MTS snapshot, "
+            "not silently return a truncated 1-room list"
+        )
+
+    def test_partial_resolution_without_mts_fallback_returns_partial(self):
+        """When there's no MTS snapshot to fall back to, the partial result
+        is still returned rather than discarded entirely — better to show
+        a possibly-incomplete order than nothing at all."""
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba.master_state = {
+            "state": {"reported": {"lastCommand": {
+                "regions": [{"rid": "21"}, {"rid": "25"}]
+            }}}
+        }
+        cc = MagicMock()
+        cc.regions = [{"id": "21", "name": "Corridoio"}]
+        data.cloud_coordinator = cc
+
+        mts = MagicMock()
+        mts.planned_rooms = []  # nothing to fall back to
+        data.mission_timer_store = mts
+
+        result = _get_planned_room_order(data)
+        assert result == ["Corridoio"]
+
+
+class TestSetMissionPlanCallSignature:
+    """set_mission_plan call in callbacks passes hass and entry_id — v2.7.5 regression."""
+
+    def test_set_mission_plan_accepts_hass_and_entry_id(self):
+        """Method signature requires hass and entry_id (were missing in v2.7.5)."""
+        import inspect
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        params = list(inspect.signature(MissionTimerStore.set_mission_plan).parameters)
+        assert "hass" in params
+        assert "entry_id" in params
+
+
+class TestNamesExtractionRidFormat:
+    """v2.9.0 (D) — _names construction (callbacks.py, AUTO-ADVANCE-ROOM/
+    set_mission_plan wiring) only recognised region_id/region_name keys,
+    missing the {"rid": ...} format lewis 22.52.10+ reports when a mission
+    is started directly from the iRobot app (not via roomba_plus.clean_room).
+    _get_planned_room_order() (sensor.py, live display) already handled all
+    three formats correctly via MissionStore._extract_rid() — this was an
+    inconsistency between the display path and the AUTO-ADVANCE-ROOM
+    wiring path, leaving mts.planned_rooms empty for iRobot-app-started
+    missions on lewis firmware.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rid_only_regions_now_populate_planned_rooms(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        # Override with rid-only format (no region_id/region_name at all) —
+        # the exact shape lewis 22.52.10+ reports for iRobot-app-started
+        # missions.
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"rid": "21"},
+                    {"rid": "25"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["21", "25"], (
+            "rid-only regions must resolve to (at minimum) the raw rid "
+            "strings via _extract_rid(), not leave planned_rooms empty"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rid_format_resolves_zone_alias_by_rid(self):
+        """When a zone alias is configured for the rid, it must be used —
+        same alias-lookup behaviour as the region_id path, just keyed
+        correctly via _extract_rid() instead of a raw region_id-only get()."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [{"rid": "21"}]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_region_id_and_rid_both_resolve(self):
+        """Real-world robustness: a regions list mixing both key formats
+        (e.g. firmware inconsistency) must resolve every entry, not just
+        the first format encountered."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "Kitchen", "region_id": "19"},
+                    {"rid": "25"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Kitchen", "25"]
+
+
+class TestNamesPrefersCloudName:
+    """v2.9.0 (H) — NAME-PRIORITY CONSISTENCY. _names construction
+    (callbacks.py, builds mts.planned_rooms) must use the SAME name
+    priority as _get_planned_room_order() (sensor.py, the live display
+    path): cloud_coordinator.regions[*].name first, region_name/zone-alias/
+    raw-id only as fallbacks when cloud data is unavailable. Before this
+    fix, _names preferred region_name/zone-alias over the cloud name —
+    a custom alias differing from the cloud's own name could make the
+    fallback path (mts.current_room) and the live precision path
+    (extra_state_attributes) show two different strings for the same room.
+    """
+
+    def test_cloud_name_preferred_over_region_name_and_alias(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno (Alias)"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "MQTT-Name", "region_id": "21"},
+                ]},
+            }}
+        }
+        cc = MagicMock()
+        cc.regions = [{"id": "21", "name": "Bagno (Cloud)"}]
+        entry.runtime_data.cloud_coordinator = cc
+
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno (Cloud)"], (
+            "Cloud name must win over both region_name (raw MQTT field) "
+            "and the configured zone alias — same priority "
+            "_get_planned_room_order() already uses for the live display"
+        )
+
+    def test_falls_back_to_region_name_when_no_cloud_coordinator(self):
+        """No cloud_coordinator at all (e.g. cloud disabled) — falls back
+        to region_name, exactly as before this fix."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [
+                    {"region_name": "MQTT-Name", "region_id": "21"},
+                ]},
+            }}
+        }
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["MQTT-Name"]
+
+    def test_falls_back_to_zone_alias_when_cloud_has_no_match(self):
+        """Cloud coordinator present, but doesn't have this specific
+        region (e.g. brand-new zone not yet synced) — falls back to the
+        configured alias."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        entry.options = {"smart_zone_data": {"21": {"name": "Bagno (Alias)"}}}
+        entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {
+                "lastCommand": {"regions": [{"region_id": "21"}]},
+            }}
+        }
+        cc = MagicMock()
+        cc.regions = []  # cloud has nothing for this region yet
+        entry.runtime_data.cloud_coordinator = cc
+
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.planned_rooms == ["Bagno (Alias)"]
+
+
+class TestAdvanceRoom:
+    def test_advances_idx(self):
+        mts = _make_mts(current_room_idx=0)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            result = mts.advance_room(hass, "entry")
+        assert result is True
+        assert mts.current_room_idx == 1
+
+    def test_returns_false_at_last_room(self):
+        mts = _make_mts(planned_rooms=["Kitchen", "Hall"], current_room_idx=1)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            result = mts.advance_room(hass, "entry")
+        assert result is False
+        assert mts.current_room_idx == 1  # unchanged
+
+    def test_returns_false_no_planned_rooms(self):
+        mts = _make_mts(planned_rooms=[])
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        result = mts.advance_room(hass, "entry")
+        assert result is False
+
+    def test_saves_after_advance(self):
+        mts = _make_mts(current_room_idx=0)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save") as mock_save:
+            mts.advance_room(hass, "entry")
+        mock_save.assert_called_once_with(hass, "entry")
+
+    def test_current_room_after_advance(self):
+        mts = _make_mts(planned_rooms=["Kitchen", "Hall", "Bedroom"], current_room_idx=0)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.advance_room(hass, "entry")
+        assert mts.current_room == "Hall"
+
+
+class TestAdvanceRoomService:
+    def _setup(
+        self,
+        phase: str = "hmUsrDock",
+        mts: MissionTimerStore | None = None,
+        current_room_idx: int = 0,
+    ):
+        if mts is None:
+            mts = _make_mts(current_room_idx=current_room_idx)
+        data = _make_data(mts, phase=phase)
+        call = _make_service_call()
+
+        ent_reg_entry = MagicMock()
+        ent_reg_entry.config_entry_id = "cfg_entry"
+
+        config_entry = MagicMock()
+        config_entry.entry_id = "cfg_entry"
+        config_entry.runtime_data = data
+
+        call.hass.config_entries.async_get_entry.return_value = config_entry
+        return call, mts
+
+    @pytest.mark.asyncio
+    async def test_advances_when_not_in_run_phase(self):
+        call, mts = self._setup(phase="hmUsrDock")
+        from custom_components.roomba_plus.services import async_handle_advance_room
+        with (
+            patch("custom_components.roomba_plus.services.er") as mock_er,
+            patch.object(mts, "_schedule_save"),
+        ):
+            mock_er.async_get.return_value.async_get.return_value = MagicMock(
+                config_entry_id="cfg_entry"
+            )
+            await async_handle_advance_room(call)
+        assert mts.current_room_idx == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_when_phase_is_run(self):
+        call, mts = self._setup(phase="run")
+        from custom_components.roomba_plus.services import async_handle_advance_room
+        with (
+            patch("custom_components.roomba_plus.services.er") as mock_er,
+            patch.object(mts, "_schedule_save"),
+        ):
+            mock_er.async_get.return_value.async_get.return_value = MagicMock(
+                config_entry_id="cfg_entry"
+            )
+            await async_handle_advance_room(call)
+        assert mts.current_room_idx == 0  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_active_mission(self):
+        mts = _make_mts(mission_id=None)
+        call, _ = self._setup(mts=mts)
+        from custom_components.roomba_plus.services import async_handle_advance_room
+        with (
+            patch("custom_components.roomba_plus.services.er") as mock_er,
+            patch.object(mts, "_schedule_save"),
+        ):
+            mock_er.async_get.return_value.async_get.return_value = MagicMock(
+                config_entry_id="cfg_entry"
+            )
+            await async_handle_advance_room(call)
+        assert mts.current_room_idx == 0  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_mts(self):
+        """Raises ServiceValidationError when MissionTimerStore is None."""
+        from homeassistant.exceptions import ServiceValidationError
+        from custom_components.roomba_plus.services import async_handle_advance_room
+        call = _make_service_call()
+        data = _make_data(mts=None)
+        config_entry = MagicMock()
+        config_entry.entry_id = "cfg"
+        config_entry.runtime_data = data
+        call.hass.config_entries.async_get_entry.return_value = config_entry
+
+        with (
+            patch("custom_components.roomba_plus.services.er") as mock_er,
+            pytest.raises(ServiceValidationError),
+        ):
+            mock_er.async_get.return_value.async_get.return_value = MagicMock(
+                config_entry_id="cfg"
+            )
+            await async_handle_advance_room(call)
+
+
+class TestRoomTransitionConfidenceOk:
+    def _mts(self, expected_room_sec, time_in_current_room_sec):
+        mts = MagicMock()
+        mts.expected_room_sec = expected_room_sec
+        mts.time_in_current_room_sec = time_in_current_room_sec
+        return mts
+
+    def test_false_when_error_present(self):
+        mts = self._mts(200.0, 150.0)
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 224}, mts
+        ) is False
+
+    def test_false_when_cycle_none(self):
+        """cycle=none means genuine mission end — not a transition signal."""
+        mts = self._mts(200.0, 150.0)
+        assert _room_transition_confidence_ok(
+            {"cycle": "none", "error": 0}, mts
+        ) is False
+
+    def test_false_when_cycle_missing(self):
+        mts = self._mts(200.0, 150.0)
+        assert _room_transition_confidence_ok({"error": 0}, mts) is False
+
+    def test_true_when_cycle_clean_and_time_ok(self):
+        mts = self._mts(200.0, 150.0)  # 150 >= 200*0.5=100
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is True
+
+    def test_true_when_cycle_quick(self):
+        mts = self._mts(200.0, 150.0)
+        assert _room_transition_confidence_ok(
+            {"cycle": "quick", "error": 0}, mts
+        ) is True
+
+    def test_false_when_elapsed_below_threshold(self):
+        """Elapsed time well below expected → likely genuine recharge, not done."""
+        mts = self._mts(200.0, 50.0)  # 50 < 200*0.5=100
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is False
+
+    def test_false_when_expected_room_sec_none(self):
+        """KNOWN LIMITATION: expected_room_sec always None in current deployment."""
+        mts = self._mts(None, 150.0)
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is False
+
+    def test_false_when_expected_room_sec_zero(self):
+        mts = self._mts(0.0, 150.0)
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is False
+
+    def test_exactly_at_threshold_passes(self):
+        """elapsed == expected * ratio is inclusive (>=)."""
+        mts = self._mts(200.0, 100.0)  # exactly 0.5 ratio
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is True
+
+    def test_error_string_zero_passes(self):
+        """error='0' (string) — defensive, mission.get default handles int 0 only.
+        This test documents current behaviour with a falsy non-zero-int value."""
+        mts = self._mts(200.0, 150.0)
+        # error=0 (int) is the only falsy case handled; this just confirms int 0 works
+        assert _room_transition_confidence_ok(
+            {"cycle": "clean", "error": 0}, mts
+        ) is True
+
+
+class TestMissionDurationMin:
+    """v2.9.0 — mission_duration_min: pure wall-clock duration since mission
+    start, independent of run_sec/phase-tracking entirely."""
+
+    def _mts(self) -> MissionTimerStore:
+        return MissionTimerStore()
+
+    def test_none_when_no_active_mission(self):
+        mts = self._mts()
+        assert mts.mission_duration_min is None
+
+    def test_none_when_wall_ts_not_set(self):
+        """mission_id present but mission_started_wall_ts still 0 — e.g. a
+        mission already in progress when this field was introduced."""
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = 0.0
+        assert mts.mission_duration_min is None
+
+    def test_computes_wall_clock_minutes(self):
+        import time
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() - 600  # 10 minutes ago
+        assert mts.mission_duration_min == pytest.approx(10.0, abs=0.05)
+
+    def test_never_negative_even_with_clock_skew(self):
+        import time
+        mts = self._mts()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() + 100  # future timestamp
+        assert mts.mission_duration_min == 0.0
+
+
+class TestEffectiveElapsedMin:
+    """v2.9.0 — effective_elapsed_min = mission_duration_min - recharge_min.
+    No time-based clamp; recharge_min comes from the robot's own F4e
+    (hmMidMsn/rechrgM) reporting, not a heuristic."""
+
+    def _mts(self, minutes_ago: float) -> MissionTimerStore:
+        import time
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time() - minutes_ago * 60
+        return mts
+
+    def test_none_when_no_duration(self):
+        mts = MissionTimerStore()
+        assert mts.effective_elapsed_min is None
+
+    def test_subtracts_recharge_min(self):
+        mts = self._mts(minutes_ago=20)
+        mts.recharge_min = 5.0
+        assert mts.effective_elapsed_min == pytest.approx(15.0, abs=0.05)
+
+    def test_zero_recharge_equals_full_duration(self):
+        mts = self._mts(minutes_ago=10)
+        mts.recharge_min = 0.0
+        assert mts.effective_elapsed_min == pytest.approx(10.0, abs=0.05)
+
+    def test_never_negative_when_recharge_exceeds_duration(self):
+        """Defensive floor — shouldn't normally happen (recharge_min can't
+        exceed real elapsed wall-clock time), but never show negative."""
+        mts = self._mts(minutes_ago=2)
+        mts.recharge_min = 100.0
+        assert mts.effective_elapsed_min == 0.0
+
+    def test_navigation_gap_counts_as_effective_time(self):
+        """The actual field scenario this was built for: a multi-minute gap
+        with NO recharge reported (navigation/room-reading, confirmed by
+        Thonno's app observation) must count fully as effective time, not
+        be excluded by any fixed-duration clamp."""
+        mts = self._mts(minutes_ago=4.37)  # ~262s, Thonno's exact field gap
+        mts.recharge_min = 0.0  # no hmMidMsn ever reported during this gap
+        assert mts.effective_elapsed_min == pytest.approx(4.37, abs=0.05)
+
+
+class TestMissionTimerStorePersistsNewFields:
+    """v2.9.0 — mission_started_wall_ts and recharge_min round-trip through
+    async_save/async_load like every other field."""
+
+    @pytest.mark.asyncio
+    async def test_save_load_roundtrip(self, tmp_path):
+        import time
+        hass = MagicMock()
+        hass.config.path = lambda *a: str(tmp_path / "_".join(a))
+
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        wall_ts = time.time() - 300
+        mts.mission_started_wall_ts = wall_ts
+        mts.recharge_min = 7.5
+
+        store_calls = {}
+
+        class _FakeStore:
+            def __init__(self, hass, version, key):
+                store_calls["key"] = key
+            async def async_save(self, data):
+                store_calls["data"] = data
+            async def async_load(self):
+                return store_calls.get("data")
+
+        with patch("custom_components.roomba_plus.mission_timer_store.Store", _FakeStore):
+            await mts.async_save(hass, "entry1")
+            mts2 = MissionTimerStore()
+            await mts2.async_load(hass, "entry1")
+
+        assert mts2.mission_started_wall_ts == pytest.approx(wall_ts)
+        assert mts2.recharge_min == 7.5
+
+    def test_clear_resets_new_fields(self):
+        import time
+        mts = MissionTimerStore()
+        mts.mission_id = "m1"
+        mts.mission_started_wall_ts = time.time()
+        mts.recharge_min = 12.0
+        hass = MagicMock()
+        with patch.object(mts, "_schedule_save"):
+            mts.clear(hass, "entry1")
+        assert mts.mission_started_wall_ts == 0.0
+        assert mts.recharge_min == 0.0
+
+
+class TestMissionTimerStoreTimingProperties:
+    def _mts(self) -> MissionTimerStore:
+        return MissionTimerStore()
+
+    def test_expected_room_sec_none_when_no_estimate(self):
+        mts = self._mts()
+        mts.total_estimated_sec = None
+        mts.planned_rooms = ["A", "B"]
+        assert mts.expected_room_sec is None
+
+    def test_expected_room_sec_none_when_zero_estimate(self):
+        """Documents the v2.8.0 known limitation: total_estimated_sec=0 → None."""
+        mts = self._mts()
+        mts.total_estimated_sec = 0
+        mts.planned_rooms = ["A", "B"]
+        assert mts.expected_room_sec is None
+
+    def test_expected_room_sec_none_when_no_rooms(self):
+        mts = self._mts()
+        mts.total_estimated_sec = 1000.0
+        mts.planned_rooms = []
+        assert mts.expected_room_sec is None
+
+    def test_expected_room_sec_uniform_split(self):
+        mts = self._mts()
+        mts.total_estimated_sec = 1000.0
+        mts.planned_rooms = ["A", "B", "C", "D"]
+        assert mts.expected_room_sec == 250.0
+
+    def test_time_in_current_room_sec_basic(self):
+        mts = self._mts()
+        mts.run_sec = 500.0
+        mts.room_entered_run_sec = 200.0
+        assert mts.time_in_current_room_sec == 300.0
+
+    def test_time_in_current_room_sec_never_negative(self):
+        """Defensive: run_sec < room_entered_run_sec (clock skew) → 0, not negative."""
+        mts = self._mts()
+        mts.run_sec = 100.0
+        mts.room_entered_run_sec = 200.0
+        assert mts.time_in_current_room_sec == 0.0
+
+    def test_room_entered_run_sec_resets_on_new_mission(self):
+        mts = self._mts()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.set_mission_plan("m1", ["A", "B"], 0, hass, "e")
+            mts.room_entered_run_sec = 50.0  # simulate some progress
+            mts.set_mission_plan("m2", ["C", "D"], 0, hass, "e")  # new mission
+        assert mts.room_entered_run_sec == 0.0
+
+    def test_room_entered_run_sec_updates_on_advance(self):
+        mts = self._mts()
+        mts.planned_rooms = ["A", "B", "C"]
+        mts.current_room_idx = 0
+        mts.run_sec = 300.0
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.advance_room(hass, "e")
+        assert mts.room_entered_run_sec == 300.0
+        assert mts.time_in_current_room_sec == 0.0  # just entered new room
+
+
+class TestAutoAdvanceRoomIntegration:
+    @pytest.mark.asyncio
+    async def test_no_advance_when_expected_room_sec_unavailable(self):
+        """Current deployment state: total_estimated_sec=0 → never auto-advances.
+
+        This is the DORMANT-BY-DESIGN behaviour — confirms the feature does not
+        misfire given the current lack of a real per-room time estimate.
+        """
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.current_room_idx == idx_before, (
+            "AUTO-ADVANCE-ROOM fired despite expected_room_sec being unavailable "
+            "(total_estimated_sec always 0 in current deployment)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_advances_when_confidence_signal_present(self):
+        """With a real time estimate wired in, the room advances on the
+        transient phase once the time-in-room confidence check passes."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0  # 300s/room average
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 250.0  # >= 300*0.5=150 → confidence check passes
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.current_room_idx == idx_before + 1, (
+            "AUTO-ADVANCE-ROOM did not advance despite confidence signal present"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_double_advance_on_repeated_charge_messages(self):
+        """Edge-trigger: phase staying 'charge' across multiple messages must
+        only advance once, not once per message (would corrupt room tracking
+        during a genuine multi-minute recharge)."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 250.0
+            cb(_msg("charge", cycle="clean"))
+            idx_after_first = mts.current_room_idx
+            # Same phase repeated (e.g. firmware re-sends identical state)
+            cb(_msg("charge", cycle="clean"))
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.current_room_idx == idx_after_first, (
+            "Room advanced multiple times for a single charge-phase dwell "
+            "(edge-trigger guard failed)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_advance_when_error_present(self):
+        """Error code present (e.g. 224) must block auto-advance even if
+        timing would otherwise pass."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 250.0
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean", error=224))
+
+        assert mts.current_room_idx == idx_before, \
+            "AUTO-ADVANCE-ROOM fired despite error=224 present"
+
+    @pytest.mark.asyncio
+    async def test_no_advance_on_genuine_mission_end(self):
+        """cycle=none (true mission end) must never trigger auto-advance."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 250.0
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="none"))
+
+        assert mts.current_room_idx == idx_before, \
+            "AUTO-ADVANCE-ROOM fired on genuine mission end (cycle=none)"
+
+    @pytest.mark.asyncio
+    async def test_no_advance_when_time_in_room_too_short(self):
+        """Elapsed time well below expected → likely a genuine recharge
+        interrupting the room, not a completion. Must not advance."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0  # 300s/room
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 30.0  # well below 300*0.5=150
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.current_room_idx == idx_before, (
+            "AUTO-ADVANCE-ROOM fired despite insufficient time in room "
+            "(likely a genuine mid-room recharge, not room completion)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stop_phase_never_triggers_auto_advance(self):
+        """'stop' is excluded from _ROOM_TRANSITION_CANDIDATE_PHASES — a
+        deliberate user stop must never auto-advance the room."""
+        mts = MissionTimerStore()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            mts.run_sec = 250.0
+            idx_before = mts.current_room_idx
+            cb(_msg("stop", cycle="clean"))
+
+        assert mts.current_room_idx == idx_before, \
+            "AUTO-ADVANCE-ROOM fired on 'stop' phase (should be excluded)"
+
+    def test_candidate_phases_set_contents(self):
+        """Documents exactly which phases are eligible for auto-advance."""
+        assert _ROOM_TRANSITION_CANDIDATE_PHASES == frozenset({"charge", "hmPostMsn"})
+
+    def test_min_elapsed_ratio_is_conservative(self):
+        """Threshold should require at least half the expected room time."""
+        assert _ROOM_TRANSITION_MIN_ELAPSED_RATIO == 0.5
+
+
+class TestRoomEstimatesSecField:
+    def _mts(self) -> MissionTimerStore:
+        return MissionTimerStore()
+
+    def test_default_empty_list(self):
+        mts = self._mts()
+        assert mts.room_estimates_sec == []
+
+    def test_set_mission_plan_stores_room_estimates(self):
+        mts = self._mts()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.set_mission_plan(
+                "m1", ["Kitchen", "Hall"], 1000.0, hass, "e",
+                room_estimates_sec=[600.0, 400.0],
+            )
+        assert mts.room_estimates_sec == [600.0, 400.0]
+
+    def test_set_mission_plan_without_room_estimates_defaults_empty(self):
+        """Backward compatibility: omitting the new kwarg still works."""
+        mts = self._mts()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.set_mission_plan("m1", ["Kitchen", "Hall"], 1000.0, hass, "e")
+        assert mts.room_estimates_sec == []
+
+    def test_room_estimates_reset_on_new_mission(self):
+        mts = self._mts()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.set_mission_plan(
+                "m1", ["Kitchen"], 600.0, hass, "e", room_estimates_sec=[600.0]
+            )
+            mts.set_mission_plan(
+                "m2", ["Hall"], 400.0, hass, "e", room_estimates_sec=[400.0]
+            )
+        assert mts.room_estimates_sec == [400.0]
+
+    def test_room_estimates_reset_on_clear(self):
+        mts = self._mts()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch.object(mts, "_schedule_save"):
+            mts.set_mission_plan(
+                "m1", ["Kitchen"], 600.0, hass, "e", room_estimates_sec=[600.0]
+            )
+            mts.clear(hass, "e")
+        assert mts.room_estimates_sec == []
+
+    @pytest.mark.asyncio
+    async def test_persists_through_storage_roundtrip(self):
+        mts = self._mts()
+        mts.room_estimates_sec = [600.0, None, 400.0]
+
+        store_mock = MagicMock()
+        store_mock.async_save = AsyncMock()
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        with patch(
+            "custom_components.roomba_plus.mission_timer_store.Store",
+            return_value=store_mock,
+        ):
+            await mts.async_save(hass, "entry")
+
+        saved_dict = store_mock.async_save.call_args[0][0]
+        assert saved_dict["room_estimates_sec"] == [600.0, None, 400.0]
+
+        # Now verify restore: async_load reads the same key back
+        store_mock2 = MagicMock()
+        store_mock2.async_load = AsyncMock(return_value=saved_dict)
+        mts2 = self._mts()
+        with patch(
+            "custom_components.roomba_plus.mission_timer_store.Store",
+            return_value=store_mock2,
+        ):
+            await mts2.async_load(hass, "entry")
+        assert mts2.room_estimates_sec == [600.0, None, 400.0]
+
+
+class TestExpectedRoomSecPrefersRealData:
+    def _mts(self) -> MissionTimerStore:
+        return MissionTimerStore()
+
+    def test_uses_real_estimate_when_available(self):
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0  # uniform split would give 300.0
+        mts.room_estimates_sec = [600.0, 200.0, 100.0]
+        mts.current_room_idx = 0
+        assert mts.expected_room_sec == 600.0  # real value, not 300.0
+
+    def test_uses_real_estimate_for_current_room_index(self):
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+        mts.total_estimated_sec = 900.0
+        mts.room_estimates_sec = [600.0, 200.0, 100.0]
+        mts.current_room_idx = 1
+        assert mts.expected_room_sec == 200.0
+
+    def test_falls_back_to_uniform_when_specific_room_is_none(self):
+        """Auto pass mode room (None estimate) falls back to uniform split."""
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen", "Hall"]
+        mts.total_estimated_sec = 1000.0
+        mts.room_estimates_sec = [None, 400.0]
+        mts.current_room_idx = 0
+        assert mts.expected_room_sec == 500.0  # 1000 / 2 rooms
+
+    def test_falls_back_to_uniform_when_room_estimates_empty(self):
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen", "Hall"]
+        mts.total_estimated_sec = 1000.0
+        mts.room_estimates_sec = []
+        mts.current_room_idx = 0
+        assert mts.expected_room_sec == 500.0
+
+    def test_falls_back_to_uniform_when_index_out_of_range(self):
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen", "Hall"]
+        mts.total_estimated_sec = 1000.0
+        mts.room_estimates_sec = [600.0]  # only 1 entry, idx 1 out of range
+        mts.current_room_idx = 1
+        assert mts.expected_room_sec == 500.0
+
+    def test_none_when_neither_source_available(self):
+        mts = self._mts()
+        mts.planned_rooms = ["Kitchen"]
+        mts.total_estimated_sec = None
+        mts.room_estimates_sec = []
+        assert mts.expected_room_sec is None
+
+
+class TestCallbacksWiresRealEstimates:
+    @pytest.mark.asyncio
+    async def test_set_mission_plan_receives_nonzero_total_when_estimates_exist(self):
+        """The old hardcoded `0` is gone — real estimates produce a real total."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        fake_estimates = [600, 400]  # Kitchen, Hall
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=fake_estimates,
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec == 1000.0  # sum(600, 400), not 0
+        assert mts.room_estimates_sec == [600, 400]
+
+    @pytest.mark.asyncio
+    async def test_total_estimated_sec_none_when_no_estimates_available(self):
+        """All-None per-room estimates (e.g. Auto mode) → total is None, not 0."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec is None
+        assert mts.room_estimates_sec == [None, None]
+
+    @pytest.mark.asyncio
+    async def test_total_estimated_sec_falls_back_to_mission_duration_mean(self):
+        """v2.9.0 (A) — CONFIRMED ROOT CAUSE fix. When every planned room
+        uses Auto pass mode (or none has reached GOOD_CONFIDENCE cloud
+        history), _known_secs is empty and total_estimated_sec used to stay
+        None for the WHOLE mission — meaning expected_room_sec's uniform-
+        split fallback had nothing to divide, and AUTO-ADVANCE-ROOM could
+        never advance current_room_idx past 0, for the entire mission,
+        regardless of how many rooms the robot actually visited. Likely the
+        majority case in the field, since Auto is the default pass mode.
+
+        Falls back to robot_profile_store.mission_duration_mean (already
+        used by mission_progress's "no room sequence" branch for exactly
+        this purpose) so AUTO-ADVANCE-ROOM gets at least a coarse uniform
+        estimate instead of nothing, as long as the robot has completed at
+        least one prior mission.
+        """
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = 30.0  # minutes — robot's own history
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],  # Auto mode — no per-room estimates
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec == 1800.0, (  # 30min * 60 = 1800s
+            "Must fall back to mission_duration_mean*60 when no per-room "
+            "estimate exists anywhere, not stay None"
+        )
+        assert mts.room_estimates_sec == [None, None], (
+            "Per-room estimates themselves stay None — only the TOTAL "
+            "gets the fallback, preserving expected_room_sec's existing "
+            "preference for a real per-room value when one exists"
+        )
+
+    @pytest.mark.asyncio
+    async def test_total_estimated_sec_stays_none_without_any_history(self):
+        """Sanity check: with NO robot_profile_store data either (brand-new
+        install, no completed missions yet), the fallback correctly stays
+        None — AUTO-ADVANCE-ROOM conservatively refuses exactly as before
+        this fix, rather than fabricating a number from nothing."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = None  # no history yet
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec is None
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_fallback_unblocks_auto_advance_room(self):
+        """v2.9.0 (A) end-to-end: with the mission_duration_mean fallback,
+        AUTO-ADVANCE-ROOM can now actually fire for a pure-Auto-mode
+        mission — reproducing the exact field scenario (current_room_idx
+        permanently stuck at 0) and confirming it is resolved."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        rps = MagicMock()
+        rps.mission_duration_mean = 20.0  # minutes -> 1200s total -> 600s/room
+        entry.runtime_data.robot_profile_store = rps
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],  # pure Auto mode
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))  # sets plan, total_estimated_sec=1200
+            mts.run_sec = 350.0  # >= 600*0.5=300 (uniform split: 1200/2 rooms)
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))  # transient phase
+
+        assert mts.current_room_idx == idx_before + 1, (
+            "Auto-mode fallback must let AUTO-ADVANCE-ROOM fire using the "
+            "uniform-split estimate (total_estimated_sec / room_count), "
+            "exactly reproducing and resolving the field-confirmed "
+            "permanently-stuck-at-0 scenario"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_advance_room_now_fires_with_real_estimates(self):
+        """End-to-end: AUTO-ADVANCE-ROOM is no longer dormant once a real
+        per-room estimate is wired in via set_mission_plan."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
+
+        fake_estimates = [600, 400]  # Kitchen=600s, Hall=400s
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=fake_estimates,
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))  # sets mission plan: Kitchen=600s
+            mts.run_sec = 350.0  # >= 600*0.5=300 → confidence check passes
+            idx_before = mts.current_room_idx
+            cb(_msg("charge", cycle="clean"))  # transient phase → confidence check
+
+        assert mts.current_room_idx == idx_before + 1, (
+            "AUTO-ADVANCE-ROOM still dormant after wiring real per-room "
+            "estimates — expected_room_sec should now resolve to 600.0"
+        )
+
+
+class TestEstimateRetry:
+    """v2.9.0 (E) — RETRY for missing estimates. set_mission_plan() only ran
+    once, at the first phase=="run" message. If cloud TE1 data simply hadn't
+    synced yet at that exact moment, total_estimated_sec stayed None for the
+    rest of the mission with no chance to recover. AUTO-ADVANCE-ROOM's
+    evaluation point now retries once via update_estimates() — which must
+    refresh ONLY the estimate fields, never touching mission_id/run_sec/
+    current_room_idx/planned_rooms.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_refreshes_estimates_without_resetting_progress(self):
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        # Mission start: cloud not synced yet — estimates all None.
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.total_estimated_sec is None
+        mts.run_sec = 123.0  # simulate real progress already accumulated
+
+        # A few messages later: cloud data has now arrived.
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[600, 400],
+        ):
+            cb(_msg("charge", cycle="clean"))
+
+        assert mts.total_estimated_sec == 1000.0, (
+            "Retry must pick up the now-available cloud estimates"
+        )
+        assert mts.room_estimates_sec == [600, 400]
+        assert mts.run_sec == pytest.approx(123.0, abs=0.1), (
+            "Retry must NOT reset run_sec — only the estimate fields change"
+        )
+        assert mts.mission_id is not None, (
+            "Retry must NOT clear mission_id"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_is_noop_once_estimates_already_known(self):
+        """Once total_estimated_sec is set, the retry block's guard
+        (`is None`) must prevent it from running again — no wasted cloud
+        lookups on every subsequent ambiguous-phase message."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[600, 400],
+        ) as mock_estimates:
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+            calls_after_start = mock_estimates.call_count
+            cb(_msg("charge", cycle="clean"))
+            cb(_msg("charge", cycle="clean"))
+
+        # Retry block should not have fired again — total_estimated_sec was
+        # already known after the first call.
+        assert mock_estimates.call_count == calls_after_start
+
+    @pytest.mark.asyncio
+    async def test_retry_failure_does_not_crash_callback(self):
+        """A cloud lookup exception during retry must be swallowed, same
+        as the mission-start lookup — never crash the MQTT callback."""
+        mts = MissionTimerStore()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            return_value=[None, None],
+        ):
+            from custom_components.roomba_plus.callbacks import make_mission_callback
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            side_effect=RuntimeError("cloud API exploded"),
+        ):
+            cb(_msg("charge", cycle="clean"))  # must not raise
+
+        assert mts.total_estimated_sec is None
+
+
+class TestInterRoomRechargeMTSNotReset:
+    """Thonno regression: phase=charge with cycle=clean must not clear MTS."""
+
+    @pytest.mark.asyncio
+    async def test_mts_not_cleared_on_charge_with_cycle_clean(self):
+        """phase=charge + cycle=clean (inter-room) → MTS NOT cleared."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            # Mission starts
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            # Simulate some run time accumulation
+            mission_id_after_run = mts.mission_id
+
+            # Inter-room charge phase (lewis firmware between rooms)
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="clean"))
+
+        # MTS must NOT be cleared — mission_id still set
+        assert mts.mission_id is not None, (
+            "MTS was incorrectly cleared on phase=charge + cycle=clean "
+            "(Thonno inter-room recharge regression)"
+        )
+        assert mts.mission_id == mission_id_after_run, \
+            "MTS mission_id changed on inter-room charge transition"
+
+    @pytest.mark.asyncio
+    async def test_run_sec_not_reset_on_inter_room_charge(self):
+        """run_sec accumulated before inter-room charge must be preserved."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            # Manually set some run_sec to simulate elapsed time
+            mts.run_sec = 300.0  # 5 minutes
+
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="clean"))
+
+        # run_sec must NOT be reset to 0
+        # (on_phase_other adds a tiny flush delta; we check >= not ==)
+        assert mts.run_sec >= 300.0, \
+            f"run_sec reset on inter-room charge: {mts.run_sec} < 300.0"
+
+    @pytest.mark.asyncio
+    async def test_progress_continues_after_inter_room_charge(self):
+        """After inter-room charge, next run phase continues accumulating."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            # Phase 1: run (room A)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            mts.run_sec = 300.0
+            mission_id_room_a = mts.mission_id
+
+            # Phase 2: inter-room charge (lewis firmware)
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="clean"))
+
+            # Phase 3: run (room B) — should continue, not new mission
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+        # Mission ID must be the same (not a new mission)
+        assert mts.mission_id == mission_id_room_a, (
+            f"New mission detected after inter-room charge. "
+            f"Expected {mission_id_room_a!r}, got {mts.mission_id!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cycle_quick_also_guarded(self):
+        """cycle='quick' between rooms also prevents false clear."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="quick"))
+            mission_id = mts.mission_id
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="quick"))
+
+        assert mts.mission_id == mission_id, \
+            "MTS cleared on cycle=quick inter-room charge"
+
+    @pytest.mark.asyncio
+    async def test_hmpostmsn_with_cycle_clean_not_cleared(self):
+        """hmPostMsn + cycle=clean (lewis inter-room) must NOT clear MTS.
+
+        This was the gap in the original narrow fix (charge-only guard).
+        Lewis firmware may send hmPostMsn between rooms if each room segment
+        is treated as a sub-mission internally.
+        """
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            mission_id = mts.mission_id
+            assert mission_id is not None
+
+            # Lewis firmware: hmPostMsn appears between rooms with cycle still "clean"
+            _run_callback(cb, _msg_v280_inter_room_recharge("hmPostMsn", cycle="clean"))
+
+        assert mts.mission_id == mission_id, (
+            "MTS cleared on hmPostMsn + cycle=clean (inter-room transition). "
+            "This was the gap in the original charge-only fix."
+        )
+
+
+class TestGenuineMissionEndClearsMTS:
+    """True mission end (cycle=none) must still clear MTS."""
+
+    @pytest.mark.asyncio
+    async def test_mts_cleared_on_charge_with_cycle_none(self):
+        """phase=charge + cycle=none (true end) → MTS IS cleared.
+
+        v2.8.1: charge is debounced (ambiguous with inter-room transitions) —
+        two consecutive charge messages confirm a genuine end.
+        v2.8.3: also requires END_SIGNAL_MIN_HOLD_SECONDS gap — provided by
+        _patch_callbacks_time() which makes each monotonic() call 10 s later.
+        """
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), _patch_callbacks_time():
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert mts.mission_id is not None
+
+            # True mission end — robot docked, cycle=none, confirmed over 2 messages
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+
+        assert mts.mission_id is None, \
+            "MTS was NOT cleared on true mission end (cycle=none)"
+
+    @pytest.mark.asyncio
+    async def test_mts_cleared_on_hmpostmsn(self):
+        """phase=hmPostMsn clears MTS once confirmed.
+
+        v2.8.1: hmPostMsn is debounced (ambiguous with inter-room transitions).
+        v2.8.3: also requires END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch).
+        """
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), _patch_callbacks_time():
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert mts.mission_id is not None
+            _run_callback(cb, _msg_v280_inter_room_recharge("hmPostMsn", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("hmPostMsn", cycle="none"))
+
+        assert mts.mission_id is None, \
+            "MTS was NOT cleared on hmPostMsn"
+
+    @pytest.mark.asyncio
+    async def test_mts_cleared_on_stop(self):
+        """phase=stop always clears MTS."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert mts.mission_id is not None
+            _run_callback(cb, _msg_v280_inter_room_recharge("stop", cycle="none"))
+
+        assert mts.mission_id is None, "MTS was NOT cleared on stop"
+
+    @pytest.mark.asyncio
+    async def test_mts_cleared_on_charge_no_cycle_field(self):
+        """phase=charge with no cycle field → empty string → not guarded → clears."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        def _msg_no_cycle(phase: str) -> dict:
+            return {"state": {"reported": {
+                "cleanMissionStatus": {
+                    "phase": phase,
+                    "mssnStrtTm": 1700000000,
+                },
+                "bbrun": {"nStuck": 0},
+            }}}
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), _patch_callbacks_time():
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_no_cycle("run"))
+            assert mts.mission_id is not None
+            # v2.8.1: charge is debounced — needs 2 consecutive messages
+            # v2.8.3: also needs END_SIGNAL_MIN_HOLD_SECONDS gap (provided by patch)
+            _run_callback(cb, _msg_no_cycle("charge"))
+            _run_callback(cb, _msg_no_cycle("charge"))
+
+        # No cycle field → cycle="" → not "clean" → mission end fires → cleared
+        assert mts.mission_id is None, \
+            "MTS NOT cleared on charge with no cycle field (pre-existing firmware)"
+
+
+class TestEndDebounceV281:
+    """v2.8.1 (END-DEBOUNCE) — regression coverage for the Thonno multi-room
+    report: a single transient cycle misreport on an ambiguous phase
+    (charge/hmPostMsn) must NOT clear MissionTimerStore or reset run_sec,
+    since the mission is genuinely still running. A genuine end must still
+    be detected once the signal is confirmed across two consecutive
+    messages, and unambiguous terminal phases (stop/completed/cancelled)
+    must still confirm on a single message as before.
+    """
+
+    def test_single_transient_charge_blip_does_not_clear_mts(self):
+        """One inter-room MQTT message momentarily misreporting cycle on
+        phase=charge must not clear the timer — this is the exact mechanism
+        behind Thonno's "progress reset to 0% mid-mission" report."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert mts.mission_id is not None
+            mission_id_before = mts.mission_id
+            run_sec_before = mts.run_sec
+
+            # Single transient blip: phase=charge, cycle misreported (not
+            # "clean"/"quick") for exactly one message, then mission resumes.
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+        assert mts.mission_id == mission_id_before, (
+            "A single transient end-look message must not clear mission_id "
+            "(this is the Thonno progress-reset regression)"
+        )
+        assert mts.run_sec >= run_sec_before, (
+            "run_sec must not have been reset by the transient blip"
+        )
+
+    def test_streak_does_not_carry_across_an_interruption(self):
+        """charge (1) → run (resets streak) → charge (1, not 2) must NOT
+        confirm an end — the debounce counts *consecutive* messages only."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+
+        assert mts.mission_id is not None, (
+            "Non-consecutive charge signals must not accumulate into a "
+            "confirmed end"
+        )
+
+    def test_two_consecutive_charge_messages_confirm_genuine_end(self):
+        """Two consecutive charge+cycle-misreport messages with sufficient
+        time between them (≥ END_SIGNAL_MIN_HOLD_SECONDS) DO confirm a
+        genuine end — the debounce threshold is satisfied AND the time gate
+        is cleared.  Time is mocked so the second message appears 3 s after
+        the first, which is well above the 2 s hold threshold."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            # Monotonic call sequence for run(cycle=clean) → charge(cycle=none) × 2:
+            #   call 1: end_signal_first_ts = 1.0  (set when streak 0→1 on first charge)
+            #   call 2: time_held on first charge  = 4.0 → held = 3.0 s (just logged; streak=1<2)
+            #   call 3: time_held on second charge = 4.0 → held = 3.0 s (no burst: 3.0 ≥ 2.0)
+            #   call 4: fire-condition check       = 4.0 → 4.0−1.0=3.0 ≥ 2.0 → FIRE ✓
+            # Note: first value must be > 0; if 0.0 the `end_signal_first_ts > 0` guard
+            # short-circuits all time_held checks, giving time_held=0.0 always → burst reject.
+            tmock.monotonic.side_effect = [
+                1.0,   # end_signal_first_ts recorded on first charge
+                4.0,   # time_held check on first charge (logged; streak=1, no action)
+                4.0,   # time_held check on second charge (streak=2, 3.0 s ≥ 2.0 → no burst)
+                4.0,   # fire condition check on second charge → 3.0 s ≥ 2.0 → FIRE
+            ]
+            tmock.time.return_value = 1000.0
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+
+        assert mts.mission_id is None, (
+            "Two consecutive genuine-end-look messages with sufficient time "
+            "gap must confirm the end"
+        )
+
+    def test_rapid_burst_of_two_end_looking_messages_does_not_clear_mts(self):
+        """v2.8.3 regression — lewis firmware 22.52.10 sends exactly two
+        cleanMissionStatus messages ~21 ms apart during an inter-room
+        transition, both with cycle outside {'clean','quick'} and phase in
+        {'charge','hmPostMsn'}.  The v2.8.1 count-only debounce
+        (END_SIGNAL_DEBOUNCE_COUNT=2) was exactly satisfied by this burst,
+        causing MissionTimerStore.clear() to fire and progress to reset to 0%.
+        The v2.8.3 time gate must block the burst: time_held < 2.0 s."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            # Burst: first charge at T=1.000, second at T=1.021 (21 ms apart)
+            tmock.monotonic.side_effect = [
+                0.0,   # mission start bookkeeping
+                1.000, # end_signal_first_ts recorded on first charge
+                1.021, # time_held check in the debug/info log block (second charge)
+                1.021, # time_held check in the fire condition (second charge)
+            ]
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            mission_id_before = mts.mission_id
+            run_sec_before = mts.run_sec
+
+            # Rapid burst — both end-looking, but only 21 ms apart
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            # Mission resumes — robot sends run again
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+        assert mts.mission_id == mission_id_before, (
+            "A rapid burst of two end-looking messages must NOT clear "
+            "mission_id — this is the Thonno v2.8.2 progress-reset regression"
+        )
+        assert mts.run_sec >= run_sec_before, (
+            "run_sec must not have been reset by the rapid burst"
+        )
+
+    def test_stop_phase_still_confirms_immediately_no_debounce(self):
+        """stop/completed/cancelled are unambiguous terminal phases — a
+        single message must still confirm immediately, same as pre-v2.8.1."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("stop", cycle="none"))
+
+        assert mts.mission_id is None, (
+            "stop is unambiguous and must confirm a genuine end on a single "
+            "message, without waiting for debounce"
+        )
+
+    def test_mission_continues_correctly_after_blip_recovers(self):
+        """After a transient blip resolves, the mission must keep accumulating
+        run_sec normally on subsequent run-phase messages, with planned_rooms
+        intact (not corrupted by a spurious re-derivation)."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry_v280_auto_advance_room_live(mts)
+        hass = MagicMock()
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert mts.planned_rooms == ["Kitchen", "Hall"]
+
+            # Transient blip — does not clear, planned_rooms must stay intact
+            _run_callback(cb, _msg_v280_inter_room_recharge("charge", cycle="none"))
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+        assert mts.mission_id is not None
+        assert mts.planned_rooms == ["Kitchen", "Hall"], (
+            "planned_rooms must not be corrupted/re-derived by a transient "
+            "end-look blip that did not actually end the mission"
+        )
+
+
+class TestPeriodicStuckMissionRecheck:
+    """v2.9.0 — recheck_stuck_end_state() periodic safety-net regression
+    tests. Confirmed via Thonno's field log: once the robot stops sending
+    cleanMissionStatus *changes* (steady-state charging — only bbchg3/
+    batPct/etc. keep arriving), the end-phase confirmation logic — including
+    the 90s UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS safety cap — never runs
+    again, since _on_mission_message bails out immediately on any message
+    that doesn't include 'cleanMissionStatus'. This attribute, attached to
+    the callback returned by make_mission_callback(), re-injects the cached
+    last-known state on a timer so the safety cap gets a chance to fire
+    even during total cleanMissionStatus silence.
+    """
+
+    def _make_clock(self, start: float = 0.0):
+        clock = [start]
+        def _fake_monotonic():
+            return clock[0]
+        return clock, _fake_monotonic
+
+    def test_noop_when_no_mission_active(self):
+        """No mission currently held open — must not even touch
+        roomba_reported_state(), let alone crash."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+
+        cb = make_mission_callback(hass, entry)
+        cb.recheck_stuck_end_state()
+
+        entry.runtime_data.roomba_reported_state.assert_not_called()
+
+    def test_force_closes_after_safety_cap_with_zero_new_messages(self):
+        """The exact field scenario: a 2-room mission stuck at
+        current_room_idx=0 (unvisited_rooms=True), past the 90s safety cap,
+        with NO new cleanMissionStatus message ever arriving — only the
+        periodic recheck, using the cached state, must still force-close it.
+        """
+        from custom_components.roomba_plus.const import (
+            UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS,
+        )
+
+        mts = _make_mts_v280_inter_room_recharge()
+        mts.planned_rooms = ["Bagno Studio", "Studio"]
+        mts.current_room_idx = 0  # stuck — never advanced past room 1
+        mts.total_estimated_sec = 200.0  # _has_any_estimate must be True
+        entry = _make_entry(mts)
+        entry.runtime_data.roomba_reported_state = MagicMock(return_value={})
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        clock, fake_monotonic = self._make_clock(0.0)
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            tmock.monotonic.side_effect = fake_monotonic
+            tmock.time.return_value = 1000.0
+
+            cb = make_mission_callback(hass, entry)
+            run_msg = _msg_v280_inter_room_recharge("run", cycle="clean")
+            charge_msg = _msg_v280_inter_room_recharge("charge", cycle="none")
+
+            clock[0] = 0.0
+            _run_callback(cb, run_msg)
+
+            clock[0] = 1.0
+            _run_callback(cb, charge_msg)   # streak 0→1, end_signal_first_ts=1.0
+            clock[0] = 1.05
+            _run_callback(cb, charge_msg)   # streak 1→2, time_held=0.05s — rejected
+                                             # (unvisited_rooms True, time<90s)
+
+            assert mts.mission_id is not None, "must still be open before the cap"
+
+            # Cache the last-known reported state, exactly as
+            # entry.runtime_data.roomba_reported_state() would return it —
+            # this is what the periodic recheck reads instead of a new
+            # MQTT message.
+            entry.runtime_data.roomba_reported_state.return_value = (
+                charge_msg["state"]["reported"]
+            )
+
+            # Simulate real time passing well beyond the 90s cap — with
+            # ZERO further cleanMissionStatus messages, only the periodic
+            # recheck firing.
+            clock[0] = 1.0 + UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS + 5
+            cb.recheck_stuck_end_state()
+
+        assert mts.mission_id is None, (
+            "periodic recheck must force-close the mission once the 90s "
+            "safety cap is exceeded, even with zero new MQTT messages"
+        )
+
+    def test_recheck_does_not_disturb_mqtt_staleness_watchdog(self):
+        """_synthetic=True must skip the last_mqtt_message_ts stamp — a
+        periodic synthetic re-check must not mask genuine MQTT silence
+        from the RoombaMqttStale binary sensor."""
+        mts = _make_mts_v280_inter_room_recharge()
+        mts.planned_rooms = ["A", "B"]
+        mts.current_room_idx = 0
+        mts.total_estimated_sec = 200.0
+        entry = _make_entry(mts)
+        entry.runtime_data.last_mqtt_message_ts = 12345.0
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+        hass.loop = None
+
+        clock, fake_monotonic = self._make_clock(0.0)
+
+        with patch(
+            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ), patch(
+            "custom_components.roomba_plus.callbacks._time_mod"
+        ) as tmock:
+            tmock.monotonic.side_effect = fake_monotonic
+            tmock.time.return_value = 99999.0  # would be the new stamp if NOT skipped
+
+            cb = make_mission_callback(hass, entry)
+            clock[0] = 0.0
+            _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
+
+            real_ts_after_real_message = entry.runtime_data.last_mqtt_message_ts
+            assert real_ts_after_real_message == 99999.0  # real message DOES stamp it
+
+            # Reset to a sentinel, then run the synthetic recheck — it must
+            # NOT re-stamp this, even though _time_mod.time() would return
+            # the same 99999.0 if it were (wrongly) called.
+            entry.runtime_data.last_mqtt_message_ts = 12345.0
+            entry.runtime_data.roomba_reported_state = MagicMock(
+                return_value=_msg_v280_inter_room_recharge("run", cycle="clean")
+                ["state"]["reported"]
+            )
+            cb.recheck_stuck_end_state()
+
+        assert entry.runtime_data.last_mqtt_message_ts == 12345.0, (
+            "synthetic recheck must not touch the MQTT-staleness timestamp"
+        )
+
+    def test_recheck_attribute_is_idempotent_no_op_after_close(self):
+        """Calling the recheck again after the mission already closed must
+        be a harmless no-op (had_cleaning_phase is now False)."""
+        mts = _make_mts_v280_inter_room_recharge()
+        entry = _make_entry(mts)
+        hass = MagicMock()
+
+        cb = make_mission_callback(hass, entry)
+        # No mission ever started — had_cleaning_phase is False from init.
+        cb.recheck_stuck_end_state()
+        cb.recheck_stuck_end_state()  # call twice — still a no-op, no crash
+
+        entry.runtime_data.roomba_reported_state.assert_not_called()
