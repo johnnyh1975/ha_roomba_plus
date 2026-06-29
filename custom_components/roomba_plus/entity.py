@@ -73,6 +73,36 @@ class IRobotEntity(Entity):
         """Stable device identifier based on BLID."""
         return f"roomba_plus_{self._blid}"
 
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Return a locale-independent entity_id suffix for all subclasses.
+
+        HA derives the entity_id at first registration from slugify(entity.name),
+        which is the *translated* name in the user's locale.  On a DE-locale
+        install this produces German slugs (e.g. 'akkualter' instead of
+        'battery_age_days'), making entity_ids installation-locale-dependent and
+        impossible to document or reference reliably.
+
+        All Roomba+ entities follow the pattern:
+            _attr_unique_id = f"{self.robot_unique_id}_{english_key}"
+
+        This property strips the robot-specific prefix and returns the English
+        key, which HA then uses as the suggested entity_id suffix regardless of
+        the user's locale.  Subclasses that use EntityDescription should
+        override this to return ``self.entity_description.key`` directly.
+
+        NAMING CONVENTION (enforced by test_locale_slug_guard):
+        - NEVER set ``_attr_name`` alongside ``_attr_translation_key`` on a class.
+        - ALWAYS set ``_attr_unique_id = f"{self.robot_unique_id}_{english_key}"``.
+        - The English key must match the translation file key exactly.
+        """
+        uid: str | None = getattr(self, "_attr_unique_id", None)
+        if uid:
+            prefix = f"{self.robot_unique_id}_"
+            if uid.startswith(prefix):
+                return uid[len(prefix):]
+        return None
+
     # ── State sub-dict properties ─────────────────────────────────────────────
 
     @property

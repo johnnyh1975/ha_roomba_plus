@@ -20,8 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
+from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles
+from .const import CONF_BLID, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -1533,3 +1534,286 @@ def make_map_updating_callback(
         )
 
     return _on_roomba_message
+
+
+# ── SETUP-SPLIT Teil B (v3.0.0) — Cloud refresh callback ─────────────────────
+# Extracted from async_setup_entry in __init__.py.
+# make_cloud_refresh_callback() returns the @callback closure that was
+# previously defined inline.  The four private helper functions it calls
+# are moved here too so that callbacks.py has no import dependency on
+# __init__.py (which would be circular).
+
+
+def _umf_version_changed(
+    coordinator: Any,
+    entry: "RoombaConfigEntry",
+) -> bool:
+    """Return True when the active UMF version differs from the last aligned version."""
+    current_version = coordinator.umf_data.get("version_id")
+    if not current_version:
+        return False
+    aligner = entry.runtime_data.umf_aligner
+    if aligner is None:
+        return True
+    return aligner.pmap_version_id != current_version
+
+
+async def _async_realign(
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    coordinator: Any,
+) -> None:
+    """Re-instantiate and run UmfAligner after a pmap version change."""
+    from .umf_aligner import UmfAligner
+    data = entry.runtime_data
+    if not coordinator.umf_data.get("points2d") or not coordinator.regions:
+        return
+    if data.geometry_store is None:
+        return
+    aligner = UmfAligner(
+        points2d=coordinator.umf_data["points2d"],
+        regions=coordinator.regions,
+        geometry_store=data.geometry_store,
+        pmap_version_id=coordinator.umf_data.get("version_id", ""),
+    )
+    conf = await hass.async_add_executor_job(aligner.align)
+    data.umf_aligner = aligner
+    _LOGGER.info(
+        "Roomba+ UmfAligner: re-aligned confidence=%.2f aligned=%s for %s",
+        conf, aligner.aligned, entry.data[CONF_BLID],
+    )
+
+
+def _extract_traversal_umf_positions(
+    records: list[dict],
+    aligner: Any,
+    min_missions: int = 3,
+) -> list[tuple[float, float]]:
+    """Return UMF door candidate positions confirmed by ≥min_missions traversal missions."""
+    door_candidates = getattr(aligner, "_door_candidates", [])
+    if len(door_candidates) < 2:
+        return []
+    missions_with_traversals = 0
+    for record in records:
+        timeline = record.get("timeline") or {}
+        fin_events = timeline.get("finEvents", [])
+        if any(e.get("type") == "traversal" for e in fin_events):
+            missions_with_traversals += 1
+        if missions_with_traversals >= min_missions:
+            return list(door_candidates)
+    _LOGGER.info(
+        "GS-SMART-UMF: %d/%d missions with traversal events in last %d cloud records "
+        "— need %d more complete room-specific cleans for bootstrap",
+        missions_with_traversals, min_missions, len(records),
+        max(0, min_missions - missions_with_traversals),
+    )
+    return []
+
+
+async def _async_update_robot_profile_store(
+    hass: Any,
+    entry: "RoombaConfigEntry",
+    mission_store: Any,
+    robot_profile_store: Any,
+) -> None:
+    """Update RobotProfileStore from the latest MissionStore and GridStore data.
+
+    v2.6.0 L5/L6 — called after each successful cloud refresh.
+    Moved from __init__.py to callbacks.py (SETUP-SPLIT Teil B, v3.0.0).
+    """
+    from .const import SQFT_TO_M2
+    changed = False
+
+    # L3/L8: mission duration/area baseline
+    if robot_profile_store.update_mission_stats(mission_store.query(days=30)):
+        changed = True
+
+    # L5: per-room dirtiness from latest record's timeline
+    records = mission_store.query(days=1)
+    if records:
+        latest = records[-1]
+        timeline = latest.get("timeline") or {}
+        fin_events = timeline.get("finEvents", [])
+        for event in fin_events:
+            if event.get("type") != "room":
+                continue
+            room = event.get("room", {})
+            if room.get("status") not in (0, 6):
+                continue
+            rid = str(room.get("rid", ""))
+            pass_count = int(room.get("passCount", 0))
+            area_sqft = room.get("totalArea") or room.get("area") or 0
+            area_m2 = float(area_sqft) * SQFT_TO_M2
+            if rid and pass_count > 0 and area_m2 > 0:
+                robot_profile_store.update_room_dirt_index(rid, pass_count, area_m2)
+                changed = True
+
+    # L6: navigation efficiency baseline from GridStore
+    gs = getattr(entry.runtime_data, "grid_store", None)
+    if gs is not None:
+        try:
+            ratio = gs.edge_coverage_ratio()
+            if ratio is not None and ratio > 0:
+                robot_profile_store.update_coverage_baseline(ratio)
+                changed = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    # J: lifetime sqft staleness tracking
+    try:
+        _reported = dict(
+            entry.runtime_data.roomba.master_state
+            .get("state", {}).get("reported", {})
+        )
+        _bbrun = _reported.get("bbrun", {})
+        _runtime = _reported.get("runtimeStats", {})
+        _sqft = _runtime.get("sqft", _bbrun.get("sqft"))
+        if _sqft is not None:
+            if robot_profile_store.update_lifetime_sqft_tracking(float(_sqft)):
+                changed = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    if changed:
+        await robot_profile_store.async_save(hass, entry.entry_id)
+
+
+async def _async_bootstrap_umf_aligner(
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    coordinator: Any,
+) -> None:
+    """GS-SMART-UMF — align without local pose data using cloud traversal evidence.
+
+    Moved from __init__.py to callbacks.py (SETUP-SPLIT Teil B, v3.0.0).
+    """
+    data = entry.runtime_data
+    aligner = data.umf_aligner
+    gs = data.geometry_store
+
+    if aligner is None or aligner.aligned:
+        return
+    if gs is not None and sum(
+        1 for m in gs.door_markers if m.mission_count >= 2
+    ) >= 2:
+        return
+    if not coordinator.last_update_success:
+        return
+    if not getattr(aligner, "_door_candidates", []):
+        await hass.async_add_executor_job(aligner.align)
+
+    positions = _extract_traversal_umf_positions(coordinator.raw_records, aligner)
+
+    if not positions:
+        blid = entry.data.get(CONF_BLID, "")
+        oldest_ts = min(
+            (r.get("startTime") for r in coordinator.raw_records if r.get("startTime")),
+            default=None,
+        )
+        if blid and oldest_ts:
+            _LOGGER.info(
+                "GS-SMART-UMF: fetching older cloud records for %s (before ts=%s)",
+                blid, oldest_ts,
+            )
+            try:
+                cloud_api = coordinator.api
+                older = await cloud_api.get_mission_history(
+                    blid, count=500, before_ts=oldest_ts
+                )
+                if older:
+                    positions = _extract_traversal_umf_positions(older, aligner)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.debug("GS-SMART-UMF: paginated fetch failed — %s", exc)
+
+    if not positions:
+        return
+
+    aligner.set_bootstrap_markers(positions)
+    conf = await hass.async_add_executor_job(aligner.align)
+    _LOGGER.info(
+        "GS-SMART-UMF: bootstrap alignment confidence=%.2f aligned=%s for %s",
+        conf, aligner.aligned, entry.data.get(CONF_BLID, "unknown"),
+    )
+
+
+def make_cloud_refresh_callback(
+    hass: HomeAssistant,
+    config_entry: "RoombaConfigEntry",
+    cloud_coordinator: Any,
+) -> Any:
+    """Factory: return the @callback for cloud coordinator listener registration.
+
+    SETUP-SPLIT Teil B (v3.0.0) — extracted from async_setup_entry in __init__.py.
+    """
+    @callback
+    def _on_cloud_refresh_complete() -> None:
+        from .repairs import async_check_cloud_stale
+        hass.async_create_task(
+            async_check_cloud_stale(hass, config_entry, cloud_coordinator),
+            name="roomba_plus_cloud_stale_check",
+        )
+        if not cloud_coordinator.last_update_success:
+            return
+        ms = config_entry.runtime_data.mission_store
+        if ms is None:
+            return
+        _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
+        if _bf.corrected or _bf.enriched:
+            hass.async_create_task(
+                ms.async_save(hass, config_entry.entry_id),
+                name="roomba_plus_cloud_merge_save",
+            )
+        _dtm = config_entry.runtime_data.dirt_threshold_manager
+        if _dtm is not None:
+            hass.async_create_task(
+                _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id),
+                name="roomba_plus_demand_clean_eval",
+            )
+        if _umf_version_changed(cloud_coordinator, config_entry):
+            hass.async_create_task(
+                _async_realign(hass, config_entry, cloud_coordinator),
+                name="roomba_plus_umf_realign",
+            )
+        from .repairs import async_check_error_recurrence
+        hass.async_create_task(
+            async_check_error_recurrence(hass, config_entry),
+            name="roomba_plus_error_recurrence_check",
+        )
+        from .repairs import async_check_cancellation_recurrence
+        hass.async_create_task(
+            async_check_cancellation_recurrence(hass, config_entry),
+            name="roomba_plus_cancellation_recurrence_check",
+        )
+        _rps = config_entry.runtime_data.robot_profile_store
+        if _rps is not None:
+            hass.async_create_task(
+                _async_update_robot_profile_store(hass, config_entry, ms, _rps),
+                name="roomba_plus_profile_store_update",
+            )
+        if config_entry.runtime_data.grid_store is not None:
+            from .repairs import async_check_stuck_pattern
+            hass.async_create_task(
+                async_check_stuck_pattern(hass, config_entry),
+                name="roomba_plus_l7_stuck_pattern_check",
+            )
+        from .repairs import async_check_smberr
+        hass.async_create_task(
+            async_check_smberr(hass, config_entry),
+            name="roomba_plus_smberr_check",
+        )
+        from .repairs import async_check_dock_health
+        hass.async_create_task(
+            async_check_dock_health(hass, config_entry),
+            name="roomba_plus_dock_health_check",
+        )
+        from .models import MapCapability
+        if (
+            config_entry.runtime_data.map_capability == MapCapability.SMART
+            and config_entry.runtime_data.umf_aligner is not None
+        ):
+            hass.async_create_task(
+                _async_bootstrap_umf_aligner(hass, config_entry, cloud_coordinator),
+                name="roomba_plus_gs_smart_umf_bootstrap",
+            )
+
+    return _on_cloud_refresh_complete

@@ -254,7 +254,6 @@ class FilterResetButton(_MaintenanceResetButton):
     """Button: mark filter as replaced → restart filter-life countdown."""
 
     _attr_translation_key = "reset_filter"
-    _attr_name            = "Reset filter"        # G6: locale-independent entity_id slug
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
@@ -275,7 +274,6 @@ class BrushResetButton(_MaintenanceResetButton):
     """Button: mark brushes as replaced → restart brush-life countdown."""
 
     _attr_translation_key = "reset_brush"
-    _attr_name            = "Reset brush"         # G6: locale-independent entity_id slug
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
@@ -296,7 +294,6 @@ class BatteryResetButton(_MaintenanceResetButton):
     """Button: mark battery as replaced → restart battery-hour tracking."""
 
     _attr_translation_key = "reset_battery"
-    _attr_name            = "Reset battery"       # G6: locale-independent entity_id slug
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
@@ -333,7 +330,6 @@ class ZoneCleanButton(_MaintenanceResetButton):
     """
 
     _attr_translation_key = "clean_zone"
-    _attr_name            = "Clean zone"          # G6: locale-independent entity_id slug
     _attr_entity_category = None   # visible by default — primary action
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
@@ -395,7 +391,6 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
     """
 
     _attr_translation_key = "repeat_mission"
-    _attr_name            = "Repeat last mission" # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary action → Steuerelemente
 
     def __init__(self, roomba: Any, blid: str) -> None:
@@ -448,7 +443,6 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
     """
 
     _attr_translation_key = "clean_smart_zone"
-    _attr_name            = "Clean Smart Map zone" # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary action — visible by default
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:

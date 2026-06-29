@@ -115,12 +115,19 @@ class RobotProfileStore:
             lb = data.get("learned_brush_hours")
             self.learned_brush_hours = float(lb) if lb is not None else None
 
-            # Weekday baselines — keys stored as strings in JSON, convert to int
-            raw_wdb = data.get("baseline_by_weekday", {})
+            # Weekday baselines — keys stored as strings in JSON, convert to int.
+            # `or {}` coerces an explicit null (or a wrong type that isn't a
+            # mapping) so .items() can't raise AttributeError on a corrupted
+            # persisted store; a dict default only guards a *missing* key.
+            raw_wdb = data.get("baseline_by_weekday") or {}
+            if not isinstance(raw_wdb, dict):
+                raw_wdb = {}
             self.baseline_by_weekday = {int(k): float(v) for k, v in raw_wdb.items()}
 
             # Per-room dirt index
-            raw_rdi = data.get("room_dirt_index", {})
+            raw_rdi = data.get("room_dirt_index") or {}
+            if not isinstance(raw_rdi, dict):
+                raw_rdi = {}
             self.room_dirt_index = {str(k): float(v) for k, v in raw_rdi.items()}
 
             # Mission statistics
@@ -146,7 +153,7 @@ class RobotProfileStore:
                 len(self.room_dirt_index),
                 f"{self.coverage_baseline:.3f}" if self.coverage_baseline else "None",
             )
-        except (TypeError, ValueError, KeyError) as exc:
+        except (TypeError, ValueError, KeyError, AttributeError) as exc:
             _LOGGER.warning("RobotProfileStore: failed to load data: %s", exc)
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:

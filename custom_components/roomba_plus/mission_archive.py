@@ -254,8 +254,8 @@ class MissionArchive:
             _LOGGER.debug("MissionArchive: no persisted data for %s", entry_id)
             return
         try:
-            self._derived = list(data.get("derived", []))
-            self._timeline = list(data.get("timeline", []))
+            self._derived = [r for r in (data.get("derived") or []) if isinstance(r, dict)]
+            self._timeline = list(data.get("timeline") or [])
 
             # DEDUP-V1 (v2.10.2) — see _dedup_by_nmssn docstring. Runs at
             # most once per archive (gated by _dedup_v1_done, persisted
@@ -341,7 +341,7 @@ class MissionArchive:
                 len(self._derived), self._last_nMssn,
                 len(self._raw), entry_id,
             )
-        except (TypeError, ValueError, KeyError) as exc:
+        except (TypeError, ValueError, KeyError, AttributeError) as exc:
             _LOGGER.warning(
                 "MissionArchive: failed to load — %s; starting empty", exc
             )
@@ -897,21 +897,6 @@ class MissionArchive:
         """
         return [r for r in self._derived if r.get("traversal_rids")]
 
-    def missions_by_room(self, rid: str, days: int | None = None) -> list[dict[str, Any]]:
-        """Return derived records where the given room was completed.
-
-        Args:
-            rid:  Region ID string.
-            days: Optional window; None = all history.
-
-        Used by L5-ARC for per-room dirt index over full history.
-        """
-        candidates = self.recent_derived(days) if days else self._derived
-        return [
-            r for r in candidates
-            if rid in (r.get("rooms_completed") or {})
-        ]
-
     def raw_finEvents(self, n_mssn: int) -> list | None:
         """Return Layer 3 raw finEvents for a given mission number, or None."""
         return self._raw.get(n_mssn)
@@ -937,12 +922,4 @@ class MissionArchive:
                 channels.append(ch)
         return channels
 
-    def dirt_series(self, days: int = 30) -> list[dict[str, Any]]:
-        """Return recent derived records that have sqft and dirt data.
 
-        Used by L3-ARC anomaly baseline and BAT-ARCH dirt analytics.
-        """
-        return [
-            r for r in self.recent_derived(days)
-            if r.get("sqft") and r.get("dirt") is not None
-        ]

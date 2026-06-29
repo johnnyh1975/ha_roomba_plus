@@ -3,8 +3,8 @@
 # Roomba Integrations — Feature Comparison
 
 > Based on source code analysis · last verified June 2026 against
-> Roomba+ **v2.10.0** and roomba_rest980 **v1.19.1**
-> (manifest version; quality_scale.yaml self-declares **bronze**).
+> Roomba+ **v3.0.0** and roomba_rest980 **v1.19.1**
+> (manifest version; quality_scale.yaml documents Bronze→Platinum rules, all met).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
 **Legend:** ✅ Supported &nbsp;·&nbsp; ⚠️ Partial / limited &nbsp;·&nbsp; ❌ Not available &nbsp;·&nbsp; ★ Best in class
@@ -20,7 +20,7 @@
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, mission log | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 2750 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 2946 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -133,6 +133,7 @@
 | Real room names from cloud | ⚠️ cloud credentials required | ❌ | ✅ directly from cloud pmaps ★ |
 | Room names without cloud (900) | ✅ automatic zone detection ★ | ❌ | ❌ |
 | Keep-out zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
+| Observed obstacle zone overlay | ✅ orange circles from UMF observed_zones (v3.0.0) | ❌ | ❌ |
 | Observed zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
 | HA area mapping (`vacuum.clean_area`) | ✅ v2.4+, HA 2026.3+, SMART + cloud | ❌ | ❌ |
 | Automatic room detection (900-series) | ✅ gap segmentation + EMA confidence ★ | ❌ | ❌ |

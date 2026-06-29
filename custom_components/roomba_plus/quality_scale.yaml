@@ -12,11 +12,11 @@ rules:
       Integration is local_push (MQTT). Cloud coordinator polls on a 24h
       interval — appropriate for slowly-changing pmap/favorites data.
   brands:
-    status: todo
+    status: done
     comment: >
-      Brand assets (icon.png, icon@2x.png) prepared in brands_submission/.
-      Requires manual PR to github.com/home-assistant/brands after v2.0 release.
-      Cannot be automated — marked todo until PR is merged.
+      Brand assets (icon.png, icon@2x.png) ship in the inline brand/ directory.
+      Since HA 2026.3 the inline brand/ directory is the supported mechanism and
+      a separate PR to github.com/home-assistant/brands is no longer required.
   common-modules:
     status: done
     comment: >

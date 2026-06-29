@@ -489,7 +489,7 @@ def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
 
 
 
-# ── F1 — WiFi floor / stability (CloudRawSensor value functions) ──────────────
+# ── F1 — WiFi floor / stability (also used by RoombaWifiHealthSensor) ──────────
 
 def _parse_netinfo_addr(addr: object) -> str | None:
     """Parse netinfo.addr to a dotted-decimal IP string.
@@ -931,7 +931,10 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
     Returns None when insufficient data is available.
     """
     store = entity._config_entry.runtime_data.maintenance_store
-    if store is None or store.baseline_estcap is None:
+    # Guard against both None and 0 — a corrupted or hand-edited persisted
+    # store could hold baseline_estcap: 0, which `is None` would not catch and
+    # which would raise ZeroDivisionError at the current_pct computation below.
+    if store is None or not store.baseline_estcap:
         return None
 
     # Use converted mAh to match baseline_estcap units (set from _estcap_to_mah)
@@ -1162,6 +1165,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         available_fn=lambda e: e.vacuum_state.get("batInfo") is not None,
+        entity_registry_enabled_default=False,
         value_fn=lambda e: e.vacuum_state.get("batInfo", {}).get("cCount"),
         extra_attributes_fn=lambda e: {
             "manufacturer": e.vacuum_state.get("batInfo", {}).get("mName"),
@@ -1177,6 +1181,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         available_fn=lambda e: bool(
             (e.vacuum_state.get("batInfo") or {}).get("mDate")
         ),
@@ -1697,6 +1702,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="wheel_last_cleaned",
         translation_key="wheel_last_cleaned",
+        entity_registry_enabled_default=False,
         name="Maintenance – Wheel last cleaned",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1718,6 +1724,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="contact_last_cleaned",
         translation_key="contact_last_cleaned",
+        entity_registry_enabled_default=False,
         name="Maintenance – Contacts last cleaned",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1739,6 +1746,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     RoombaSensorDescription(
         key="bin_last_cleaned",
         translation_key="bin_last_cleaned",
+        entity_registry_enabled_default=False,
         name="Maintenance – Bin last cleaned",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -1882,6 +1890,27 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             e._config_entry.runtime_data.mission_store
             and e._config_entry.runtime_data.mission_store.query(30, result=e._config_entry.runtime_data.mission_store.STUCK_RESULTS)
         ),
+    ),
+
+    # ── v3.0.0 L3-FIX — Consecutive anomalous missions ────────────────────────
+    #
+    # Exposes MissionStore.consecutive_anomalous as a standalone sensor.
+    # Disabled by default — only the companion Card and Automations consume it.
+    # Card C5-ANOMALY banner triggers at ≥3 (two consecutive anomalies can be
+    # coincidence; three are a pattern).
+    RoombaSensorDescription(
+        key="consecutive_mission_anomalies",
+        translation_key="consecutive_mission_anomalies",
+        name="Error – Consecutive anomalous missions",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda e: (
+            e._config_entry.runtime_data.mission_store.consecutive_anomalous
+            if e._config_entry.runtime_data.mission_store is not None
+            else None
+        ),
+        available_fn=lambda e: e._config_entry.runtime_data.mission_store is not None,
     ),
 
     # ── v1.8.0 L6 — Presence Analytics ───────────────────────────────────────
@@ -2210,24 +2239,10 @@ async def async_setup_entry(
             CloudHistorySensor(roomba, blid, cc, desc)
             for desc in CLOUD_HISTORY_SENSORS
         ])
-        # v2.0: per-mission raw record sensors (recent window + cloud error)
-        # F5f: recent_coverage_pct needs a MissionStore reference via closure.
-        # We use a list-cell so the store is captured by reference at setup time.
-        mission_store_ref: list = [data.mission_store]
-        coverage_pct_fn = _make_coverage_pct_fn(mission_store_ref)
-
-        for desc in CLOUD_RAW_SENSORS:
-            if desc.key == "recent_coverage_pct":
-                # Replace sentinel value_fn with the live closure
-                import dataclasses
-                desc = dataclasses.replace(desc, value_fn=coverage_pct_fn)
-            # recent_evacuations is only meaningful when a Clean Base is present.
-            # Without one the cloud always records evacs=0 — suppress the entity
-            # so 980/900-series robots without a Clean Base don't show a
-            # permanently-zero sensor.
-            if desc.key == "recent_evacuations" and not has_clean_base(state):
-                continue
-            entities.append(CloudRawSensor(roomba, blid, cc, desc, config_entry))
+        # SC1 (v3.0): CloudRawSensor descriptors removed — deprecated sensors
+        # deactivated. Consolidated replacements: cleaning_performance,
+        # cleaning_analytics_30d, wifi_health, event_counts_30d.
+        pass
 
     # F12d — recent_edge_coverage_ratio (map-capable robots with GridStore)
     if data.grid_store is not None and data.map_capability.value != "none":
@@ -2303,10 +2318,13 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
-        # Lock entity_id to the description key so it is locale-independent.
-        # Without this, HA derives entity_id from the translated name, causing
-        # German slugs on DE installs (the root cause of all v5–v9 migrations).
         self._unsub_tick: Callable[[], None] | None = None
+
+    @property
+    def suggested_object_id(self) -> str:
+        """Override: use description key directly (more explicit than uid-strip)."""
+        return self.entity_description.key
+
 
     # ── Countdown tick for recharge/expire minute sensors ────────────────────
     # iRobot firmware sends rechrgTm / expireTm once at recharge start and does
@@ -2714,6 +2732,12 @@ class CloudRawSensorDescription(SensorEntityDescription):
     available_fn: Callable[[Any], bool] | None = field(default=None)
 
 
+# ── F5 — Performance intelligence (RoombaSensor + consolidated functions) ───
+# SC1 (v3.0): _raw_dirt_density_attrs, _make_coverage_pct_fn removed — only
+# used by the now-deactivated CLOUD_RAW_SENSORS descriptors.
+# The functions below are KEPT because they are also used by the consolidated
+# replacement sensors (cleaning_performance, event_counts_30d).
+
 def _raw_completion_rate(records: list[dict[str, Any]]) -> StateType:
     """Return completion rate (%) across the API window records."""
     if not records:
@@ -2744,14 +2768,7 @@ def _raw_dirt_events(records: list[dict[str, Any]]) -> StateType:
 
 
 def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
-    """Return the pauseId from the most recent failed mission record.
-
-    Iterates newest-first (API returns newest first). Returns None when no
-    failed mission exists in the window.
-
-    Cloud pauseId is more reliable than cleanMissionStatus.error from MQTT:
-    on 980/900-series firmware the MQTT error code sometimes never arrives.
-    """
+    """Return the pauseId from the most recent failed mission record."""
     for r in records:
         classified = r.get("classified_result", "")
         if classified.startswith("error_") or classified == "stuck":
@@ -2761,10 +2778,7 @@ def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
 
 
 def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> StateType:
-    """Return the end timestamp of the most recent failed mission as a datetime.
-
-    HA requires a timezone-aware datetime object for device_class=TIMESTAMP sensors.
-    """
+    """Return the end timestamp of the most recent failed mission as a datetime."""
     for r in records:
         classified = r.get("classified_result", "")
         if classified.startswith("error_") or classified == "stuck":
@@ -2794,9 +2808,6 @@ def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]
             }
     return {}
 
-
-
-# ── F5 — Performance intelligence (CloudRawSensor + RoombaSensor functions) ───
 
 import statistics as _statistics
 
@@ -2852,45 +2863,6 @@ def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
     if dirt_trend == "rising" and speed_trend in ("stable", "rising", "unknown"):
         return "floor_dirty"
     return "unknown"
-
-
-def _raw_dirt_density_attrs(records: list[dict]) -> dict:
-    """F5b — cause attribute for recent_dirt_density sensor.
-
-    Computes independent dirt-density and cleaning-speed trends from the
-    raw records, then classifies the cause via _classify_dirt_cause().
-    """
-    # Compute independent trends: dirt density trend vs speed trend
-    dirt_densities = []
-    for r in records:
-        dirt = r.get("dirt")
-        sqft = r.get("sqft")
-        if dirt is not None and sqft and float(sqft) > 0:
-            dirt_densities.append(float(dirt) / (float(sqft) * SQFT_TO_M2))
-    speeds = []
-    for r in records:
-        sqft = r.get("sqft")
-        run_m = r.get("runM") or r.get("durationM")
-        if sqft is not None and run_m and float(run_m) > 0:
-            speeds.append(float(sqft) / float(run_m))
-
-    def _trend(values: list[float]) -> str:
-        if len(values) < 6:
-            return "unknown"
-        recent = _statistics.median(values[:5])
-        older  = _statistics.median(values[5:])
-        if older == 0:
-            return "unknown"
-        delta = (recent - older) / older
-        if delta > 0.10:
-            return "rising" if values is dirt_densities else "improving"
-        if delta < -0.10:
-            return "declining"
-        return "stable"
-
-    dt = _trend(dirt_densities)
-    st = _trend(speeds)
-    return {"cause": _classify_dirt_cause(dt, st)}
 
 
 def _raw_recharge_fraction(records: list[dict]) -> StateType:
@@ -2968,198 +2940,6 @@ def _raw_cleaning_speed_trend(records: list[dict]) -> StateType:
     if delta < -0.10:
         return "declining"
     return "stable"
-
-
-def _make_coverage_pct_fn(mission_store_ref: list) -> Callable:
-    """F5f — factory returning a value_fn that captures the MissionStore reference.
-
-    Uses a list-cell reference so the closure sees the live store even though
-    it is set after this function is called (during async_setup_entry).
-    """
-    def _coverage_pct(records: list[dict]) -> StateType:
-        store = mission_store_ref[0] if mission_store_ref else None
-        if store is None or not records:
-            return None
-        # Use the most recent cloud record with a positive sqft value.
-        # records is newest-first; records[0] may be a cancelled/stuck mission
-        # with sqft=0 or absent, which would produce a misleading 0% result.
-        recent_sqft = next(
-            (r["sqft"] for r in records if r.get("sqft") and r["sqft"] > 0),
-            None,
-        )
-        p75 = store.p75_area(60)
-        if recent_sqft is None or p75 is None or p75 == 0:
-            return None
-        return round(float(recent_sqft) / p75 * 100, 1)
-    return _coverage_pct
-
-
-# Sentinel description for F5f — value_fn swapped in async_setup_entry
-_COVERAGE_PCT_SENTINEL = "coverage_pct_sentinel"
-
-
-CLOUD_RAW_SENSORS: tuple[CloudRawSensorDescription, ...] = (
-    CloudRawSensorDescription(
-        key="recent_completion_rate",
-        translation_key="recent_completion_rate",
-        name="Recent completion rate",
-        native_unit_of_measurement="%",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_completion_rate,
-    ),
-    CloudRawSensorDescription(
-        key="recent_recharges",
-        translation_key="recent_recharges",
-        name="Recent mid-mission recharges",
-        native_unit_of_measurement="recharges",
-        state_class=SensorStateClass.TOTAL,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_recharges,
-    ),
-    CloudRawSensorDescription(
-        key="recent_evacuations",
-        translation_key="recent_evacuations",
-        name="Recent Clean Base evacuations",
-        native_unit_of_measurement="evacuations",
-        state_class=SensorStateClass.TOTAL,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_evacuations,
-    ),
-    CloudRawSensorDescription(
-        key="recent_dirt_events",
-        translation_key="recent_dirt_events",
-        name="Recent dirt events",
-        native_unit_of_measurement="events",
-        state_class=SensorStateClass.TOTAL,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_dirt_events,
-    ),
-    CloudRawSensorDescription(
-        key="recent_error_code",
-        translation_key="recent_error_code",
-        name="Recent error code (cloud)",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_cloud_last_error_code,
-        attributes_fn=_raw_cloud_last_error_attrs,
-    ),
-    CloudRawSensorDescription(
-        key="recent_error_time",
-        translation_key="recent_error_time",
-        name="Recent error time (cloud)",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_cloud_last_error_time,
-    ),
-
-    # F1 -- WiFi floor and stability from per-mission wlBars arrays
-    CloudRawSensorDescription(
-        key="recent_wifi_floor",
-        translation_key="recent_wifi_floor",
-        name="Wi-Fi – Signal floor",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=_raw_wifi_floor,
-    ),
-    CloudRawSensorDescription(
-        key="recent_wifi_stability",
-        translation_key="recent_wifi_stability",
-        name="Wi-Fi – Signal stability",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=_raw_wifi_stability,
-    ),
-
-    # F5a -- cleaning speed (m²/min, converted from cloud sqft)
-    CloudRawSensorDescription(
-        key="recent_cleaning_speed",
-        translation_key="recent_cleaning_speed",
-        name="Performance – Cleaning speed",
-        native_unit_of_measurement="m²/min",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_cleaning_speed,
-    ),
-
-    # F5b -- dirt density (events/sqft) with cause attribute
-    CloudRawSensorDescription(
-        key="recent_dirt_density",
-        translation_key="recent_dirt_density",
-        name="Performance – Dirt density",
-        native_unit_of_measurement="events/m²",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_dirt_density,
-        attributes_fn=_raw_dirt_density_attrs,
-    ),
-
-    # F5c -- recharge fraction (%)
-    CloudRawSensorDescription(
-        key="recent_recharge_fraction",
-        translation_key="recent_recharge_fraction",
-        name="Performance – Recharge fraction",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_recharge_fraction,
-    ),
-
-    # F5e -- cleaning speed trend (ENUM)
-    CloudRawSensorDescription(
-        key="cleaning_speed_trend",
-        translation_key="cleaning_speed_trend",
-        name="Performance – Cleaning speed trend",
-        device_class=SensorDeviceClass.ENUM,
-        options=["improving", "stable", "declining", "unknown"],
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=_raw_cleaning_speed_trend,
-    ),
-
-    # F5f -- coverage pct — value_fn swapped in async_setup_entry via factory
-    # The sentinel key is detected at setup time and replaced with the closure.
-    CloudRawSensorDescription(
-        key="recent_coverage_pct",
-        translation_key="recent_coverage_pct",
-        name="Performance – Coverage",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # SC1 (v2.7.0): disabled by default — superseded by consolidated sensor.
-        entity_registry_enabled_default=False,
-        value_fn=lambda records: None,  # replaced in async_setup_entry
-        # Check both cloud records (sqft present) and local p75 baseline ready.
-        available_fn=lambda e: bool(
-            next((r for r in e._coordinator.raw_records
-                  if r.get("sqft") and r["sqft"] > 0), None)
-            and e._config_entry.runtime_data.mission_store is not None
-            and e._config_entry.runtime_data.mission_store.p75_area(60) is not None
-        ),
-    ),
-)
 
 
 class CloudRawSensor(IRobotEntity, SensorEntity):
@@ -4160,6 +3940,47 @@ class _ConsolidatedCloudSensor(IRobotEntity, SensorEntity):
             and self._coordinator.data is not None
         )
 
+    def _cache_and_check_f6a(self, trend_value: str | None) -> None:
+        """Cache cleaning_speed_trend_value; schedule F6a check only on change.
+
+        B1/B2 (v3.0.0): migrated from the deactivated
+        CloudRawSensor(key="cleaning_speed_trend").native_value side-effect.
+        extra_state_attributes may be evaluated multiple times per state write,
+        so the F6a performance-degradation check is scheduled only when the
+        cached trend actually changes — keeping repeated reads side-effect-free.
+        """
+        data = self._config_entry.runtime_data
+        changed = data.cleaning_speed_trend_value != trend_value
+        data.cleaning_speed_trend_value = trend_value
+        if changed and hasattr(self.hass, "is_running") and self.hass.is_running:
+            from .repairs import async_check_performance_degradation
+            self.hass.async_create_task(
+                async_check_performance_degradation(self.hass, self._config_entry),
+                name="roomba_plus_f6a_perf_check",
+            )
+
+    def _cache_and_check_f6b(
+        self, recharge_value: float | None, dirt_rising: bool | None
+    ) -> None:
+        """Cache recharge_fraction_value + dirt_density_rising; F6b check on change.
+
+        B1/B2 (v3.0.0): migrated from the deactivated CloudRawSensor side-effects
+        (keys "recent_recharge_fraction" and "recent_dirt_density"). The F6b
+        battery-recharge check is scheduled only when the recharge fraction
+        changes, avoiding duplicate tasks on repeated property reads.
+        """
+        data = self._config_entry.runtime_data
+        changed = data.recharge_fraction_value != recharge_value
+        data.recharge_fraction_value = recharge_value
+        if dirt_rising is not None:
+            data.dirt_density_rising = dirt_rising
+        if changed and hasattr(self.hass, "is_running") and self.hass.is_running:
+            from .repairs import async_check_battery_recharge
+            self.hass.async_create_task(
+                async_check_battery_recharge(self.hass, self._config_entry),
+                name="roomba_plus_f6b_battery_check",
+            )
+
 
 class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
     """SC1 — Cleaning performance: completion rate + speed + trend + streak.
@@ -4198,6 +4019,13 @@ class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
             trend = _raw_cleaning_speed_trend(records)
             if trend is not None:
                 attrs["trend"] = trend
+            # B1/B2-PRE — cache cleaning_speed_trend_value for F6a Repair and
+            # RobotHealthSensor Signal 3.  Migrated from the now-deactivated
+            # CloudRawSensor(key="cleaning_speed_trend") side-effect.
+            # Idempotent: the F6a check is scheduled only when the trend changes.
+            self._cache_and_check_f6a(
+                str(trend) if trend is not None else None
+            )
             # Coverage: most-recent sqft vs 60-day p75 baseline
             ms = self._config_entry.runtime_data.mission_store
             if ms is not None:
@@ -4261,6 +4089,25 @@ class RoombaCleaningAnalytics30dSensor(_ConsolidatedCloudSensor):
             rf = _raw_recharge_fraction(records)
             if rf is not None:
                 attrs["recharge_pct"] = rf
+            # B1/B2-PRE — cache recharge_fraction_value + dirt_density_rising for
+            # F6b Repair and F6a cause classification.  Migrated from the now-
+            # deactivated CloudRawSensor side-effects (keys "recent_recharge_fraction"
+            # and "recent_dirt_density").  Idempotent: F6b check only on change.
+            dirt_rising: bool | None = None
+            if len(records) >= 6:
+                densities = [
+                    float(r["dirt"]) / float(r["sqft"])
+                    for r in records
+                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
+                ]
+                if len(densities) >= 6:
+                    recent = _statistics.median(densities[:5])
+                    older  = _statistics.median(densities[5:])
+                    dirt_rising = (recent / older > 1.10) if older > 0 else False
+            self._cache_and_check_f6b(
+                float(rf) if rf is not None else None,
+                dirt_rising,
+            )
         return attrs
 
 

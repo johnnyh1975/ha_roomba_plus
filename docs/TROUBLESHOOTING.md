@@ -66,6 +66,17 @@ If you don't use `vacuum.clean_area`, dismiss the repair — `roomba_plus.clean_
 
 ---
 
+**"Map vacuum segments to areas" dialog shows no rooms on the left**
+
+The left column is populated from the iRobot cloud, so an empty list means the integration has no room data to offer yet. Check, in order:
+
+- **Cloud credentials configured?** Room segments require the cloud coordinator (Settings → Configure → iRobot cloud credentials). Local-only setups have no room names to map.
+- **SMART robot?** Only i/s/j-series robots expose cloud rooms. 900-series (EPHEMERAL) robots have no cloud pmap, so they list no segments here and don't support room- or area-targeted cleaning at all (`clean_room` and `vacuum.clean_area` are SMART-only) — they clean the whole floor.
+- **Map finalized in the iRobot app?** If rooms aren't named/saved in the iRobot app, the cloud returns none. Open the app, confirm the room layout, then re-save the cloud credentials step in Configure to force a coordinator refresh.
+- **First fetch completed?** On a fresh install, wait a few minutes for the first cloud poll, then reopen the dialog. Check `region_count_active` in the diagnostics download is > 0.
+
+---
+
 **Mission progress gets stuck reporting a completed room as still in progress**
 
 On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-cleaning phase between rooms that can confuse the progress sensor. As of v2.8.0, Roomba+ detects these transitions automatically using your robot's real per-room cloud time estimates, so this should self-correct within the next room change. If it doesn't, call `roomba_plus.advance_room` to manually move to the next room — it's a no-op if the robot is actively cleaning or already at the last planned room, so it's safe to call speculatively.

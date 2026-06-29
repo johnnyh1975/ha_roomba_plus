@@ -158,12 +158,12 @@ class GridStore:
             )
             return
         try:
-            raw_cells = data.get("cells", {})
+            raw_cells = data.get("cells") or {}
             self._cells = {
                 (int(k.split(",")[0]), int(k.split(",")[1])): float(v)
                 for k, v in raw_cells.items()
             }
-            raw_stuck = data.get("stuck", {})
+            raw_stuck = data.get("stuck") or {}
             for k, v in raw_stuck.items():
                 cell = (int(k.split(",")[0]), int(k.split(",")[1]))
                 if isinstance(v, (int, float)):
@@ -173,13 +173,13 @@ class GridStore:
                     # v2 format: structured dict with count + times list
                     self._stuck[cell] = {
                         "count": int(v.get("count", 0)),
-                        "times": [list(t) for t in v.get("times", [])],
+                        "times": [list(t) for t in (v.get("times") or [])],
                     }
             _LOGGER.debug(
                 "GridStore: loaded %d cell(s), %d stuck cell(s) for %s",
                 len(self._cells), len(self._stuck), entry_id,
             )
-        except (KeyError, ValueError, IndexError) as exc:
+        except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
             self._stuck = {}

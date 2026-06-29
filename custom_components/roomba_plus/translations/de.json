@@ -35,6 +35,10 @@
         "data": {
           "irobot_username": "iRobot E-Mail",
           "irobot_password": "iRobot Passwort"
+        },
+        "data_description": {
+          "irobot_password": "Dein iRobot App-Passwort.",
+          "irobot_username": "Die E-Mail-Adresse zur Anmeldung in der iRobot App."
         }
       },
       "reconfigure": {
@@ -132,24 +136,41 @@
         }
       },
       "blocking_sensors": {
-        "title": "Blocking sensors",
+        "title": "Sperrsensoren",
         "data": {
-          "blocking_sensors": "Blocking sensors",
-          "blocking_behavior": "Behavior when blocked",
-          "blocking_timeout_min": "Queue timeout (minutes)"
+          "blocking_sensors": "Sperrsensoren",
+          "blocking_behavior": "Verhalten bei Sperre",
+          "blocking_timeout_min": "Warteschlangen-Timeout (Minuten)"
+        },
+        "description": "Sensoren konfigurieren, die inaktiv sein müssen, bevor ein smart_start beginnen kann.",
+        "data_description": {
+          "blocking_behavior": "Sofort abbrechen oder Start in Warteschlange stellen, bis Sensoren inaktiv werden.",
+          "blocking_sensors": "Binärsensoren, die einen Start blockieren, wenn aktiv (z.B. Tür offen, Bewegung erkannt).",
+          "blocking_timeout_min": "Wie lange auf das Inaktivwerden der Sensoren gewartet werden soll, bevor aufgegeben wird."
         }
       },
       "map_management": {
-        "title": "Zone management",
+        "title": "Zonenverwaltung",
         "data": {
-          "selected_zone": "Zone to edit"
-        }
+          "selected_zone": "Zu bearbeitende Zone"
+        },
+        "description": "Zone zum Umbenennen oder Ausblenden auswählen. Ohne ausgewählte Zone absenden, um Änderungen zu speichern.\n\n{zone_summary}"
       },
       "map_management_edit": {
-        "title": "Edit zone",
+        "title": "Zone bearbeiten: {zone_name}",
         "data": {
-          "display_name": "Display name",
-          "hidden": "Hide this zone"
+          "display_name": "Anzeigename",
+          "hidden": "Diese Zone ausblenden"
+        },
+        "description": "Anzeigename und Sichtbarkeit für diese Zone festlegen.",
+        "data_description": {
+          "display_name": "Benutzerdefinierter Name in Auswahlmenüs. Leer lassen für den Standardnamen.",
+          "hidden": "Ausgeblendete Zonen werden aus Auswahlmenüs entfernt und lösen keine Benennungs-Reparaturmeldungen aus."
+        },
+        "placeholders": {
+          "zone_name": {
+            "example": "Wohnzimmer"
+          }
         }
       },
       "presence_scheduling": {
@@ -164,11 +185,11 @@
         }
       },
       "demand_cleaning": {
-        "title": "Demand cleaning",
-        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "title": "Bedarfsreinigung",
+        "description": "Startet automatisch eine Reinigung, wenn der Boden erheblich schmutziger als üblich ist.",
         "data": {
-          "demand_cleaning_enabled": "Enable demand cleaning",
-          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
+          "demand_cleaning_enabled": "Bedarfsreinigung aktivieren",
+          "demand_clean_multiplier": "Auslösemultiplikator (z.B. 1,5 = 50 % über Durchschnitt)"
         }
       },
       "test_cloud_connection": {
@@ -193,7 +214,7 @@
       "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "integration_not_loaded": "Die Integration konnte nicht geladen werden. Prüfe die Protokolle und lade neu, bevor du die Einstellungen öffnest.",
       "demand_cleaning_not_supported": "Bedarfsgesteuerte Reinigung erfordert einen SMART-Roboter mit konfigurierten Cloud-Zugangsdaten.",
       "no_rest980_rooms_found": "Keine Räume in deiner roomba_rest980-Installation gefunden.",
       "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt."
@@ -353,6 +374,9 @@
       },
       "problem_zone": {
         "name": "Fehler – Problemzone"
+      },
+      "consecutive_mission_anomalies": {
+        "name": "Aufeinanderfolgende anomale Missionen"
       },
       "presence_clean_opportunities_7d": {
         "name": "Anwesenheit – Reinigungsgelegenheiten (7 Tage)"
@@ -860,12 +884,12 @@
       "description": "Missionen wurden in den letzten 30 Tagen {count} Mal abgebrochen ({by_user_count} durch Nutzer/App, {other_count} anders). Prüfen Sie Zeitplankonflikte, Eingriffe über die App oder ob der Roboter manuell gestoppt wird."
     },
     "schedule_suboptimal": {
-      "title": "Schedule may be missing high-dirt days",
-      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
+      "title": "Zeitplan überdeckt möglicherweise nicht alle schmutzigen Tage",
+      "description": "An {days} war die Schmutzdichte mehr als {threshold}× über dem 30-Tage-Durchschnitt und keine Reinigung wurde aufgezeichnet. Erwäge, einen geplanten Reinigungsauftrag für diese Wochentage hinzuzufügen."
     },
     "mission_anomaly": {
-      "title": "Unusual cleaning patterns detected",
-      "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
+      "title": "Ungewöhnliche Reinigungsmuster erkannt",
+      "description": "Die letzten {count} Missionen zeigten abnormale Muster – der Roboter verbringt möglicherweise mehr Zeit als üblich mit weniger Fläche, hat ungewöhnlich lange Zwischenladungen oder trifft auf extreme Schmutzmengen. Prüfe auf Hindernisse, verschlissene Bürsten oder Akkuverschlechterung."
     },
     "stuck_pattern": {
       "title": "Steckenbleib-Muster erkannt",
@@ -946,6 +970,48 @@
           "description": "Räume in der angegebenen Reihenfolge reinigen, statt die Reihenfolge dem Roboter zu überlassen."
         }
       }
+    },
+    "clean_sequence": {
+      "name": "Sequenzreinigung starten",
+      "description": "Startet Roboter B, wenn Roboter A seine aktuelle Mission abgeschlossen hat. Der Listener wird einmalig ausgelöst und entfernt sich automatisch.",
+      "fields": {
+        "entity_id": {
+          "name": "Auslöse-Roboter",
+          "description": "Vakuum-Entität für Roboter A (muss zuerst fertig sein)."
+        },
+        "target_entity_id": {
+          "name": "Ziel-Roboter",
+          "description": "Vakuum-Entität für Roboter B (wird nach A gestartet)."
+        },
+        "delay_minutes": {
+          "name": "Verzögerung (Minuten)",
+          "description": "Diese Anzahl Minuten nach dem Andocken von Roboter A warten, bevor Roboter B gestartet wird."
+        },
+        "require_completed": {
+          "name": "Abschluss erforderlich",
+          "description": "Wenn aktiv, wird Roboter B nur gestartet, wenn Roboter A normal angedockt hat."
+        }
+      }
+    },
+    "reset_battery": {
+      "name": "Akku zurücksetzen",
+      "description": "Zeichnet den aktuellen Zeitpunkt als Austauschzeitpunkt des Akkus auf."
+    },
+    "reset_brush": {
+      "name": "Bürsten zurücksetzen",
+      "description": "Zeichnet den aktuellen Zeitpunkt als Austauschzeitpunkt der Bürsten auf."
+    },
+    "reset_filter": {
+      "name": "Filter zurücksetzen",
+      "description": "Zeichnet den aktuellen Zeitpunkt als Austauschzeitpunkt des Filters auf."
+    },
+    "reset_pad": {
+      "name": "Reinigungspad zurücksetzen",
+      "description": "Zeichnet den aktuellen Zeitpunkt als Austauschzeitpunkt des Pads auf (nur Braava)."
+    },
+    "smart_start": {
+      "name": "Smart Start",
+      "description": "Startet eine Reinigung mit Sperrsensor-Prüfungen."
     }
   },
   "exceptions": {
@@ -956,7 +1022,7 @@
       "message": "Alle Räume müssen sich auf demselben Stockwerk befinden. Räume von verschiedenen Karten: {pmap_ids}."
     },
     "not_smart_map": {
-      "message": "Raumreinigung erfordert einen Smart-Map-Roboter (i7, s9, j-Serie). Dieser Roboter unterstützt keine Smart Maps."
+      "message": "Raumreinigung erfordert einen Roboter mit finalisierter Smart Map (i7, s9, j-Serie oder Braava jet m6). Dieser Roboter hat keine Smart Map — falls es ein kompatibles Modell ist, stelle sicher, dass seine Karte in der iRobot-App gespeichert ist."
     },
     "no_rooms_configured": {
       "message": "Noch keine Räume konfiguriert. Vorgehensweise: (1) iRobot-App öffnen, (2) Für jeden Raum eine raumbasierte Reinigung starten, (3) In Home Assistant öffnen sich die Roomba+-Optionen automatisch, wo die Räume benannt werden können."
@@ -968,22 +1034,25 @@
       "message": "Der Roboter aktualisiert gerade seine Smart Map. Warte, bis der Bereitschaftssensor 'Bereit' anzeigt, und versuche es erneut."
     },
     "entity_not_found": {
-      "message": "Entity {entity_id} not found in the entity registry."
+      "message": "Entität {entity_id} nicht in der Entitätsregistrierung gefunden."
     },
     "maintenance_store_unavailable": {
-      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+      "message": "Der Wartungsspeicher ist für {entity_id} nicht verfügbar. Lade die Integration neu und versuche es erneut."
     },
     "no_valid_segments": {
-      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+      "message": "Keine Segmente stimmen mit der aktuellen Karte überein. Die Karte wurde möglicherweise neu trainiert – führe eine Raummission in der iRobot App aus."
     },
     "config_entry_not_found": {
-      "message": "No config entry found for {entity_id}. Try reloading the integration."
+      "message": "Kein Konfigurationseintrag für {entity_id} gefunden. Versuche, die Integration neu zu laden."
     },
     "room_name_and_room_passes_conflict": {
-      "message": "Provide either room_name or room_passes, not both."
+      "message": "Gib entweder room_name oder room_passes an, nicht beides."
     },
     "room_name_or_room_passes_required": {
-      "message": "Provide either room_name or room_passes."
+      "message": "Gib entweder room_name oder room_passes an."
+    },
+    "no_rooms_resolved": {
+      "message": "Keine Räume zum Reinigen — gib mindestens einen Raumnamen an."
     }
   }
 }

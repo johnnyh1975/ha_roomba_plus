@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 from datetime import timedelta
 from functools import partial
 import logging
@@ -32,7 +33,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .callbacks import make_map_retrain_callback, make_map_updating_callback, make_mission_callback, make_mission_complete_callback
+from .callbacks import (
+    make_map_retrain_callback,
+    make_map_updating_callback,
+    make_mission_callback,
+    make_mission_complete_callback,
+    make_cloud_refresh_callback,
+)
 from .const import (
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
@@ -1993,6 +2000,178 @@ async def async_migrate_entry(
         )
         current = 22
 
+    if current == 22:
+        # v22 → v23 (v3.0.0): stabilise FavoriteButton entity_ids.
+        #
+        # Root cause: FavoriteButton used _attr_name = fav_name (user-defined
+        # iRobot routine name) without suggested_object_id.  With
+        # has_entity_name=True this generated entity_ids from the routine name,
+        # e.g. button.roomba_980_og_montag_morgen, making them
+        # user-locale-dependent and impossible for the card to discover.
+        #
+        # Fix (v3.0.0): IRobotEntity.suggested_object_id now returns
+        # fav_{fav_id} for FavoriteButton (via unique_id prefix strip).
+        # HA will use button.{device_slug}_fav_{fav_id} for all NEW entities.
+        #
+        # This migration renames existing FavoriteButton entity_ids that do NOT
+        # already contain "_fav_" to the canonical form so the card's
+        # button.{robotName}_fav_* prefix scan works immediately after upgrade
+        # without requiring users to delete and re-add the integration.
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers import device_registry as dr
+        from homeassistant.util import slugify as ha_slugify
+
+        entity_reg = er.async_get(hass)
+        device_reg = dr.async_get(hass)
+
+        # Build the exact prefix that FavoriteButton unique_ids start with.
+        # unique_id format: f"{robot_unique_id}_fav_{fav_id}"
+        # robot_unique_id = f"roomba_plus_{blid}"
+        # Using the exact prefix (not rfind) makes the check unambiguous even
+        # when fav_id itself contains the string "_fav_".
+        blid = config_entry.data.get("blid", "")
+        fav_uid_prefix = f"roomba_plus_{blid}_fav_"
+
+        renamed = 0
+        if not blid:
+            _LOGGER.warning(
+                "Roomba+: v22→v23 migration — blid not in config entry data, "
+                "skipping FavoriteButton rename pass"
+            )
+            fav_entries: list[Any] = []
+        else:
+            fav_entries = list(entity_reg.entities.values())
+
+        for entry in fav_entries:
+            if entry.platform != DOMAIN:
+                continue
+            uid = entry.unique_id or ""
+
+            # Exact prefix match — only FavoriteButton entities for THIS robot
+            if not uid.startswith(fav_uid_prefix):
+                continue
+            fav_id = uid[len(fav_uid_prefix):]
+            if not fav_id:
+                continue  # empty fav_id — skip
+
+            eid = entry.entity_id
+            # Already canonical: entity_id suffix contains _fav_
+            if "_fav_" in eid:
+                continue
+
+            # Compute canonical entity_id: button.{device_slug}_fav_{fav_id_slug}
+            device = device_reg.async_get(entry.device_id) if entry.device_id else None
+            # Match HA's own entity_id generation: name_by_user overrides name.
+            device_name = (device.name_by_user or device.name or "") if device else ""
+            if not device_name:
+                _LOGGER.warning(
+                    "Roomba+: cannot rename FavoriteButton %s — device name unknown",
+                    eid,
+                )
+                continue
+
+            fav_slug = ha_slugify(fav_id)
+            device_slug = ha_slugify(device_name)
+            new_eid = f"button.{device_slug}_fav_{fav_slug}"
+
+            # Avoid collision — skip if target already taken
+            if entity_reg.async_get(new_eid) is not None:
+                _LOGGER.warning(
+                    "Roomba+: target entity_id %s already exists — skipping rename of %s",
+                    new_eid, eid,
+                )
+                continue
+
+            entity_reg.async_update_entity(eid, new_entity_id=new_eid)
+            renamed += 1
+            _LOGGER.debug(
+                "Roomba+: FavoriteButton renamed %s → %s", eid, new_eid
+            )
+
+        hass.config_entries.async_update_entry(config_entry, version=23)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 23 "
+            "(%d FavoriteButton entity_id(s) stabilised)",
+            config_entry.entry_id, renamed,
+        )
+        current = 23
+
+    if current == 23:
+        # v23 → v24 (v3.0.0): disable sensors that are permanently unavailable
+        # for most robots and have no UI path to become available.
+        #
+        # Root cause: entity_registry_enabled_default=False only prevents
+        # auto-enabling on *new* registrations.  Entities already present in
+        # the registry as enabled stay enabled even after the flag is set,
+        # and they continue to show as "Nicht verfügbar" / "unavailable"
+        # cluttering the entity list with sensors the user cannot act on.
+        #
+        # Which sensors are targeted:
+        #   battery_age_days        — requires batInfo.mDate (BMS chip), absent
+        #                             on 900-series firmware; never available
+        #   battery_cycle_count_bms — requires batInfo (BMS chip), same
+        #   bin_last_cleaned        — requires roomba_plus.reset_bin_cleaning
+        #   contact_last_cleaned    — requires roomba_plus.reset_contact_cleaning
+        #   wheel_last_cleaned      — requires roomba_plus.reset_wheel_cleaning
+        #   The last three have no button entity; only a service call can set
+        #   them, making them permanently unavailable for typical users.
+        #
+        # All five are disabled with disabled_by=INTEGRATION so the user can
+        # manually re-enable via the entity registry UI if they need them.
+        # On robots where these sensors actually have data (i/s-series BMS),
+        # re-enabling takes two clicks.
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+
+        entity_reg = er.async_get(hass)
+
+        _DISABLE_SUFFIXES = frozenset({
+            "battery_age_days",
+            "battery_cycle_count_bms",
+            "bin_last_cleaned",
+            "contact_last_cleaned",
+            "wheel_last_cleaned",
+        })
+
+        blid = config_entry.data.get("blid", "")
+        disabled_count = 0
+        if not blid:
+            _LOGGER.warning(
+                "Roomba+: v23→v24 migration — blid not in config entry data, "
+                "skipping sensor disable pass"
+            )
+        else:
+            prefix = f"roomba_plus_{blid}_"
+            for entry in list(entity_reg.entities.values()):
+                if entry.platform != DOMAIN:
+                    continue
+                uid = entry.unique_id or ""
+                # Match exact unique_id pattern: roomba_plus_{blid}_{suffix}
+                if not uid.startswith(prefix):
+                    continue
+                suffix = uid[len(prefix):]
+                if suffix not in _DISABLE_SUFFIXES:
+                    continue
+                if entry.disabled_by is not None:
+                    continue  # already disabled — leave as-is
+                entity_reg.async_update_entity(
+                    entry.entity_id,
+                    disabled_by=RegistryEntryDisabler.INTEGRATION,
+                )
+                disabled_count += 1
+                _LOGGER.debug(
+                    "Roomba+: disabled permanently-unavailable sensor %s",
+                    entry.entity_id,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=24)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 24 "
+            "(%d permanently-unavailable sensor(s) disabled)",
+            config_entry.entry_id, disabled_count,
+        )
+        current = 24
+
     if current == config_entry.version:
         _LOGGER.debug(
             "Roomba+: config entry %s already at version %d — no migration needed",
@@ -2108,251 +2287,61 @@ async def _async_seed_l3_from_archive(
         )
 
 
-async def _async_update_robot_profile_store(
-    hass: Any,
-    entry: "RoombaConfigEntry",
-    mission_store: "MissionStore",
-    robot_profile_store: "RobotProfileStore",
-) -> None:
-    """Update RobotProfileStore from the latest MissionStore and GridStore data.
+# ── SETUP-SPLIT Teil A (v3.0.0) ──────────────────────────────────────────────
+# _SetupContext collects all local variables that span multiple phases of
+# async_setup_entry so they can be passed cleanly between named phase functions.
 
-    v2.6.0 L5/L6 — called after each successful cloud refresh so the learned
-    state stays fresh. Saves the store only when at least one value changes.
 
-    L3/L8: recomputes mission_duration_mean/_std and mission_area_mean from
-    the last 30 days of MissionStore records — the anomaly-detection
-    baseline these feed was previously never updated in production
-    (update_mission_stats() existed but had no caller anywhere; see
-    DEDUP-V1/area_sqft v2.10.2 bug-hunt notes).
+@dataclasses.dataclass
+class _SetupContext:
+    """Mutable accumulator for async_setup_entry phase functions.
 
-    L5: extracts timeline.finEvents room passCount data from the most recent
-    merged record and calls update_room_dirt_index() for each completed room.
-
-    L6: reads edge_coverage_ratio from GridStore (if available) and calls
-    update_coverage_baseline() so the navigation efficiency baseline converges.
+    Each _phase_* function populates its subset of fields and reads from fields
+    that prior phases have already set.  Prefer explicit field assignment over
+    long parameter lists.
     """
-    from .const import SQFT_TO_M2
 
-    changed = False
-
-    # ── L3/L8: mission duration/area baseline from last 30 days ───────────────
-    if robot_profile_store.update_mission_stats(mission_store.query(days=30)):
-        changed = True
-
-    # ── L5: per-room dirtiness from latest record's timeline ─────────────────
-    records = mission_store.query(days=1)  # last 24 h — pick the most recent
-    if records:
-        latest = records[-1]
-        timeline = latest.get("timeline") or {}
-        fin_events = timeline.get("finEvents", [])
-        for event in fin_events:
-            if event.get("type") != "room":
-                continue
-            room = event.get("room", {})
-            # Only status=0 (pass complete) or status=6 (post-error recovery)
-            if room.get("status") not in (0, 6):
-                continue
-            rid = str(room.get("rid", ""))
-            pass_count = int(room.get("passCount", 0))
-            area_sqft = room.get("totalArea") or room.get("area") or 0
-            area_m2 = float(area_sqft) * SQFT_TO_M2
-            if rid and pass_count > 0 and area_m2 > 0:
-                robot_profile_store.update_room_dirt_index(rid, pass_count, area_m2)
-                changed = True
-
-    # ── L6: navigation efficiency baseline from GridStore ─────────────────────
-    gs = getattr(entry.runtime_data, "grid_store", None)
-    if gs is not None:
-        try:
-            ratio = gs.edge_coverage_ratio()
-            if ratio is not None and ratio > 0:
-                robot_profile_store.update_coverage_baseline(ratio)
-                changed = True
-        except Exception:  # noqa: BLE001
-            pass
-
-    # ── J: lifetime sqft staleness tracking ────────────────────────────────
-    # v2.9.0 — field-confirmed: bbrun.sqft/runtimeStats.sqft can remain
-    # frozen for weeks while the robot keeps actively cleaning and every
-    # OTHER bbrun.* counter keeps incrementing normally. We cannot make the
-    # firmware send fresher data, but we CAN detect and surface "this
-    # number hasn't changed in N days" via the total_cleaned_area sensor's
-    # extra_attributes_fn, instead of silently displaying a stale number as
-    # if it were a live reading.
-    try:
-        _state = roomba_reported_state(entry.runtime_data.roomba)
-        _bbrun = _state.get("bbrun", {})
-        _runtime = _state.get("runtimeStats", {})
-        _sqft = _runtime.get("sqft", _bbrun.get("sqft"))
-        if _sqft is not None:
-            if robot_profile_store.update_lifetime_sqft_tracking(float(_sqft)):
-                changed = True
-    except Exception:  # noqa: BLE001
-        pass
-
-    if changed:
-        await robot_profile_store.async_save(hass, entry.entry_id)
+    hass: HomeAssistant
+    config_entry: RoombaConfigEntry
+    # ── Phase 1: connection ───────────────────────────────────────────────────
+    roomba: Any = None
+    state: dict = dataclasses.field(default_factory=dict)
+    # ── Phase 2: spatial stores ───────────────────────────────────────────────
+    map_capability: MapCapability = dataclasses.field(
+        default_factory=lambda: MapCapability.NONE
+    )
+    renderer: MapRenderer | None = None
+    geometry_store: GeometryStore | None = None
+    grid_store: GridStore | None = None
+    room_seg_store: RoomSegStore | None = None
+    # ── Phase 3: data stores ──────────────────────────────────────────────────
+    maintenance_store: MaintenanceStore | None = None
+    mission_store: MissionStore | None = None
+    mission_archive: MissionArchive | None = None
+    last_error_code: int | None = None
+    last_error_at: str | None = None
+    last_error_zone: str | None = None
+    blocking_manager: BlockingManager | None = None
+    presence_manager: PresenceManager | None = None
+    # ── Phase 4: cloud + dependent stores ────────────────────────────────────
+    cloud_coordinator: IrobotCloudCoordinator | None = None
+    umf_aligner: Any = None
+    outline_store: OutlineStore | None = None
+    dirt_threshold_manager: DirtThresholdManager | None = None
+    robot_profile_store: RobotProfileStore | None = None
+    mission_timer_store: MissionTimerStore | None = None
 
 
-# ── GS-SMART-UMF (v2.7.0) — Bootstrap UmfAligner from cloud traversal events ──
+async def _phase_connect(ctx: _SetupContext) -> bool:
+    """Phase 1 — Migrate options, create Roomba, connect, register stop listener.
 
-def _extract_traversal_umf_positions(
-    records: list[dict],
-    aligner: Any,
-    min_missions: int = 3,
-) -> list[tuple[float, float]]:
-    """Return UMF door candidate positions confirmed by ≥min_missions traversal missions.
-
-    Traversal events in cloud timeline confirm the robot crossed room boundaries.
-    A mission is counted when it has ≥1 traversal event in its finEvents.
-    After min_missions of confirmed crossings, all UMF door candidates are returned
-    (the geometric analysis already filters real doors; traversal confirms the robot
-    actually navigated through them).
+    Returns False when connection fails without raising.
+    Raises ConfigEntryNotReady on persistent connectivity issues.
+    Sets ctx.roomba and ctx.state.
     """
-    door_candidates = getattr(aligner, "_door_candidates", [])
-    if len(door_candidates) < 2:
-        return []
+    hass = ctx.hass
+    config_entry = ctx.config_entry
 
-    missions_with_traversals = 0
-    for record in records:
-        timeline = record.get("timeline") or {}
-        fin_events = timeline.get("finEvents", [])
-        if any(e.get("type") == "traversal" for e in fin_events):
-            missions_with_traversals += 1
-        if missions_with_traversals >= min_missions:
-            return list(door_candidates)
-
-    # GS-LOG: explicit log so users can see why bootstrap hasn't fired
-    _LOGGER.info(
-        "GS-SMART-UMF: %d/%d missions with traversal events in last %d cloud records "
-        "— need %d more complete room-specific cleans for bootstrap",
-        missions_with_traversals, min_missions, len(records),
-        max(0, min_missions - missions_with_traversals),
-    )
-    return []
-
-
-async def _async_bootstrap_umf_aligner(
-    hass: HomeAssistant,
-    entry: "RoombaConfigEntry",
-    coordinator: Any,
-) -> None:
-    """GS-SMART-UMF — align without local pose data using cloud traversal evidence.
-
-    Called from _on_cloud_refresh_complete when:
-    - SMART robot with cloud credentials
-    - GeometryStore has < 2 confirmed markers (no local pose data arrived)
-    - UmfAligner not yet aligned
-    - ≥3 cloud missions with traversal events confirm room crossings
-
-    Sets synthetic markers on UmfAligner (UMF-space, identity transform) so
-    room coverage maps and calibration attributes become available even when
-    lewis firmware suppresses local MQTT pose broadcasts.
-    """
-    data = entry.runtime_data
-    aligner = data.umf_aligner
-    gs = data.geometry_store
-
-    if aligner is None or aligner.aligned:
-        return  # Already aligned (normal or previous bootstrap) — nothing to do
-
-    if gs is not None and sum(
-        1 for m in gs.door_markers if m.mission_count >= 2
-    ) >= 2:
-        return  # Local GS markers exist — normal alignment path is running
-
-    if not coordinator.last_update_success:
-        return
-
-    # Bug 4 fix (v2.7.0): _door_candidates is only populated after align() runs.
-    # On the first call the aligner has never run, so candidates would be empty
-    # and _extract_traversal_umf_positions would silently return [].
-    # Run align() once (returns 0.0 without markers) to populate _door_candidates.
-    if not getattr(aligner, "_door_candidates", []):
-        await hass.async_add_executor_job(aligner.align)
-
-    positions = _extract_traversal_umf_positions(
-        coordinator.raw_records, aligner
-    )
-
-    # GS-QUICK (v2.7.1): when last 100 records lack enough traversal missions
-    # (e.g. recent error 224 floods), paginate further back in history.
-    if not positions:
-        blid = entry.data.get(CONF_BLID, "")
-        oldest_ts = min(
-            (r.get("startTime") for r in coordinator.raw_records if r.get("startTime")),
-            default=None,
-        )
-        if blid and oldest_ts:
-            _LOGGER.info(
-                "GS-SMART-UMF: fetching older cloud records for %s (before ts=%s)",
-                blid, oldest_ts,
-            )
-            try:
-                cloud_api = coordinator.api
-                older = await cloud_api.get_mission_history(
-                    blid, count=500, before_ts=oldest_ts
-                )
-                if older:
-                    positions = _extract_traversal_umf_positions(older, aligner)
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.debug("GS-SMART-UMF: paginated fetch failed — %s", exc)
-
-    if not positions:
-        return
-
-    aligner.set_bootstrap_markers(positions)
-    conf = await hass.async_add_executor_job(aligner.align)
-    _LOGGER.info(
-        "GS-SMART-UMF: bootstrap alignment confidence=%.2f aligned=%s for %s",
-        conf, aligner.aligned, entry.data.get(CONF_BLID, "unknown"),
-    )
-
-
-def _umf_version_changed(
-    coordinator: Any,
-    entry: RoombaConfigEntry,
-) -> bool:
-    """Return True when the active UMF version differs from the last aligned version."""
-    current_version = coordinator.umf_data.get("version_id")
-    if not current_version:
-        return False
-    aligner = entry.runtime_data.umf_aligner
-    if aligner is None:
-        return True
-    return aligner.pmap_version_id != current_version
-
-
-async def _async_realign(
-    hass: HomeAssistant,
-    entry: RoombaConfigEntry,
-    coordinator: Any,
-) -> None:
-    """Re-instantiate and run UmfAligner after a pmap version change."""
-    from .umf_aligner import UmfAligner
-    data = entry.runtime_data
-    if not coordinator.umf_data.get("points2d") or not coordinator.regions:
-        return
-    if data.geometry_store is None:
-        return
-    aligner = UmfAligner(
-        points2d=coordinator.umf_data["points2d"],
-        regions=coordinator.regions,
-        geometry_store=data.geometry_store,
-        pmap_version_id=coordinator.umf_data.get("version_id", ""),
-    )
-    conf = await hass.async_add_executor_job(aligner.align)
-    data.umf_aligner = aligner
-    _LOGGER.info(
-        "Roomba+ UmfAligner: re-aligned confidence=%.2f aligned=%s for %s",
-        conf, aligner.aligned, entry.data[CONF_BLID],
-    )
-
-
-async def async_setup_entry(
-    hass: HomeAssistant, config_entry: RoombaConfigEntry
-) -> bool:
-    """Set up Roomba+ from a config entry."""
     # Migrate options from data if this is a fresh entry
     if not config_entry.options:
         hass.config_entries.async_update_entry(
@@ -2406,8 +2395,20 @@ async def async_setup_entry(
         )
     )
 
-    # ── Detect map capability ──────────────────────────────────────────────
-    state = roomba_reported_state(roomba)
+    ctx.roomba = roomba
+    ctx.state = roomba_reported_state(roomba)
+    return True
+
+
+async def _phase_spatial(ctx: _SetupContext) -> None:
+    """Phase 2 — Detect map capability; load spatial stores.
+
+    Populates: map_capability, renderer, geometry_store, grid_store, room_seg_store.
+    """
+    hass = ctx.hass
+    config_entry = ctx.config_entry
+    state = ctx.state
+
     map_capability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None
@@ -2422,21 +2423,10 @@ async def async_setup_entry(
             map_capability = MapCapability.EPHEMERAL
             _LOGGER.debug("Roomba+ map: EPHEMERAL (900-series pose, no pmaps)")
 
-        # ROOM-SEG Stage 6 — ZoneStore (gap-heuristic room detection)
-        # removed entirely; RoomSegStore (created further below) is the
-        # sole room/door source for EPHEMERAL robots now.
-
-        # GeometryStore is needed for both EPHEMERAL (door markers, now fed
-        # from RoomSegStore -- see update_from_room_seg_store) and SMART
-        # (UmfAligner door marker accumulation for alignment confidence).
         if map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             geometry_store = GeometryStore()
             await geometry_store.async_load(hass, config_entry.entry_id)
 
-        # v2.9.0 — robot footprint circle radius matches the real chassis
-        # diameter, not an arbitrary cleaning-width guess. 900-series (incl.
-        # EPHEMERAL test robot 980) has a slightly larger chassis than
-        # i/s/j-series (SMART).
         if map_capability == MapCapability.EPHEMERAL:
             _robot_diameter_mm = ROBOT_DIAMETER_MM_900_SERIES
         elif map_capability == MapCapability.SMART:
@@ -2458,7 +2448,7 @@ async def async_setup_entry(
             state.get("cap", {}).get("pose"), map_enabled,
         )
 
-    # F9 — GridStore for all pose-capable robots (EMA occupancy heatmap + hazard detection)
+    # F9 — GridStore
     grid_store: GridStore | None = None
     if map_capability != MapCapability.NONE and map_enabled:
         grid_store = GridStore()
@@ -2468,13 +2458,7 @@ async def async_setup_entry(
             grid_store.cell_count, config_entry.data[CONF_BLID],
         )
 
-    # ROOM-SEG — watershed-based room/door segmentation on GridStore data.
-    # EPHEMERAL only: SMART robots already get authoritative room data
-    # from the cloud (UmfAligner). Sole room/door source for EPHEMERAL
-    # since Stage 6 — ZoneStore itself was removed (gap heuristic proved
-    # unreliable, see ROOM_SEGMENTATION_NOTES.md); only a minimal
-    # read-only migration shim (legacy_zone_migration.py) remains, used
-    # exactly once below.
+    # ROOM-SEG — RoomSegStore (EPHEMERAL only)
     room_seg_store: RoomSegStore | None = None
     if map_capability == MapCapability.EPHEMERAL and map_enabled:
         room_seg_store = RoomSegStore()
@@ -2484,13 +2468,6 @@ async def async_setup_entry(
             len(room_seg_store.rooms), config_entry.data[CONF_BLID],
         )
 
-        # Stage 2/6 — one-shot migration of names/confirmed/hidden from
-        # whatever a pre-ROOM-SEG installation already saved under the old
-        # ZoneStore storage key, so existing installations with months of
-        # GridStore history don't have to wait for a fresh mission to get
-        # rooms, and don't lose user-assigned names from the old
-        # gap-heuristic system. async_load_legacy_zones() returns []
-        # for fresh installs that never had ZoneStore data at all.
         if not room_seg_store.migrated_from_zonestore:
             if grid_store is not None and grid_store.cell_count > 0 and not room_seg_store.rooms:
                 room_seg_store.maybe_recompute(grid_store.cells)
@@ -2507,20 +2484,30 @@ async def async_setup_entry(
                 room_seg_store.migrated_from_zonestore = True
             await room_seg_store.async_save(hass, config_entry.entry_id)
 
-        # ROOM-SEG Stage 5 — late-attach to the renderer constructed
-        # earlier (above, before room_seg_store existed). See
-        # MapRenderer.__init__'s room_seg_store parameter and
-        # _draw_inference_suggestions().
+        # ROOM-SEG Stage 5 — late-attach to renderer
         renderer._room_seg_store = room_seg_store
+
+    ctx.map_capability = map_capability
+    ctx.renderer = renderer
+    ctx.geometry_store = geometry_store
+    ctx.grid_store = grid_store
+    ctx.room_seg_store = room_seg_store
+
+
+async def _phase_data(ctx: _SetupContext) -> None:
+    """Phase 3 — Load maintenance/mission stores, restore L3 state, create managers.
+
+    Populates: maintenance_store, mission_store, mission_archive,
+               last_error_code/at/zone, blocking_manager, presence_manager.
+    """
+    hass = ctx.hass
+    config_entry = ctx.config_entry
 
     maintenance_store = MaintenanceStore()
     await maintenance_store.async_load(hass, config_entry.entry_id)
 
-    # F4d -- detect bbrun.hr firmware reset (current_hr < stored reset_hr).
-    # This happens silently after a firmware update that resets the runtime
-    # counter.  The stored reset baselines are now wrong; fire a Repair Issue
-    # so the user knows to re-reset consumables.
-    _state_for_bbrun = roomba_reported_state(roomba)
+    # F4d — detect bbrun.hr firmware reset
+    _state_for_bbrun = roomba_reported_state(ctx.roomba)
     _bbrun = _state_for_bbrun.get("bbrun", {})
     _runtime = _state_for_bbrun.get("runtimeStats", {})
     _current_hr = _bbrun.get("hr") or _runtime.get("hr") or 0
@@ -2528,13 +2515,10 @@ async def async_setup_entry(
         from .repairs import async_check_bbrun_reset
         await async_check_bbrun_reset(hass, config_entry, maintenance_store, _current_hr)
 
-    # ── v1.8.0 L1 — Mission store ─────────────────────────────────────────
+    # Mission store
     mission_store = MissionStore()
     await mission_store.async_load(hass, config_entry.entry_id)
 
-    # F7j — backfill HA Long-Term Statistics from stored mission records.
-    # Idempotent — safe to run on every startup. Runs in background so it
-    # does not block setup even on large mission histories.
     robot_name = config_entry.title or "Roomba"
     hass.async_create_task(
         mission_store.async_backfill_statistics(
@@ -2543,7 +2527,7 @@ async def async_setup_entry(
         name="roomba_plus_statistics_backfill",
     )
 
-    # Restore L3 last-error state from mission history.
+    # Restore L3 last-error state from mission history
     last_error_code: int | None = None
     last_error_at: str | None = None
     last_error_zone: str | None = None
@@ -2557,7 +2541,19 @@ async def async_setup_entry(
             last_error_zone = (_rec.get("zones") or [None])[0]
             break
 
-    # ── v1.7.0 L5 — Blocking manager ──────────────────────────────────────
+    # MissionArchive (same cloud-credentials gate as coordinator)
+    mission_archive: MissionArchive | None = None
+    if (ctx.map_capability != MapCapability.NONE
+            and config_entry.data.get(CONF_IROBOT_USERNAME)
+            and config_entry.data.get(CONF_IROBOT_PASSWORD)):
+        mission_archive = MissionArchive()
+        await mission_archive.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "MissionArchive: loaded %d record(s) for %s",
+            mission_archive.record_count, config_entry.data[CONF_BLID],
+        )
+
+    # BlockingManager
     blocking_manager: BlockingManager | None = None
     if config_entry.options.get(CONF_BLOCKING_SENSORS):
         blocking_manager = BlockingManager(hass, config_entry)
@@ -2566,27 +2562,36 @@ async def async_setup_entry(
             config_entry.options[CONF_BLOCKING_SENSORS],
         )
 
-    # ── v1.8.0 L6 — Presence manager ──────────────────────────────────────
+    # PresenceManager
     presence_manager: PresenceManager | None = None
     if config_entry.options.get(CONF_PRESENCE_SCHEDULING_ENABLED):
         presence_manager = PresenceManager(hass, config_entry)
         _LOGGER.debug("Roomba+ presence manager active")
 
-    # ── Cloud coordinator ──────────────────────────────────────────────────
-    cloud_coordinator: IrobotCloudCoordinator | None = None
+    ctx.maintenance_store = maintenance_store
+    ctx.mission_store = mission_store
+    ctx.mission_archive = mission_archive
+    ctx.last_error_code = last_error_code
+    ctx.last_error_at = last_error_at
+    ctx.last_error_zone = last_error_zone
+    ctx.blocking_manager = blocking_manager
+    ctx.presence_manager = presence_manager
+
+
+async def _phase_cloud(ctx: _SetupContext) -> None:
+    """Phase 4 — Create cloud coordinator; load all cloud-dependent stores.
+
+    Populates: cloud_coordinator, umf_aligner, outline_store,
+               dirt_threshold_manager, robot_profile_store, mission_timer_store.
+    """
+    hass = ctx.hass
+    config_entry = ctx.config_entry
+    map_capability = ctx.map_capability
+
     irobot_username = config_entry.data.get(CONF_IROBOT_USERNAME)
     irobot_password = config_entry.data.get(CONF_IROBOT_PASSWORD)
 
-    # v2.8.0 ARC1 — MissionArchive (requires cloud credentials; same gate as coordinator)
-    mission_archive: MissionArchive | None = None
-    if map_capability != MapCapability.NONE and irobot_username and irobot_password:
-        mission_archive = MissionArchive()
-        await mission_archive.async_load(hass, config_entry.entry_id)
-        _LOGGER.debug(
-            "MissionArchive: loaded %d record(s) for %s",
-            mission_archive.record_count, config_entry.data[CONF_BLID],
-        )
-
+    cloud_coordinator: IrobotCloudCoordinator | None = None
     if map_capability != MapCapability.NONE and irobot_username and irobot_password:
         has_pmaps = map_capability == MapCapability.SMART
         cloud_coordinator = IrobotCloudCoordinator(
@@ -2596,12 +2601,10 @@ async def async_setup_entry(
             username=irobot_username,
             password=irobot_password,
             has_pmaps=has_pmaps,
-            mission_store=mission_store,   # CR3 — fallback source
-            mission_archive=mission_archive,  # ARC1 — v2.8.0
+            mission_store=ctx.mission_store,
+            mission_archive=ctx.mission_archive,
         )
-        # IA74-PMAP: seed active_pmap_id from local MQTT before first cloud fetch
-        # so vacuum.clean_area is not blocked during the initial coordinator refresh.
-        cloud_coordinator.seed_pmap_id_from_local(state)
+        cloud_coordinator.seed_pmap_id_from_local(ctx.state)
         try:
             await cloud_coordinator.async_config_entry_first_refresh()
             _LOGGER.info(
@@ -2610,26 +2613,19 @@ async def async_setup_entry(
                 len(cloud_coordinator.data.get("pmaps", [])),
                 map_capability.value,
             )
-            # v2.0 Step 6 — backfill MissionStore timestamps from cloud.
-            # 980/900-series firmware resets mssnStrtTm=0 in the end-of-mission
-            # MQTT message, leaving local records with duration_min≈0. Correct
-            # them now using the authoritative cloud timestamps.
             if cloud_coordinator.raw_records:
-                _bf = mission_store.backfill_from_cloud(
+                _bf = ctx.mission_store.backfill_from_cloud(
                     cloud_coordinator.raw_records
                 )
                 if _bf.corrected or _bf.enriched:
-                    await mission_store.async_save(hass, config_entry.entry_id)
+                    await ctx.mission_store.async_save(hass, config_entry.entry_id)
 
-                # F22a prerequisite — seed GridStore with cloud-detected obstacle
-                # centroids from UMF observed_zones. Only seeds cells not already
-                # present in GridStore (no overwrite of local data).
-                if grid_store is not None:
+                if ctx.grid_store is not None:
                     centroids = cloud_coordinator.observed_zone_centroids
                     if centroids:
-                        seeded = grid_store.seed_from_observed_zones(centroids)
+                        seeded = ctx.grid_store.seed_from_observed_zones(centroids)
                         if seeded:
-                            await grid_store.async_save(hass, config_entry.entry_id)
+                            await ctx.grid_store.async_save(hass, config_entry.entry_id)
                             _LOGGER.debug(
                                 "Roomba+: seeded %d GridStore cell(s) from UMF "
                                 "observed_zones for %s",
@@ -2649,12 +2645,10 @@ async def async_setup_entry(
                 config_entry.data[CONF_BLID],
             )
 
-    # v2.4.0 F-EPHEMERAL — OutlineStore (EPHEMERAL robots with map enabled)
+    # OutlineStore (EPHEMERAL + map enabled)
     outline_store: OutlineStore | None = None
-    if (
-        map_capability == MapCapability.EPHEMERAL
-        and config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)
-    ):
+    if (map_capability == MapCapability.EPHEMERAL
+            and config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)):
         outline_store = OutlineStore()
         await outline_store.async_load(hass, config_entry.entry_id)
         _LOGGER.debug(
@@ -2662,40 +2656,29 @@ async def async_setup_entry(
             outline_store.contour_point_count, config_entry.data[CONF_BLID],
         )
 
-    # v2.4.0 F11 — DirtThresholdManager (SMART + cloud + demand enabled)
+    # DirtThresholdManager (SMART + cloud + demand enabled)
     dirt_threshold_manager: DirtThresholdManager | None = None
-    if (
-        map_capability == MapCapability.SMART
-        and cloud_coordinator is not None
-        and config_entry.options.get(CONF_DEMAND_CLEANING_ENABLED, False)
-    ):
+    if (map_capability == MapCapability.SMART
+            and cloud_coordinator is not None
+            and config_entry.options.get(CONF_DEMAND_CLEANING_ENABLED, False)):
         dirt_threshold_manager = DirtThresholdManager(hass, config_entry)
         await dirt_threshold_manager.async_load(config_entry.entry_id)
-        _LOGGER.debug("Roomba+ DirtThresholdManager: active for %s", config_entry.data[CONF_BLID])
+        _LOGGER.debug(
+            "Roomba+ DirtThresholdManager: active for %s", config_entry.data[CONF_BLID]
+        )
 
-    # v2.6.0 L4 — RobotProfileStore (all capability tiers)
+    # RobotProfileStore (all tiers)
     robot_profile_store = RobotProfileStore()
     await robot_profile_store.async_load(hass, config_entry.entry_id)
     _LOGGER.debug("RobotProfileStore: loaded for %s", config_entry.data[CONF_BLID])
 
-    # v2.8.0 L5-ARC — seed room_dirt_index from archive if already complete
-    # (archive.initial_load_done=True = loaded from storage, not first run).
-    #
-    # Bug-hunt: both seeding calls are awaited directly here, not via
-    # hass.async_create_task — an uncaught exception would fail
-    # async_setup_entry entirely, blocking the whole integration from
-    # loading after a restart until storage is manually cleared. Wrapped
-    # as defense-in-depth on top of the type-guard inside the function
-    # itself, since a corrupted/hand-edited persisted archive file could
-    # be malformed in ways beyond the one shape this session's bug hunt
-    # specifically enumerated.
-    if mission_archive is not None and mission_archive.initial_load_done:
+    # L5-ARC/L3-ARC archive seeding
+    if ctx.mission_archive is not None and ctx.mission_archive.initial_load_done:
         try:
             await _async_seed_l5_from_archive(
-                hass, config_entry.entry_id, mission_archive, robot_profile_store
+                hass, config_entry.entry_id, ctx.mission_archive, robot_profile_store
             )
-            # L3-ARC — seed anomaly detection baseline from same archive
-            await _async_seed_l3_from_archive(mission_archive, mission_store)
+            await _async_seed_l3_from_archive(ctx.mission_archive, ctx.mission_store)
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "L5-ARC/L3-ARC: archive seeding failed — continuing setup "
@@ -2703,21 +2686,17 @@ async def async_setup_entry(
                 exc_info=True,
             )
 
-    # v2.6.0 MP1 — MissionTimerStore (SMART + cloud only)
+    # MissionTimerStore (SMART + cloud only)
     mission_timer_store: MissionTimerStore | None = None
     if map_capability == MapCapability.SMART and cloud_coordinator is not None:
         mission_timer_store = MissionTimerStore()
         await mission_timer_store.async_load(hass, config_entry.entry_id)
         _LOGGER.debug("MissionTimerStore: loaded for %s", config_entry.data[CONF_BLID])
 
-    # v2.3.0 F8 — UMF spatial fusion aligner
-    umf_aligner: Any | None = None
-    if cloud_coordinator is not None and geometry_store is not None:
-        _points2d   = cloud_coordinator.umf_data.get("points2d")
-        # Use regions from UMF maps[] — these contain geometry.ids for polygon
-        # resolution. Regions from get_pmaps() only have metadata (name, policies
-        # etc.) without geometry. Fall back to get_pmaps() regions if UMF regions
-        # are absent (e.g. older API versions).
+    # UMF spatial fusion aligner
+    umf_aligner: Any = None
+    if cloud_coordinator is not None and ctx.geometry_store is not None:
+        _points2d    = cloud_coordinator.umf_data.get("points2d")
         _umf_regions = cloud_coordinator.umf_data.get("regions") or []
         _regions     = _umf_regions or cloud_coordinator.regions
         if not _points2d:
@@ -2738,7 +2717,7 @@ async def async_setup_entry(
             _aligner = UmfAligner(
                 points2d=_points2d,
                 regions=_regions,
-                geometry_store=geometry_store,
+                geometry_store=ctx.geometry_store,
                 pmap_version_id=cloud_coordinator.umf_data.get("version_id", ""),
             )
             _conf = await hass.async_add_executor_job(_aligner.align)
@@ -2748,45 +2727,62 @@ async def async_setup_entry(
                 _conf, _aligner.aligned, config_entry.data[CONF_BLID],
             )
 
-    config_entry.runtime_data = RoombaData(
-        roomba=roomba,
-        blid=config_entry.data[CONF_BLID],
-        map_capability=map_capability,
-        renderer=renderer,
-        geometry_store=geometry_store,
-        maintenance_store=maintenance_store,
-        cloud_coordinator=cloud_coordinator,
-        blocking_manager=blocking_manager,
-        mission_store=mission_store,
-        last_error_code=last_error_code,
-        last_error_at=last_error_at,
-        last_error_zone=last_error_zone,
-        grid_store=grid_store,
-        room_seg_store=room_seg_store,
-        floor_label=config_entry.options.get(CONF_FLOOR, ""),
-        umf_aligner=umf_aligner,
-        dirt_threshold_manager=dirt_threshold_manager,
-        outline_store=outline_store,
+    ctx.cloud_coordinator = cloud_coordinator
+    ctx.umf_aligner = umf_aligner
+    ctx.outline_store = outline_store
+    ctx.dirt_threshold_manager = dirt_threshold_manager
+    ctx.robot_profile_store = robot_profile_store
+    ctx.mission_timer_store = mission_timer_store
+
+
+def _build_runtime_data(ctx: _SetupContext) -> RoombaData:
+    """Assemble RoombaData from the fully populated _SetupContext."""
+    return RoombaData(
+        roomba=ctx.roomba,
+        blid=ctx.config_entry.data[CONF_BLID],
+        map_capability=ctx.map_capability,
+        renderer=ctx.renderer,
+        geometry_store=ctx.geometry_store,
+        maintenance_store=ctx.maintenance_store,
+        cloud_coordinator=ctx.cloud_coordinator,
+        blocking_manager=ctx.blocking_manager,
+        mission_store=ctx.mission_store,
+        last_error_code=ctx.last_error_code,
+        last_error_at=ctx.last_error_at,
+        last_error_zone=ctx.last_error_zone,
+        grid_store=ctx.grid_store,
+        room_seg_store=ctx.room_seg_store,
+        floor_label=ctx.config_entry.options.get(CONF_FLOOR, ""),
+        umf_aligner=ctx.umf_aligner,
+        dirt_threshold_manager=ctx.dirt_threshold_manager,
+        outline_store=ctx.outline_store,
         robot_profile=get_robot_profile(
-            state.get("sku"),
-            battery_type=state.get("batteryType"),   # override chemistry from live state
+            ctx.state.get("sku"),
+            battery_type=ctx.state.get("batteryType"),
         ),
-        robot_profile_store=robot_profile_store,
-        mission_timer_store=mission_timer_store,
-        mission_archive=mission_archive,
+        robot_profile_store=ctx.robot_profile_store,
+        mission_timer_store=ctx.mission_timer_store,
+        mission_archive=ctx.mission_archive,
     )
 
-    # v2.8.0 ARC1 — start one-time paginated back-fill as background task.
-    # Runs after runtime_data is set so any concurrent delta updates (from the
-    # first coordinator refresh) are already in the archive and will be skipped
-    # via _archived_nmssns.
-    if (
-        mission_archive is not None
-        and cloud_coordinator is not None
-        and not mission_archive.initial_load_done
-    ):
+
+async def _phase_finalize(ctx: _SetupContext) -> None:
+    """Phase 5 — Background tasks, platform setup, REST views, services, MQTT callbacks.
+
+    Called after config_entry.runtime_data is set so platform entities can
+    access it during setup.
+    """
+    hass = ctx.hass
+    config_entry = ctx.config_entry
+    roomba = ctx.roomba
+    cloud_coordinator = ctx.cloud_coordinator
+
+    # ARC1 — one-time paginated back-fill as background task
+    if (ctx.mission_archive is not None
+            and cloud_coordinator is not None
+            and not ctx.mission_archive.initial_load_done):
         hass.async_create_task(
-            mission_archive.async_initial_load(
+            ctx.mission_archive.async_initial_load(
                 cloud_coordinator.api,
                 config_entry.data[CONF_BLID],
                 hass,
@@ -2795,13 +2791,11 @@ async def async_setup_entry(
             name=f"roomba_plus_arc1_initial_load_{config_entry.entry_id}",
         )
 
-    # v2.6.3 B9 — the 980 may not include "sku" in the first MQTT state dump
-    # that arrives before async_setup_entry completes.  Register a one-time
-    # callback that fills in robot_profile when "sku" first appears.
+    # B9 — late SKU resolve (980 may not send sku in first MQTT dump)
     if config_entry.runtime_data.robot_profile is None:
         def _set_robot_profile_on_sku(json_data: dict) -> None:
             if config_entry.runtime_data.robot_profile is not None:
-                return  # already resolved
+                return
             reported = json_data.get("state", {}).get("reported", {})
             sku = reported.get("sku")
             if sku:
@@ -2814,23 +2808,22 @@ async def async_setup_entry(
                     )
         roomba.register_on_message_callback(_set_robot_profile_on_sku)
 
-    if presence_manager is not None:
-        config_entry.runtime_data.presence_manager = presence_manager
-        presence_manager.start()
+    if ctx.presence_manager is not None:
+        config_entry.runtime_data.presence_manager = ctx.presence_manager
+        ctx.presence_manager.start()
 
-    # ── Platform setup ─────────────────────────────────────────────────────
+    # Platform setup
     platforms = list(LOCAL_PLATFORMS)
-    if map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
-        # IMAGE platform covers both RoombaMapImage and RoombaCoverageImage
+    if ctx.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
         if Platform.IMAGE not in platforms:
             platforms.append(Platform.IMAGE)
-    if map_capability == MapCapability.SMART:
+    if ctx.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
-    # ── v1.8.0 — REST API view    # ── v1.8.0 — REST API view ─────────────────────────────────────────────
+    # REST API views (registered once per HA instance)
     if not hass.data.get("_roomba_plus_view_registered"):
         hass.http.register_view(MissionHistoryView())
         hass.http.register_view(HouseholdSummaryView())
@@ -2838,22 +2831,18 @@ async def async_setup_entry(
         hass.http.register_view(DailyDigestView())
         hass.data["_roomba_plus_view_registered"] = True
 
-    # ── Register services ──────────────────────────────────────────────────
     async_register_services(hass)
 
-    # ── F22a — check for cloud-detected obstacle zones ─────────────────────
-    if cloud_coordinator is not None and grid_store is not None:
+    # F22a — check for cloud-detected obstacle zones
+    if cloud_coordinator is not None and ctx.grid_store is not None:
         from .repairs import async_check_observed_zones
         hass.async_create_task(
             async_check_observed_zones(hass, config_entry),
             name=f"roomba_plus_observed_zones_check_{config_entry.entry_id}",
         )
 
-    # ── MQTT callbacks ─────────────────────────────────────────────────────
-    # v2.9.0 MAP-RETRAIN-WF — local-MQTT-only signal (notReady bit), so this
-    # is registered independent of cloud_coordinator presence, unlike the
-    # block below.
-    if map_capability == MapCapability.SMART:
+    # MQTT callbacks
+    if ctx.map_capability == MapCapability.SMART:
         roomba.register_on_message_callback(
             make_map_updating_callback(hass, config_entry)
         )
@@ -2862,129 +2851,18 @@ async def async_setup_entry(
         roomba.register_on_message_callback(
             make_map_retrain_callback(hass, cloud_coordinator, config_entry)
         )
-        # F4b -- trigger cloud refresh at mission end to eliminate 24h staleness
         roomba.register_on_message_callback(
             make_mission_complete_callback(hass, cloud_coordinator, config_entry)
         )
-
-        # CR2 — after each post-mission cloud refresh, merge latest cloud
-        # analytics into the most recent MissionStore record so fields like
-        # dirt, chrgM, and wlBars are persisted across restarts.
-        @callback
-        def _on_cloud_refresh_complete() -> None:
-            # v2.8.3 CLOUD-STALE — check before the success gate so the Repair
-            # Issue fires even during a streak of failed refreshes (which is
-            # exactly when it's most actionable) and clears immediately on the
-            # first successful one.
-            from .repairs import async_check_cloud_stale
-            hass.async_create_task(
-                async_check_cloud_stale(hass, config_entry, cloud_coordinator),
-                name="roomba_plus_cloud_stale_check",
-            )
-            if not cloud_coordinator.last_update_success:
-                return
-            ms = config_entry.runtime_data.mission_store
-            if ms is None:
-                return
-            # v2.9.0 — was merge_latest_from_cloud() (single-shot, only ever
-            # tried the newest record once, no retry). If that one attempt
-            # missed — e.g. local ended_at drifted outside the ±120s match
-            # tolerance because mission-end confirmation was delayed (see
-            # the v2.8.7 stuck-mission fix) — the record's timeline/
-            # analytics fields were stuck missing FOREVER, since nothing
-            # else ever looked at that record again until the next HA
-            # restart's one-time backfill_from_cloud() pass. Confirmed root
-            # cause of Thonno's stale last_cleaned_rooms report: it reads
-            # timeline.finEvents from MissionStore.latest(), which depends
-            # entirely on this merge having succeeded for the newest record.
-            # backfill_from_cloud() is the same logic but re-checks EVERY
-            # record on EVERY refresh — cheap (dict lookups against ~100
-            # cloud records) and gives every record a fresh chance, not
-            # just one.
-            _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
-            if _bf.corrected or _bf.enriched:
-                hass.async_create_task(
-                    ms.async_save(hass, config_entry.entry_id),
-                    name="roomba_plus_cloud_merge_save",
-                )
-            # v2.4.2 F11-WIRE — evaluate demand cleaning after every cloud refresh.
-            _dtm = config_entry.runtime_data.dirt_threshold_manager
-            if _dtm is not None:
-                hass.async_create_task(
-                    _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id),
-                    name="roomba_plus_demand_clean_eval",
-                )
-            # v2.3.0 — re-align UmfAligner when UMF version changes
-            if _umf_version_changed(cloud_coordinator, config_entry):
-                hass.async_create_task(
-                    _async_realign(hass, config_entry, cloud_coordinator),
-                    name="roomba_plus_umf_realign",
-                )
-            # v2.3.0 Step 6c — F8b error recurrence Repair Issue
-            from .repairs import async_check_error_recurrence
-            hass.async_create_task(
-                async_check_error_recurrence(hass, config_entry),
-                name="roomba_plus_error_recurrence_check",
-            )
-            # v2.8.2 — cancellation recurrence Repair Issue (separate from
-            # error_recurrence since cancelled/cancelled_by_user results
-            # carry no numeric error_code and were previously invisible to
-            # any recurrence check).
-            from .repairs import async_check_cancellation_recurrence
-            hass.async_create_task(
-                async_check_cancellation_recurrence(hass, config_entry),
-                name="roomba_plus_cancellation_recurrence_check",
-            )
-            # v2.6.0 L5/L6 — update RobotProfileStore from latest cloud data
-            _rps = config_entry.runtime_data.robot_profile_store
-            if _rps is not None:
-                hass.async_create_task(
-                    _async_update_robot_profile_store(hass, config_entry, ms, _rps),
-                    name="roomba_plus_profile_store_update",
-                )
-            # v2.7.0 L7 — stuck pattern time-correlation check
-            if config_entry.runtime_data.grid_store is not None:
-                from .repairs import async_check_stuck_pattern
-                hass.async_create_task(
-                    async_check_stuck_pattern(hass, config_entry),
-                    name="roomba_plus_l7_stuck_pattern_check",
-                )
-            # v2.7.1 SMBERR — SMBus battery communication error check
-            from .repairs import async_check_smberr
-            hass.async_create_task(
-                async_check_smberr(hass, config_entry),
-                name="roomba_plus_smberr_check",
-            )
-            # v2.8.0 DOCK-HEALTH — dock contact health check
-            from .repairs import async_check_dock_health
-            hass.async_create_task(
-                async_check_dock_health(hass, config_entry),
-                name="roomba_plus_dock_health_check",
-            )
-            # v2.7.0 GS-SMART-UMF — bootstrap alignment for robots without local pose
-            if (
-                config_entry.runtime_data.map_capability == MapCapability.SMART
-                and config_entry.runtime_data.umf_aligner is not None
-            ):
-                hass.async_create_task(
-                    _async_bootstrap_umf_aligner(
-                        hass, config_entry, cloud_coordinator
-                    ),
-                    name="roomba_plus_gs_smart_umf_bootstrap",
-                )
         config_entry.async_on_unload(
-            cloud_coordinator.async_add_listener(_on_cloud_refresh_complete)
+            cloud_coordinator.async_add_listener(
+                make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+            )
         )
 
     _mission_cb = make_mission_callback(hass, config_entry)
     roomba.register_on_message_callback(_mission_cb)
 
-    # v2.9.0 — periodic safety net for the end-phase confirmation logic
-    # (see _async_recheck_stuck_end_state docstring in callbacks.py for the
-    # full root-cause explanation). Every 30s so a stuck mission closes
-    # within 30s of crossing the 90s UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
-    # cap, instead of potentially staying open indefinitely if the robot
-    # stops sending cleanMissionStatus changes once docked.
     config_entry.async_on_unload(
         async_track_time_interval(
             hass,
@@ -2993,10 +2871,37 @@ async def async_setup_entry(
         )
     )
 
-    # Reload on options change (continuous/delay require reconnect)
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
+
+
+async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
+    """Set up Roomba+ from a config entry.
+
+    SETUP-SPLIT Teil A (v3.0.0) — pure orchestrator: delegates all work to
+    named phase functions that each populate a shared _SetupContext.
+
+    Phase summary:
+        1. _phase_connect    — options migration, Roomba creation, MQTT connection
+        2. _phase_spatial    — map capability detection, spatial stores
+        3. _phase_data       — mission/maintenance stores, L3 state, managers
+        4. _phase_cloud      — cloud coordinator, UMF aligner, cloud-dependent stores
+        5. _build_runtime_data — assemble and assign RoombaData
+        6. _phase_finalize   — background tasks, platforms, REST views, callbacks
+    """
+    ctx = _SetupContext(hass=hass, config_entry=config_entry)
+
+    if not await _phase_connect(ctx):
+        return False
+
+    await _phase_spatial(ctx)
+    await _phase_data(ctx)
+    await _phase_cloud(ctx)
+
+    config_entry.runtime_data = _build_runtime_data(ctx)
+
+    await _phase_finalize(ctx)
 
     _LOGGER.info(
         "Roomba+ connected to %s (blid=%s)",
@@ -3111,8 +3016,15 @@ async def async_disconnect_or_timeout(
 # ── State helpers (used across all platforms) ─────────────────────────────────
 
 def roomba_reported_state(roomba: Roomba) -> dict[str, Any]:
-    """Return the 'reported' sub-dict from master_state."""
-    return roomba.master_state.get("state", {}).get("reported", {})
+    """Return the 'reported' sub-dict from master_state.
+
+    Uses ``or {}`` rather than a dict default so that an explicit JSON null
+    (``{"state": null}``) — which a sparse or initial MQTT frame can produce —
+    is coerced to an empty dict instead of raising AttributeError. A dict
+    default (``.get("state", {})``) only guards against a *missing* key, not a
+    present-but-null value.
+    """
+    return (roomba.master_state.get("state") or {}).get("reported") or {}
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────

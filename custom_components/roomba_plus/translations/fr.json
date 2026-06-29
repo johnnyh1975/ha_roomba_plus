@@ -141,19 +141,36 @@
           "blocking_sensors": "Blocking sensors",
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
+        },
+        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "data_description": {
+          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
+          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
+          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
         }
       },
       "map_management": {
         "title": "Zone management",
         "data": {
           "selected_zone": "Zone to edit"
-        }
+        },
+        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
       },
       "map_management_edit": {
-        "title": "Edit zone",
+        "title": "Modifier la zone : {zone_name}",
         "data": {
           "display_name": "Display name",
           "hidden": "Hide this zone"
+        },
+        "description": "Set a display name and visibility for this zone.",
+        "data_description": {
+          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
+          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+        },
+        "placeholders": {
+          "zone_name": {
+            "example": "Salon"
+          }
         }
       },
       "presence_scheduling": {
@@ -357,6 +374,9 @@
       },
       "problem_zone": {
         "name": "Erreur – Zone problématique"
+      },
+      "consecutive_mission_anomalies": {
+        "name": "Missions anormales consécutives"
       },
       "presence_clean_opportunities_7d": {
         "name": "Présence – Opportunités de nettoyage (7 jours)"
@@ -950,6 +970,48 @@
           "description": "Nettoyer les pièces dans l'ordre fourni plutôt que de laisser le robot choisir."
         }
       }
+    },
+    "reset_filter": {
+      "name": "Reset filter",
+      "description": "Record the current time as the filter replacement date."
+    },
+    "reset_brush": {
+      "name": "Reset brushes",
+      "description": "Record the current time as the brush replacement date."
+    },
+    "reset_battery": {
+      "name": "Reset battery",
+      "description": "Record the current time as the battery replacement date."
+    },
+    "reset_pad": {
+      "name": "Reset cleaning pad",
+      "description": "Record the current time as the pad replacement date (Braava only)."
+    },
+    "smart_start": {
+      "name": "Smart start",
+      "description": "Start a clean with blocking-sensor checks."
+    },
+    "clean_sequence": {
+      "name": "Start sequence clean",
+      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "fields": {
+        "entity_id": {
+          "name": "Trigger robot",
+          "description": "Vacuum entity for robot A (must finish first)."
+        },
+        "target_entity_id": {
+          "name": "Target robot",
+          "description": "Vacuum entity for robot B (started after A finishes)."
+        },
+        "require_completed": {
+          "name": "Require completion",
+          "description": "When true, robot B starts only if robot A docked normally."
+        },
+        "delay_minutes": {
+          "name": "Delay (minutes)",
+          "description": "Wait this many minutes after robot A docks before starting robot B."
+        }
+      }
     }
   },
   "exceptions": {
@@ -960,7 +1022,7 @@
       "message": "Toutes les pièces doivent être au même étage. Des pièces provenant de cartes différentes ont été détectées : {pmap_ids}."
     },
     "not_smart_map": {
-      "message": "Le nettoyage par pièce nécessite un robot Smart Map (i7, s9, série j). Ce robot ne prend pas en charge les Smart Maps."
+      "message": "Le nettoyage par pièce nécessite un robot avec une Smart Map finalisée (i7, s9, série j ou Braava jet m6). Ce robot na pas de Smart Map — sil sagit dun modèle compatible, assurez-vous que sa carte est enregistrée dans lapplication iRobot."
     },
     "no_rooms_configured": {
       "message": "Aucune pièce configurée pour l'instant. Pour utiliser cette action : (1) Ouvrez l'application iRobot, (2) Démarrez un nettoyage ciblé par pièce pour chaque pièce, (3) Revenez dans Home Assistant — les pièces apparaîtront automatiquement dans les options Roomba+ où vous pourrez leur attribuer des noms."
@@ -988,6 +1050,9 @@
     },
     "room_name_or_room_passes_required": {
       "message": "Provide either room_name or room_passes."
+    },
+    "no_rooms_resolved": {
+      "message": "Aucune pièce à nettoyer — indiquez au moins un nom de pièce."
     }
   }
 }

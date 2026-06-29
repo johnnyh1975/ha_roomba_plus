@@ -66,6 +66,8 @@ OPT_AUTO = CLEAN_MODE_LABELS["auto"]    # "Auto"
 OPT_ONE  = CLEAN_MODE_LABELS["one"]     # "One pass"
 OPT_TWO  = CLEAN_MODE_LABELS["two"]     # "Two passes"
 
+_PAD_WET_OPTIONS: list[str] = ["1", "2", "3"]  # Braava wetness levels (disposable + reusable)
+
 # Preference payloads per option
 # noAutoPasses=False → auto decide; True → manual control
 # twoPass=False → one pass; True → two passes
@@ -140,57 +142,196 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class CleaningPassesSelect(IRobotEntity, SelectEntity):
-    """Select entity for cleaning pass mode (Auto / One / Two passes).
+# ── F-RB-6 (v3.0.0) — Descriptor pattern for simple MQTT-backed selects ──────
+#
+# Replaces CleaningPassesSelect, DisposablePadWetnessSelect,
+# ReusablePadWetnessSelect, CarpetBoostSelect with a single generic class
+# + four frozen dataclass descriptors.
 
-    Maps to the noAutoPasses + twoPass preference pair.
+from dataclasses import dataclass, field as _field
+from typing import Callable, Coroutine
+from homeassistant.components.select import SelectEntityDescription
+
+
+@dataclass(frozen=True, kw_only=True)
+class RoombaPlusSelectDescription(SelectEntityDescription):
+    """Descriptor for a simple MQTT-backed select entity (F-RB-6)."""
+    unique_id_suffix: str
+    options: list[str]
+    current_option_fn: Callable[[dict[str, Any]], str | None]
+    select_fn: Callable[["SimpleRoombaSelect", str], Coroutine]
+    state_filter_keys: tuple[str, ...]
+
+
+class SimpleRoombaSelect(IRobotEntity, SelectEntity):
+    """Generic MQTT-backed select — driven by RoombaPlusSelectDescription.
+
+    Replaces the four separate simple select classes (F-RB-6, v3.0.0):
+    CleaningPassesSelect, DisposablePadWetnessSelect,
+    ReusablePadWetnessSelect, CarpetBoostSelect.
     """
 
-    _attr_translation_key = "cleaning_passes"
-    _attr_name = "Setting – Cleaning passes"  # G6: locale-independent entity_id slug
+    entity_description: RoombaPlusSelectDescription
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = [OPT_AUTO, OPT_ONE, OPT_TWO]
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str, description: RoombaPlusSelectDescription) -> None:
         super().__init__(roomba, blid)
-        self._attr_unique_id = f"{self.robot_unique_id}_cleaning_passes"
+        self.entity_description = description
+        self._attr_options = list(description.options)
+        self._attr_unique_id = f"{self.robot_unique_id}_{description.unique_id_suffix}"
 
     @property
     def current_option(self) -> str | None:
-        """Return the current pass mode."""
-        no_auto = self.vacuum_state.get("noAutoPasses")
-        two_pass = self.vacuum_state.get("twoPass")
-        if no_auto is None or two_pass is None:
-            return None
-        if no_auto and two_pass:
-            return OPT_TWO
-        if no_auto and not two_pass:
-            return OPT_ONE
-        return OPT_AUTO
+        return self.entity_description.current_option_fn(self.vacuum_state)
 
     async def async_select_option(self, option: str) -> None:
-        """Apply a cleaning pass mode by sending two delta preferences."""
-        prefs = _OPTION_TO_PREFS.get(option)
-        if prefs is None:
-            _LOGGER.error("CleaningPasses: unknown option %r", option)
-            return
-
-        no_auto, two_pass = prefs
-        _LOGGER.debug(
-            "CleaningPasses: setting option=%r → noAutoPasses=%s twoPass=%s",
-            option, no_auto, two_pass,
-        )
-        # Each set_preference sends a separate delta — order matters:
-        # set noAutoPasses first, then twoPass
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "noAutoPasses", no_auto
-        )
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "twoPass", two_pass
-        )
+        await self.entity_description.select_fn(self, option)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
-        return "noAutoPasses" in new_state or "twoPass" in new_state
+        return any(k in new_state for k in self.entity_description.state_filter_keys)
+
+
+# ── select_fn helpers (named coroutines — can't be lambdas) ──────────────────
+
+async def _select_cleaning_passes(entity: SimpleRoombaSelect, option: str) -> None:
+    prefs = _OPTION_TO_PREFS.get(option)
+    if prefs is None:
+        _LOGGER.error("CleaningPasses: unknown option %r", option)
+        return
+    no_auto, two_pass = prefs
+    _LOGGER.debug(
+        "CleaningPasses: option=%r → noAutoPasses=%s twoPass=%s", option, no_auto, two_pass
+    )
+    await entity.hass.async_add_executor_job(entity.vacuum.set_preference, "noAutoPasses", no_auto)
+    await entity.hass.async_add_executor_job(entity.vacuum.set_preference, "twoPass", two_pass)
+
+
+async def _select_disposable_wetness(entity: SimpleRoombaSelect, option: str) -> None:
+    level = int(option)
+    current = entity.vacuum_state.get("padWetness", {})
+    await entity.hass.async_add_executor_job(
+        entity.vacuum.set_preference,
+        "padWetness",
+        {"disposable": level, "reusable": current.get("reusable", level)},
+    )
+
+
+async def _select_reusable_wetness(entity: SimpleRoombaSelect, option: str) -> None:
+    level = int(option)
+    current = entity.vacuum_state.get("padWetness", {})
+    await entity.hass.async_add_executor_job(
+        entity.vacuum.set_preference,
+        "padWetness",
+        {"disposable": current.get("disposable", level), "reusable": level},
+    )
+
+
+async def _select_carpet_boost(entity: SimpleRoombaSelect, option: str) -> None:
+    if option not in FAN_SPEEDS:
+        _LOGGER.error("CarpetBoostSelect: unknown option %r", option)
+        return
+    from homeassistant.helpers import entity_registry as er
+    reg = er.async_get(entity.hass)
+    vac_entry = reg.async_get_entity_id("vacuum", "roomba_plus", entity._blid)
+    if vac_entry is None:
+        _LOGGER.error("CarpetBoostSelect: no vacuum entity for blid=%s", entity._blid)
+        return
+    await entity.hass.services.async_call(
+        "vacuum", "set_fan_speed",
+        {"entity_id": vac_entry, "fan_speed": option},
+        blocking=False,
+    )
+
+
+# ── Descriptor instances ──────────────────────────────────────────────────────
+
+_CLEANING_PASSES_DESC = RoombaPlusSelectDescription(
+    key="cleaning_passes",
+    translation_key="cleaning_passes",
+    name="Setting – Cleaning passes",
+    unique_id_suffix="cleaning_passes",
+    options=[OPT_AUTO, OPT_ONE, OPT_TWO],
+    current_option_fn=lambda state: (
+        OPT_TWO   if (state.get("noAutoPasses") and state.get("twoPass"))  else
+        OPT_ONE   if (state.get("noAutoPasses") and not state.get("twoPass")) else
+        OPT_AUTO  if (state.get("noAutoPasses") is not None) else None
+    ),
+    select_fn=_select_cleaning_passes,
+    state_filter_keys=("noAutoPasses", "twoPass"),
+)
+
+_DISPOSABLE_PAD_DESC = RoombaPlusSelectDescription(
+    key="disposable_pad_wetness",
+    translation_key="disposable_pad_wetness",
+    name="Disposable pad wetness",
+    unique_id_suffix="disposable_pad_wetness",
+    options=_PAD_WET_OPTIONS,
+    current_option_fn=lambda state: (
+        str(v) if (v := state.get("padWetness", {}).get("disposable")) is not None else None
+    ),
+    select_fn=_select_disposable_wetness,
+    state_filter_keys=("padWetness",),
+)
+
+_REUSABLE_PAD_DESC = RoombaPlusSelectDescription(
+    key="reusable_pad_wetness",
+    translation_key="reusable_pad_wetness",
+    name="Reusable pad wetness",
+    unique_id_suffix="reusable_pad_wetness",
+    options=_PAD_WET_OPTIONS,
+    current_option_fn=lambda state: (
+        str(v) if (v := state.get("padWetness", {}).get("reusable")) is not None else None
+    ),
+    select_fn=_select_reusable_wetness,
+    state_filter_keys=("padWetness",),
+)
+
+_CARPET_BOOST_DESC = RoombaPlusSelectDescription(
+    key="carpet_boost_select",
+    translation_key="carpet_boost_select",
+    name="Carpet boost",
+    unique_id_suffix="carpet_boost_select",
+    options=list(FAN_SPEEDS),
+    current_option_fn=lambda state: (
+        FAN_SPEED_AUTOMATIC if state.get("carpetBoost")
+        else FAN_SPEED_PERFORMANCE if state.get("vacHigh")
+        else FAN_SPEED_ECO if state.get("carpetBoost") is not None
+        else None
+    ),
+    select_fn=_select_carpet_boost,
+    state_filter_keys=("carpetBoost", "vacHigh"),
+)
+
+
+# ── Compatibility subclasses ──────────────────────────────────────────────────
+# Thin subclasses keep the original class names so that async_setup_entry
+# and existing tests continue to work without changes.
+
+class CleaningPassesSelect(SimpleRoombaSelect):
+    """Descriptor-backed CleaningPassesSelect (F-RB-6)."""
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid, _CLEANING_PASSES_DESC)
+
+
+class DisposablePadWetnessSelect(SimpleRoombaSelect):
+    """Descriptor-backed DisposablePadWetnessSelect (F-RB-6)."""
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid, _DISPOSABLE_PAD_DESC)
+
+
+class ReusablePadWetnessSelect(SimpleRoombaSelect):
+    """Descriptor-backed ReusablePadWetnessSelect (F-RB-6)."""
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid, _REUSABLE_PAD_DESC)
+
+
+class CarpetBoostSelect(SimpleRoombaSelect):
+    """Descriptor-backed CarpetBoostSelect (F-RB-6)."""
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid, _CARPET_BOOST_DESC)
+
+
+
 
 
 class ZoneSelect(IRobotEntity, SelectEntity):
@@ -214,7 +355,6 @@ class ZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "zone_select"
-    _attr_name = "Select zone"  # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -284,7 +424,6 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     """
 
     _attr_translation_key = "smart_zone_select"
-    _attr_name = "Select Smart Map zone"  # G6: locale-independent entity_id slug
     _attr_entity_category = None   # primary control → Steuerelemente
 
     def __init__(
@@ -611,7 +750,6 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
 
         self._attr_unique_id = f"{self.robot_unique_id}_cloud_zone_{pmap_id}"
         self._attr_translation_key = "cloud_smart_zone_select"
-        self._attr_name = "Select zone (cloud)"  # G6: locale-independent entity_id slug
 
         # Inactive maps: disabled by default, name suffixed so users know why.
         # Active map: enabled by default, name unchanged.
@@ -734,7 +872,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
                     if details.get("active_pmapv", {}).get("pmap_id") == self._pmap_id:
                         learning_pct = details.get("map_header", {}).get("learning_percentage")
                         break
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
         # ROOM-SIZE (v2.9.1) -- region_areas_m2: maps each zone display name
@@ -758,7 +896,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
                     )
                     if name:
                         region_areas_m2[name] = areas_by_rid[rid]
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
         attrs = {
@@ -797,148 +935,3 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         return False
 
 
-# ── v1.9.0 — Braava Pad Wetness ───────────────────────────────────────────────
-
-_PAD_WET_OPTIONS: list[str] = ["1", "2", "3"]
-
-
-class DisposablePadWetnessSelect(IRobotEntity, SelectEntity):
-    """Select entity: disposable pad wetness level for Braava (1–3).
-
-    Reads padWetness.disposable from MQTT state.
-    Writes via set_preference('padWetness', {disposable: level}).
-
-    When writing, the current value of the other key (reusable) is preserved
-    by reading it from the live MQTT state — never blindly overwritten.
-
-    Options are the iRobot-internal integers as strings ("1", "2", "3") so
-    that translation via state-keys in strings.json works correctly.
-
-    Only created when 'padWetness' dict is present in the initial state.
-    """
-
-    _attr_translation_key = "disposable_pad_wetness"
-    _attr_name = "Disposable pad wetness"  # G6: locale-independent entity_id slug
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = _PAD_WET_OPTIONS
-
-    def __init__(self, roomba: Any, blid: str) -> None:
-        super().__init__(roomba, blid)
-        self._attr_unique_id = f"{self.robot_unique_id}_disposable_pad_wetness"
-
-    @property
-    def current_option(self) -> str | None:
-        val = self.vacuum_state.get("padWetness", {}).get("disposable")
-        return str(val) if val is not None else None
-
-    async def async_select_option(self, option: str) -> None:
-        level = int(option)
-        current = self.vacuum_state.get("padWetness", {})
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference,
-            "padWetness",
-            {"disposable": level, "reusable": current.get("reusable", level)},
-        )
-
-    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
-        return "padWetness" in new_state
-
-
-class ReusablePadWetnessSelect(IRobotEntity, SelectEntity):
-    """Select entity: reusable pad wetness level for Braava (1–3).
-
-    Reads padWetness.reusable from MQTT state.
-    Writes via set_preference('padWetness', {reusable: level}).
-
-    When writing, the current value of disposable is preserved by reading
-    it from the live MQTT state — never blindly overwritten.
-
-    Only created when 'padWetness' dict is present in the initial state.
-    """
-
-    _attr_translation_key = "reusable_pad_wetness"
-    _attr_name = "Reusable pad wetness"  # G6: locale-independent entity_id slug
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = _PAD_WET_OPTIONS
-
-    def __init__(self, roomba: Any, blid: str) -> None:
-        super().__init__(roomba, blid)
-        self._attr_unique_id = f"{self.robot_unique_id}_reusable_pad_wetness"
-
-    @property
-    def current_option(self) -> str | None:
-        val = self.vacuum_state.get("padWetness", {}).get("reusable")
-        return str(val) if val is not None else None
-
-    async def async_select_option(self, option: str) -> None:
-        level = int(option)
-        current = self.vacuum_state.get("padWetness", {})
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference,
-            "padWetness",
-            {"disposable": current.get("disposable", level), "reusable": level},
-        )
-
-    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
-        return "padWetness" in new_state
-
-
-class CarpetBoostSelect(IRobotEntity, SelectEntity):
-    """Carpet boost mode select — wraps vacuum.set_fan_speed for card control.
-
-    Card fix P2 — select.*_carpet_boost_select.
-
-    Reads carpet boost state from carpetBoost/vacHigh flags (same logic as the
-    carpet_boost_mode sensor). Writes by calling vacuum.set_fan_speed via the
-    HA service layer — keeping all delta-command logic in RoombaVacuumCarpetBoost.
-
-    Gate: registered only when has_carpet_boost(state) is True.
-    """
-
-    _attr_translation_key = "carpet_boost_select"
-    _attr_name            = "Carpet boost"   # G6: locale-independent entity_id slug
-    _attr_options = FAN_SPEEDS          # ["Automatic", "Eco", "Performance"]
-    _attr_entity_category = EntityCategory.CONFIG
-
-    def __init__(self, roomba: Any, blid: str) -> None:
-        super().__init__(roomba, blid)
-        self._attr_unique_id = f"{self.robot_unique_id}_carpet_boost_select"
-
-    @property
-    def current_option(self) -> str | None:
-        carpet_boost = self.vacuum_state.get("carpetBoost")
-        vac_high     = self.vacuum_state.get("vacHigh")
-        if carpet_boost is None or vac_high is None:
-            return None
-        if carpet_boost:
-            return FAN_SPEED_AUTOMATIC
-        if vac_high:
-            return FAN_SPEED_PERFORMANCE
-        return FAN_SPEED_ECO
-
-    async def async_select_option(self, option: str) -> None:
-        """Set carpet boost mode via vacuum.set_fan_speed service."""
-        if option not in FAN_SPEEDS:
-            import logging
-            logging.getLogger(__name__).error(
-                "CarpetBoostSelect: unknown option %r", option
-            )
-            return
-        from homeassistant.helpers import entity_registry as er
-        reg = er.async_get(self.hass)
-        # Find the vacuum entity for this device (unique_id == blid)
-        vac_entry = reg.async_get_entity_id("vacuum", "roomba_plus", self._blid)
-        if vac_entry is None:
-            import logging
-            logging.getLogger(__name__).error(
-                "CarpetBoostSelect: no vacuum entity found for blid=%s", self._blid
-            )
-            return
-        await self.hass.services.async_call(
-            "vacuum", "set_fan_speed",
-            {"entity_id": vac_entry, "fan_speed": option},
-            blocking=False,
-        )
-
-    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
-        return "carpetBoost" in new_state or "vacHigh" in new_state

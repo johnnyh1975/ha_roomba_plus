@@ -1,10 +1,13 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-2.10.3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
-[![HA Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io/)
+[![Version](https://img.shields.io/badge/Version-3.0.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnnyh1975&repository=ha_roomba_plus&category=integration)
 
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
@@ -13,7 +16,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,831 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 2,946 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -61,7 +64,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 ## Installation
 
-**Requirements:** Home Assistant 2024.11 or newer · HACS installed (for recommended install)
+**Requirements:** Home Assistant 2025.5 or newer · HACS installed (for recommended install)
 
 ### HACS (recommended)
 
@@ -328,33 +331,21 @@ show_state: false
 
 Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[docs/xiaomi-vacuum-map-card.md](docs/xiaomi-vacuum-map-card.md)** for the full setup guide.
 
+The cleaning map overlays keep-out zones (red, semi-transparent) when the UMF aligner is active. **Observed obstacle zones** (v3.0.0) are also overlaid as orange circles — these represent positions where the robot has repeatedly detected obstacles over time, sourced from the UMF `observed_zones` data.
+
+The native **Roomba+ platform was merged into xiaomi-vacuum-map-card in v2.4.1** (June 2026). On that version or newer, pick **Roomba+** as the `vacuum_platform` in the card editor and use the **"Generate Room Configs"** button — it reads the `rooms` attribute and builds the room overlay for you, no manual coordinates:
+
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
+vacuum_platform: roomba_plus        # XVMC v2.4.1+; then use "Generate Room Configs"
 map_source:
   camera: image.roomba_rooms_map    # or image.roomba_cleaning_map
 calibration_source:
   camera: true                      # reads calibration_points automatically
-map_modes:
-  - template: vacuum_clean_segment
-    service_call_schema:
-      service: roomba_plus.clean_room
-      service_data:
-        entity_id: "[[entity_id]]"
-        room_name: "[[selection]]"
-        ordered: true
-    predefined_selections:
-      - id: Kitchen             # must match the room name exactly (case-insensitive)
-        label:
-          text: Kitchen
 ```
-        room_name: "[[selection]]"
-        ordered: true
-    predefined_selections:
-      - id: Kitchen             # must match the room name exactly (case-insensitive)
-        label:
-          text: Kitchen
-```
+
+On older XVMC versions (no Roomba+ platform in the dropdown), define `map_modes` with explicit `predefined_selections` manually — the full fallback example is in [docs/xiaomi-vacuum-map-card.md](docs/xiaomi-vacuum-map-card.md).
 
 #### Coverage map (v2.2+)
 
@@ -434,6 +425,7 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Area cleaned today | Sum of mission area today (VSLAM robots) |
 | Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
+| Consecutive anomalous missions | Count of consecutive most-recent missions classified as anomalous (v3.0.0, disabled by default — threshold ≥ 3 triggers the Card C5-ANOMALY banner) |
 
 Every mission also writes a searchable Logbook entry and fires `roomba_plus_mission_completed` — see [Events & device triggers](#events--device-triggers).
 
@@ -505,7 +497,7 @@ Tracks the weekday and hour of every stuck event per grid cell. When a cell accu
 | `sensor.{name}_wifi_health` | Signal floor (%) | stability_pct |
 | `sensor.{name}_event_counts_30d` | Last error code | recharges, evacuations, dirt_events, error_time |
 
-The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt_density`) are now **disabled by default** on fresh installs. They remain active for existing users and will be removed in v3.0. A one-time warning is logged when they are read to guide migration.
+The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt_density`) are now **disabled by default** on fresh installs. They were permanently removed in v3.0.0. A one-time warning is logged when they are read to guide migration.
 
 **Robot health score (v2.7+):**
 
@@ -636,6 +628,8 @@ Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zo
 2. Open the vacuum entity → ⚙ Entity settings → **"Map vacuum segments to areas"**
 3. Match each robot room to a Home Assistant area
 4. Save
+
+The left side of the dialog lists your **iRobot room names** (pulled from the cloud — Roomba+ exposes them as HA "segments" with their real names, grouped by floor if you set a floor label in Configure). The right side is your HA areas. You assign them yourself: the mapping is intentionally manual and lives in HA, not in the integration. There is no reliable automatic match — robot room names and HA area names differ by language, spelling, and how each was set up, and a wrong auto-mapping (cleaning the wrong room) would be worse than none. Doing it once takes under a minute.
 
 If the robot retrains its map later, HA raises the Repair again to re-confirm the mapping.
 
@@ -827,6 +821,16 @@ cards:
 | [GitHub Releases →](https://github.com/johnnyh1975/ha_roomba_plus/releases) | Changelogs and release notes |
 
 Questions or issues? → [GitHub Issues](https://github.com/johnnyh1975/ha_roomba_plus/issues) · [HA Community Forum](https://community.home-assistant.io)
+
+### Upgrading to v3.0.0
+
+Two automatic migration steps run on first load (config entry 22 → 24):
+
+**Migration v22→v23 — FavoriteButton entity_id stabilisation.** Existing favorite buttons are renamed from their old user-name-based entity_ids (e.g. `button.roomba_monday_morning`) to the canonical `button.{device}_fav_{id}` form. New favorites registered after this version receive the canonical form automatically. No action required — the migration is fully automatic.
+
+**Migration v23→v24 — Permanently unavailable sensors disabled.** Five sensors that are unavailable by design on most robots (`battery_age_days`, `battery_cycle_count_bms`, `bin_last_cleaned`, `contact_last_cleaned`, `wheel_last_cleaned`) are automatically disabled in the entity registry. On i/s-series robots where BMS data is available, re-enable `battery_age_days` and `battery_cycle_count_bms` in Settings → Entities if needed.
+
+**Deprecated sensors:** If you had manually re-enabled any of the 13 deprecated sensors removed in this release, switch to the consolidated replacement listed in the release notes. HA removes the stale entity registry entries automatically on first load.
 
 ---
 

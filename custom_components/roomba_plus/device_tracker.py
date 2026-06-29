@@ -100,6 +100,18 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_position"
 
     @property
+    def suggested_object_id(self) -> str | None:
+        """Override: device tracker keeps device-name-only entity_id.
+
+        This entity sets _attr_name = None, so HA derives its entity_id from
+        the device name alone (e.g. device_tracker.roomba_980_og) — there is no
+        per-entity name suffix. Returning None here prevents the IRobotEntity
+        base implementation from appending "_position" to the entity_id, which
+        would change the established naming for both new and existing installs.
+        """
+        return None
+
+    @property
     def source_type(self) -> SourceType:
         # Locally determined from the robot's own onboard pose estimate —
         # not GPS, not router-presence. ROUTER is the closest existing

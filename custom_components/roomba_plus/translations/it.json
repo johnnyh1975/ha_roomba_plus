@@ -141,19 +141,36 @@
           "blocking_sensors": "Blocking sensors",
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
+        },
+        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "data_description": {
+          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
+          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
+          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
         }
       },
       "map_management": {
         "title": "Zone management",
         "data": {
           "selected_zone": "Zone to edit"
-        }
+        },
+        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
       },
       "map_management_edit": {
-        "title": "Edit zone",
+        "title": "Modifica zona: {zone_name}",
         "data": {
           "display_name": "Display name",
           "hidden": "Hide this zone"
+        },
+        "description": "Set a display name and visibility for this zone.",
+        "data_description": {
+          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
+          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+        },
+        "placeholders": {
+          "zone_name": {
+            "example": "Soggiorno"
+          }
         }
       },
       "presence_scheduling": {
@@ -357,6 +374,9 @@
       },
       "problem_zone": {
         "name": "Errore – Zona problematica"
+      },
+      "consecutive_mission_anomalies": {
+        "name": "Missioni anomale consecutive"
       },
       "presence_clean_opportunities_7d": {
         "name": "Presenza – Opportunità di pulizia (7 giorni)"
@@ -950,6 +970,48 @@
           "description": "Pulisci le stanze nell'ordine fornito anziché lasciare scegliere al robot."
         }
       }
+    },
+    "reset_filter": {
+      "name": "Reset filter",
+      "description": "Record the current time as the filter replacement date."
+    },
+    "reset_brush": {
+      "name": "Reset brushes",
+      "description": "Record the current time as the brush replacement date."
+    },
+    "reset_battery": {
+      "name": "Reset battery",
+      "description": "Record the current time as the battery replacement date."
+    },
+    "reset_pad": {
+      "name": "Reset cleaning pad",
+      "description": "Record the current time as the pad replacement date (Braava only)."
+    },
+    "smart_start": {
+      "name": "Smart start",
+      "description": "Start a clean with blocking-sensor checks."
+    },
+    "clean_sequence": {
+      "name": "Start sequence clean",
+      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "fields": {
+        "entity_id": {
+          "name": "Trigger robot",
+          "description": "Vacuum entity for robot A (must finish first)."
+        },
+        "target_entity_id": {
+          "name": "Target robot",
+          "description": "Vacuum entity for robot B (started after A finishes)."
+        },
+        "require_completed": {
+          "name": "Require completion",
+          "description": "When true, robot B starts only if robot A docked normally."
+        },
+        "delay_minutes": {
+          "name": "Delay (minutes)",
+          "description": "Wait this many minutes after robot A docks before starting robot B."
+        }
+      }
     }
   },
   "exceptions": {
@@ -960,7 +1022,7 @@
       "message": "Tutte le stanze devono essere allo stesso piano. Stanze da mappe diverse: {pmap_ids}."
     },
     "not_smart_map": {
-      "message": "La pulizia per stanza richiede un robot Smart Map (i7, s9, serie j). Questo robot non supporta le Smart Map."
+      "message": "La pulizia per stanza richiede un robot con una Smart Map finalizzata (i7, s9, serie j o Braava jet m6). Questo robot non ha una Smart Map — se è un modello compatibile, assicurati che la sua mappa sia salvata nellapp iRobot."
     },
     "no_rooms_configured": {
       "message": "Nessuna stanza configurata. Per usare questa azione: (1) Apri l'app iRobot, (2) Avvia una pulizia per stanza per ogni stanza, (3) Torna in Home Assistant — le stanze appariranno automaticamente nelle opzioni Roomba+ dove potrai assegnare i nomi."
@@ -988,6 +1050,9 @@
     },
     "room_name_or_room_passes_required": {
       "message": "Provide either room_name or room_passes."
+    },
+    "no_rooms_resolved": {
+      "message": "Nessuna stanza da pulire — indica almeno un nome di stanza."
     }
   }
 }

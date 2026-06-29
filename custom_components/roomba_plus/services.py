@@ -358,7 +358,9 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         if data.map_capability != MapCapability.SMART:
             raise ServiceValidationError(
                 f"{entity_id} does not support Smart Map room cleaning. "
-                "Only i7, s9, and j-series robots support this action.",
+                "This requires a robot with a finalized Smart Map "
+                "(i7, s9, j-series, or Braava jet m6). If you have a "
+                "compatible robot, make sure its map is saved in the iRobot app.",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
@@ -409,6 +411,16 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
             )
 
         resolved = _resolve_rooms(zone_data, room_names, state, cloud_pmap_id)
+        if not resolved:
+            # room_passes=[] (empty array) passes the "exactly one of" checks
+            # above and _resolve_rooms returns [] without raising (it only
+            # raises on *unknown* names, not an empty list). Guard the [0]
+            # access explicitly.
+            raise ServiceValidationError(
+                "No rooms to clean — provide at least one room name.",
+                translation_domain=DOMAIN,
+                translation_key="no_rooms_resolved",
+            )
         pmap_id = resolved[0][1]
 
         # v2.7.4 (PMAP-PMAPV): cloud coordinator is authoritative for lewis
@@ -507,8 +519,9 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
         data: RoombaData = config_entry.runtime_data
         if rooms and data.map_capability != MapCapability.SMART:
             raise ServiceValidationError(
-                f"{eid} does not support room targeting — "
-                "only i7, s9, and j-series robots support this.",
+                f"{eid} does not support room targeting — this requires a "
+                "robot with a finalized Smart Map (i7, s9, j-series, or "
+                "Braava jet m6).",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
@@ -960,10 +973,10 @@ def async_remove_services(hass: HomeAssistant) -> None:
         SERVICE_CLEAN_ROOM,
         SERVICE_SMART_START,
         SERVICE_CLEAN_SEQUENCE,
-        "reset_filter",
-        "reset_brush",
-        "reset_battery",
-        "reset_pad",
+        SERVICE_RESET_FILTER,
+        SERVICE_RESET_BRUSH,
+        SERVICE_RESET_BATTERY,
+        SERVICE_RESET_PAD,
         "reset_wheel_cleaning",
         "reset_contact_cleaning",
         "reset_bin_cleaning",

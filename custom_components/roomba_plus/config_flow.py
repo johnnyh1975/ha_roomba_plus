@@ -185,7 +185,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     and full manual fallback with explicit password entry.
     """
 
-    VERSION = 22
+    VERSION = 24
 
     def __init__(self) -> None:
         """Initialise the flow."""

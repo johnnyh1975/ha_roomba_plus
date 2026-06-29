@@ -201,12 +201,25 @@ class OutlineStore:
         store = self._get_store(hass, entry_id)
         data = await store.async_load()
         if data and isinstance(data, dict) and data.get("version") == PAYLOAD_VERSION:
-            self._mission_count = int(data.get("mission_count", 0))
-            raw = data.get("contour_points", [])
-            self._contour_points = [(int(p[0]), int(p[1])) for p in raw if len(p) == 2]
-            canvas = data.get("canvas_size")
-            if canvas and len(canvas) == 2:
-                self._canvas_size = (int(canvas[0]), int(canvas[1]))
+            try:
+                self._mission_count = int(data.get("mission_count") or 0)
+                raw = data.get("contour_points") or []
+                self._contour_points = [
+                    (int(p[0]), int(p[1]))
+                    for p in raw
+                    if isinstance(p, (list, tuple)) and len(p) == 2
+                ]
+                canvas = data.get("canvas_size")
+                if isinstance(canvas, (list, tuple)) and len(canvas) == 2:
+                    self._canvas_size = (int(canvas[0]), int(canvas[1]))
+            except (TypeError, ValueError, KeyError, AttributeError, IndexError) as exc:
+                _LOGGER.warning(
+                    "OutlineStore: failed to load for %s — %s; starting empty",
+                    entry_id, exc,
+                )
+                self._mission_count = 0
+                self._contour_points = []
+                self._canvas_size = None
         _LOGGER.debug(
             "OutlineStore: loaded mission_count=%d contour_points=%d",
             self._mission_count, len(self._contour_points),

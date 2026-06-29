@@ -166,6 +166,11 @@
         "data_description": {
           "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
           "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+        },
+        "placeholders": {
+          "zone_name": {
+            "example": "Living Room"
+          }
         }
       },
       "presence_scheduling": {
@@ -369,6 +374,9 @@
       },
       "problem_zone": {
         "name": "Error – Problem zone"
+      },
+      "consecutive_mission_anomalies": {
+        "name": "Consecutive anomalous missions"
       },
       "presence_clean_opportunities_7d": {
         "name": "Presence – Clean opportunities (7 days)"
@@ -1044,6 +1052,9 @@
     },
     "room_name_or_room_passes_required": {
       "message": "Provide either room_name or room_passes."
+    },
+    "no_rooms_resolved": {
+      "message": "No rooms to clean — provide at least one room name."
     }
   }
 }

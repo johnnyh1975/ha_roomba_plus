@@ -93,7 +93,6 @@ async def async_setup_entry(
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
-    capabilities = state.get("cap", {})
 
     # Determine device class using capability helpers.
     # is_mop() detects Braava by presence of 'detectedPad' in state.
@@ -133,6 +132,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         self._cap_position: bool = (
             self.vacuum_state.get("cap", {}).get("pose") == 1
         )
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Override: vacuum is the primary entity, entity_id = device name only.
+
+        Its unique_id equals robot_unique_id with no suffix, so the IRobotEntity
+        base implementation already returns None here (prefix never matches).
+        This explicit override documents the intent and guards against future
+        changes to the base prefix-strip logic silently appending a suffix.
+        """
+        return None
 
     # ── HA lifecycle ──────────────────────────────────────────────────────────
 
@@ -185,7 +195,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     def activity(self) -> VacuumActivity:
         """Map the current cleanMissionStatus phase to a VacuumActivity."""
         status = self.vacuum_state.get("cleanMissionStatus", {})
-        cycle = status.get("cycle")
+        # Default to "none" so a missing/sparse cleanMissionStatus (cycle absent
+        # → None) is treated as "no active cycle". Without this, `None != "none"`
+        # is True and the override below would flip a freshly-connected idle or
+        # docked robot to PAUSED before its first full status frame arrives.
+        cycle = status.get("cycle") or "none"
         phase = status.get("phase", "")
 
         try:

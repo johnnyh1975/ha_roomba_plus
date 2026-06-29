@@ -133,8 +133,13 @@ class RoombaData:
     firmware_updated_at: float | None = None
 
     def roomba_reported_state(self) -> dict[str, Any]:
-        """Return the reported state dict from master_state."""
-        return self.roomba.master_state.get("state", {}).get("reported", {})
+        """Return the reported state dict from master_state.
+
+        ``or {}`` coerces an explicit null (``{"state": null}``) from a sparse
+        MQTT frame to an empty dict; a dict default would only guard a missing
+        key, not a present-but-null value.
+        """
+        return (self.roomba.master_state.get("state") or {}).get("reported") or {}
 
     @property
     def has_cloud(self) -> bool:

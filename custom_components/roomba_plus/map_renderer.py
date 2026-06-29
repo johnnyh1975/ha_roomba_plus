@@ -625,7 +625,7 @@ class MapRenderer:
 
         Must be called AFTER render() so _last_png is populated.
         Composites the overlay onto _last_png in-memory and updates _last_png
-        so the caller can use the returned bytes directly without another render().
+        so the caller can use the returned bytes directly without another render().</p>
 
         Returns updated PNG bytes, or None when _last_png is absent or list empty.
         Called from image.py async_image(); caller uses the return value directly.
@@ -640,6 +640,39 @@ class MapRenderer:
         for poly in keepout_polygons_px:
             if len(poly) >= 3:
                 draw.polygon(poly, fill=(255, 0, 0, 80))
+        composite     = PILImage.alpha_composite(base, overlay).convert("RGB")
+        buf           = _io.BytesIO()
+        composite.save(buf, format="PNG")
+        self._last_png = buf.getvalue()
+        return self._last_png
+
+    def render_observed_zones(
+        self,
+        circles_px: list[tuple[int, int, int]],
+    ) -> bytes | None:
+        """v3.0.0 ZONE-OVERLAY — Overlay robot-observed obstacle zones as orange circles.
+
+        Mirrors render_keepout_zones() compositing pattern.
+        Colour: orange (255, 140, 0, 100) — distinct from keepout red and outline grey.
+        Shape: filled circles (draw.ellipse) — observed_zone_centroids carry x/y/radius,
+        not full polygon paths like UMF keepout zones.
+
+        Args:
+            circles_px: list of (cx_px, cy_px, radius_px) tuples in pixel coordinates.
+
+        Must be called AFTER render() so _last_png is populated.
+        Returns updated PNG bytes, or None when _last_png is absent or list empty.
+        """
+        if not circles_px or self._last_png is None:
+            return None
+        import io as _io
+        from PIL import Image as PILImage, ImageDraw
+        base    = PILImage.open(_io.BytesIO(self._last_png)).convert("RGBA")
+        overlay = PILImage.new("RGBA", base.size, (0, 0, 0, 0))
+        draw    = ImageDraw.Draw(overlay)
+        for cx, cy, r in circles_px:
+            bbox = [cx - r, cy - r, cx + r, cy + r]
+            draw.ellipse(bbox, fill=(255, 140, 0, 100))
         composite     = PILImage.alpha_composite(base, overlay).convert("RGB")
         buf           = _io.BytesIO()
         composite.save(buf, format="PNG")

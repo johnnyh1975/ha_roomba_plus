@@ -228,7 +228,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     """
 
     _attr_translation_key = "map"
-    _attr_name            = "Cleaning Map"   # G6: locale-independent entity_id slug
     _attr_entity_category = None
     _attr_content_type = "image/png"
 
@@ -328,6 +327,29 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     if polys_px:
                         overlay_png = await self.hass.async_add_executor_job(
                             self._renderer.render_keepout_zones, polys_px
+                        )
+                        if overlay_png is not None:
+                            png = overlay_png
+
+                # ZONE-OVERLAY (v3.0.0) — robot-observed obstacle zones as orange circles.
+                # Gate: same as keepout (aligner aligned) — observed_zone_centroids are in
+                # UMF space and require the aligner for pose conversion.
+                # Available: any robot with active cloud coordinator (SMART + EPHEMERAL
+                # with cloud credentials) — not limited to has_pmaps.
+                centroids = _data.cloud_coordinator.observed_zone_centroids if _data.cloud_coordinator else []
+                if centroids:
+                    _OBSERVED_RADIUS_MM = 200  # approx obstacle circle radius in mm
+                    circles_px: list[tuple[int, int, int]] = []
+                    for c in centroids:
+                        pose_xy = aligner.umf_to_pose(c["x"], c["y"])
+                        if pose_xy is None:
+                            continue
+                        cx_px, cy_px = self._renderer._mm_to_px_fit(*pose_xy)
+                        r_px = max(3, round(_OBSERVED_RADIUS_MM / self._renderer._fit_scale))
+                        circles_px.append((int(cx_px), int(cy_px), r_px))
+                    if circles_px:
+                        overlay_png = await self.hass.async_add_executor_job(
+                            self._renderer.render_observed_zones, circles_px
                         )
                         if overlay_png is not None:
                             png = overlay_png
@@ -785,7 +807,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 )
                 # v2.6.3 E — notify RoombaCoverageImage so it bumps its
                 # image_last_updated timestamp and the frontend re-fetches.
-                from homeassistant.helpers.dispatcher import async_dispatcher_send
                 _eid = self._config_entry.entry_id
                 asyncio.run_coroutine_threadsafe(
                     _async_send_coverage_signal(self.hass, _eid),
@@ -1085,7 +1106,6 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
     """
 
     _attr_translation_key = "coverage_map"
-    _attr_name            = "Coverage Map"   # G6: locale-independent entity_id slug
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_content_type = "image/png"
 
@@ -1206,7 +1226,6 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
 
     _attr_content_type    = "image/png"
     _attr_translation_key = "rooms_map"
-    _attr_name            = "Rooms Map"
     _attr_entity_category = None
 
     def __init__(
@@ -1380,7 +1399,8 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw
         img  = Image.new("RGB", (size, size), (30, 30, 30))
         draw = ImageDraw.Draw(img)
-        rid_to_name = aligner.rid_to_name()
+        # v2.7.3: rid_to_name() lookup removed — labels are no longer drawn
+        # into the PNG (XVMC card renders its own from predefined_selections).
 
         # ROOM-PALETTE (v2.9.0) — rotating per-room fill instead of a single
         # uniform colour, so adjacent rooms are visually distinguishable even
