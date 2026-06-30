@@ -1,9 +1,23 @@
 name: Release
 
+# Two ways to run this:
+# 1. Push a tag matching v*.*.* (e.g. `git tag v3.1.0 && git push --tags`) — runs automatically.
+# 2. Actions tab → Release → "Run workflow" → enter a tag manually. Useful for a
+#    safe first test: use a throwaway tag like v0.0.1-test, then delete the
+#    resulting release + tag afterwards from the Releases page if it was just a test.
+#    Manual runs build from whichever branch is selected in the dropdown (defaults
+#    to main) — the new tag is created pointing at that commit.
+
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to package and release (e.g. v3.1.0). Use a throwaway tag like v0.0.1-test for a safe test run — it still gets a real release, but you can delete it afterwards from the Releases page."
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,7 +33,11 @@ jobs:
       - name: Derive version from tag
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
