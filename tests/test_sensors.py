@@ -259,10 +259,12 @@ def _make_coordinator(records=None, data=None):
     return cc
 
 
-def _make_entry(mission_store=None):
+def _make_entry(mission_store=None, cloud_coordinator=None, umf_aligner=None):
     entry = MagicMock()
     rd = MagicMock()
-    rd.has_cloud = True
+    rd.has_cloud = cloud_coordinator is not None
+    rd.cloud_coordinator = cloud_coordinator
+    rd.umf_aligner = umf_aligner
     rd.mission_store = mission_store
     rd.robot_profile_store = None
     entry.runtime_data = rd
@@ -3542,12 +3544,16 @@ class TestSensorSetupEntryCloud:
 # LAST-MISSION-SUMMARY (v3.1.0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_last_mission_summary_sensor(mission_store=None):
+def _make_last_mission_summary_sensor(mission_store=None, cloud_coordinator=None, umf_aligner=None):
     """Return a RoombaLastMissionSummarySensor backed by the given store."""
     from custom_components.roomba_plus.sensor import RoombaLastMissionSummarySensor
     roomba = MagicMock()
     roomba.master_state = {"state": {"reported": {}}}
-    entry = _make_entry(mission_store=mission_store)
+    entry = _make_entry(
+        mission_store=mission_store,
+        cloud_coordinator=cloud_coordinator,
+        umf_aligner=umf_aligner,
+    )
     sensor = RoombaLastMissionSummarySensor.__new__(RoombaLastMissionSummarySensor)
     sensor._roomba = roomba
     sensor._blid = "test_blid"
@@ -3567,6 +3573,8 @@ class TestLastMissionSummarySensor:
         assert attrs["result"] is None
         assert attrs["duration_min"] is None
         assert attrs["area_sqft"] is None
+        assert attrs["cleaned_rooms"] is None
+        assert attrs["room_coverage"] is None
         assert attrs["started_at"] is None
 
     def test_no_store_returns_none(self):
@@ -3576,12 +3584,19 @@ class TestLastMissionSummarySensor:
         assert sensor.extra_state_attributes["result"] is None
 
     def test_completed_mission_all_fields(self):
-        """Completed mission → native_value = 'completed', attributes populated."""
+        """Completed mission → native_value = 'completed', attributes populated.
+
+        v3.1.1 ROOM-COVERAGE-IN-SUMMARY: cleaned_rooms/room_coverage now come
+        from MissionStore.latest_cleaned_rooms()/latest_room_coverage() via
+        timeline.finEvents, not a literal "last_cleaned_rooms" record key
+        (which never actually exists on a real record — that was the bug
+        this fix corrected). Fixture below uses the same finEvents shape
+        test_mission_store.py's region-map tests use.
+        """
         record = {
             "result": "completed",
             "duration_min": 45,
             "area_sqft": 320.5,
-            "last_cleaned_rooms": ["Kitchen", "Living Room"],
             "cleaning_passes": 1,
             "battery_start_pct": 100,
             "battery_end_pct": 72,
@@ -3592,18 +3607,81 @@ class TestLastMissionSummarySensor:
             "initiator": "schedule",
             "started_at": "2026-06-29T08:00:00",
             "ended_at": "2026-06-29T08:45:00",
+            "timeline": {
+                "plan": {"upcoming": ["19", "21"]},
+                "finEvents": [
+                    {"type": "room", "room": {"rid": "19", "status": 0,
+                                               "area": 100, "totalArea": 80}},
+                    {"type": "room", "room": {"rid": "21", "status": 0,
+                                               "area": 120, "totalArea": 90}},
+                ],
+            },
         }
-        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
+        cc = MagicMock()
+        cc.regions = [
+            {"id": "19", "name": "Kitchen"},
+            {"id": "21", "name": "Living Room"},
+        ]
+        sensor = _make_last_mission_summary_sensor(
+            mission_store=_store_with(record), cloud_coordinator=cc,
+        )
+
         assert sensor.native_value == "completed"
         attrs = sensor.extra_state_attributes
         assert attrs["duration_min"] == 45
         assert attrs["area_sqft"] == 320.5
         assert attrs["cleaned_rooms"] == ["Kitchen", "Living Room"]
+        assert attrs["room_coverage"] == {"Kitchen": 0.8, "Living Room": 0.75}
         assert attrs["battery_start_pct"] == 100
         assert attrs["battery_end_pct"] == 72
         assert attrs["dirt_events"] == 3
         assert attrs["initiator"] == "schedule"
         assert attrs["started_at"] == "2026-06-29T08:00:00"
+
+    def test_cleaned_rooms_and_coverage_none_without_region_map_or_umf(self):
+        """v3.1.1: no cloud_coordinator and no aligned umf_aligner →
+        cleaned_rooms/room_coverage stay None (no region source to resolve
+        room names — same gate as vacuum.py's attribute computation).
+        """
+        record = {
+            "result": "completed",
+            "timeline": {
+                "plan": {"upcoming": ["19"]},
+                "finEvents": [
+                    {"type": "room", "room": {"rid": "19", "status": 0,
+                                               "area": 100, "totalArea": 80}},
+                ],
+            },
+        }
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
+        attrs = sensor.extra_state_attributes
+        assert attrs["cleaned_rooms"] is None
+        assert attrs["room_coverage"] is None
+
+    def test_cleaned_rooms_and_coverage_use_umf_fallback(self):
+        """v3.1.1: EPHEMERAL robots without cloud use the aligned UmfAligner's
+        rid_to_name() as a fallback region source, same as vacuum.py.
+        """
+        record = {
+            "result": "completed",
+            "timeline": {
+                "plan": {"upcoming": ["5"]},
+                "finEvents": [
+                    {"type": "room", "room": {"rid": "5", "status": 0,
+                                               "area": 50, "totalArea": 40}},
+                ],
+            },
+        }
+        umf = MagicMock()
+        umf.aligned = True
+        umf.rid_to_name.return_value = {"5": "Hallway"}
+        sensor = _make_last_mission_summary_sensor(
+            mission_store=_store_with(record), umf_aligner=umf,
+        )
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["cleaned_rooms"] == ["Hallway"]
+        assert attrs["room_coverage"] == {"Hallway": 0.8}
 
     def test_error_mission_error_code_populated(self):
         """Error mission → native_value = 'error', error_code present."""
