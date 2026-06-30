@@ -1,8 +1,6 @@
 {
   "name": "Roomba+",
   "homeassistant": "2025.5.0",
-  "documentation": "https://github.com/johnnyh1975/ha_roomba_plus",
-  "iot_class": "local_push",
   "zip_release": true,
   "filename": "ha_roomba_plus.zip"
 }
