@@ -3527,3 +3527,345 @@ class TestSensorSetupEntryCloud:
         cloud_sensors = [e for e in created if isinstance(e, CloudHistorySensor)]
         keys = {e.entity_description.key for e in cloud_sensors}
         assert keys == {"recent_area_30d", "recent_time_30d", "lifetime_missions"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LAST-MISSION-SUMMARY (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_last_mission_summary_sensor(mission_store=None):
+    """Return a RoombaLastMissionSummarySensor backed by the given store."""
+    from custom_components.roomba_plus.sensor import RoombaLastMissionSummarySensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = _make_entry(mission_store=mission_store)
+    sensor = RoombaLastMissionSummarySensor.__new__(RoombaLastMissionSummarySensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_last_mission_summary"
+    return sensor
+
+
+class TestLastMissionSummarySensor:
+    """LAST-MISSION-SUMMARY (v3.1.0) — sensor that exposes the latest mission record."""
+
+    def test_empty_store_returns_none(self):
+        """No records → native_value is None, all attributes are None."""
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with())
+        assert sensor.native_value is None
+        attrs = sensor.extra_state_attributes
+        assert attrs["result"] is None
+        assert attrs["duration_min"] is None
+        assert attrs["area_sqft"] is None
+        assert attrs["started_at"] is None
+
+    def test_no_store_returns_none(self):
+        """MissionStore not initialised → native_value is None."""
+        sensor = _make_last_mission_summary_sensor(mission_store=None)
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes["result"] is None
+
+    def test_completed_mission_all_fields(self):
+        """Completed mission → native_value = 'completed', attributes populated."""
+        record = {
+            "result": "completed",
+            "duration_min": 45,
+            "area_sqft": 320.5,
+            "last_cleaned_rooms": ["Kitchen", "Living Room"],
+            "cleaning_passes": 1,
+            "battery_start_pct": 100,
+            "battery_end_pct": 72,
+            "recharges": 0,
+            "dirt_events": 3,
+            "evacuations": 1,
+            "error_code": None,
+            "initiator": "schedule",
+            "started_at": "2026-06-29T08:00:00",
+            "ended_at": "2026-06-29T08:45:00",
+        }
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
+        assert sensor.native_value == "completed"
+        attrs = sensor.extra_state_attributes
+        assert attrs["duration_min"] == 45
+        assert attrs["area_sqft"] == 320.5
+        assert attrs["cleaned_rooms"] == ["Kitchen", "Living Room"]
+        assert attrs["battery_start_pct"] == 100
+        assert attrs["battery_end_pct"] == 72
+        assert attrs["dirt_events"] == 3
+        assert attrs["initiator"] == "schedule"
+        assert attrs["started_at"] == "2026-06-29T08:00:00"
+
+    def test_error_mission_error_code_populated(self):
+        """Error mission → native_value = 'error', error_code present."""
+        record = {
+            "result": "error",
+            "error_code": 11,
+            "duration_min": 5,
+            "area_sqft": 0,
+        }
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
+        assert sensor.native_value == "error"
+        assert sensor.extra_state_attributes["error_code"] == 11
+
+    def test_returns_latest_record_not_first(self):
+        """With multiple records, native_value reflects the last (most recent) record."""
+        older = {"result": "cancelled", "duration_min": 10}
+        newer = {"result": "completed", "duration_min": 55}
+        sensor = _make_last_mission_summary_sensor(
+            mission_store=_store_with(older, newer)
+        )
+        assert sensor.native_value == "completed"
+        assert sensor.extra_state_attributes["duration_min"] == 55
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROOM-CLEANING-HISTORY (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_room_cleaning_history_sensor(mission_store=None):
+    """Return a RoombaRoomCleaningHistorySensor backed by the given store."""
+    from custom_components.roomba_plus.sensor import RoombaRoomCleaningHistorySensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = _make_entry(mission_store=mission_store)
+    sensor = RoombaRoomCleaningHistorySensor.__new__(RoombaRoomCleaningHistorySensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_room_cleaning_history"
+    return sensor
+
+
+class TestRoomCleaningHistorySensor:
+    """ROOM-CLEANING-HISTORY (v3.1.0) — per-room last-clean timestamps."""
+
+    def test_empty_store_returns_zero(self):
+        """No records → native_value = 0, attributes = {}."""
+        sensor = _make_room_cleaning_history_sensor(mission_store=_store_with())
+        assert sensor.native_value == 0
+        assert sensor.extra_state_attributes == {}
+
+    def test_no_store_returns_zero(self):
+        """MissionStore not initialised → native_value = 0."""
+        sensor = _make_room_cleaning_history_sensor(mission_store=None)
+        assert sensor.native_value == 0
+        assert sensor.extra_state_attributes == {}
+
+    def test_single_mission_populates_rooms(self):
+        """Record with last_cleaned_rooms → each room gets ended_at timestamp."""
+        record = {
+            "last_cleaned_rooms": ["Kitchen", "Living Room"],
+            "ended_at": "2026-06-29T08:45:00",
+            "result": "completed",
+        }
+        sensor = _make_room_cleaning_history_sensor(mission_store=_store_with(record))
+        assert sensor.native_value == 2
+        attrs = sensor.extra_state_attributes
+        assert attrs["Kitchen"] == "2026-06-29T08:45:00"
+        assert attrs["Living Room"] == "2026-06-29T08:45:00"
+
+    def test_newest_record_wins_per_room(self):
+        """Multiple records — each room shows its most recent ended_at."""
+        older = {
+            "last_cleaned_rooms": ["Kitchen", "Hallway"],
+            "ended_at": "2026-06-27T09:00:00",
+            "result": "completed",
+        }
+        newer = {
+            "last_cleaned_rooms": ["Kitchen", "Living Room"],
+            "ended_at": "2026-06-29T08:45:00",
+            "result": "completed",
+        }
+        sensor = _make_room_cleaning_history_sensor(
+            mission_store=_store_with(older, newer)
+        )
+        attrs = sensor.extra_state_attributes
+        # Kitchen: newer record wins
+        assert attrs["Kitchen"] == "2026-06-29T08:45:00"
+        # Hallway: only in older record
+        assert attrs["Hallway"] == "2026-06-27T09:00:00"
+        # Living Room: only in newer record
+        assert attrs["Living Room"] == "2026-06-29T08:45:00"
+        assert sensor.native_value == 3
+
+    def test_record_without_rooms_is_skipped(self):
+        """Records lacking last_cleaned_rooms (whole-home missions) are skipped."""
+        whole_home = {
+            "last_cleaned_rooms": None,
+            "ended_at": "2026-06-28T10:00:00",
+            "result": "completed",
+        }
+        room_mission = {
+            "last_cleaned_rooms": ["Bedroom"],
+            "ended_at": "2026-06-29T08:00:00",
+            "result": "completed",
+        }
+        sensor = _make_room_cleaning_history_sensor(
+            mission_store=_store_with(whole_home, room_mission)
+        )
+        assert sensor.native_value == 1
+        assert "Bedroom" in sensor.extra_state_attributes
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROOM-SIZE / room_areas (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_room_areas_sensor(umf_aligner=None, regions=None):
+    """Return a RoombaRoomAreasSensor with the given aligner and cc.regions."""
+    from custom_components.roomba_plus.sensor import RoombaRoomAreasSensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = MagicMock()
+    rd = MagicMock()
+    cc = MagicMock()
+    cc.regions = regions or []
+    rd.umf_aligner = umf_aligner
+    rd.cloud_coordinator = cc if umf_aligner is not None else None
+    entry.runtime_data = rd
+    sensor = RoombaRoomAreasSensor.__new__(RoombaRoomAreasSensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_room_areas"
+    return sensor
+
+
+class TestRoomAreasSensor:
+    """ROOM-SIZE (v3.1.0) — per-room floor area dictionary sensor."""
+
+    def test_no_aligner_returns_zero(self):
+        """umf_aligner=None → native_value=0, attributes={}."""
+        sensor = _make_room_areas_sensor(umf_aligner=None)
+        assert sensor.native_value == 0
+        assert sensor.extra_state_attributes == {}
+
+    def test_areas_translated_to_display_names(self):
+        """rid keys from room_areas_m2 are translated via cc.regions."""
+        aligner = MagicMock()
+        aligner.room_areas_m2 = {"19": 14.3, "21": 22.1}
+        regions = [
+            {"id": "19", "name": "Kitchen"},
+            {"id": "21", "name": "Living Room"},
+        ]
+        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=regions)
+        assert sensor.native_value == 2
+        attrs = sensor.extra_state_attributes
+        assert attrs["Kitchen"] == 14.3
+        assert attrs["Living Room"] == 22.1
+
+    def test_unknown_rid_falls_back_to_rid(self):
+        """rid without a matching region entry is used as-is as key."""
+        aligner = MagicMock()
+        aligner.room_areas_m2 = {"99": 8.5}
+        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=[])
+        assert "99" in sensor.extra_state_attributes
+        assert sensor.extra_state_attributes["99"] == 8.5
+
+    def test_empty_room_polygons_returns_zero(self):
+        """Aligner present but no polygons resolved → native_value=0."""
+        aligner = MagicMock()
+        aligner.room_areas_m2 = {}
+        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=[])
+        assert sensor.native_value == 0
+        assert sensor.extra_state_attributes == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIMARY-SLIM (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPrimarySlim:
+    """PRIMARY-SLIM (v3.1.0) — verify entity_category assignments on SENSORS tuple."""
+
+    def test_clean_streak_is_diagnostic(self):
+        """clean_streak must be DIAGNOSTIC after PRIMARY-SLIM reclassification."""
+        from homeassistant.helpers.entity import EntityCategory
+        desc = _get_sensor("clean_streak")
+        assert desc.entity_category == EntityCategory.DIAGNOSTIC, (
+            "clean_streak should be DIAGNOSTIC (pure statistic, not daily-use)"
+        )
+
+    def test_core_primary_sensors_remain_primary(self):
+        """battery, phase, error, next_clean, last_mission_result must stay Primary."""
+        for key in ("battery", "phase", "error", "next_clean", "last_mission_result"):
+            desc = _get_sensor(key)
+            assert desc.entity_category is None, (
+                f"{key} should remain Primary (entity_category=None)"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L9-MAP / relocalisation_rate (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_reloc_sensor(rps=None):
+    """Return a RoombaRelocalisationRateSensor backed by the given RobotProfileStore."""
+    from custom_components.roomba_plus.sensor import RoombaRelocalisationRateSensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = MagicMock()
+    rd = MagicMock()
+    rd.robot_profile_store = rps
+    entry.runtime_data = rd
+    sensor = RoombaRelocalisationRateSensor.__new__(RoombaRelocalisationRateSensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_relocalisation_rate"
+    return sensor
+
+
+class TestRelocalisationRateSensor:
+    """L9-MAP (v3.1.0) — self-calibrating relocalisation rate sensor."""
+
+    def test_no_rps_returns_none(self):
+        """robot_profile_store=None → native_value=None, safe empty attributes."""
+        sensor = _make_reloc_sensor(rps=None)
+        assert sensor.native_value is None
+        attrs = sensor.extra_state_attributes
+        assert attrs["baseline"] is None
+        assert attrs["alert"] is False
+
+    def test_not_ready_returns_none(self):
+        """Baseline not yet established (< 15 missions) → native_value=None."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(5):
+            rps.update_reloc_baseline(0)
+        sensor = _make_reloc_sensor(rps=rps)
+        assert sensor.native_value is None
+
+    def test_ready_returns_window_mean(self):
+        """Baseline established → native_value is the recent window's mean."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(20):
+            rps.update_reloc_baseline(2)
+        sensor = _make_reloc_sensor(rps=rps)
+        assert sensor.native_value == pytest.approx(2.0)
+
+    def test_attributes_include_baseline_and_window(self):
+        """extra_state_attributes expose baseline, count, window, and alert state."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(20):
+            rps.update_reloc_baseline(1)
+        sensor = _make_reloc_sensor(rps=rps)
+        attrs = sensor.extra_state_attributes
+        assert attrs["baseline"] == pytest.approx(1.0)
+        assert attrs["baseline_mission_count"] == 20
+        assert len(attrs["recent_window"]) == 10
+        assert attrs["alert"] is False
+
+    def test_alert_attribute_reflects_triggered_state(self):
+        """When an alert is active, extra_state_attributes reflects it."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(100):
+            rps.update_reloc_baseline(1)
+        for _ in range(10):
+            rps.update_reloc_baseline(10)
+        sensor = _make_reloc_sensor(rps=rps)
+        assert sensor.extra_state_attributes["alert"] is True

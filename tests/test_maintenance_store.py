@@ -145,6 +145,11 @@ def _entity(battery_stats: dict = None, vacuum_state: dict = None,
     profile.estcap_scale_liion = 1.0
     profile.estcap_scale_nimh  = 1.0
     e._config_entry.runtime_data.robot_profile = profile
+    # v3.1.0 L9-BATTERY — explicit None (not an auto-generated MagicMock)
+    # so _estimated_battery_eol's self-calibration gate correctly takes the
+    # "no RobotProfileStore" fallback path rather than treating a bare
+    # MagicMock as a usable (but nonsensical) store.
+    e._config_entry.runtime_data.robot_profile_store = None
     return e
 
 

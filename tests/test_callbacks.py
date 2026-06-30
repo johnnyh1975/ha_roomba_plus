@@ -1982,6 +1982,16 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
         assert _capture_zone_names(entry, reported) == ["Kitchen"]
 
 
+@pytest.mark.skipif(
+    not any(
+        __import__("pathlib").Path(p).exists()
+        for p in [
+            "tests/fixtures/roomba_plus_missions_01KRRVYR4T1MPSYM7ACKA5XCBX.dms",
+            "/mnt/user-data/uploads/roomba_plus_missions_01KRRVYR4T1MPSYM7ACKA5XCBX.dms",
+        ]
+    ),
+    reason="Real-data fixture (.dms) not available in this environment",
+)
 class TestMissionClassificationAgainstRealRecords:
     """Real-data validation (field-store bug-hunt): drive async_record_mission
     with inputs reconstructed from the 24 real persisted mission records and
@@ -1995,9 +2005,12 @@ class TestMissionClassificationAgainstRealRecords:
     import json as _json
     from pathlib import Path as _Path
 
-    _REAL = _json.load(open(
-        "/mnt/user-data/uploads/roomba_plus_missions_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"
-    ))
+    _DMS_PATHS = [
+        _Path("tests/fixtures/roomba_plus_missions_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+        _Path("/mnt/user-data/uploads/roomba_plus_missions_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+    ]
+    _DMS_FILE = next((p for p in _DMS_PATHS if p.exists()), None)
+    _REAL = _json.load(open(_DMS_FILE)) if _DMS_FILE else {"records": []}
     _RECORDS = _REAL.get("data", _REAL).get("records", [])
 
     def _classify(self, mission, reported=None, nstuck_delta=0):

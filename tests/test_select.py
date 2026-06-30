@@ -318,13 +318,14 @@ class TestCarpetBoostSelect:
     """Card fix P2 — select.*_carpet_boost_select."""
 
     def test_current_option_automatic(self):
-        assert _boost_entity(carpet_boost=True, vac_high=False).current_option == "Automatic"
+        # v3.1.0 CARPET-BOOST-SLUG-FIX: lowercase slug, not "Automatic"
+        assert _boost_entity(carpet_boost=True, vac_high=False).current_option == "automatic"
 
     def test_current_option_performance(self):
-        assert _boost_entity(carpet_boost=False, vac_high=True).current_option == "Performance"
+        assert _boost_entity(carpet_boost=False, vac_high=True).current_option == "performance"
 
     def test_current_option_eco(self):
-        assert _boost_entity(carpet_boost=False, vac_high=False).current_option == "Eco"
+        assert _boost_entity(carpet_boost=False, vac_high=False).current_option == "eco"
 
     def test_current_option_none_when_state_absent(self):
         assert _boost_entity().current_option is None
@@ -334,9 +335,9 @@ class TestCarpetBoostSelect:
         from custom_components.roomba_plus.const import FAN_SPEEDS
         s = CarpetBoostSelect.__new__(CarpetBoostSelect)
         s._attr_options = FAN_SPEEDS
-        assert "Automatic" in s._attr_options
-        assert "Eco" in s._attr_options
-        assert "Performance" in s._attr_options
+        assert "automatic" in s._attr_options
+        assert "eco" in s._attr_options
+        assert "performance" in s._attr_options
 
     def test_state_filter_carpet_boost(self):
         s = _boost_entity()
@@ -361,6 +362,99 @@ class TestCarpetBoostSelect:
         s = CarpetBoostSelect.__new__(CarpetBoostSelect)
         s._attr_unique_id = "test_blid_carpet_boost_select"
         assert s._attr_unique_id.endswith("_carpet_boost_select")
+
+
+class TestCarpetBoostSlugMigration:
+    """v3.1.0 CARPET-BOOST-SLUG-FIX — FAN_SPEEDS lowercase migration.
+
+    Hassfest requires select translation_key state keys to match
+    [a-z0-9-_]+ (cannot start/end with hyphen/underscore). FAN_SPEEDS moved
+    from Capital-Case ("Automatic") to lowercase ("automatic"). These tests
+    verify both the new canonical values AND backward compatibility for
+    existing automations still sending the old Capital-Case value.
+    """
+
+    @pytest.mark.asyncio
+    async def test_select_fn_accepts_new_lowercase_value(self):
+        """select.select_option with the new canonical lowercase value works."""
+        from custom_components.roomba_plus.select import _select_carpet_boost
+        entity = MagicMock()
+        entity._blid = "test_blid"
+        entity.hass.services.async_call = AsyncMock()
+        reg = MagicMock()
+        reg.async_get_entity_id.return_value = "vacuum.test_robot"
+        with patch(
+            "homeassistant.helpers.entity_registry.async_get", return_value=reg
+        ):
+            await _select_carpet_boost(entity, "automatic")
+        entity.hass.services.async_call.assert_called_once()
+        call_args = entity.hass.services.async_call.call_args
+        assert call_args[0][2]["fan_speed"] == "automatic"
+
+    @pytest.mark.asyncio
+    async def test_select_fn_accepts_old_capital_case_value(self):
+        """Backward compat: select.select_option with the OLD Capital-Case
+        value ("Automatic") from an existing automation still works — gets
+        normalised to the new canonical lowercase value before being sent on.
+        """
+        from custom_components.roomba_plus.select import _select_carpet_boost
+        entity = MagicMock()
+        entity._blid = "test_blid"
+        entity.hass.services.async_call = AsyncMock()
+        reg = MagicMock()
+        reg.async_get_entity_id.return_value = "vacuum.test_robot"
+        with patch(
+            "homeassistant.helpers.entity_registry.async_get", return_value=reg
+        ):
+            await _select_carpet_boost(entity, "Automatic")
+        entity.hass.services.async_call.assert_called_once()
+        call_args = entity.hass.services.async_call.call_args
+        assert call_args[0][2]["fan_speed"] == "automatic"
+
+    @pytest.mark.asyncio
+    async def test_vacuum_set_fan_speed_accepts_old_capital_case(self):
+        """RoombaVacuumCarpetBoost.async_set_fan_speed accepts the old
+        Capital-Case value via case-insensitive matching, not .capitalize()
+        (which would break with the new lowercase canonical constants).
+        """
+        from custom_components.roomba_plus.vacuum import RoombaVacuumCarpetBoost
+        v = RoombaVacuumCarpetBoost.__new__(RoombaVacuumCarpetBoost)
+        v.hass = MagicMock()
+        v.hass.async_add_executor_job = AsyncMock()
+        v.vacuum = MagicMock()
+        await v.async_set_fan_speed("Automatic")
+        # Should not log an error and should call set_preference twice
+        assert v.hass.async_add_executor_job.call_count == 2
+
+    def test_all_seven_languages_have_lowercase_state_keys(self):
+        """strings.json + all 7 translations must use lowercase slug keys
+        for carpet_boost_select state, matching the hassfest [a-z0-9-_]+ rule.
+        """
+        import json, os, re
+        base = os.path.join(
+            os.path.dirname(__file__),
+            "..", "custom_components", "roomba_plus"
+        )
+        pattern = re.compile(r"^[a-z0-9_-]+$")
+
+        files = ["strings.json"] + [
+            os.path.join("translations", f"{lang}.json")
+            for lang in ("en", "de", "fr", "it", "es", "nl", "pt")
+        ]
+        for rel_path in files:
+            with open(os.path.join(base, rel_path), encoding="utf-8") as f:
+                data = json.load(f)
+            state = data["entity"]["select"]["carpet_boost_select"]["state"]
+            for key in state:
+                assert pattern.match(key), (
+                    f"{rel_path}: state key {key!r} does not match "
+                    f"hassfest's [a-z0-9-_]+ requirement"
+                )
+                assert not key.startswith(("-", "_")), f"{rel_path}: {key!r} starts with - or _"
+                assert not key.endswith(("-", "_")), f"{rel_path}: {key!r} ends with - or _"
+            assert set(state.keys()) == {"automatic", "eco", "performance"}, (
+                f"{rel_path}: unexpected state keys {set(state.keys())}"
+            )
 
 
 class TestSelectKeeputAttrs:

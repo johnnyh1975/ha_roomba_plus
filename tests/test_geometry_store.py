@@ -201,11 +201,28 @@ class TestGeometryStoreDrift:
         result = gs.record_drift(10.0, 0.0)
         assert result is False
 
-    def test_record_drift_returns_true_when_threshold_exceeded(self):
+    def test_record_drift_returns_true_when_window_mean_exceeds_threshold(self):
+        """v3.1.0 DRIFT-AUTO: trigger now depends on the recent-window mean,
+        not cumulative_drift_mm. Three samples all above threshold → mean
+        above threshold → True.
+        """
         gs = GeometryStore()
-        gs.cumulative_drift_mm = DEFAULT_DRIFT_THRESHOLD_MM - 1
-        result = gs.record_drift(2.0, 0.0)
+        gs.record_drift(260.0, 0.0)
+        gs.record_drift(260.0, 0.0)
+        result = gs.record_drift(260.0, 0.0)
         assert result is True
+
+    def test_record_drift_does_not_trigger_on_high_cumulative_alone(self):
+        """v3.1.0 DRIFT-AUTO: a high cumulative_drift_mm from many small,
+        individually-harmless drifts must NOT trigger — only the recent
+        window's mean matters now. This is the core fix for the false-positive
+        documented in DRIFT_AUTO_konzept.md (5820mm cumulative from normal
+        50-100mm per-mission VSLAM drift).
+        """
+        gs = GeometryStore()
+        gs.cumulative_drift_mm = 5820.0  # simulates long lifetime history
+        result = gs.record_drift(10.0, 0.0)  # small, normal per-mission drift
+        assert result is False
 
     def test_record_drift_ignores_zero_vector(self):
         gs = GeometryStore()
@@ -229,6 +246,119 @@ class TestGeometryStoreDrift:
         gs.reset_drift()
         gs.record_drift(50.0, 0.0)
         assert gs.cumulative_drift_mm == pytest.approx(50.0)
+
+
+class TestDriftAutoWindow:
+    """DRIFT-AUTO (v3.1.0) — sliding window replaces lifetime-sum trigger."""
+
+    def test_window_trigger_requires_min_samples(self):
+        """Fewer than _DRIFT_MIN_SAMPLES samples never trigger, even if huge."""
+        gs = GeometryStore()
+        result1 = gs.record_drift(400.0, 0.0)
+        result2 = gs.record_drift(400.0, 0.0)
+        assert result1 is False
+        assert result2 is False  # only 2 samples, min is 3
+
+    def test_window_is_bounded_to_ten(self):
+        """recent_drifts_mm never exceeds the configured window size."""
+        gs = GeometryStore()
+        for _ in range(15):
+            gs.record_drift(50.0, 0.0)
+        assert len(gs.recent_drifts_mm) == 10
+
+    def test_drift_recovered_true_below_recovery_threshold(self):
+        """Window mean below the (lower, hysteresis) recovery threshold → recovered."""
+        gs = GeometryStore()
+        gs.record_drift(50.0, 0.0)
+        gs.record_drift(50.0, 0.0)
+        gs.record_drift(50.0, 0.0)
+        assert gs.drift_recovered() is True
+
+    def test_drift_recovered_false_in_hysteresis_band(self):
+        """Window mean between recovery (150) and trigger (250) thresholds is
+        neither a trigger nor a recovery — prevents flapping at the boundary.
+        """
+        gs = GeometryStore()
+        gs.record_drift(200.0, 0.0)
+        gs.record_drift(200.0, 0.0)
+        triggered = gs.record_drift(200.0, 0.0)
+        assert triggered is False          # below 250mm trigger threshold
+        assert gs.drift_recovered() is False  # above 150mm recovery threshold
+
+    def test_drift_recovered_false_with_insufficient_samples(self):
+        """An empty or sparse window (e.g. right after migration) is NOT
+        treated as recovered — there's nothing to judge yet, so no delete
+        fires on a window that hasn't formed.
+        """
+        gs = GeometryStore()
+        assert gs.drift_recovered() is False
+        gs.record_drift(10.0, 0.0)
+        assert gs.drift_recovered() is False  # only 1 sample, min is 3
+
+    def test_migration_empty_window_no_immediate_trigger(self):
+        """Synthetic regression for the field-reported 5820mm case: a store
+        loaded from before DRIFT-AUTO has a high cumulative_drift_mm but no
+        recent_drifts_mm field. After _restore_from_dict, the window must be
+        empty and the next single normal-magnitude drift must NOT trigger —
+        the window rebuilds itself over subsequent missions instead of firing
+        an immediate false-positive Repair Issue.
+        """
+        gs = GeometryStore()
+        legacy_payload = {
+            "version": 2,
+            "next_marker_id": 5,
+            "cumulative_drift_mm": 5820.0,
+            # recent_drifts_mm deliberately absent — pre-v3.1.0 payload
+            "wall_offset_mm": 300,
+            "zone_labels": {},
+            "door_markers": [],
+            "walls": [],
+            "doors": [],
+            "obstacles": [],
+        }
+        gs._restore_from_dict(legacy_payload)
+
+        assert gs.cumulative_drift_mm == pytest.approx(5820.0)
+        assert gs.recent_drifts_mm == []
+
+        # First normal-magnitude drift after migration must not trigger —
+        # only 1 sample, far below _DRIFT_MIN_SAMPLES.
+        result = gs.record_drift(60.0, 0.0)
+        assert result is False
+
+    def test_migration_preserves_other_geometry_fields(self):
+        """The additive recent_drifts_mm field must not cause door_markers,
+        walls, doors, or obstacles to be discarded — unlike a PAYLOAD_VERSION
+        bump would (see geometry_store.py module docstring on why this
+        feature deliberately did NOT bump PAYLOAD_VERSION).
+        """
+        gs = GeometryStore()
+        legacy_payload = {
+            "version": 2,
+            "next_marker_id": 3,
+            "cumulative_drift_mm": 1200.0,
+            "wall_offset_mm": 250,
+            "zone_labels": {"5": "Kitchen"},
+            "door_markers": [],
+            "walls": [{"id": 1, "x1": 0, "y1": 0, "x2": 100, "y2": 0}],
+            "doors": [],
+            "obstacles": [],
+        }
+        gs._restore_from_dict(legacy_payload)
+
+        assert gs.zone_labels == {"5": "Kitchen"}
+        assert len(gs.walls) == 1
+        assert gs.wall_offset_mm == 250
+
+    def test_cumulative_drift_mm_unaffected_by_window_trigger(self):
+        """cumulative_drift_mm keeps accumulating as a pure diagnostics value
+        regardless of what the windowed trigger decides.
+        """
+        gs = GeometryStore()
+        gs.record_drift(10.0, 0.0)
+        gs.record_drift(10.0, 0.0)
+        gs.record_drift(10.0, 0.0)
+        assert gs.cumulative_drift_mm == pytest.approx(30.0)
 
 
 class TestGeometryStoreApplyUserEdit:

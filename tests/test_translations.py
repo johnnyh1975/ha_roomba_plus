@@ -529,3 +529,67 @@ class TestAllTranslationKeysExistEverywhere:
             f"{locale}.json has non-ASCII dict key(s) that don't match any "
             f"translation_key in source — likely a typo'd key: {sorted(stray)}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIVACY-DOC (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPrivacyDoc:
+    """PRIVACY-DOC (v3.1.0) — cloud_credentials step must contain privacy statement."""
+
+    LANGS = ["en", "de", "fr", "it", "es", "nl", "pt"]
+    PRIVACY_KEYWORDS = ["MQTT", "locally", "local"]  # EN anchor words
+
+    def _load(self, lang: str) -> dict:
+        import json, os
+        base = os.path.join(
+            os.path.dirname(__file__),
+            "..", "custom_components", "roomba_plus", "translations"
+        )
+        with open(os.path.join(base, f"{lang}.json")) as f:
+            return json.load(f)
+
+    def test_strings_json_cloud_credentials_contains_mqtt(self):
+        """strings.json cloud_credentials description must mention MQTT."""
+        import json, os
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "custom_components", "roomba_plus", "strings.json"
+        )
+        with open(path) as f:
+            data = json.load(f)
+        desc = data["config"]["step"]["cloud_credentials"]["description"]
+        assert "MQTT" in desc, "strings.json privacy statement missing MQTT keyword"
+
+    def test_all_languages_cloud_credentials_description_updated(self):
+        """Every translation must have an updated cloud_credentials description."""
+        for lang in self.LANGS:
+            data = self._load(lang)
+            desc = data["config"]["step"]["cloud_credentials"]["description"]
+            # Must be substantially longer than the old one-liner (>100 chars)
+            assert len(desc) > 100, (
+                f"{lang}: cloud_credentials description too short ({len(desc)} chars) "
+                "— privacy statement may be missing"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIFECYCLE-DOC (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLifecycleDoc:
+    """LIFECYCLE-DOC (v3.1.0) — verify lifecycle section exists in TROUBLESHOOTING."""
+
+    def test_troubleshooting_contains_lifecycle_section(self):
+        """TROUBLESHOOTING.md must contain the robot replacement section."""
+        import os
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "docs", "TROUBLESHOOTING.md"
+        )
+        with open(path) as f:
+            content = f.read()
+        assert "Replacing or selling your robot" in content
+        assert "Factory reset" in content
+        assert "format=export" in content

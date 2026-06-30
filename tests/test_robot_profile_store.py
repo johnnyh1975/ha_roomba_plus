@@ -420,7 +420,7 @@ class TestComputeHealthScore:
         """With only battery + anomaly (2 signals), score is None."""
         rps = _rps()  # no coverage baseline → nav signal missing
         # Only battery (1) + anomaly (always counted) = 2 signals
-        score = rps.compute_health_score(
+        score, breakdown = rps.compute_health_score(
             battery_retention_pct=85.0,
             nav_efficiency_ratio=None,    # no baseline → skipped
             cleaning_speed_trend="unknown",  # not in map → skipped
@@ -428,11 +428,12 @@ class TestComputeHealthScore:
             stuck_rate_30d=None,          # skipped
         )
         assert score is None
+        assert breakdown == {}
 
     def test_returns_score_with_all_signals_healthy(self):
-        """All signals healthy → score near 100."""
+        """All signals healthy → score near 100, no weakest_signal."""
         rps = _rps(coverage_baseline=0.7, coverage_mission_count=25)
-        score = rps.compute_health_score(
+        score, breakdown = rps.compute_health_score(
             battery_retention_pct=95.0,   # → 90 pts
             nav_efficiency_ratio=1.0,     # current == baseline → 100 pts
             cleaning_speed_trend="improving",  # → 100 pts
@@ -442,11 +443,12 @@ class TestComputeHealthScore:
         assert score is not None
         assert isinstance(score, float)
         assert 85.0 <= score <= 100.0
+        assert breakdown["weakest_signal"] is None
 
     def test_returns_low_score_with_all_signals_poor(self):
-        """All signals poor → score near 0."""
+        """All signals poor → score near 0, weakest_signal identifies the lowest."""
         rps = _rps(coverage_baseline=0.7, coverage_mission_count=25)
-        score = rps.compute_health_score(
+        score, breakdown = rps.compute_health_score(
             battery_retention_pct=55.0,   # → 10 pts (near 0)
             nav_efficiency_ratio=0.4,     # below 0.5 → 0 pts
             cleaning_speed_trend="declining",  # → 40 pts
@@ -455,11 +457,12 @@ class TestComputeHealthScore:
         )
         assert score is not None
         assert score <= 40.0
+        assert breakdown["weakest_signal"] in ("nav_efficiency", "stuck_rate")
 
     def test_score_capped_between_0_and_100(self):
         """Score must always be in [0, 100]."""
         rps = _rps(coverage_baseline=0.5, coverage_mission_count=25)
-        score = rps.compute_health_score(
+        score, _ = rps.compute_health_score(
             battery_retention_pct=200.0,  # extreme value
             nav_efficiency_ratio=5.0,     # extreme value
             cleaning_speed_trend="improving",
@@ -473,7 +476,7 @@ class TestComputeHealthScore:
         """With nav signal missing, remaining weights are renormalised."""
         rps = _rps()  # no coverage baseline → nav skipped
         # Provide battery + trend + anomaly + stuck (4 of 5) = enough
-        score = rps.compute_health_score(
+        score, _ = rps.compute_health_score(
             battery_retention_pct=80.0,
             nav_efficiency_ratio=None,    # skipped
             cleaning_speed_trend="stable",
@@ -495,8 +498,8 @@ class TestComputeHealthScore:
             consecutive_anomalous=0,
             stuck_rate_30d=0.05,
         )
-        score_no_baseline = rps_no_baseline.compute_health_score(**kwargs)
-        score_ready = rps_ready.compute_health_score(**kwargs)
+        score_no_baseline, _ = rps_no_baseline.compute_health_score(**kwargs)
+        score_ready, _ = rps_ready.compute_health_score(**kwargs)
 
         # Both should produce a score (nav just gets skipped vs included)
         assert score_no_baseline is not None
@@ -1144,3 +1147,325 @@ class TestRobotProfileStoreCorruptionResilience:
         # No crash; numeric fields stay None, dicts empty
         assert rps.coverage_baseline is None
         assert rps.baseline_by_weekday == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L9-MAP (v3.1.0) — self-calibrating relocalisation rate baseline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRelocBaseline:
+    """L9-MAP (v3.1.0) — update_reloc_baseline / reloc_baseline_ready / reloc_alert_triggered."""
+
+    def test_first_update_sets_baseline_directly(self):
+        """First observation becomes the initial baseline value."""
+        rps = RobotProfileStore()
+        rps.update_reloc_baseline(0)
+        assert rps.reloc_baseline == 0.0
+        assert rps.reloc_mission_count == 1
+        assert rps.recent_relocs == [0]
+
+    def test_running_mean_converges(self):
+        """Multiple observations converge to a running mean, not the last value."""
+        rps = RobotProfileStore()
+        for v in [0, 0, 2, 0, 0]:
+            rps.update_reloc_baseline(v)
+        assert rps.reloc_mission_count == 5
+        assert rps.reloc_baseline == pytest.approx(0.4)
+
+    def test_recent_window_bounded(self):
+        """recent_relocs never exceeds _RELOC_WINDOW (10) entries."""
+        rps = RobotProfileStore()
+        for v in range(15):
+            rps.update_reloc_baseline(v)
+        assert len(rps.recent_relocs) == 10
+        # newest values retained (5..14), oldest (0..4) dropped
+        assert rps.recent_relocs == list(range(5, 15))
+
+    def test_baseline_not_ready_below_min_missions(self):
+        """reloc_baseline_ready is False below _RELOC_BASELINE_MIN_MISSIONS (15)."""
+        rps = RobotProfileStore()
+        for _ in range(14):
+            rps.update_reloc_baseline(0)
+        assert rps.reloc_baseline_ready is False
+
+    def test_baseline_ready_at_min_missions(self):
+        """reloc_baseline_ready becomes True at exactly 15 missions."""
+        rps = RobotProfileStore()
+        for _ in range(15):
+            rps.update_reloc_baseline(0)
+        assert rps.reloc_baseline_ready is True
+
+    def test_alert_not_triggered_when_not_ready(self):
+        """reloc_alert_triggered is always False before baseline is ready,
+        regardless of how extreme the recent values are."""
+        rps = RobotProfileStore()
+        for _ in range(10):
+            rps.update_reloc_baseline(50)  # extreme values, but too few missions
+        assert rps.reloc_alert_triggered() is False
+
+    def test_alert_triggered_above_multiplier(self):
+        """Recent window mean > 3x the established (pre-window) baseline
+        triggers the alert. Since update_reloc_baseline() updates both the
+        running mean AND the window together, this test establishes the
+        baseline with reloc_baseline_ready already True from a long quiet
+        history, then pushes a short burst of high values — the running
+        mean barely moves (large n) while the recent window fills with the
+        spike, which is exactly the scenario the alert is meant to catch.
+        """
+        rps = RobotProfileStore()
+        # Long quiet history so the running mean is well-established and
+        # barely moves when a handful of high readings are added afterwards.
+        for _ in range(100):
+            rps.update_reloc_baseline(1)
+        baseline_before_spike = rps.reloc_baseline
+        assert baseline_before_spike == pytest.approx(1.0)
+
+        # Now a burst of high values — window fills with these, but with
+        # n=110 the running mean only nudges up slightly.
+        for _ in range(10):
+            rps.update_reloc_baseline(10)
+
+        # Recent window is now all 10s; baseline only rose slightly (n large).
+        assert rps.recent_relocs == [10] * 10
+        assert rps.reloc_baseline < 2.0  # still close to the pre-spike baseline
+        assert rps.reloc_alert_triggered() is True
+
+    def test_alert_not_triggered_within_multiplier(self):
+        """Recent window mean below the 3x threshold does not trigger."""
+        rps = RobotProfileStore()
+        for _ in range(100):
+            rps.update_reloc_baseline(1)
+        for _ in range(10):
+            rps.update_reloc_baseline(2)  # 2x-ish, not 3x+
+        assert rps.reloc_alert_triggered() is False
+
+    def test_zero_baseline_special_case(self):
+        """A near-zero baseline (robot has almost never relocalised) triggers
+        on ANY non-zero recent activity, since multiplying a tiny baseline by
+        _RELOC_ALERT_MULTIPLIER would otherwise never meaningfully trigger.
+        """
+        rps = RobotProfileStore()
+        for _ in range(100):
+            rps.update_reloc_baseline(0)
+        assert rps.reloc_baseline == 0.0
+        # Push a burst with a single non-zero value into the window — this
+        # nudges the running mean slightly above exactly 0.0 (e.g. 0.009),
+        # which the < 0.05 tolerance check still correctly catches.
+        for _ in range(9):
+            rps.update_reloc_baseline(0)
+        rps.update_reloc_baseline(1)
+        assert rps.reloc_baseline < 0.05  # still effectively zero
+        assert rps.reloc_alert_triggered() is True
+
+    def test_zero_baseline_no_alert_when_still_zero(self):
+        """Baseline 0.0 with a window that's still all zeros does not alert."""
+        rps = RobotProfileStore()
+        for _ in range(20):
+            rps.update_reloc_baseline(0)
+        assert rps.reloc_alert_triggered() is False
+
+    def test_persistence_fields_round_trip_via_attributes(self):
+        """reloc_baseline state is captured correctly by the three persisted
+        attributes (reloc_baseline, reloc_mission_count, recent_relocs) —
+        the same fields async_save()/async_load() read and write.
+        """
+        rps = RobotProfileStore()
+        for v in [0, 1, 0, 2, 0]:
+            rps.update_reloc_baseline(v)
+
+        # Simulate what async_load() does: read the persisted dict shape
+        # and reconstruct a fresh store from it.
+        persisted = {
+            "reloc_baseline": rps.reloc_baseline,
+            "reloc_mission_count": rps.reloc_mission_count,
+            "recent_relocs": rps.recent_relocs,
+        }
+        restored = RobotProfileStore()
+        rb = persisted.get("reloc_baseline")
+        restored.reloc_baseline = float(rb) if rb is not None else None
+        restored.reloc_mission_count = int(persisted.get("reloc_mission_count", 0))
+        restored.recent_relocs = [int(v) for v in persisted.get("recent_relocs", [])]
+
+        assert restored.reloc_baseline == pytest.approx(rps.reloc_baseline)
+        assert restored.reloc_mission_count == rps.reloc_mission_count
+        assert restored.recent_relocs == rps.recent_relocs
+
+    def test_missing_reloc_fields_default_safely(self):
+        """A legacy payload without reloc_baseline fields loads with safe
+        defaults — no crash, baseline starts fresh. Mirrors the .get()
+        defaulting pattern used in the real async_load().
+        """
+        legacy_payload = {
+            "version": 1,
+            "coverage_baseline": 0.8,
+            "coverage_mission_count": 25,
+            # reloc_baseline fields deliberately absent
+        }
+        restored = RobotProfileStore()
+        rb = legacy_payload.get("reloc_baseline")
+        restored.reloc_baseline = float(rb) if rb is not None else None
+        restored.reloc_mission_count = int(legacy_payload.get("reloc_mission_count", 0))
+        restored.recent_relocs = [int(v) for v in legacy_payload.get("recent_relocs", [])]
+
+        assert restored.reloc_baseline is None
+        assert restored.reloc_mission_count == 0
+        assert restored.recent_relocs == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L9-BATTERY (v3.1.0) — self-calibrating estCap noise-floor baseline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEstcapNoiseBaseline:
+    """L9-BATTERY (v3.1.0) — update_estcap_noise / record_estcap_observation /
+    degradation_rate_is_significant / cap_remaining_cycles.
+    """
+
+    def test_record_first_observation_seeds_without_delta(self):
+        """First observation only seeds last_estcap_mah — no delta to record yet."""
+        rps = RobotProfileStore()
+        rps.record_estcap_observation(2488.0)
+        assert rps.last_estcap_mah == 2488.0
+        assert rps.estcap_noise_count == 0
+
+    def test_record_second_observation_feeds_delta(self):
+        """Second observation computes and records the delta from the first."""
+        rps = RobotProfileStore()
+        rps.record_estcap_observation(2488.0)
+        rps.record_estcap_observation(2492.0)
+        assert rps.estcap_noise_count == 1
+        assert rps.estcap_noise_mean == pytest.approx(4.0)
+        assert rps.last_estcap_mah == 2492.0
+
+    def test_stdev_none_below_two_samples(self):
+        """Standard deviation is undefined with fewer than 2 delta observations."""
+        rps = RobotProfileStore()
+        rps.update_estcap_noise(2.0)
+        assert rps.estcap_noise_stdev is None
+
+    def test_stdev_computed_with_oscillating_deltas(self):
+        """Welford's algorithm produces a sensible stdev for noisy, mean-reverting
+        deltas (mirrors Thonno's field data: estCap oscillates ±a few mAh).
+        """
+        rps = RobotProfileStore()
+        for delta in [4, -4, -6, -2, -8, 25]:  # roughly Thonno's observed deltas
+            rps.update_estcap_noise(delta)
+        assert rps.estcap_noise_stdev is not None
+        assert rps.estcap_noise_stdev > 0
+
+    def test_noise_ready_at_min_samples(self):
+        """estcap_noise_ready becomes True at _ESTCAP_NOISE_MIN_SAMPLES (10)."""
+        rps = RobotProfileStore()
+        for _ in range(9):
+            rps.update_estcap_noise(1.0)
+        assert rps.estcap_noise_ready is False
+        rps.update_estcap_noise(1.0)
+        assert rps.estcap_noise_ready is True
+
+    def test_significant_false_when_not_ready_and_below_fallback(self):
+        """Before the noise baseline is ready, a tiny degradation_rate
+        (below the fallback threshold) is not trusted.
+        """
+        rps = RobotProfileStore()
+        # Thonno's actual field rate from the noise-only case: ~0.0003 %/cycle
+        assert rps.degradation_rate_is_significant(0.0003, 2421) is False
+
+    def test_significant_true_when_not_ready_but_above_fallback(self):
+        """Before the noise baseline is ready, a clearly large degradation_rate
+        (e.g. a genuinely failing battery) is still trusted via the fallback.
+        """
+        rps = RobotProfileStore()
+        # 90% retention over 300 cycles → 0.033 %/cycle, clearly real degradation
+        assert rps.degradation_rate_is_significant(0.033, 300) is True
+
+    def test_significant_false_when_ready_and_within_noise_floor(self):
+        """Once the noise baseline is established, a degradation_rate that
+        produces a total drop within the expected noise drift is rejected —
+        this is the core fix for the 354-year false projection bug.
+        """
+        rps = RobotProfileStore()
+        # Establish a noise floor from oscillating field-like deltas
+        for delta in [4, -4, -6, -2, -8, 6, -3, 5, -7, 2]:
+            rps.update_estcap_noise(delta)
+        assert rps.estcap_noise_ready is True
+        # Thonno's actual near-zero degradation_rate (noise-driven, not real)
+        assert rps.degradation_rate_is_significant(0.0003, 2421) is False
+
+    def test_significant_true_when_ready_and_exceeds_noise_floor(self):
+        """Once the noise baseline is established, a degradation_rate whose
+        total drop clearly exceeds the expected noise drift is trusted.
+        """
+        rps = RobotProfileStore()
+        for delta in [1, -1, 0, 1, -1, 0, 1, -1, 0, 1]:  # small, tight noise floor
+            rps.update_estcap_noise(delta)
+        assert rps.estcap_noise_ready is True
+        # Large, clearly-real degradation rate — total drop (0.2 * 500 = 100)
+        # vs expected noise drift (stdev≈0.88 * sqrt(500)≈19.6, threshold≈39.2)
+        # is unambiguously well above the noise floor.
+        assert rps.degradation_rate_is_significant(0.2, 500) is True
+
+    def test_cap_remaining_cycles_passes_through_reasonable_values(self):
+        """A plausible remaining-cycle count is returned unchanged."""
+        rps = RobotProfileStore()
+        assert rps.cap_remaining_cycles(750.0) == 750.0
+
+    def test_cap_remaining_cycles_rejects_absurd_projection(self):
+        """A projection beyond the sanity cap (e.g. the 129000-cycle/354-year
+        case from Thonno's noise-only field data) is rejected as None.
+        """
+        rps = RobotProfileStore()
+        assert rps.cap_remaining_cycles(129342.0) is None
+
+    def test_cap_remaining_cycles_boundary(self):
+        """Exactly at the sanity cap is still accepted (strict > comparison)."""
+        rps = RobotProfileStore()
+        assert rps.cap_remaining_cycles(10_000.0) == 10_000.0
+        assert rps.cap_remaining_cycles(10_000.1) is None
+
+    def test_estcap_noise_persistence_fields_round_trip(self):
+        """estcap_noise state survives the same load/save attribute pattern
+        used by the real async_load()/async_save().
+        """
+        rps = RobotProfileStore()
+        rps.record_estcap_observation(2488.0)
+        rps.record_estcap_observation(2492.0)
+        rps.record_estcap_observation(2480.0)
+
+        persisted = {
+            "estcap_noise_mean": rps.estcap_noise_mean,
+            "estcap_noise_m2": rps.estcap_noise_m2,
+            "estcap_noise_count": rps.estcap_noise_count,
+            "last_estcap_mah": rps.last_estcap_mah,
+        }
+        restored = RobotProfileStore()
+        enm = persisted.get("estcap_noise_mean")
+        restored.estcap_noise_mean = float(enm) if enm is not None else None
+        restored.estcap_noise_m2 = float(persisted.get("estcap_noise_m2", 0.0))
+        restored.estcap_noise_count = int(persisted.get("estcap_noise_count", 0))
+        lec = persisted.get("last_estcap_mah")
+        restored.last_estcap_mah = float(lec) if lec is not None else None
+
+        assert restored.estcap_noise_count == rps.estcap_noise_count
+        assert restored.estcap_noise_mean == pytest.approx(rps.estcap_noise_mean)
+        assert restored.last_estcap_mah == rps.last_estcap_mah
+
+    def test_missing_estcap_fields_default_safely(self):
+        """A legacy payload without estcap_noise fields loads with safe
+        defaults — no crash, noise floor starts fresh.
+        """
+        legacy_payload = {
+            "version": 1,
+            "reloc_baseline": 0.5,
+            # estcap_noise fields deliberately absent
+        }
+        restored = RobotProfileStore()
+        enm = legacy_payload.get("estcap_noise_mean")
+        restored.estcap_noise_mean = float(enm) if enm is not None else None
+        restored.estcap_noise_m2 = float(legacy_payload.get("estcap_noise_m2", 0.0))
+        restored.estcap_noise_count = int(legacy_payload.get("estcap_noise_count", 0))
+        lec = legacy_payload.get("last_estcap_mah")
+        restored.last_estcap_mah = float(lec) if lec is not None else None
+
+        assert restored.estcap_noise_mean is None
+        assert restored.estcap_noise_count == 0
+        assert restored.last_estcap_mah is None

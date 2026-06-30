@@ -2175,3 +2175,250 @@ class TestBugReportScenario:
         raw = "1=Cucina,17=Armadio,19=Bagno"
         result = _parse_zone_input(raw, ["1", "17", "19"])
         assert result == {"1": "Cucina", "17": "Armadio", "19": "Bagno"}
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAIN-STATUS (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestIntegrationHealthPlainStatus:
+    """PLAIN-STATUS (v3.1.0) — status_text/recommendation on integration_health."""
+
+    def _make_entry(self, entry_id="test_plain_status_entry"):
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        entry.runtime_data.last_mqtt_message_ts = 0.0
+        entry.runtime_data.mission_archive = None
+        entry.runtime_data.cloud_coordinator = None
+        return entry
+
+    def _hass(self, lang="en"):
+        hass = MagicMock()
+        hass.config.language = lang
+        return hass
+
+    def test_healthy_status_text_no_recommendation(self):
+        """No issues, no stale data → healthy status_text, recommendation=None."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"active_issues": 0, "mqtt_age_hours": None, "arc1_age_hours": None}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert text == "Everything is fine"
+        assert rec is None
+
+    def test_active_issues_status_text_and_recommendation(self):
+        """Active issues → status_text mentions count, recommendation present."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"active_issues": 3, "mqtt_age_hours": None, "arc1_age_hours": None}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert "3" in text
+        assert rec is not None
+        assert "Repairs" in rec
+
+    def test_mqtt_stale_status_text(self):
+        """Stale MQTT (no active issues) → MQTT-specific status_text."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"active_issues": 0, "mqtt_age_hours": 30.0, "arc1_age_hours": None}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert "WiFi" in text or "WiFi" in rec
+
+    def test_arc1_stale_status_text_includes_hours(self):
+        """Stale ARC1 (no issues, MQTT fresh) → cloud-specific status_text with hours."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"active_issues": 0, "mqtt_age_hours": 1.0, "arc1_age_hours": 60.0}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert "60" in text
+        assert rec is not None
+
+    def test_active_issues_takes_priority_over_stale_signals(self):
+        """When multiple conditions apply, active_issues (strongest) wins."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"active_issues": 1, "mqtt_age_hours": 30.0, "arc1_age_hours": 60.0}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert "1" in text  # active_issues text, not MQTT/ARC1 text
+
+    def test_all_seven_languages_produce_non_empty_healthy_text(self):
+        """Every supported language must have a non-empty healthy status_text."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        breakdown = {"active_issues": 0, "mqtt_age_hours": None, "arc1_age_hours": None}
+        for lang in ("en", "de", "fr", "it", "es", "nl", "pt"):
+            hass = self._hass(lang)
+            text, rec = _integration_health_plain_status(hass, breakdown)
+            assert text, f"{lang}: empty healthy status_text"
+            assert rec is None
+
+    def test_unsupported_language_falls_back_to_english(self):
+        """A language not in the table falls back to English."""
+        from custom_components.roomba_plus.sensor import _integration_health_plain_status
+        hass = self._hass("ja")  # unsupported
+        breakdown = {"active_issues": 0, "mqtt_age_hours": None, "arc1_age_hours": None}
+        text, rec = _integration_health_plain_status(hass, breakdown)
+        assert text == "Everything is fine"
+
+    def test_extra_state_attributes_includes_plain_status_fields(self):
+        """RoombaIntegrationHealthSensor.extra_state_attributes carries
+        status_text/recommendation alongside the existing breakdown fields.
+        """
+        from custom_components.roomba_plus.sensor import RoombaIntegrationHealthSensor
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        entry = self._make_entry()
+        sensor = RoombaIntegrationHealthSensor.__new__(RoombaIntegrationHealthSensor)
+        sensor._roomba = roomba
+        sensor._blid = "test_blid"
+        sensor._entry = entry
+        sensor.hass = self._hass("en")
+
+        registry = MagicMock()
+        registry.issues = {}
+        with patch(
+            "custom_components.roomba_plus.sensor.ir.async_get",
+            return_value=registry,
+        ):
+            attrs = sensor.extra_state_attributes
+
+        assert "status_text" in attrs
+        assert "recommendation" in attrs
+        assert attrs["active_issues"] == 0  # original breakdown field preserved
+
+
+class TestRobotHealthPlainStatus:
+    """PLAIN-STATUS (v3.1.0) — status_text/recommendation on robot_health_score."""
+
+    def _hass(self, lang="en"):
+        hass = MagicMock()
+        hass.config.language = lang
+        return hass
+
+    def test_good_condition_when_weakest_signal_none(self):
+        """weakest_signal=None (all signals >= 60) → good-condition text."""
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": None}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert text == "Robot is in good condition"
+        assert rec is None
+
+    def test_battery_retention_weakest_signal(self):
+        """weakest_signal=battery_retention → battery-specific text + recommendation."""
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "battery_retention"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert "Battery" in text
+        assert "battery" in rec.lower()
+
+    def test_nav_efficiency_weakest_signal(self):
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "nav_efficiency"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert "Navigation" in text
+        assert "Smart Map" in rec
+
+    def test_cleaning_speed_trend_weakest_signal(self):
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "cleaning_speed_trend"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert "Cleaning time" in text
+        assert "brushes" in rec.lower() or "filter" in rec.lower()
+
+    def test_anomaly_rate_weakest_signal(self):
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "anomaly_rate"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert "unusual" in text.lower()
+        assert "history" in rec.lower()
+
+    def test_stuck_rate_weakest_signal(self):
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "stuck_rate"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert "stuck" in text.lower()
+        assert "obstacles" in rec.lower()
+
+    def test_all_seven_languages_produce_non_empty_text_for_each_signal(self):
+        """Every (language, signal) combination must have non-empty text/rec."""
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        signals = (
+            "battery_retention", "nav_efficiency", "cleaning_speed_trend",
+            "anomaly_rate", "stuck_rate",
+        )
+        for lang in ("en", "de", "fr", "it", "es", "nl", "pt"):
+            hass = self._hass(lang)
+            for signal in signals:
+                breakdown = {"weakest_signal": signal}
+                text, rec = _robot_health_plain_status(hass, breakdown)
+                assert text, f"{lang}/{signal}: empty status_text"
+                assert rec, f"{lang}/{signal}: empty recommendation"
+
+    def test_unknown_signal_name_falls_back_to_good_condition(self):
+        """A weakest_signal value not in the mapping table is treated as
+        'no clear weak signal' rather than crashing.
+        """
+        from custom_components.roomba_plus.sensor import _robot_health_plain_status
+        hass = self._hass("en")
+        breakdown = {"weakest_signal": "some_future_signal_not_yet_mapped"}
+        text, rec = _robot_health_plain_status(hass, breakdown)
+        assert text == "Robot is in good condition"
+        assert rec is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L9-MAP — async_check_reloc_alert (v3.1.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRelocAlertRepairIssue:
+    """L9-MAP (v3.1.0) — async_check_reloc_alert fires/clears the Repair Issue."""
+
+    def _make_entry(self, rps):
+        entry = MagicMock()
+        entry.entry_id = "test_reloc_entry"
+        entry.runtime_data.robot_profile_store = rps
+        return entry
+
+    def test_fires_when_alert_triggered(self):
+        from custom_components.roomba_plus.repairs import async_check_reloc_alert
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(100):
+            rps.update_reloc_baseline(1)
+        for _ in range(10):
+            rps.update_reloc_baseline(10)
+        entry = self._make_entry(rps)
+        hass = MagicMock()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_reloc_alert(hass, entry)
+        mock_ir.async_create_issue.assert_called_once()
+        mock_ir.async_delete_issue.assert_not_called()
+
+    def test_clears_when_not_triggered(self):
+        """Self-healing: when the alert is no longer active, the issue is deleted."""
+        from custom_components.roomba_plus.repairs import async_check_reloc_alert
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for _ in range(20):
+            rps.update_reloc_baseline(1)
+        entry = self._make_entry(rps)
+        hass = MagicMock()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_reloc_alert(hass, entry)
+        mock_ir.async_delete_issue.assert_called_once()
+        mock_ir.async_create_issue.assert_not_called()
+
+    def test_no_rps_clears_issue(self):
+        """robot_profile_store=None → treated as not-triggered, issue cleared."""
+        from custom_components.roomba_plus.repairs import async_check_reloc_alert
+        entry = self._make_entry(rps=None)
+        hass = MagicMock()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            async_check_reloc_alert(hass, entry)
+        mock_ir.async_delete_issue.assert_called_once()
