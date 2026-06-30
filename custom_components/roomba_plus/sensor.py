@@ -681,6 +681,246 @@ def _compute_integration_health(hass: Any, entry: Any) -> tuple[int, dict[str, A
     return score, breakdown
 
 
+# ── v3.1.0 PLAIN-STATUS ──────────────────────────────────────────────────────
+# Plain-language status_text/recommendation derived from the existing
+# breakdown dicts of integration_health and robot_health_score — no new
+# computation, just a human-readable translation layer. Mirrors the
+# established hass.config.language pattern from device_tracker.py since
+# extra_state_attributes values are not covered by the strings.json/
+# translations/*.json mechanism (that only translates entity names and
+# config-flow text, not runtime attribute values).
+
+_PLAIN_LANG_TABLE = ("en", "de", "fr", "it", "es", "nl", "pt")
+
+
+def _plain_lang(hass: Any) -> str:
+    lang = (hass.config.language or "en")[:2]
+    return lang if lang in _PLAIN_LANG_TABLE else "en"
+
+
+_INTEG_HEALTH_HEALTHY: dict[str, str] = {
+    "en": "Everything is fine",
+    "de": "Alles in Ordnung",
+    "fr": "Tout va bien",
+    "it": "Tutto a posto",
+    "es": "Todo está bien",
+    "nl": "Alles in orde",
+    "pt": "Tudo certo",
+}
+
+_INTEG_HEALTH_ACTIVE_ISSUES: dict[str, str] = {
+    "en": "{n} active issue(s) detected",
+    "de": "{n} aktive Probleme erkannt",
+    "fr": "{n} problème(s) actif(s) détecté(s)",
+    "it": "{n} problema/i attivo/i rilevato/i",
+    "es": "{n} problema(s) activo(s) detectado(s)",
+    "nl": "{n} actief(ve) probleem/problemen gedetecteerd",
+    "pt": "{n} problema(s) ativo(s) detectado(s)",
+}
+
+_INTEG_HEALTH_ACTIVE_ISSUES_REC: dict[str, str] = {
+    "en": "See details under Settings → Repairs",
+    "de": "Details unter Einstellungen → Reparaturen",
+    "fr": "Voir les détails dans Paramètres → Réparations",
+    "it": "Vedi dettagli in Impostazioni → Riparazioni",
+    "es": "Ver detalles en Ajustes → Reparaciones",
+    "nl": "Bekijk details onder Instellingen → Reparaties",
+    "pt": "Veja detalhes em Configurações → Reparos",
+}
+
+_INTEG_HEALTH_MQTT_STALE: dict[str, str] = {
+    "en": "Local connection looks dead — is the robot on WiFi?",
+    "de": "Lokale Verbindung wirkt tot — Roboter im WLAN?",
+    "fr": "La connexion locale semble morte — le robot est-il sur le WiFi ?",
+    "it": "La connessione locale sembra inattiva — il robot è sul WiFi?",
+    "es": "La conexión local parece muerta — ¿está el robot en WiFi?",
+    "nl": "Lokale verbinding lijkt dood — zit de robot op WiFi?",
+    "pt": "A conexão local parece inativa — o robô está no WiFi?",
+}
+
+_INTEG_HEALTH_MQTT_STALE_REC: dict[str, str] = {
+    "en": "Check the robot's WiFi connection",
+    "de": "Roboter-WLAN-Verbindung prüfen",
+    "fr": "Vérifiez la connexion WiFi du robot",
+    "it": "Controlla la connessione WiFi del robot",
+    "es": "Revisa la conexión WiFi del robot",
+    "nl": "Controleer de WiFi-verbinding van de robot",
+    "pt": "Verifique a conexão WiFi do robô",
+}
+
+_INTEG_HEALTH_ARC1_STALE: dict[str, str] = {
+    "en": "Cloud connection has been stuck for {n}h",
+    "de": "Cloud-Verbindung hängt seit {n}h",
+    "fr": "La connexion cloud est bloquée depuis {n}h",
+    "it": "La connessione cloud è bloccata da {n}h",
+    "es": "La conexión a la nube lleva {n}h bloqueada",
+    "nl": "Cloudverbinding hangt al {n}u vast",
+    "pt": "A conexão com a nuvem está travada há {n}h",
+}
+
+_INTEG_HEALTH_ARC1_STALE_REC: dict[str, str] = {
+    "en": "Check your iRobot credentials in the options",
+    "de": "iRobot-Zugangsdaten in den Optionen prüfen",
+    "fr": "Vérifiez vos identifiants iRobot dans les options",
+    "it": "Controlla le credenziali iRobot nelle opzioni",
+    "es": "Revisa tus credenciales de iRobot en las opciones",
+    "nl": "Controleer je iRobot-gegevens in de opties",
+    "pt": "Verifique suas credenciais iRobot nas opções",
+}
+
+
+def _integration_health_plain_status(
+    hass: Any, breakdown: dict[str, Any]
+) -> tuple[str, str | None]:
+    """v3.1.0 PLAIN-STATUS — derive (status_text, recommendation) from the
+    integration_health breakdown. Priority mirrors the score's own
+    weighting: active_issues (strongest signal) > mqtt_age > arc1_age.
+    Only one condition is surfaced even if several apply — the strongest
+    signal is the most actionable one.
+    """
+    lang = _plain_lang(hass)
+    issue_count = breakdown.get("active_issues", 0)
+    mqtt_age = breakdown.get("mqtt_age_hours")
+    arc1_age = breakdown.get("arc1_age_hours")
+
+    if issue_count:
+        text = _INTEG_HEALTH_ACTIVE_ISSUES[lang].format(n=issue_count)
+        rec = _INTEG_HEALTH_ACTIVE_ISSUES_REC[lang]
+        return text, rec
+
+    if mqtt_age is not None and mqtt_age > INTEGRATION_HEALTH_MQTT_STALE_HOURS:
+        return _INTEG_HEALTH_MQTT_STALE[lang], _INTEG_HEALTH_MQTT_STALE_REC[lang]
+
+    if arc1_age is not None and arc1_age > INTEGRATION_HEALTH_ARC1_STALE_HOURS:
+        text = _INTEG_HEALTH_ARC1_STALE[lang].format(n=round(arc1_age))
+        rec = _INTEG_HEALTH_ARC1_STALE_REC[lang]
+        return text, rec
+
+    return _INTEG_HEALTH_HEALTHY[lang], None
+
+
+_ROBOT_HEALTH_GOOD: dict[str, str] = {
+    "en": "Robot is in good condition",
+    "de": "Roboter ist in gutem Zustand",
+    "fr": "Le robot est en bon état",
+    "it": "Il robot è in buone condizioni",
+    "es": "El robot está en buen estado",
+    "nl": "Robot is in goede staat",
+    "pt": "O robô está em bom estado",
+}
+
+_ROBOT_HEALTH_SIGNAL_TEXT: dict[str, dict[str, str]] = {
+    "battery_retention": {
+        "en": "Battery capacity is declining",
+        "de": "Akkuleistung lässt nach",
+        "fr": "La capacité de la batterie diminue",
+        "it": "La capacità della batteria sta diminuendo",
+        "es": "La capacidad de la batería está disminuyendo",
+        "nl": "Batterijcapaciteit neemt af",
+        "pt": "A capacidade da bateria está diminuindo",
+    },
+    "nav_efficiency": {
+        "en": "Navigation performance is below normal",
+        "de": "Navigationsleistung unter Normal",
+        "fr": "Les performances de navigation sont inférieures à la normale",
+        "it": "Le prestazioni di navigazione sono sotto la norma",
+        "es": "El rendimiento de navegación está por debajo de lo normal",
+        "nl": "Navigatieprestaties onder normaal",
+        "pt": "O desempenho de navegação está abaixo do normal",
+    },
+    "cleaning_speed_trend": {
+        "en": "Cleaning time is trending up",
+        "de": "Reinigungsdauer steigt",
+        "fr": "Le temps de nettoyage augmente",
+        "it": "Il tempo di pulizia è in aumento",
+        "es": "El tiempo de limpieza está aumentando",
+        "nl": "Schoonmaaktijd neemt toe",
+        "pt": "O tempo de limpeza está aumentando",
+    },
+    "anomaly_rate": {
+        "en": "Frequent unusual missions",
+        "de": "Häufige ungewöhnliche Missionen",
+        "fr": "Missions inhabituelles fréquentes",
+        "it": "Missioni insolite frequenti",
+        "es": "Misiones inusuales frecuentes",
+        "nl": "Vaak ongebruikelijke missies",
+        "pt": "Missões incomuns frequentes",
+    },
+    "stuck_rate": {
+        "en": "Robot is getting stuck more often",
+        "de": "Roboter bleibt häufiger stecken",
+        "fr": "Le robot reste coincé plus souvent",
+        "it": "Il robot si blocca più spesso",
+        "es": "El robot se atasca con más frecuencia",
+        "nl": "Robot blijft vaker vastzitten",
+        "pt": "O robô fica preso com mais frequência",
+    },
+}
+
+_ROBOT_HEALTH_SIGNAL_REC: dict[str, dict[str, str]] = {
+    "battery_retention": {
+        "en": "Consider replacing the battery",
+        "de": "Akkuwechsel in Erwägung ziehen",
+        "fr": "Envisagez de remplacer la batterie",
+        "it": "Valuta la sostituzione della batteria",
+        "es": "Considera reemplazar la batería",
+        "nl": "Overweeg de batterij te vervangen",
+        "pt": "Considere substituir a bateria",
+    },
+    "nav_efficiency": {
+        "en": "Retrain the Smart Map",
+        "de": "Smart Map neu trainieren",
+        "fr": "Réentraînez la Smart Map",
+        "it": "Riaddestra la Smart Map",
+        "es": "Vuelve a entrenar el Smart Map",
+        "nl": "Train de Smart Map opnieuw",
+        "pt": "Treine novamente o Smart Map",
+    },
+    "cleaning_speed_trend": {
+        "en": "Check the brushes and filter",
+        "de": "Bürsten und Filter prüfen",
+        "fr": "Vérifiez les brosses et le filtre",
+        "it": "Controlla le spazzole e il filtro",
+        "es": "Revisa los cepillos y el filtro",
+        "nl": "Controleer de borstels en het filter",
+        "pt": "Verifique as escovas e o filtro",
+    },
+    "anomaly_rate": {
+        "en": "Review recent missions in the history",
+        "de": "Letzte Missionen in der Historie prüfen",
+        "fr": "Consultez les missions récentes dans l'historique",
+        "it": "Controlla le missioni recenti nella cronologia",
+        "es": "Revisa las misiones recientes en el historial",
+        "nl": "Bekijk recente missies in de geschiedenis",
+        "pt": "Revise as missões recentes no histórico",
+    },
+    "stuck_rate": {
+        "en": "Check for obstacles in the cleaning area",
+        "de": "Hindernisse im Reinigungsbereich prüfen",
+        "fr": "Vérifiez les obstacles dans la zone de nettoyage",
+        "it": "Controlla gli ostacoli nell'area di pulizia",
+        "es": "Revisa si hay obstáculos en el área de limpieza",
+        "nl": "Controleer op obstakels in het schoonmaakgebied",
+        "pt": "Verifique obstáculos na área de limpeza",
+    },
+}
+
+
+def _robot_health_plain_status(
+    hass: Any, breakdown: dict[str, Any]
+) -> tuple[str, str | None]:
+    """v3.1.0 PLAIN-STATUS — derive (status_text, recommendation) from the
+    robot_health_score breakdown's weakest_signal field.
+    """
+    lang = _plain_lang(hass)
+    weakest = breakdown.get("weakest_signal")
+    if weakest is None or weakest not in _ROBOT_HEALTH_SIGNAL_TEXT:
+        return _ROBOT_HEALTH_GOOD[lang], None
+    text = _ROBOT_HEALTH_SIGNAL_TEXT[weakest][lang]
+    rec = _ROBOT_HEALTH_SIGNAL_REC[weakest][lang]
+    return text, rec
+
+
 def _raw_wifi_stability(records: list[dict]) -> StateType:
     """Return mean weighted standard deviation of WiFi signal across the API window.
 
@@ -840,6 +1080,15 @@ def _battery_capacity_retention(entity: "IRobotEntity") -> StateType:
 
 _EOL_THRESHOLD = 65.0  # % — typical lithium end-of-life
 
+# v3.1.0 L9-BATTERY — fallback values used only in the (abnormal) case where
+# entity._config_entry.runtime_data.robot_profile_store is None. Mirrors
+# RobotProfileStore's own _ESTCAP_FALLBACK_MIN_RATE / sanity cap constants
+# (robot_profile_store.py) — kept as a separate copy rather than imported to
+# avoid reaching into that module's private (underscore-prefixed) constants.
+# Keep these two values in sync with their robot_profile_store.py counterparts.
+_ESTCAP_FALLBACK_MIN_RATE = 0.01
+_ESTCAP_REMAINING_CYCLES_SANITY_CAP = 10_000
+
 
 def _battery_age_days(entity: "IRobotEntity") -> StateType:
     """Return battery age in days from batInfo.mDate (i/s-series only).
@@ -927,8 +1176,21 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
       remaining_cycles = (current_pct - 65) / degradation_rate
       remaining_days   ≈ remaining_cycles (at 1 charge/day)
 
+    v3.1.0 L9-BATTERY: the raw linear extrapolation above is unreliable when
+    estCap is still oscillating within normal measurement noise rather than
+    showing genuine degradation — field data (Thonno's i7+, 8 estCap readings
+    over 70 missions on a near-new battery) showed exactly this: a tiny
+    positive degradation_rate driven by noise alone projected to ~354 years
+    remaining, which is technically a correct computation but useless and
+    misleading as a user-facing number. RobotProfileStore now learns this
+    robot's own estCap reading-to-reading noise floor and only trusts
+    degradation_rate when it clearly exceeds that floor (see
+    degradation_rate_is_significant()). A sanity cap on the final result
+    catches anything that still slips through implausibly large.
+
     Returns 0 when capacity is already below threshold (replace now).
-    Returns None when insufficient data is available.
+    Returns None when insufficient data, or when degradation_rate is not
+    yet distinguishable from this robot's own measurement noise.
     """
     store = entity._config_entry.runtime_data.maintenance_store
     # Guard against both None and 0 — a corrupted or hand-edited persisted
@@ -955,7 +1217,26 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
     if degradation_rate <= 0:
         return None
 
+    # v3.1.0 L9-BATTERY — self-calibration gate
+    rps = getattr(entity._config_entry.runtime_data, "robot_profile_store", None)
+    if rps is not None:
+        if not rps.degradation_rate_is_significant(degradation_rate, int(cycles)):
+            return None
+        remaining_cycles = (current_pct - _EOL_THRESHOLD) / degradation_rate
+        remaining_cycles = rps.cap_remaining_cycles(remaining_cycles)
+        if remaining_cycles is None:
+            return None
+        return max(0, round(remaining_cycles))
+
+    # No RobotProfileStore at all (shouldn't normally happen, but handled
+    # defensively) — fall back to the same conservative absolute threshold
+    # degradation_rate_is_significant() uses when its own noise baseline
+    # isn't ready yet, just without the store-bound cap helper.
+    if degradation_rate < _ESTCAP_FALLBACK_MIN_RATE:
+        return None
     remaining_cycles = (current_pct - _EOL_THRESHOLD) / degradation_rate
+    if remaining_cycles > _ESTCAP_REMAINING_CYCLES_SANITY_CAP:
+        return None
     return max(0, round(remaining_cycles))
 
 
@@ -1773,7 +2054,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="clean_streak",
         name="Missions – Clean streak",
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
+        entity_category=EntityCategory.DIAGNOSTIC,  # PRIMARY-SLIM (v3.1.0): pure statistic, not daily-use
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
     ),
     RoombaSensorDescription(
@@ -2298,6 +2579,24 @@ async def async_setup_entry(
 
     # v2.9.0 INTEG-HEALTH — integration health meta-sensor, always created.
     entities.append(RoombaIntegrationHealthSensor(roomba, blid, config_entry))
+
+    # v3.1.0 LAST-MISSION-SUMMARY — always created; shows None when no record exists.
+    entities.append(RoombaLastMissionSummarySensor(roomba, blid, config_entry))
+
+    # v3.1.0 ROOM-CLEANING-HISTORY — per-room last-clean timestamps (SMART, cloud).
+    # Only created when mission_store is available; no tier gate — any robot that
+    # accumulates room data in last_cleaned_rooms will populate this sensor.
+    if data.mission_store is not None:
+        entities.append(RoombaRoomCleaningHistorySensor(roomba, blid, config_entry))
+
+    # v3.1.0 ROOM-SIZE — per-room floor area in m² from UMF polygons (SMART only).
+    if data.umf_aligner is not None:
+        entities.append(RoombaRoomAreasSensor(roomba, blid, config_entry))
+
+    # v3.1.0 L9-MAP — relocalisation rate (SMART only, mssnNavStats confirmed
+    # absent on EPHEMERAL tier).
+    if data.umf_aligner is not None:
+        entities.append(RoombaRelocalisationRateSensor(roomba, blid, config_entry))
 
     async_add_entities(entities)
 
@@ -4237,19 +4536,22 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_robot_health_score"
 
-    @property
-    def native_value(self) -> StateType:
+    def _score_and_breakdown(self) -> tuple[float | None, dict[str, Any]]:
+        """Compute (score, breakdown) once; shared by native_value and
+        extra_state_attributes so the underlying signals aren't recomputed
+        twice per state update.
+        """
         data = self._config_entry.runtime_data
         ms  = data.mission_store
         rps = getattr(data, "robot_profile_store", None)
 
         if ms is None or rps is None:
-            return None
+            return None, {}
 
         # Calibration gate: ≥20 missions needed for meaningful statistics
         records_30d = ms.query(30)
         if len(records_30d) < 20:
-            return None
+            return None, {}
 
         # Signal 1: battery retention (cached from battery retention sensor)
         bat_retention = data.battery_retention_value
@@ -4283,6 +4585,26 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
             consecutive_anomalous=consecutive_anom,
             stuck_rate_30d=stuck_rate,
         )
+
+    @property
+    def native_value(self) -> StateType:
+        score, _ = self._score_and_breakdown()
+        return score
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """v3.1.0 PLAIN-STATUS — status_text/recommendation derived from the
+        breakdown's weakest_signal, translated via _ROBOT_HEALTH_STATUS_MAP.
+        """
+        _, breakdown = self._score_and_breakdown()
+        if not breakdown:
+            return {}
+        status_text, recommendation = _robot_health_plain_status(self.hass, breakdown)
+        return {
+            **breakdown,
+            "status_text": status_text,
+            "recommendation": recommendation,
+        }
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return False  # updated by cloud coordinator only
@@ -4590,4 +4912,277 @@ class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         _, breakdown = _compute_integration_health(self.hass, self._entry)
-        return breakdown
+        status_text, recommendation = _integration_health_plain_status(
+            self.hass, breakdown
+        )
+        return {
+            **breakdown,
+            "status_text": status_text,
+            "recommendation": recommendation,
+        }
+
+
+class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
+    """LAST-MISSION-SUMMARY (v3.1.0) — last completed mission as a single entity.
+
+    native_value = result string of the last mission record.
+    extra_state_attributes = all relevant mission fields in one place.
+
+    Primary use-cases:
+    - Troubleshooting: attach one entity to a bug report instead of digging
+      through diagnostics.
+    - Notification automations: trigger on state change, use attributes for
+      the notification body without template work.
+
+    Gate: none — available for all robots and all tiers. Returns None /
+    empty attributes when MissionStore has no records yet.
+    """
+
+    _attr_translation_key = "last_mission_summary"
+    _attr_entity_category = None          # Primary — visible on the device page
+    _attr_has_entity_name = True
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_last_mission_summary"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "last_mission_summary"
+
+    @property
+    def _latest(self) -> dict[str, Any] | None:
+        """Return the most recent MissionStore record, or None."""
+        store = self._entry.runtime_data.mission_store
+        if store is None:
+            return None
+        return store.latest()
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the result of the last mission, e.g. 'completed'."""
+        rec = self._latest
+        return rec.get("result") if rec else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose all mission fields as attributes for easy automation use."""
+        rec = self._latest
+        if rec is None:
+            return {
+                "result": None,
+                "duration_min": None,
+                "area_sqft": None,
+                "cleaned_rooms": None,
+                "cleaning_passes": None,
+                "battery_start_pct": None,
+                "battery_end_pct": None,
+                "recharges": None,
+                "dirt_events": None,
+                "evacuations": None,
+                "error_code": None,
+                "initiator": None,
+                "started_at": None,
+                "ended_at": None,
+            }
+        return {
+            "result": rec.get("result"),
+            "duration_min": rec.get("duration_min"),
+            "area_sqft": rec.get("area_sqft"),
+            "cleaned_rooms": rec.get("last_cleaned_rooms"),
+            "cleaning_passes": rec.get("cleaning_passes"),
+            "battery_start_pct": rec.get("battery_start_pct"),
+            "battery_end_pct": rec.get("battery_end_pct"),
+            "recharges": rec.get("recharges"),
+            "dirt_events": rec.get("dirt_events"),
+            "evacuations": rec.get("evacuations"),
+            "error_code": rec.get("error_code"),
+            "initiator": rec.get("initiator"),
+            "started_at": rec.get("started_at"),
+            "ended_at": rec.get("ended_at"),
+        }
+
+
+class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
+    """ROOM-CLEANING-HISTORY (v3.1.0) — last clean timestamp per room.
+
+    native_value = number of rooms for which a cleaning timestamp is known.
+    extra_state_attributes = {room_name: iso_timestamp} dict spanning all
+    records in MissionStore, newest-first scan so each room shows its most
+    recent clean.
+
+    Gate: only created when the robot has ever recorded room data
+    (``last_cleaned_rooms`` in at least one MissionStore record). In practice
+    this means SMART robots with cloud credentials, but the sensor is
+    tier-agnostic — if an EPHEMERAL robot gains room data via future
+    enrichment it will appear automatically.
+
+    Primary use-cases:
+    - Dashboard: "When was the kitchen last cleaned?"
+    - Automation: template sensor pulling a single room's timestamp for
+      a time-based notification.
+    """
+
+    _attr_translation_key = "room_cleaning_history"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_room_cleaning_history"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "room_cleaning_history"
+
+    @property
+    def _history(self) -> dict[str, str]:
+        store = self._entry.runtime_data.mission_store
+        if store is None:
+            return {}
+        return store.room_cleaning_history()
+
+    @property
+    def native_value(self) -> int:
+        """Number of rooms with a known last-clean timestamp."""
+        return len(self._history)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Dict mapping room display name → ISO timestamp of last clean."""
+        return self._history
+
+
+class RoombaRoomAreasSensor(IRobotEntity, SensorEntity):
+    """ROOM-SIZE (v3.1.0) — per-room floor area in m² from UMF polygons.
+
+    native_value = number of rooms with a known area.
+    extra_state_attributes = {room_display_name: area_m2} dict.
+
+    Source: UmfAligner.room_areas_m2 (shoelace formula on UMF polygon
+    vertices). Keys are translated from region IDs to display names via
+    cloud_coordinator.regions. Falls back to region ID as key when the
+    display name is not available.
+
+    Does NOT require UmfAligner.aligned — room_areas_m2 is populated by
+    _resolve_room_polygons() before the alignment step, so areas are
+    available even at low confidence.
+
+    Gate: SMART-tier + umf_aligner present. The UmfAligner is only
+    instantiated for SMART robots with cloud credentials.
+    """
+
+    _attr_translation_key = "room_areas"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_room_areas"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "room_areas"
+
+    @property
+    def _areas(self) -> dict[str, float]:
+        """Return {display_name: area_m2} from UmfAligner, or {} if unavailable."""
+        data = self._entry.runtime_data
+        aligner = data.umf_aligner
+        if aligner is None:
+            return {}
+        areas_by_rid = aligner.room_areas_m2          # {rid: float}
+        if not areas_by_rid:
+            return {}
+        # Build rid → display_name map from cloud coordinator
+        cc = data.cloud_coordinator
+        id_to_name: dict[str, str] = {}
+        if cc is not None:
+            id_to_name = {
+                r["id"]: r["name"]
+                for r in (cc.regions or [])
+                if r.get("id") and r.get("name")
+            }
+        return {
+            id_to_name.get(rid, rid): round(area, 2)
+            for rid, area in areas_by_rid.items()
+        }
+
+    @property
+    def native_value(self) -> int:
+        """Number of rooms with a known floor area."""
+        return len(self._areas)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float]:
+        """Dict mapping room display name → floor area in m²."""
+        return self._areas
+
+
+class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
+    """L9-MAP (v3.1.0) — self-calibrating relocalisation rate sensor.
+
+    native_value = recent-window mean reLc per mission (rounded to 2dp),
+    or None until reloc_baseline_ready (needs _RELOC_BASELINE_MIN_MISSIONS
+    observations).
+
+    extra_state_attributes expose the underlying baseline and window for
+    troubleshooting and so a user/automation can see the comparison directly
+    rather than just trusting the sensor's verdict.
+
+    Gate: SMART-tier only — mssnNavStats is confirmed present on i7+/s9+
+    (lewis firmware) via field data (Thonno), absent on 980/900-series.
+    DIAGNOSTIC, disabled by default — this is a debugging/power-user signal,
+    not a primary daily-use sensor, consistent with nav_quality (l_squal)
+    which uses the same gating pattern.
+    """
+
+    _attr_translation_key = "relocalisation_rate"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_entity_registry_enabled_default = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_relocalisation_rate"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "relocalisation_rate"
+
+    @property
+    def _rps(self) -> Any:
+        return self._entry.runtime_data.robot_profile_store
+
+    @property
+    def native_value(self) -> float | None:
+        rps = self._rps
+        if rps is None or not rps.reloc_baseline_ready:
+            return None
+        if not rps.recent_relocs:
+            return None
+        return round(sum(rps.recent_relocs) / len(rps.recent_relocs), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rps = self._rps
+        if rps is None:
+            return {
+                "baseline": None,
+                "baseline_mission_count": 0,
+                "recent_window": [],
+                "alert": False,
+            }
+        return {
+            "baseline": round(rps.reloc_baseline, 2) if rps.reloc_baseline is not None else None,
+            "baseline_mission_count": rps.reloc_mission_count,
+            "recent_window": list(rps.recent_relocs),
+            "alert": rps.reloc_alert_triggered(),
+        }

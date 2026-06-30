@@ -464,6 +464,30 @@ class MissionStore:
             return None
         return {effective_map.get(rid, rid): frac for rid, frac in coverage.items()}
 
+    def room_cleaning_history(self) -> dict[str, str]:
+        """Return the most recent clean timestamp per room across all records.
+
+        Scans records newest-first; the first hit per room name wins.
+        Uses ``last_cleaned_rooms`` (list of room display names) and
+        ``ended_at`` (ISO timestamp string) from each record.
+
+        Returns an empty dict when no records contain room data.
+        Only completed/enriched records carry ``last_cleaned_rooms`` — records
+        without it are skipped silently.
+
+        Result: ``{"Kitchen": "2026-06-29T08:45:00", "Living Room": "2026-06-27T09:10:00"}``
+        """
+        result: dict[str, str] = {}
+        for rec in reversed(self._records):
+            ended_at = rec.get("ended_at")
+            rooms: list[str] = rec.get("last_cleaned_rooms") or []
+            if not ended_at or not rooms:
+                continue
+            for room in rooms:
+                if room not in result:
+                    result[room] = ended_at
+        return result
+
     def presence_windows(self, days: int) -> list[MissionWindow]:
         """Return gaps between missions as potential 'all-away' windows.
 

@@ -704,9 +704,18 @@ ATTR_TANK_LEVEL: Final = "tank_level"
 ATTR_PAD_WETNESS: Final = "spray_amount"
 
 # Fan speed labels for carpet-boost models
-FAN_SPEED_AUTOMATIC: Final = "Automatic"
-FAN_SPEED_ECO: Final = "Eco"
-FAN_SPEED_PERFORMANCE: Final = "Performance"
+# v3.1.0 CARPET-BOOST-SLUG-FIX — lowercase slugs required by HA's select
+# translation_key convention (hassfest enforces [a-z0-9-_]+ on state keys).
+# Previously "Automatic"/"Eco"/"Performance" (Capital-Case) were both the
+# select's option/state value AND directly displayed — that's how the
+# select worked before translation_key was added, but it fails hassfest
+# validation. select.py's _select_carpet_boost() accepts the old Capital-Case
+# values too (case-insensitive match) so existing automations using
+# select.select_option with "Automatic" keep working — only the *displayed*
+# state value and the slugs in strings.json/translations changed.
+FAN_SPEED_AUTOMATIC: Final = "automatic"
+FAN_SPEED_ECO: Final = "eco"
+FAN_SPEED_PERFORMANCE: Final = "performance"
 FAN_SPEEDS: Final[list[str]] = [FAN_SPEED_AUTOMATIC, FAN_SPEED_ECO, FAN_SPEED_PERFORMANCE]
 
 # Braava mop overlap constants
@@ -781,6 +790,34 @@ def active_charge_cycles(bbchg3: dict) -> int | None:
         return int(nimh_cycles)
     cycles = bbchg3.get("nLithChrg") or bbchg3.get("nAvail")
     return int(cycles) if cycles else None
+
+
+def estcap_to_mah(
+    raw_estcap: float | int | None,
+    estcap_scale_liion: float,
+    estcap_scale_nimh: float,
+    nimh_cycles: int | None,
+) -> float | None:
+    """v3.1.0 L9-BATTERY — chemistry-aware raw estCap → mAh conversion.
+
+    Extracted from sensor.py's _estcap_to_mah() (which is bound to an
+    IRobotEntity and reads robot_profile off it) so callbacks.py can record
+    estCap observations into RobotProfileStore's noise-floor baseline at
+    mission end without needing the full entity wrapper — same
+    extract-on-third-call-site reasoning as active_charge_cycles() above.
+
+    For i/s/j/e/6 series (both scales == 1.0): raw estCap == mAh directly.
+    For 9-series old firmware: raw estCap is BMS-scaled.
+      Li-ion (scale != 1.0, no NiMH cycles recorded): raw ÷ estcap_scale_liion
+      NiMH   (nimh_cycles > 0): raw ÷ estcap_scale_nimh
+    Returns None when raw_estcap is absent or zero.
+    """
+    if not raw_estcap:
+        return None
+    if estcap_scale_liion == 1.0 and estcap_scale_nimh == 1.0:
+        return float(raw_estcap)
+    scale = estcap_scale_nimh if (nimh_cycles or 0) > 0 else estcap_scale_liion
+    return round(float(raw_estcap) / scale)
 
 # ── F7g — Region type icons ───────────────────────────────────────────────────
 # Single source of truth for MDI icon names per iRobot region_type string.

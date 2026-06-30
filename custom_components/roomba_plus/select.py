@@ -227,7 +227,12 @@ async def _select_reusable_wetness(entity: SimpleRoombaSelect, option: str) -> N
 
 
 async def _select_carpet_boost(entity: SimpleRoombaSelect, option: str) -> None:
-    if option not in FAN_SPEEDS:
+    """v3.1.0 CARPET-BOOST-SLUG-FIX: case-insensitive so existing automations
+    calling select.select_option with the old Capital-Case value ("Automatic")
+    keep working after FAN_SPEEDS moved to lowercase slugs.
+    """
+    canonical = option.lower()
+    if canonical not in FAN_SPEEDS:
         _LOGGER.error("CarpetBoostSelect: unknown option %r", option)
         return
     from homeassistant.helpers import entity_registry as er
@@ -238,7 +243,7 @@ async def _select_carpet_boost(entity: SimpleRoombaSelect, option: str) -> None:
         return
     await entity.hass.services.async_call(
         "vacuum", "set_fan_speed",
-        {"entity_id": vac_entry, "fan_speed": option},
+        {"entity_id": vac_entry, "fan_speed": canonical},
         blocking=False,
     )
 

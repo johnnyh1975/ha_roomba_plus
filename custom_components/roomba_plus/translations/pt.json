@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "Credenciais cloud iRobot (opcional)",
-        "description": "Introduz o email e a palavra-passe da app iRobot para ativar as funcionalidades cloud (nomes de divisões oficiais, favoritos). Deixa ambos os campos vazios para ignorar e usar apenas MQTT local.",
+        "description": "Todos os comandos (iniciar, parar, seleção de quartos) são executados localmente via MQTT e nunca tocam a nuvem. As credenciais da nuvem são usadas apenas para ler nomes de quartos, histórico de missões e favoritos — o robô é sempre controlado diretamente.\n\nInsira o seu e-mail e senha do aplicativo iRobot para ativar essas funções na nuvem, ou deixe ambos os campos vazios para usar apenas MQTT local.",
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Palavra-passe iRobot"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missões – Área limpa hoje"
+      },
+      "room_areas": {
+        "name": "Quartos – Áreas"
+      },
+      "relocalisation_rate": {
+        "name": "Navegação – Taxa de relocalização"
+      },
+      "room_cleaning_history": {
+        "name": "Quartos – Histórico de limpeza"
+      },
+      "last_mission_summary": {
+        "name": "Missões – Resumo da última missão"
       },
       "last_mission_result": {
         "name": "Missões – Último resultado"
@@ -771,9 +783,9 @@
       "carpet_boost_select": {
         "name": "Reforço de tapete",
         "state": {
-          "Automatic": "Automático",
-          "Eco": "Eco",
-          "Performance": "Desempenho"
+          "automatic": "Automático",
+          "eco": "Eco",
+          "performance": "Desempenho"
         }
       }
     },
@@ -869,7 +881,11 @@
     },
     "map_drift_detected": {
       "title": "Deriva do Smart Map",
-      "description": "Deriva de {magnitude_cm} cm (rumo {bearing}°). Verifica a base e efetua novo mapeamento."
+      "description": "As missões recentes do robô mostram desvio elevado em relação à posição esperada da base (último: {magnitude_cm} cm, direção {bearing}°). Isso pode indicar que a base foi movida ou que o robô está com dificuldade de relocalização. Reconecte-o à base e permita uma nova passagem de mapeamento. Este aviso desaparece automaticamente quando o desvio voltar ao normal nas próximas missões."
+    },
+    "reloc_rate_elevated": {
+      "title": "Taxa de relocalização elevada",
+      "description": "O robô tem se relocalizado significativamente mais do que a sua própria linha de base estabelecida ({baseline} em média por missão). Isso pode indicar degradação do Smart Map — considere excluir e treinar novamente o mapa se também notar mensagens de \"Novo espaço encontrado\" ou rastreamento impreciso de cômodos. Este aviso desaparece automaticamente quando a taxa voltar ao normal nas próximas missões."
     },
     "observed_zones_detected": {
       "title": "Obstáculos detetados pelo robô no mapa cloud",

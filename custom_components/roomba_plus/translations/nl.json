@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "iRobot cloud-inloggegevens (optioneel)",
-        "description": "Voer je e-mailadres en wachtwoord van de iRobot-app in om cloudfuncties te activeren (officiële kamernamen, favorieten). Laat beide velden leeg om over te slaan en alleen lokale MQTT te gebruiken.",
+        "description": "Alle opdrachten (starten, stoppen, kamerselectie) worden lokaal uitgevoerd via MQTT en raken de cloud nooit. Cloudgegevens worden alleen gebruikt om kamernamen, missiegeschiedenis en favorieten te lezen — de robot wordt altijd direct aangestuurd.\n\nVoer je iRobot-app-e-mailadres en wachtwoord in om deze cloudfuncties in te schakelen, of laat beide velden leeg om alleen lokaal MQTT te gebruiken.",
         "data": {
           "irobot_username": "iRobot e-mail",
           "irobot_password": "iRobot wachtwoord"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missies – Vandaag schoongemaakt"
+      },
+      "room_areas": {
+        "name": "Kamers – Vloeroppervlakken"
+      },
+      "relocalisation_rate": {
+        "name": "Navigatie – Herlokalisatiepercentage"
+      },
+      "room_cleaning_history": {
+        "name": "Kamers – Schoonmaakgeschiedenis"
+      },
+      "last_mission_summary": {
+        "name": "Missies – Samenvatting laatste missie"
       },
       "last_mission_result": {
         "name": "Missies – Laatste resultaat"
@@ -771,9 +783,9 @@
       "carpet_boost_select": {
         "name": "Tapijt boost",
         "state": {
-          "Automatic": "Automatisch",
-          "Eco": "Eco",
-          "Performance": "Prestaties"
+          "automatic": "Automatisch",
+          "eco": "Eco",
+          "performance": "Prestaties"
         }
       }
     },
@@ -869,7 +881,11 @@
     },
     "map_drift_detected": {
       "title": "Smart Map-drift gedetecteerd",
-      "description": "Drift van {magnitude_cm} cm (koers {bearing}°). Controleer het dock en karteer opnieuw."
+      "description": "De recente missies van de robot tonen verhoogde drift ten opzichte van de verwachte dockpositie (laatste: {magnitude_cm} cm, richting {bearing}°). Dit kan erop wijzen dat het dock is verplaatst of dat de robot moeite heeft met herlokaliseren. Laat hem opnieuw dokken en een nieuwe karteringsrit uitvoeren. Deze melding verdwijnt automatisch zodra de drift de komende missies weer normaal wordt."
+    },
+    "reloc_rate_elevated": {
+      "title": "Verhoogd herlokalisatiepercentage",
+      "description": "De robot heeft zich aanzienlijk vaker moeten herlokaliseren dan zijn eigen vastgestelde basislijn ({baseline} gemiddeld per missie). Dit kan wijzen op verslechtering van de Smart Map — overweeg de kaart te verwijderen en opnieuw te trainen als je ook \"Nieuwe ruimte gevonden\"-meldingen of onnauwkeurige kamertracking opmerkt. Deze melding verdwijnt automatisch zodra het percentage de komende missies weer normaal wordt."
     },
     "observed_zones_detected": {
       "title": "Door robot gedetecteerde obstakels in cloudkaart",

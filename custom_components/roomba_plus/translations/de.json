@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "iRobot Cloud-Zugangsdaten (optional)",
-        "description": "Geben Sie Ihre iRobot-App E-Mail und Ihr Passwort ein, um Cloud-Funktionen zu aktivieren (verbindliche Raumnamen, Favoriten). Lassen Sie beide Felder leer, um die Cloud zu überspringen und nur lokales MQTT zu verwenden.",
+        "description": "Alle Befehle (Start, Stop, Raumauswahl) laufen lokal über MQTT und berühren nie die Cloud. Cloud-Zugangsdaten werden nur zum Lesen von Raumnamen, Missionsverlauf und Favoriten verwendet — der Roboter wird immer direkt gesteuert.\n\nGib deine iRobot-App-E-Mail und dein Passwort ein, um diese Cloud-Funktionen zu aktivieren, oder lass beide Felder leer, um nur lokales MQTT zu verwenden.",
         "data": {
           "irobot_username": "iRobot E-Mail",
           "irobot_password": "iRobot Passwort"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missionen – Heute gereinigte Fläche"
+      },
+      "room_areas": {
+        "name": "Räume – Grundflächen"
+      },
+      "relocalisation_rate": {
+        "name": "Navigation – Relokalisierungsrate"
+      },
+      "room_cleaning_history": {
+        "name": "Räume – Reinigungshistorie"
+      },
+      "last_mission_summary": {
+        "name": "Missionen – Letzte Mission Zusammenfassung"
       },
       "last_mission_result": {
         "name": "Missionen – Letztes Ergebnis"
@@ -771,9 +783,9 @@
       "carpet_boost_select": {
         "name": "Teppich-Boost",
         "state": {
-          "Automatic": "Automatisch",
-          "Eco": "Eco",
-          "Performance": "Leistung"
+          "automatic": "Automatisch",
+          "eco": "Eco",
+          "performance": "Leistung"
         }
       }
     },
@@ -858,7 +870,11 @@
     },
     "map_drift_detected": {
       "title": "Smart-Map-Drift erkannt",
-      "description": "Der Roboter ist {magnitude_cm} cm (Richtung {bearing}°) von seiner erwarteten Position abgewichen. Dock prüfen und neue Kartierungsfahrt durchführen."
+      "description": "Die letzten Missionen des Roboters zeigen erhöhten Drift von der erwarteten Dockposition (zuletzt: {magnitude_cm} cm, Richtung {bearing}°). Das kann darauf hindeuten, dass die Dockingstation verschoben wurde oder der Roboter Schwierigkeiten bei der Neulokalisierung hat. Erneut andocken und eine frische Kartierungsfahrt zulassen. Dieser Hinweis verschwindet automatisch, sobald sich der Drift in den nächsten Missionen wieder normalisiert."
+    },
+    "reloc_rate_elevated": {
+      "title": "Erhöhte Relokalisierungsrate",
+      "description": "Der Roboter musste sich deutlich häufiger neu lokalisieren als es seiner eigenen etablierten Baseline entspricht ({baseline} pro Mission im Schnitt). Das kann auf eine Verschlechterung der Smart Map hindeuten — erwäge die Karte zu löschen und neu zu trainieren, falls zusätzlich Meldungen wie \"Neuer Bereich gefunden\" auftreten oder die Raumverfolgung ungenau wird. Dieser Hinweis verschwindet automatisch, sobald sich die Rate in den nächsten Missionen wieder normalisiert."
     },
     "geometry_drifted": {
       "title": "Kartenverschiebung erkannt",

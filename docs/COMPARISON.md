@@ -3,7 +3,7 @@
 # Roomba Integrations — Feature Comparison
 
 > Based on source code analysis · last verified June 2026 against
-> Roomba+ **v3.0.0** and roomba_rest980 **v1.19.1**
+> Roomba+ **v3.1.0** and roomba_rest980 **v1.19.1**
 > (manifest version; quality_scale.yaml documents Bronze→Platinum rules, all met).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
@@ -20,7 +20,7 @@
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, mission log | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 2946 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3024 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 

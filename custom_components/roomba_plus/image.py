@@ -651,6 +651,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         asyncio.run_coroutine_threadsafe(
                             self._trigger_drift_issue_enriched(*drift_vector), loop
                         )
+                    # v3.1.0 DRIFT-AUTO — self-healing check after every drift
+                    # sample, regardless of whether this sample triggered.
+                    # Recovery uses a lower hysteresis threshold than the
+                    # trigger, so the issue doesn't flap right at the boundary.
+                    elif data.geometry_store.drift_recovered():
+                        asyncio.run_coroutine_threadsafe(
+                            self._clear_drift_issue(), loop
+                        )
                 asyncio.run_coroutine_threadsafe(
                     data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
                     loop,
@@ -1080,6 +1088,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """F6d -- fire the drift Repair Issue with bearing/magnitude enrichment."""
         from .repairs import async_enrich_drift_issue
         await async_enrich_drift_issue(self.hass, self._config_entry, dx=dx, dy=dy)
+
+    async def _clear_drift_issue(self) -> None:
+        """v3.1.0 DRIFT-AUTO — self-healing: clear the issue once the recent
+        drift window's mean has dropped back under the recovery threshold.
+        No-op (HA tolerates deleting an issue that doesn't exist) when the
+        issue was never created in the first place.
+        """
+        from homeassistant.components import repairs as ir
+        ir.async_delete_issue(self.hass, DOMAIN, "map_drift_detected")
 
     @staticmethod
     def _blank_image() -> bytes:

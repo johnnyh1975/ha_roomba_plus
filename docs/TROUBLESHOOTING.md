@@ -217,4 +217,42 @@ Fixed in v2.9.0. A genuine, benign Wi-Fi gap of a few minutes right after undock
 
 ---
 
+**Replacing or selling your robot**
+
+Roomba+ stores months of learned data — mission history, coverage baselines, maintenance timers, and health trends — inside HA. Before removing or selling a robot, back up that data so you can restore it if you reinstall later, or hand it off to the new owner.
+
+**Step 1 — Export your history (optional but recommended)**
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=export" \
+     -o roomba_backup.json
+```
+
+The `entry_id` is in Settings → Devices → your Roomba → ⋮ → System information.
+
+**Step 2 — Remove the integration**
+
+Go to Settings → Devices & Services → Roomba+ → Delete. This removes the config entry and all associated entities cleanly.
+
+**Step 3 — Factory reset (if selling)**
+
+A factory reset on the robot is done through the **iRobot app** (not this integration): open the app → your robot → Settings → Factory Reset. This clears the robot's stored map and account link. Roomba+ has no factory-reset command — the robot's firmware handles this directly.
+
+**Setting up a replacement robot**
+
+Add a new config entry for the new robot (Settings → Add Integration → Roomba+). The new entry starts fresh. If you want to restore history from a previous robot, use the import endpoint after setup:
+
+```bash
+curl -X POST \
+     -H "Authorization: Bearer <token>" \
+     -H "Content-Type: application/json" \
+     -d @roomba_backup.json \
+     "https://<ha>/api/roomba_plus/<new_entry_id>/mission_history/import"
+```
+
+Import deduplicates by `id` — safe to run multiple times.
+
+---
+
 *[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

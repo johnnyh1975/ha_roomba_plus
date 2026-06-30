@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "iRobot cloud credentials (optional)",
-        "description": "Enter your iRobot app email and password to enable cloud features (authoritative room names, favorites). Leave both fields empty to skip and use local MQTT only.",
+        "description": "All commands (start, stop, room selection) run locally over MQTT and never touch the cloud. Cloud credentials are only used to read room names, mission history, and favorites — the robot is always controlled directly.\n\nEnter your iRobot app email and password to enable these cloud features, or leave both fields empty to use local MQTT only.",
         "data": {
           "irobot_username": "iRobot email",
           "irobot_password": "iRobot password"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missions – Area cleaned today"
+      },
+      "room_areas": {
+        "name": "Rooms – Floor areas"
+      },
+      "relocalisation_rate": {
+        "name": "Navigation – Relocalisation rate"
+      },
+      "room_cleaning_history": {
+        "name": "Rooms – Cleaning history"
+      },
+      "last_mission_summary": {
+        "name": "Missions – Last mission summary"
       },
       "last_mission_result": {
         "name": "Missions – Last result"
@@ -778,9 +790,9 @@
       "carpet_boost_select": {
         "name": "Carpet boost",
         "state": {
-          "Automatic": "Automatic",
-          "Eco": "Eco",
-          "Performance": "Performance"
+          "automatic": "Automatic",
+          "eco": "Eco",
+          "performance": "Performance"
         }
       }
     },
@@ -871,7 +883,11 @@
     },
     "map_drift_detected": {
       "title": "Smart Map drift detected",
-      "description": "The robot's position drifted {magnitude_cm} cm (bearing {bearing}°) from its expected location. This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run."
+      "description": "The robot's recent missions show elevated drift from its expected dock position (latest: {magnitude_cm} cm, bearing {bearing}°). This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run. This notice clears automatically once drift returns to normal over the next few missions."
+    },
+    "reloc_rate_elevated": {
+      "title": "Elevated relocalisation rate",
+      "description": "The robot has been relocalising significantly more often than its own established baseline ({baseline} per mission on average). This can indicate Smart Map degradation — consider deleting and re-training the map if you also notice \"New space found\" messages or inaccurate room tracking. This notice clears automatically once the rate returns to normal over the next few missions."
     },
     "observed_zones_detected": {
       "title": "Robot-detected obstacles in cloud map",

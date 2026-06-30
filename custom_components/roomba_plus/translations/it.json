@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "Credenziali cloud iRobot (opzionale)",
-        "description": "Inserisci l'email e la password dell'app iRobot per abilitare le funzioni cloud (nomi stanze ufficiali, preferiti). Lascia entrambi i campi vuoti per usare solo il MQTT locale.",
+        "description": "Tutti i comandi (avvio, stop, selezione stanze) vengono eseguiti localmente tramite MQTT e non toccano mai il cloud. Le credenziali cloud vengono usate solo per leggere i nomi delle stanze, la cronologia delle missioni e i preferiti — il robot è sempre controllato direttamente.\n\nInserisci la tua email e password dell’app iRobot per abilitare queste funzioni cloud, oppure lascia entrambi i campi vuoti per usare solo MQTT locale.",
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Password iRobot"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missioni – Area pulita oggi"
+      },
+      "room_areas": {
+        "name": "Stanze – Superfici"
+      },
+      "relocalisation_rate": {
+        "name": "Navigazione – Tasso di rilocalizzazione"
+      },
+      "room_cleaning_history": {
+        "name": "Stanze – Cronologia pulizia"
+      },
+      "last_mission_summary": {
+        "name": "Missioni – Riepilogo ultima missione"
       },
       "last_mission_result": {
         "name": "Missioni – Ultimo risultato"
@@ -771,9 +783,9 @@
       "carpet_boost_select": {
         "name": "Boost tappeto",
         "state": {
-          "Automatic": "Automatico",
-          "Eco": "Eco",
-          "Performance": "Prestazioni"
+          "automatic": "Automatico",
+          "eco": "Eco",
+          "performance": "Prestazioni"
         }
       }
     },
@@ -869,7 +881,11 @@
     },
     "map_drift_detected": {
       "title": "Deriva Smart Map rilevata",
-      "description": "Deriva di {magnitude_cm} cm (rotta {bearing}°). Verifica la base e completa una nuova mappatura."
+      "description": "Le missioni recenti del robot mostrano una deriva elevata rispetto alla posizione di base prevista (ultima: {magnitude_cm} cm, direzione {bearing}°). Questo potrebbe indicare che la base è stata spostata o che il robot ha difficoltà a rilocalizzarsi. Ricollega alla base e consenti una nuova mappatura. Questo avviso si chiude automaticamente quando la deriva torna normale nelle missioni successive."
+    },
+    "reloc_rate_elevated": {
+      "title": "Tasso di rilocalizzazione elevato",
+      "description": "Il robot si è rilocalizzato significativamente più spesso rispetto alla propria baseline consolidata ({baseline} in media per missione). Questo può indicare un degrado della Smart Map — valuta di eliminare e riaddestrare la mappa se noti anche messaggi \"Nuovo spazio trovato\" o un tracciamento impreciso delle stanze. Questo avviso si chiude automaticamente quando il tasso torna normale nelle missioni successive."
     },
     "observed_zones_detected": {
       "title": "Ostacoli rilevati dal robot nella mappa cloud",

@@ -31,7 +31,7 @@
       },
       "cloud_credentials": {
         "title": "Identifiants cloud iRobot (optionnel)",
-        "description": "Entrez l'adresse e-mail et le mot de passe de votre application iRobot pour activer les fonctionnalités cloud (noms de pièces officiels, favoris). Laissez les deux champs vides pour ignorer et utiliser uniquement le MQTT local.",
+        "description": "Toutes les commandes (démarrage, arrêt, sélection de pièces) s’exécutent localement via MQTT et ne touchent jamais le cloud. Les identifiants cloud servent uniquement à lire les noms de pièces, l’historique des missions et les favoris — le robot est toujours contrôlé directement.\n\nEntrez votre adresse e-mail et votre mot de passe iRobot pour activer ces fonctions cloud, ou laissez les deux champs vides pour utiliser uniquement le MQTT local.",
         "data": {
           "irobot_username": "E-mail iRobot",
           "irobot_password": "Mot de passe iRobot"
@@ -353,6 +353,18 @@
       },
       "area_cleaned_today": {
         "name": "Missions – Surface nettoyée aujourd'hui"
+      },
+      "room_areas": {
+        "name": "Pièces – Surfaces au sol"
+      },
+      "relocalisation_rate": {
+        "name": "Navigation – Taux de relocalisation"
+      },
+      "room_cleaning_history": {
+        "name": "Pièces – Historique de nettoyage"
+      },
+      "last_mission_summary": {
+        "name": "Missions – Résumé de la dernière mission"
       },
       "last_mission_result": {
         "name": "Missions – Dernier résultat"
@@ -771,9 +783,9 @@
       "carpet_boost_select": {
         "name": "Boost tapis",
         "state": {
-          "Automatic": "Automatique",
-          "Eco": "Éco",
-          "Performance": "Performance"
+          "automatic": "Automatique",
+          "eco": "Éco",
+          "performance": "Performance"
         }
       }
     },
@@ -869,7 +881,11 @@
     },
     "map_drift_detected": {
       "title": "Dérive carte détectée",
-      "description": "Dérive de {magnitude_cm} cm (cap {bearing}°). Vérifiez la base et relancez une cartographie."
+      "description": "Les missions récentes du robot montrent une dérive élevée par rapport à sa position de base attendue (dernière : {magnitude_cm} cm, cap {bearing}°). Cela peut indiquer que la base a été déplacée ou que le robot a des difficultés à se relocaliser. Reconnectez-le à la base et laissez-le effectuer une nouvelle cartographie. Cet avis disparaît automatiquement une fois que la dérive redevient normale au cours des prochaines missions."
+    },
+    "reloc_rate_elevated": {
+      "title": "Taux de relocalisation élevé",
+      "description": "Le robot s'est relocalisé nettement plus souvent que sa propre référence établie ({baseline} en moyenne par mission). Cela peut indiquer une dégradation de la Smart Map — envisagez de supprimer et de réentraîner la carte si vous remarquez aussi des messages \"Nouvel espace trouvé\" ou un suivi des pièces imprécis. Cet avis disparaît automatiquement une fois le taux redevenu normal au cours des prochaines missions."
     },
     "observed_zones_detected": {
       "title": "Obstacles détectés par le robot dans la carte cloud",

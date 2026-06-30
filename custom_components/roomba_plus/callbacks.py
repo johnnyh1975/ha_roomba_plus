@@ -22,7 +22,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_BLID, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles
+from .const import CONF_BLID, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -357,6 +357,48 @@ async def async_record_mission(
 
     await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
+
+    # v3.1.0 L9-MAP — update the personal relocalisation baseline.
+    # Same gate as the MissionStore record itself (this function only runs
+    # when had_cleaning_phase was True, i.e. a genuine cleaning mission
+    # occurred) — avoids polluting the baseline with the automatic nMssn
+    # increments that happen at "mission ready" without any actual cleaning
+    # (field-confirmed by Thonno: mssnNavStats resets to near-zero values on
+    # those pseudo-missions, which would corrupt a baseline meant to reflect
+    # real navigation behaviour).
+    rps = getattr(data, "robot_profile_store", None)
+    if rps is not None:
+        nav_stats = reported.get("mssnNavStats")
+        if isinstance(nav_stats, dict) and "reLc" in nav_stats:
+            try:
+                relocs = int(nav_stats["reLc"])
+            except (TypeError, ValueError):
+                relocs = None
+            if relocs is not None:
+                rps.update_reloc_baseline(relocs)
+                await rps.async_save(hass, entry.entry_id)
+                from .repairs import async_check_reloc_alert
+                async_check_reloc_alert(hass, entry)
+
+        # v3.1.0 L9-BATTERY — record this mission's estCap observation into
+        # the noise-floor baseline. Same had_cleaning_phase gate as above —
+        # a consistent per-mission cadence is what the noise-floor baseline
+        # is meant to characterise; recording on every MQTT update instead
+        # would mix in mid-mission jitter unrelated to charge-cycle deltas.
+        bbchg3 = _merged_top_level(entry, reported, "bbchg3")
+        raw_estcap = bbchg3.get("estCap")
+        if raw_estcap:
+            profile = data.robot_profile
+            if profile is not None:
+                estcap_mah = estcap_to_mah(
+                    raw_estcap,
+                    profile.estcap_scale_liion,
+                    profile.estcap_scale_nimh,
+                    bbchg3.get("nNimhChrg"),
+                )
+                if estcap_mah is not None:
+                    rps.record_estcap_observation(estcap_mah)
+                    await rps.async_save(hass, entry.entry_id)
 
     # v2.9.0 EVENT-BUS — fire roomba_plus_mission_completed for automations.
     # entry_id + name included (unlike the older L6 presence events) so

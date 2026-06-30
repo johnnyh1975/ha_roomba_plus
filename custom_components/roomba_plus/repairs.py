@@ -1515,3 +1515,43 @@ def async_check_maintenance_due(
             translation_placeholders={"items": ", ".join(due_items)},
         )
     # else: within the grace period — no issue yet, by design.
+
+
+# ── L9-MAP (v3.1.0) ───────────────────────────────────────────────────────────
+
+def async_check_reloc_alert(hass: "HomeAssistant", config_entry: Any) -> None:
+    """L9-MAP (v3.1.0) — fire/clear a Repair Issue when the recent
+    relocalisation rate window significantly exceeds the robot's own
+    self-calibrated baseline.
+
+    Self-healing: re-evaluated after every cleaning mission (called from the
+    same point in callbacks.py that updates the reloc baseline), so the
+    issue clears automatically once the rate returns to normal — no manual
+    reconfirm needed, same pattern as DRIFT-AUTO's drift_recovered().
+
+    Conservative by design: _RELOC_ALERT_MULTIPLIER=3.0 in robot_profile_store.py
+    means this only fires on a genuinely large deviation from the robot's own
+    history, not minor day-to-day variance. Field data to properly calibrate
+    this multiplier is still limited (Thonno's i7+ has only shown reLc=0 so
+    far) — expect to revisit the threshold as more field reports come in.
+    """
+    data = config_entry.runtime_data
+    rps = data.robot_profile_store
+    issue_id = f"reloc_rate_elevated_{config_entry.entry_id}"
+
+    if rps is None or not rps.reloc_alert_triggered():
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="reloc_rate_elevated",
+        translation_placeholders={
+            "baseline": f"{rps.reloc_baseline:.1f}" if rps.reloc_baseline is not None else "?",
+        },
+    )

@@ -39,6 +39,53 @@ _ROOM_DIRT_EMA_ALPHA = 0.2
 # Minimum number of missions before coverage_baseline is established (L6).
 _COVERAGE_BASELINE_MIN_MISSIONS = 20
 
+# v3.1.0 L9-MAP — minimum missions before reloc_baseline is established.
+# Lower than coverage's 20: reLc is a simpler, more direct signal (each
+# relocalisation is an unambiguous navigation event, unlike coverage ratio
+# which is influenced by furniture rearrangement, cleaning mode, etc.) so
+# fewer observations are needed for a stable personal baseline.
+_RELOC_BASELINE_MIN_MISSIONS = 15
+# Trigger threshold: current window mean must exceed baseline by this
+# multiple before the Repair Issue fires. 3x is deliberately conservative —
+# field data so far (Thonno's i7+, 2 missions) shows reLc=0 in both, so we
+# have no confirmed "bad" reading to calibrate against; a high multiplier
+# avoids false positives until more field data narrows this down.
+_RELOC_ALERT_MULTIPLIER = 3.0
+# Recent-window size for the trigger check, mirrors DRIFT-AUTO's pattern.
+_RELOC_WINDOW = 10
+
+# v3.1.0 L9-BATTERY — minimum estCap observations before the noise-floor
+# (standard deviation) baseline is trusted. Field data (Thonno's i7+, 8
+# observations over 70 missions) showed estCap oscillating ±10-15mAh with
+# no clear monotonic trend — a near-new battery's measurement noise, not
+# degradation. 10 is intentionally low (vs reloc's 15) since estCap updates
+# once per mission and a slow-changing signal needs fewer samples to
+# characterise its noise floor than a sparse event-count signal does.
+_ESTCAP_NOISE_MIN_SAMPLES = 10
+# A degradation_rate must exceed the learned noise floor by this multiple
+# before _estimated_battery_eol trusts it enough to extrapolate from.
+# Conservative: with only oscillating, non-degrading field data so far,
+# erring toward "insufficient evidence, return None" is safer than
+# projecting a wild EOL date off measurement noise (the bug this fixes —
+# see comment in _estimated_battery_eol).
+_ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER = 2.0
+# Sanity cap: an extrapolated remaining-cycle count beyond this is treated
+# as "noise produced an absurd projection" rather than a genuine multi-decade
+# estimate, regardless of whether it technically passed the significance
+# check. ~10000 cycles at roughly 1 charge/day is ~27 years — well beyond
+# any plausible robot/battery service life, so a result this large is a
+# signal the math broke down, not useful information for the user.
+_ESTCAP_REMAINING_CYCLES_SANITY_CAP = 10_000
+# Fallback significance threshold used when this robot's own noise floor
+# isn't learned yet (degradation_rate_is_significant()). Chosen well above
+# the noise observed in field data (Thonno's i7+: degradation_rate ranged
+# roughly 0.0001-0.0003 %/cycle from pure measurement jitter) but well
+# below a genuine degradation case (e.g. 90% retention over 300 cycles =
+# 0.033 %/cycle) — conservative enough to filter obvious noise while still
+# letting clear degradation surface immediately rather than waiting through
+# the full _ESTCAP_NOISE_MIN_SAMPLES learning period.
+_ESTCAP_FALLBACK_MIN_RATE = 0.01
+
 
 @dataclass
 class RobotProfileStore:
@@ -86,6 +133,31 @@ class RobotProfileStore:
     # Navigation efficiency baseline (L6)
     coverage_baseline: float | None = None
     coverage_mission_count: int = 0
+
+    # v3.1.0 L9-MAP — self-calibrating relocalisation-rate baseline.
+    # reloc_baseline: personal running-mean of reLc per mission.
+    # reloc_mission_count: observations used in the baseline (separate
+    # counter from coverage_mission_count — not every mission necessarily
+    # has mssnNavStats present, e.g. 600/900-series robots lack it entirely).
+    # recent_relocs: bounded window of the most recent reLc values, used to
+    # detect a CURRENT elevated rate vs. the established personal baseline.
+    reloc_baseline: float | None = None
+    reloc_mission_count: int = 0
+    recent_relocs: list[int] = field(default_factory=list)
+
+    # v3.1.0 L9-BATTERY — self-calibrating estCap noise-floor baseline.
+    # Welford's online algorithm for numerically stable running mean/variance
+    # (avoids the precision loss of naive sum-of-squares accumulation, which
+    # matters here since estCap values are in the thousands and the noise
+    # being measured is single-digit-to-low-double-digit mAh).
+    estcap_noise_mean: float | None = None
+    estcap_noise_m2: float = 0.0   # Welford's running sum of squared deviations
+    estcap_noise_count: int = 0
+    # Last observed converted-mAh estCap value, used to compute the delta fed
+    # into update_estcap_noise(). Separate from baseline_estcap (the install-time
+    # reference in MaintenanceStore) — this tracks reading-to-reading, not
+    # reading-to-baseline.
+    last_estcap_mah: float | None = None
 
     # v2.9.0 (J) — STALENESS TRACKING for total_cleaned_area (bbrun.sqft /
     # runtimeStats.sqft, the robot's own onboard lifetime area counter).
@@ -143,6 +215,21 @@ class RobotProfileStore:
             self.coverage_baseline = float(cb) if cb is not None else None
             self.coverage_mission_count = int(data.get("coverage_mission_count", 0))
 
+            # v3.1.0 L9-MAP — reloc baseline
+            rb = data.get("reloc_baseline")
+            self.reloc_baseline = float(rb) if rb is not None else None
+            self.reloc_mission_count = int(data.get("reloc_mission_count", 0))
+            raw_relocs = data.get("recent_relocs", [])
+            self.recent_relocs = [int(v) for v in raw_relocs][-_RELOC_WINDOW:]
+
+            # v3.1.0 L9-BATTERY — estCap noise-floor baseline
+            enm = data.get("estcap_noise_mean")
+            self.estcap_noise_mean = float(enm) if enm is not None else None
+            self.estcap_noise_m2 = float(data.get("estcap_noise_m2", 0.0))
+            self.estcap_noise_count = int(data.get("estcap_noise_count", 0))
+            lec = data.get("last_estcap_mah")
+            self.last_estcap_mah = float(lec) if lec is not None else None
+
             # v2.9.0 (J) — sqft staleness tracking
             lsv = data.get("lifetime_sqft_last_value")
             self.lifetime_sqft_last_value = float(lsv) if lsv is not None else None
@@ -169,6 +256,13 @@ class RobotProfileStore:
             "mission_area_mean": self.mission_area_mean,
             "coverage_baseline": self.coverage_baseline,
             "coverage_mission_count": self.coverage_mission_count,
+            "reloc_baseline": self.reloc_baseline,
+            "reloc_mission_count": self.reloc_mission_count,
+            "recent_relocs": self.recent_relocs,
+            "estcap_noise_mean": self.estcap_noise_mean,
+            "estcap_noise_m2": self.estcap_noise_m2,
+            "estcap_noise_count": self.estcap_noise_count,
+            "last_estcap_mah": self.last_estcap_mah,
             "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
             "lifetime_sqft_last_changed_at": self.lifetime_sqft_last_changed_at,
         })
@@ -189,6 +283,13 @@ class RobotProfileStore:
         self.mission_area_mean = None
         self.coverage_baseline = None
         self.coverage_mission_count = 0
+        self.reloc_baseline = None
+        self.reloc_mission_count = 0
+        self.recent_relocs = []
+        self.estcap_noise_mean = None
+        self.estcap_noise_m2 = 0.0
+        self.estcap_noise_count = 0
+        self.last_estcap_mah = None
         self.lifetime_sqft_last_value = None
         self.lifetime_sqft_last_changed_at = None
         await self.async_save(hass, entry_id)
@@ -262,6 +363,146 @@ class RobotProfileStore:
             "RobotProfileStore: coverage baseline → %.3f (n=%d)",
             self.coverage_baseline, self.coverage_mission_count,
         )
+
+    def update_reloc_baseline(self, relocs: int) -> None:
+        """v3.1.0 L9-MAP — update the personal relocalisation-rate baseline
+        with a new mission's reLc count, and push it into the recent window.
+
+        Mirrors update_coverage_baseline()'s running-mean approach (same
+        reasoning: stable signal, EMA would over-weight early outliers).
+        Called once per completed cleaning mission where mssnNavStats.reLc
+        was present in the end-of-mission MQTT payload — gated the same way
+        as MissionStore records (had_cleaning_phase), so a robot that never
+        actually cleaned won't pollute the baseline with a meaningless
+        zero-relocalisation "mission".
+        """
+        self.reloc_mission_count += 1
+        if self.reloc_baseline is None:
+            self.reloc_baseline = float(relocs)
+        else:
+            n = self.reloc_mission_count
+            self.reloc_baseline = self.reloc_baseline + (relocs - self.reloc_baseline) / n
+
+        self.recent_relocs.append(relocs)
+        self.recent_relocs = self.recent_relocs[-_RELOC_WINDOW:]
+
+        _LOGGER.debug(
+            "RobotProfileStore: reloc baseline → %.3f (n=%d), window=%s",
+            self.reloc_baseline, self.reloc_mission_count, self.recent_relocs,
+        )
+
+    @property
+    def reloc_baseline_ready(self) -> bool:
+        """True once enough missions have contributed to reloc_baseline to
+        trust it for the alert comparison."""
+        return (
+            self.reloc_baseline is not None
+            and self.reloc_mission_count >= _RELOC_BASELINE_MIN_MISSIONS
+        )
+
+    def reloc_alert_triggered(self) -> bool:
+        """v3.1.0 L9-MAP — True when the recent window's mean relocalisation
+        rate significantly exceeds the robot's own established baseline.
+
+        Requires reloc_baseline_ready (enough history to trust the baseline)
+        AND enough recent samples in the window to trust the current reading.
+        A baseline of 0.0 (robot has never relocalised) is treated specially:
+        any non-zero recent activity at all is flagged, since the multiplier
+        check (0 * 3.0 = 0) would otherwise never trigger no matter how bad
+        things get.
+        """
+        if not self.reloc_baseline_ready:
+            return False
+        if len(self.recent_relocs) < _RELOC_WINDOW:
+            return False
+        recent_mean = sum(self.recent_relocs) / len(self.recent_relocs)
+        # Near-zero baseline (not just exactly 0.0 — a long quiet history with
+        # a single early outlier can leave it at e.g. 0.009) needs the same
+        # special handling: multiplying a tiny baseline by _RELOC_ALERT_MULTIPLIER
+        # still yields a near-zero threshold that wouldn't meaningfully gate
+        # anything, so treat "effectively zero" the same as exactly zero.
+        if self.reloc_baseline < 0.05:
+            return recent_mean > 0.0
+        return recent_mean > self.reloc_baseline * _RELOC_ALERT_MULTIPLIER
+
+    def update_estcap_noise(self, estcap_delta: float) -> None:
+        """v3.1.0 L9-BATTERY — feed one estCap-vs-previous-reading delta into
+        the running noise-floor baseline using Welford's online algorithm.
+
+        Called with the per-mission CHANGE in estCap (current - previous),
+        not the raw estCap value itself — the baseline characterises how
+        much estCap normally jitters between consecutive readings on this
+        specific robot, which is what determines whether a later sustained
+        decline is real degradation or just more of the same noise.
+        """
+        self.estcap_noise_count += 1
+        delta = estcap_delta - (self.estcap_noise_mean or 0.0)
+        if self.estcap_noise_mean is None:
+            self.estcap_noise_mean = estcap_delta
+        else:
+            self.estcap_noise_mean += delta / self.estcap_noise_count
+        delta2 = estcap_delta - self.estcap_noise_mean
+        self.estcap_noise_m2 += delta * delta2
+
+    @property
+    def estcap_noise_stdev(self) -> float | None:
+        """Sample standard deviation of estCap deltas, or None if not enough
+        observations yet (Welford's M2/(n-1) is undefined for n<2)."""
+        if self.estcap_noise_count < 2:
+            return None
+        return (self.estcap_noise_m2 / (self.estcap_noise_count - 1)) ** 0.5
+
+    @property
+    def estcap_noise_ready(self) -> bool:
+        """True once enough delta observations exist to trust the noise floor."""
+        return self.estcap_noise_count >= _ESTCAP_NOISE_MIN_SAMPLES
+
+    def record_estcap_observation(self, current_estcap_mah: float) -> None:
+        """v3.1.0 L9-BATTERY — record one estCap reading, computing the delta
+        against the previous reading and feeding it into the noise-floor
+        baseline. Call once per mission/charge-cycle when estCap is available.
+
+        The first call only seeds last_estcap_mah (no delta exists yet to
+        feed the baseline with).
+        """
+        if self.last_estcap_mah is not None:
+            self.update_estcap_noise(current_estcap_mah - self.last_estcap_mah)
+        self.last_estcap_mah = current_estcap_mah
+
+    def degradation_rate_is_significant(self, degradation_rate: float, cycles: int) -> bool:
+        """v3.1.0 L9-BATTERY — True when degradation_rate is large enough to
+        be trusted as genuine capacity loss rather than reading-to-reading
+        jitter.
+
+        Two paths:
+        - Noise baseline ready: compare against this robot's own learned
+          noise floor (the precise, self-calibrated check).
+        - Noise baseline not yet ready: fall back to a conservative absolute
+          threshold (_ESTCAP_FALLBACK_MIN_RATE) so a robot with obvious,
+          large degradation isn't forced to wait through the full learning
+          period before estimated_battery_eol can say anything at all — only
+          truly small, noise-plausible rates are withheld in this case.
+        """
+        if not self.estcap_noise_ready:
+            return degradation_rate >= _ESTCAP_FALLBACK_MIN_RATE
+        stdev = self.estcap_noise_stdev
+        if stdev is None or stdev <= 0:
+            return degradation_rate >= _ESTCAP_FALLBACK_MIN_RATE
+        observed_total_drop = degradation_rate * max(cycles, 1)
+        expected_noise_drift = stdev * (max(cycles, 1) ** 0.5)
+        return observed_total_drop > expected_noise_drift * _ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER
+
+    @staticmethod
+    def cap_remaining_cycles(remaining_cycles: float) -> float | None:
+        """v3.1.0 L9-BATTERY — sanity cap: a projection beyond
+        _ESTCAP_REMAINING_CYCLES_SANITY_CAP is treated as a sign the
+        extrapolation broke down (e.g. from a degradation_rate that barely
+        cleared the significance check but is still tiny), not as a genuine
+        multi-decade estimate. Returns None in that case.
+        """
+        if remaining_cycles > _ESTCAP_REMAINING_CYCLES_SANITY_CAP:
+            return None
+        return remaining_cycles
 
     def update_lifetime_sqft_tracking(self, current_sqft: float) -> bool:
         """Compare the current lifetime sqft reading against the last seen
@@ -378,7 +619,7 @@ class RobotProfileStore:
         cleaning_speed_trend: str | None,
         consecutive_anomalous: int,
         stuck_rate_30d: float | None,
-    ) -> float | None:
+    ) -> tuple[float | None, dict[str, Any]]:
         """L8 — weighted composite health score 0–100.
 
         Weights:
@@ -388,45 +629,68 @@ class RobotProfileStore:
           Anomaly rate         20%  — measures mission consistency
           Stuck rate           15%  — measures obstacle avoidance
 
-        Returns None when fewer than 3 signals are available (insufficient data
-        to form a meaningful score).  Each missing signal is skipped and the
-        remaining weights are renormalised.
+        Returns (None, {}) when fewer than 3 signals are available
+        (insufficient data to form a meaningful score). Each missing signal
+        is skipped and the remaining weights are renormalised.
+
+        v3.1.0 PLAIN-STATUS: also returns a breakdown dict identifying which
+        available signal scored lowest (weakest_signal), so callers can
+        surface a plain-language explanation without re-deriving the
+        per-signal scores themselves. weakest_signal is None when the
+        overall score is None, or when every available signal scored >= 60
+        (nothing notably weak — "good condition" case).
         """
-        components: list[tuple[float, float]] = []   # (score, weight)
+        components: list[tuple[str, float, float]] = []   # (name, score, weight)
 
         # 1. Battery retention (25%): 50% retention → 0 pts, 100% → 100 pts
         if battery_retention_pct is not None:
             s = max(0.0, min(100.0, (float(battery_retention_pct) - 50.0) * 2.0))
-            components.append((s, 0.25))
+            components.append(("battery_retention", s, 0.25))
 
         # 2. Navigation efficiency (20%): current/baseline ratio
         #    ratio ≥ 1.0 → 100; ratio ≤ 0.5 → 0 (linear between)
         if self.coverage_baseline_ready and nav_efficiency_ratio is not None:
             s = max(0.0, min(100.0, (float(nav_efficiency_ratio) - 0.5) * 200.0))
-            components.append((s, 0.20))
+            components.append(("nav_efficiency", s, 0.20))
 
         # 3. Cleaning speed trend (20%)
         _trend_pts = {"improving": 100.0, "stable": 80.0, "declining": 40.0}
         if cleaning_speed_trend in _trend_pts:
-            components.append((_trend_pts[cleaning_speed_trend], 0.20))
+            components.append(("cleaning_speed_trend", _trend_pts[cleaning_speed_trend], 0.20))
 
         # 4. Mission anomaly rate (20%): consecutive anomalous missions
         #    0 → 100, 1 → 70, 2 → 40, 3+ → 10
         _anomaly_pts = {0: 100.0, 1: 70.0, 2: 40.0}
         anomaly_score = _anomaly_pts.get(consecutive_anomalous, 10.0)
-        components.append((anomaly_score, 0.20))  # always available
+        components.append(("anomaly_rate", anomaly_score, 0.20))  # always available
 
         # 5. Stuck rate (15%): rate < 5% → 100; rate ≥ 30% → 0 (linear)
         if stuck_rate_30d is not None:
             s = max(0.0, min(100.0, (0.30 - float(stuck_rate_30d)) / 0.25 * 100.0))
-            components.append((s, 0.15))
+            components.append(("stuck_rate", s, 0.15))
 
         if len(components) < 3:
-            return None
+            return None, {}
 
-        total_weight = sum(w for _, w in components)
+        total_weight = sum(w for _, _, w in components)
         if total_weight == 0:
-            return None
+            return None, {}
 
-        score = sum(s * w for s, w in components) / total_weight
-        return round(min(100.0, max(0.0, score)), 1)
+        score = sum(s * w for _, s, w in components) / total_weight
+        score = round(min(100.0, max(0.0, score)), 1)
+
+        # v3.1.0 PLAIN-STATUS — identify the weakest available signal.
+        # Only flagged when it scored below 60 (clearly weak, not just
+        # "not perfect") — otherwise weakest_signal is None ("good condition").
+        weakest_name, weakest_score = min(
+            ((name, s) for name, s, _ in components), key=lambda t: t[1]
+        )
+        breakdown: dict[str, Any] = {
+            "battery_retention_pct": battery_retention_pct,
+            "nav_efficiency_ratio": nav_efficiency_ratio,
+            "cleaning_speed_trend": cleaning_speed_trend,
+            "consecutive_anomalous": consecutive_anomalous,
+            "stuck_rate_30d": stuck_rate_30d,
+            "weakest_signal": weakest_name if weakest_score < 60.0 else None,
+        }
+        return score, breakdown

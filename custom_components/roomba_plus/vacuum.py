@@ -819,8 +819,15 @@ class RoombaVacuumCarpetBoost(RoombaVacuum):
         return FAN_SPEED_ECO
 
     async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
-        """Set fan speed by sending two delta preferences to the Roomba."""
-        canonical = fan_speed.capitalize()
+        """Set fan speed by sending two delta preferences to the Roomba.
+
+        v3.1.0 CARPET-BOOST-SLUG-FIX: FAN_SPEEDS values changed from
+        Capital-Case ("Automatic") to lowercase slugs ("automatic") to
+        satisfy HA's translation_key requirements. Matching is
+        case-insensitive so existing automations that still call
+        vacuum.set_fan_speed with the old Capital-Case value keep working.
+        """
+        canonical = fan_speed.lower()
         if canonical not in FAN_SPEEDS:
             _LOGGER.error("Unknown fan speed: %s", fan_speed)
             return

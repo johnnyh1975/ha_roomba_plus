@@ -12,10 +12,13 @@ Design principles
 * User-authored geometry (UserWall, UserDoor, UserObstacle) is the only
   authoritative source. Once written via apply_user_edit(), inference never
   overwrites it.
-* Drift is tracked via cumulative_drift_mm (sum of |check_dock_drift()|
-  magnitudes). When it crosses DEFAULT_DRIFT_THRESHOLD_MM a Repair Issue
-  fires; the caller (image.py) handles the issue creation. Drift is reset
-  to 0.0 after user re-confirmation in the Options Flow step.
+* Drift is tracked via a bounded recent_drifts_mm window (v3.1.0 DRIFT-AUTO).
+    When the window's mean crosses _RECENT_DRIFT_THRESHOLD_MM (>= _DRIFT_MIN_SAMPLES
+    samples) a Repair Issue fires; the caller (image.py) handles issue
+    creation. The issue self-clears via drift_recovered() once the mean
+    drops back under the hysteresis recovery threshold — no manual
+    reconfirm required, though reset_drift() remains available for that.
+    cumulative_drift_mm is retained as a lifetime diagnostics value only.
 
 Storage key: roomba_plus_geometry_{entry_id}
 Storage version: 1
@@ -63,6 +66,18 @@ DEFAULT_WALL_OFFSET_MM = 200
 
 # ── Drift ─────────────────────────────────────────────────────────────────────
 DEFAULT_DRIFT_THRESHOLD_MM = 300.0
+
+# v3.1.0 DRIFT-AUTO — gleitendes Fenster statt monotoner Lebenszeit-Summe.
+# cumulative_drift_mm wächst zwangsläufig über jeden Schwellwert nach genug
+# normalen Missionen (50-100mm Pro-Mission-Drift ist bei VSLAM erwartbar) —
+# das Repair Issue feuerte dauerhaft als false-positive bei jedem
+# EPHEMERAL-Roboter mit ausreichend Historie. Das Fenster-Mittel der letzten
+# N Missionen ist die aussagekräftige Metrik ("driftet JETZT", nicht "hat
+# jemals gedriftet"). cumulative_drift_mm bleibt als Diagnostics-Wert.
+_DRIFT_WINDOW                = 10
+_DRIFT_MIN_SAMPLES           = 3
+_RECENT_DRIFT_THRESHOLD_MM   = 250.0
+_RECENT_DRIFT_RECOVERY_MM    = 150.0   # Hysterese: ~60% des Trigger-Schwellwerts
 
 # ── Observation history cap ───────────────────────────────────────────────────
 MAX_MARKER_OBSERVATIONS = 20
@@ -242,6 +257,10 @@ class GeometryStore:
         self.zone_labels: dict[str, str] = {}
         self.wall_offset_mm: int = DEFAULT_WALL_OFFSET_MM
         self.cumulative_drift_mm: float = 0.0
+        # v3.1.0 DRIFT-AUTO — bounded, most-recent-last window of per-mission
+        # drift magnitudes. Drives the Repair Issue decision; cumulative_drift_mm
+        # is retained purely as a lifetime diagnostics value.
+        self.recent_drifts_mm: list[float] = []
         self._next_marker_id: int = 1
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -353,28 +372,62 @@ class GeometryStore:
         self.door_markers = synced
 
     def record_drift(self, dx: float, dy: float) -> bool:
-        """Accumulate drift magnitude. Returns True if threshold exceeded.
+        """Accumulate drift magnitude. Returns True if the recent-window mean
+        exceeds the trigger threshold.
 
         The caller (image.py) fires the geometry_drifted Repair Issue on True.
         Only non-zero drift vectors are accumulated — (0.0, 0.0) from
         check_dock_drift() when no drift is detected is ignored.
+
+        v3.1.0 DRIFT-AUTO: cumulative_drift_mm is still tracked (lifetime
+        diagnostics value) but no longer drives the Repair decision — that
+        now comes from the bounded recent_drifts_mm window's mean, which
+        reflects current drift severity rather than lifetime total.
         """
         magnitude = math.hypot(dx, dy)
         if magnitude < 1.0:
             return False
         self.cumulative_drift_mm += magnitude
+
+        self.recent_drifts_mm.append(magnitude)
+        self.recent_drifts_mm = self.recent_drifts_mm[-_DRIFT_WINDOW:]
+
         _LOGGER.debug(
-            "GeometryStore: drift %.0f mm recorded, cumulative %.0f mm",
-            magnitude, self.cumulative_drift_mm,
+            "GeometryStore: drift %.0f mm recorded, cumulative %.0f mm, window=%s",
+            magnitude, self.cumulative_drift_mm, self.recent_drifts_mm,
         )
-        return self.cumulative_drift_mm >= DEFAULT_DRIFT_THRESHOLD_MM
+
+        if len(self.recent_drifts_mm) < _DRIFT_MIN_SAMPLES:
+            return False
+        mean = sum(self.recent_drifts_mm) / len(self.recent_drifts_mm)
+        return mean >= _RECENT_DRIFT_THRESHOLD_MM
+
+    def drift_recovered(self) -> bool:
+        """True when the recent-window mean has dropped back below the
+        recovery threshold (hysteresis: trigger at 250mm, recover at 150mm,
+        preventing flapping right at the boundary).
+
+        Returns False (not recovered) when there aren't yet enough samples
+        to judge — an empty or sparse window after migration should not be
+        treated as "recovered" in a way that suppresses a genuine future
+        trigger, nor does it fire a delete on a window that hasn't formed yet.
+        """
+        if len(self.recent_drifts_mm) < _DRIFT_MIN_SAMPLES:
+            return False
+        mean = sum(self.recent_drifts_mm) / len(self.recent_drifts_mm)
+        return mean < _RECENT_DRIFT_RECOVERY_MM
 
     def reset_drift(self) -> None:
-        """Reset cumulative drift after user re-confirms layout."""
+        """Reset both cumulative and recent-window drift after user re-confirms
+        layout. Manual reconfirm remains available, but is no longer the only
+        way to clear the Repair Issue — drift_recovered() also auto-clears it.
+        """
         _LOGGER.debug(
-            "GeometryStore: drift reset (was %.0f mm)", self.cumulative_drift_mm
+            "GeometryStore: drift reset (was %.0f mm cumulative, window=%s)",
+            self.cumulative_drift_mm, self.recent_drifts_mm,
         )
         self.cumulative_drift_mm = 0.0
+        self.recent_drifts_mm = []
 
     # ── User editing ──────────────────────────────────────────────────────────
 
@@ -442,6 +495,17 @@ class GeometryStore:
         """
         self._next_marker_id = int(data.get("next_marker_id", 1))
         self.cumulative_drift_mm = float(data.get("cumulative_drift_mm", 0.0))
+        # v3.1.0 DRIFT-AUTO — additive field, defaults to empty for any store
+        # persisted before this feature (PAYLOAD_VERSION deliberately NOT
+        # bumped: this is an additive field, not a structural break, and a
+        # version bump here would discard door_markers/walls/doors/obstacles
+        # for every existing installation, which is far more destructive than
+        # the problem being fixed). An empty window after migration means no
+        # immediate Repair fires even if cumulative_drift_mm is high — the
+        # window rebuilds itself over the next few missions, which is the
+        # desired self-healing behaviour for stale lifetime-drift state.
+        raw_recent = data.get("recent_drifts_mm", [])
+        self.recent_drifts_mm = [float(v) for v in raw_recent][-_DRIFT_WINDOW:]
         self.wall_offset_mm = int(data.get("wall_offset_mm", DEFAULT_WALL_OFFSET_MM))
         self.zone_labels = {str(k): str(v) for k, v in data.get("zone_labels", {}).items()}
         self.door_markers = [
@@ -458,6 +522,7 @@ class GeometryStore:
             "version": PAYLOAD_VERSION,
             "next_marker_id": self._next_marker_id,
             "cumulative_drift_mm": self.cumulative_drift_mm,
+            "recent_drifts_mm": self.recent_drifts_mm,
             "wall_offset_mm": self.wall_offset_mm,
             "zone_labels": self.zone_labels,
             "door_markers": [m.to_dict() for m in self.door_markers],

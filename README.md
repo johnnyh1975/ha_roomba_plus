@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-3.0.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-3.1.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -15,8 +15,8 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
-- **Self-calibrating** — maintenance thresholds adapt to your actual usage history; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 2,946 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Self-calibrating** — maintenance thresholds, navigation health, and battery degradation detection all adapt to your robot's own usage history rather than fixed thresholds; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
+- **Gold quality scale** — 3,024 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -310,6 +310,10 @@ Automatic room segmentation from the same coverage data used for the heatmap (di
 
 If you're updating from an earlier version and had already named zones, those names are carried over automatically the first time this version starts up — no action needed.
 
+#### Map drift detection (v3.1.0, EPHEMERAL-tier)
+
+A Repair Issue (`map_drift_detected`) fires when the robot's recent missions show elevated drift from its expected dock position — tracked over a 10-mission sliding window rather than a lifetime total, so a robot with a long history of normal drift fluctuation doesn't trigger a permanent false positive. The issue clears automatically (with hysteresis to prevent flapping) once drift returns to normal over subsequent missions. Usually indicates the dock was moved or the robot is having difficulty relocating; re-dock and allow a fresh mapping run if it persists.
+
 #### Battery / dock contact monitoring (v2.10.0)
 
 A Repair Issue (`battery_contact_suspect`) fires on two independent signals that usually mean a loose or corroded battery/dock contact rather than a failing battery: an implausible jump in reported battery level (more than ~25 percentage points within under 10 minutes — no real battery changes that fast), or the highest battery level reached declining over three consecutive charge cycles. Clean the contacts on the robot and dock before assuming the battery itself needs replacing.
@@ -363,9 +367,15 @@ On older XVMC versions (no Roomba+ platform in the dropdown), define `map_modes`
 | Brush remaining hours | Configurable threshold; `threshold_hours` attribute |
 | Cleaning pad remaining hours | Braava only |
 | Battery capacity retention (%) | Degradation relative to design capacity (profile-corrected, v2.5+) |
-| Estimated battery end of life (days) | Projected days until battery replacement |
+| Estimated battery end of life (days) | Projected days until battery replacement — self-calibrated against this robot's own measurement noise floor (v3.1.0), so a near-new battery with normal estCap jitter no longer produces a meaningless multi-decade projection |
 
 **Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
+
+#### Navigation health (v3.1.0, SMART-tier)
+
+> Disabled by default · i/s-series (lewis firmware)
+
+`sensor.{name}_relocalisation_rate` — tracks how often the robot needs to relocalise during a mission, a direct signal of Smart Map quality. Self-calibrates against the robot's own normal rate over its first 15 missions, then compares the recent 10-mission window against that personal baseline. A Repair Issue fires at 3× baseline and clears automatically once the rate normalises.
 
 #### Replacement tracking
 
@@ -425,6 +435,8 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Area cleaned today | Sum of mission area today (VSLAM robots) |
 | Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
+| Last mission summary | Most recent mission as a single entity — 14 attributes (duration, area, battery delta, recharges, dirt events, initiator, timestamps) for automation triggers without digging through history (v3.1.0) |
+| Room cleaning history | Dictionary sensor: `{room_name: last_cleaned_timestamp}` across all recorded missions, SMART-tier with cloud access (v3.1.0) |
 | Consecutive anomalous missions | Count of consecutive most-recent missions classified as anomalous (v3.0.0, disabled by default — threshold ≥ 3 triggers the Card C5-ANOMALY banner) |
 
 Every mission also writes a searchable Logbook entry and fires `roomba_plus_mission_completed` — see [Events & device triggers](#events--device-triggers).
@@ -464,6 +476,8 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 | `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned |
 | `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) |
 
+`sensor.{name}_room_areas` (v3.1.0) — dictionary sensor: `{room_name: floor_area_m2}`, calculated from UMF polygon data. The only automatically-measured room area available without a tape measure.
+
 #### Error intelligence
 
 | Sensor | Notes |
@@ -501,7 +515,7 @@ The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt
 
 **Robot health score (v2.7+):**
 
-`sensor.{name}_robot_health_score` — composite 0–100 score combining battery retention, navigation efficiency, cleaning speed trend, anomaly rate, and stuck rate. Visible in the main sensor list (not diagnostic). Shows Unknown until 20 missions of history have accumulated.
+`sensor.{name}_robot_health_score` — composite 0–100 score combining battery retention, navigation efficiency, cleaning speed trend, anomaly rate, and stuck rate. Visible in the main sensor list (not diagnostic). Shows Unknown until 20 missions of history have accumulated. Carries `status_text` and `recommendation` attributes (v3.1.0, all 7 languages) for a plain-language summary alongside the numeric score — `integration_health` has the same attributes.
 
 #### Map intelligence — Smart Map robots (v2.6+)
 
@@ -810,6 +824,24 @@ cards:
 
 ---
 
+## Replacing or selling your robot
+
+Roomba+ stores learned data (mission history, coverage baselines, maintenance timers, health trends) inside HA — not on the robot. Before removing a robot, export your history so you can restore it later:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=export" \
+     -o roomba_backup.json
+```
+
+Then remove the integration via Settings → Devices & Services → Roomba+ → Delete.
+
+**Factory reset** (if selling) is done through the **iRobot app**, not this integration: app → robot → Settings → Factory Reset.
+
+For a replacement robot, add a new config entry and optionally restore history via the import endpoint. Full steps: [Troubleshooting → Replacing or selling your robot](docs/TROUBLESHOOTING.md)
+
+---
+
 ## Documentation
 
 | | |
@@ -831,6 +863,12 @@ Two automatic migration steps run on first load (config entry 22 → 24):
 **Migration v23→v24 — Permanently unavailable sensors disabled.** Five sensors that are unavailable by design on most robots (`battery_age_days`, `battery_cycle_count_bms`, `bin_last_cleaned`, `contact_last_cleaned`, `wheel_last_cleaned`) are automatically disabled in the entity registry. On i/s-series robots where BMS data is available, re-enable `battery_age_days` and `battery_cycle_count_bms` in Settings → Entities if needed.
 
 **Deprecated sensors:** If you had manually re-enabled any of the 13 deprecated sensors removed in this release, switch to the consolidated replacement listed in the release notes. HA removes the stale entity registry entries automatically on first load.
+
+### Upgrading to v3.1.0
+
+No config entry migration — the persisted schema is unchanged. New self-calibrating sensors (`relocalisation_rate`, the hardened `estimated_battery_eol`, and the redesigned `map_drift_detected`) need 10–20 missions of history before they show a value rather than `Unknown`/`None` — that's expected, not a bug. They're learning your specific robot's normal behaviour rather than using a generic threshold.
+
+`FAN_SPEED_AUTOMATIC`/`ECO`/`PERFORMANCE` changed from `Automatic`/`Eco`/`Performance` to lowercase (`automatic`/`eco`/`performance`) for Home Assistant compliance. Existing automations using the old Capital-Case values continue to work unchanged — both `select.select_option` and `vacuum.set_fan_speed` accept either form.
 
 ---
 
