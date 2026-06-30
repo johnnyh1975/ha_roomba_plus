@@ -467,35 +467,36 @@
       "mop_clean_mode": {
         "name": "Mop – Clean mode",
         "state": {
-          "Dry": "Dry",
-          "Wet": "Wet",
-          "Unknown": "Unknown"
+          "dry": "Dry",
+          "wet": "Wet",
+          "unknown": "Unknown"
         }
       },
       "mop_tank_status": {
         "name": "Mop – Tank status",
         "state": {
-          "Ready": "Ready",
-          "Fill Tank": "Fill tank",
-          "Lid Open": "Lid open",
-          "Tank Missing": "Tank missing"
+          "ready": "Ready",
+          "fill_tank": "Fill tank",
+          "lid_open": "Lid open",
+          "tank_missing": "Tank missing",
+          "unknown": "Unknown"
         }
       },
       "mop_ars_behavior": {
         "name": "Mop – ARS behavior",
         "state": {
-          "No Mop": "No mop",
-          "Extended": "Extended",
-          "Standard": "Standard",
-          "Deep": "Deep",
-          "Dirty Pause": "Dirty pause",
-          "Dry": "Dry",
-          "Wash": "Wash",
-          "Dirty Pause + Dry": "Dirty pause + dry",
-          "Dirty Pause + Wash": "Dirty pause + wash",
-          "Dry + Wash": "Dry + wash",
-          "Dirty Pause + Dry + Wash": "Dirty pause + dry + wash",
-          "Unknown": "Unknown"
+          "no_mop": "No mop",
+          "extended": "Extended",
+          "standard": "Standard",
+          "deep": "Deep",
+          "dirty_pause": "Dirty pause",
+          "dry": "Dry",
+          "wash": "Wash",
+          "dirty_pause_dry": "Dirty pause + dry",
+          "dirty_pause_wash": "Dirty pause + wash",
+          "dry_wash": "Dry + wash",
+          "dirty_pause_dry_wash": "Dirty pause + dry + wash",
+          "unknown": "Unknown"
         }
       },
       "recent_cleaning_speed": {

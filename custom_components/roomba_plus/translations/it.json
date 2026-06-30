@@ -465,35 +465,36 @@
       "mop_clean_mode": {
         "name": "Mocio – Modalità pulizia",
         "state": {
-          "Dry": "Asciutto",
-          "Wet": "Umido",
-          "Unknown": "Sconosciuto"
+          "dry": "Asciutto",
+          "wet": "Umido",
+          "unknown": "Sconosciuto"
         }
       },
       "mop_tank_status": {
         "name": "Mocio – Stato serbatoio",
         "state": {
-          "Ready": "Pronto",
-          "Fill Tank": "Riempire serbatoio",
-          "Lid Open": "Coperchio aperto",
-          "Tank Missing": "Serbatoio mancante"
+          "ready": "Pronto",
+          "fill_tank": "Riempire serbatoio",
+          "lid_open": "Coperchio aperto",
+          "tank_missing": "Serbatoio mancante",
+          "unknown": "Sconosciuto"
         }
       },
       "mop_ars_behavior": {
         "name": "Mocio – Comportamento ARS",
         "state": {
-          "No Mop": "Nessun mocio",
-          "Extended": "Esteso",
-          "Standard": "Standard",
-          "Deep": "Profondo",
-          "Dirty Pause": "Pausa sporco",
-          "Dry": "Asciutto",
-          "Wash": "Lavare",
-          "Dirty Pause + Dry": "Pausa + asciutto",
-          "Dirty Pause + Wash": "Pausa + lavare",
-          "Dry + Wash": "Asciutto + lavare",
-          "Dirty Pause + Dry + Wash": "Pausa + asciutto + lavare",
-          "Unknown": "Sconosciuto"
+          "no_mop": "Nessun mocio",
+          "extended": "Esteso",
+          "standard": "Standard",
+          "deep": "Profondo",
+          "dirty_pause": "Pausa sporco",
+          "dry": "Asciutto",
+          "wash": "Lavare",
+          "dirty_pause_dry": "Pausa + asciutto",
+          "dirty_pause_wash": "Pausa + lavare",
+          "dry_wash": "Asciutto + lavare",
+          "dirty_pause_dry_wash": "Pausa + asciutto + lavare",
+          "unknown": "Sconosciuto"
         }
       },
       "recent_cleaning_speed": {

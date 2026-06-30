@@ -465,35 +465,36 @@
       "mop_clean_mode": {
         "name": "Dweil – Reinigingsmodus",
         "state": {
-          "Dry": "Droog",
-          "Wet": "Nat",
-          "Unknown": "Onbekend"
+          "dry": "Droog",
+          "wet": "Nat",
+          "unknown": "Onbekend"
         }
       },
       "mop_tank_status": {
         "name": "Dweil – Tankstatus",
         "state": {
-          "Ready": "Gereed",
-          "Fill Tank": "Tank vullen",
-          "Lid Open": "Deksel open",
-          "Tank Missing": "Tank ontbreekt"
+          "ready": "Gereed",
+          "fill_tank": "Tank vullen",
+          "lid_open": "Deksel open",
+          "tank_missing": "Tank ontbreekt",
+          "unknown": "Onbekend"
         }
       },
       "mop_ars_behavior": {
         "name": "Dweil – ARS-gedrag",
         "state": {
-          "No Mop": "Geen dweil",
-          "Extended": "Uitgebreid",
-          "Standard": "Standaard",
-          "Deep": "Intensief",
-          "Dirty Pause": "Vuile pauze",
-          "Dry": "Droog",
-          "Wash": "Wassen",
-          "Dirty Pause + Dry": "Pauze + droog",
-          "Dirty Pause + Wash": "Pauze + wassen",
-          "Dry + Wash": "Droog + wassen",
-          "Dirty Pause + Dry + Wash": "Pauze + droog + wassen",
-          "Unknown": "Onbekend"
+          "no_mop": "Geen dweil",
+          "extended": "Uitgebreid",
+          "standard": "Standaard",
+          "deep": "Intensief",
+          "dirty_pause": "Vuile pauze",
+          "dry": "Droog",
+          "wash": "Wassen",
+          "dirty_pause_dry": "Pauze + droog",
+          "dirty_pause_wash": "Pauze + wassen",
+          "dry_wash": "Droog + wassen",
+          "dirty_pause_dry_wash": "Pauze + droog + wassen",
+          "unknown": "Onbekend"
         }
       },
       "recent_cleaning_speed": {

@@ -957,21 +957,25 @@ def _mop_clean_mode(entity: "IRobotEntity") -> StateType:
 
     F2 -- exposes the readable pad wetness as a named mode enum.
     Level 1 = Dry; levels 2-3 = Wet.
+
+    v3.1.0 MOP-SENSOR-SLUG-FIX: values are lowercase slugs (hassfest
+    requires [a-z0-9-_]+ on select/sensor-enum translation_key state keys).
+    Was "Dry"/"Wet"/"Unknown" (Capital-Case) before this change.
     """
     level = entity.vacuum_state.get("padWetness", {})
     if isinstance(level, dict):
         level = level.get("disposable") or level.get("reusable")
     if level is None:
-        return "Unknown"
+        return "unknown"
     try:
         level = int(level)
     except (TypeError, ValueError):
-        return "Unknown"
+        return "unknown"
     if level == 1:
-        return "Dry"
+        return "dry"
     if level in (2, 3):
-        return "Wet"
-    return "Unknown"
+        return "wet"
+    return "unknown"
 
 
 # ── F3 — Mop tank status (RoombaSensor value function) ───────────────────────
@@ -981,30 +985,38 @@ def _mop_tank_status(entity: "IRobotEntity") -> StateType:
 
     F3 -- priority: tank missing > lid open > fill needed > ready.
     Replaces four separate binary sensors with one actionable status.
-    Returns Unknown when mopReady key is absent entirely.
+    Returns "unknown" when mopReady key is absent entirely.
+
+    v3.1.0 MOP-SENSOR-SLUG-FIX: values are lowercase underscore slugs
+    (hassfest [a-z0-9-_]+ requirement). Was "Ready"/"Fill Tank"/"Lid Open"/
+    "Tank Missing"/"Unknown" (Capital-Case, some with spaces) before this
+    change — spaces are not valid in translation_key state keys at all.
     """
     state = entity.vacuum_state
     if "mopReady" not in state:
-        return "Unknown"
+        return "unknown"
     ready = state["mopReady"]
     if not isinstance(ready, dict):
-        return "Unknown"
+        return "unknown"
     if not ready.get("tankPresent", True):
-        return "Tank Missing"
+        return "tank_missing"
     if not ready.get("lidClosed", True):
-        return "Lid Open"
+        return "lid_open"
     if ready.get("fillRequired", False):
-        return "Fill Tank"
-    return "Ready"
+        return "fill_tank"
+    return "ready"
 
 
 # ── F3b — Mop behavior / ARS (RoombaSensor value function) ───────────────────
 
+# v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs (hassfest
+# [a-z0-9-_]+ requirement). Was {15: "No Mop", 25: "Extended", ...}
+# (Capital-Case, some with spaces) before this change.
 _MOD_RANKS: dict[int, str] = {
-    15: "No Mop",
-    25: "Extended",
-    67: "Standard",
-    85: "Deep",
+    15: "no_mop",
+    25: "extended",
+    67: "standard",
+    85: "deep",
 }
 
 
@@ -1014,27 +1026,38 @@ def _mop_behavior(entity: "IRobotEntity") -> StateType:
     F3b -- derives behavior from rankOverlap when present; falls back to
     padDirtyPause / padDryAllowed / padWashAllowed flag combination.
     Absent for all vacuum robots.
+
+    v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs (hassfest
+    [a-z0-9-_]+ requirement). Combination modes (e.g. "dirty_pause_dry")
+    join with "_" instead of the old " + " separator — both the separator
+    character (space) and the individual mode names were invalid as
+    translation_key state keys. The full set of valid combinations is
+    listed explicitly in the sensor descriptor's `options` (RoombaSensorDescription
+    in SENSORS) — any combination this function can produce must have a
+    matching entry there and in strings.json/translations, kept in sync
+    manually since this is a small, fixed combinatorial set (2^2 = 4 dirty_pause ×
+    {dry, wash} combinations plus the single-flag and rankOverlap cases).
     """
     state = entity.vacuum_state
     rank = state.get("rankOverlap")
     if rank is not None:
-        return _MOD_RANKS.get(rank, "Unknown")
+        return _MOD_RANKS.get(rank, "unknown")
 
     dirty_pause  = state.get("padDirtyPause",  0) == 1
     dry_allowed  = state.get("padDryAllowed",  0) == 1
     wash_allowed = state.get("padWashAllowed", 0) == 1
 
     if not dry_allowed and not wash_allowed:
-        return "Unknown"
+        return "unknown"
 
     modes = []
     if dirty_pause:
-        modes.append("Dirty Pause")
+        modes.append("dirty_pause")
     if dry_allowed:
-        modes.append("Dry")
+        modes.append("dry")
     if wash_allowed:
-        modes.append("Wash")
-    return " + ".join(modes) if modes else "Unknown"
+        modes.append("wash")
+    return "_".join(modes) if modes else "unknown"
 
 
 
@@ -1868,7 +1891,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="mop_clean_mode",
         name="Mop – Clean mode",
         device_class=SensorDeviceClass.ENUM,
-        options=["Dry", "Wet", "Unknown"],
+        options=["dry", "wet", "unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "padWetness" in s,
         value_fn=_mop_clean_mode,
@@ -1880,7 +1903,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="mop_tank_status",
         name="Mop – Tank status",
         device_class=SensorDeviceClass.ENUM,
-        options=["Ready", "Fill Tank", "Lid Open", "Tank Missing", "Unknown"],
+        options=["ready", "fill_tank", "lid_open", "tank_missing", "unknown"],
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "mopReady" in s,
         value_fn=_mop_tank_status,
@@ -1893,10 +1916,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Mop – ARS behavior",
         device_class=SensorDeviceClass.ENUM,
         options=[
-            "No Mop", "Extended", "Standard", "Deep",
-            "Dirty Pause", "Dry", "Wash",
-            "Dirty Pause + Dry", "Dirty Pause + Wash", "Dry + Wash",
-            "Dirty Pause + Dry + Wash", "Unknown",
+            "no_mop", "extended", "standard", "deep",
+            "dirty_pause", "dry", "wash",
+            "dirty_pause_dry", "dirty_pause_wash", "dry_wash",
+            "dirty_pause_dry_wash", "unknown",
         ],
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "rankOverlap" in s or "padDryAllowed" in s,

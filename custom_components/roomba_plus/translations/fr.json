@@ -465,35 +465,36 @@
       "mop_clean_mode": {
         "name": "Serpillère – Mode de nettoyage",
         "state": {
-          "Dry": "Sec",
-          "Wet": "Humide",
-          "Unknown": "Inconnu"
+          "dry": "Sec",
+          "wet": "Humide",
+          "unknown": "Inconnu"
         }
       },
       "mop_tank_status": {
         "name": "Serpillère – État réservoir",
         "state": {
-          "Ready": "Prêt",
-          "Fill Tank": "Remplir le réservoir",
-          "Lid Open": "Couvercle ouvert",
-          "Tank Missing": "Réservoir absent"
+          "ready": "Prêt",
+          "fill_tank": "Remplir le réservoir",
+          "lid_open": "Couvercle ouvert",
+          "tank_missing": "Réservoir absent",
+          "unknown": "Inconnu"
         }
       },
       "mop_ars_behavior": {
         "name": "Serpillère – Comportement ARS",
         "state": {
-          "No Mop": "Pas de serpillère",
-          "Extended": "Étendu",
-          "Standard": "Standard",
-          "Deep": "Intensif",
-          "Dirty Pause": "Pause saleté",
-          "Dry": "Sec",
-          "Wash": "Laver",
-          "Dirty Pause + Dry": "Pause + sec",
-          "Dirty Pause + Wash": "Pause + laver",
-          "Dry + Wash": "Sec + laver",
-          "Dirty Pause + Dry + Wash": "Pause + sec + laver",
-          "Unknown": "Inconnu"
+          "no_mop": "Pas de serpillère",
+          "extended": "Étendu",
+          "standard": "Standard",
+          "deep": "Intensif",
+          "dirty_pause": "Pause saleté",
+          "dry": "Sec",
+          "wash": "Laver",
+          "dirty_pause_dry": "Pause + sec",
+          "dirty_pause_wash": "Pause + laver",
+          "dry_wash": "Sec + laver",
+          "dirty_pause_dry_wash": "Pause + sec + laver",
+          "unknown": "Inconnu"
         }
       },
       "recent_cleaning_speed": {

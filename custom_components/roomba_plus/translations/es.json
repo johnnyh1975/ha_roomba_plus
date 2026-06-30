@@ -465,35 +465,36 @@
       "mop_clean_mode": {
         "name": "Fregado – Modo de limpieza",
         "state": {
-          "Dry": "Seco",
-          "Wet": "Húmedo",
-          "Unknown": "Desconocido"
+          "dry": "Seco",
+          "wet": "Húmedo",
+          "unknown": "Desconocido"
         }
       },
       "mop_tank_status": {
         "name": "Fregado – Estado del depósito",
         "state": {
-          "Ready": "Listo",
-          "Fill Tank": "Llenar depósito",
-          "Lid Open": "Tapa abierta",
-          "Tank Missing": "Sin depósito"
+          "ready": "Listo",
+          "fill_tank": "Llenar depósito",
+          "lid_open": "Tapa abierta",
+          "tank_missing": "Sin depósito",
+          "unknown": "Desconocido"
         }
       },
       "mop_ars_behavior": {
         "name": "Fregado – Comportamiento ARS",
         "state": {
-          "No Mop": "Sin fregar",
-          "Extended": "Extendido",
-          "Standard": "Estándar",
-          "Deep": "Profundo",
-          "Dirty Pause": "Pausa suciedad",
-          "Dry": "Seco",
-          "Wash": "Lavar",
-          "Dirty Pause + Dry": "Pausa + seco",
-          "Dirty Pause + Wash": "Pausa + lavar",
-          "Dry + Wash": "Seco + lavar",
-          "Dirty Pause + Dry + Wash": "Pausa + seco + lavar",
-          "Unknown": "Desconocido"
+          "no_mop": "Sin fregar",
+          "extended": "Extendido",
+          "standard": "Estándar",
+          "deep": "Profundo",
+          "dirty_pause": "Pausa suciedad",
+          "dry": "Seco",
+          "wash": "Lavar",
+          "dirty_pause_dry": "Pausa + seco",
+          "dirty_pause_wash": "Pausa + lavar",
+          "dry_wash": "Seco + lavar",
+          "dirty_pause_dry_wash": "Pausa + seco + lavar",
+          "unknown": "Desconocido"
         }
       },
       "recent_cleaning_speed": {
