@@ -204,9 +204,6 @@
         }
       }
     },
-    "errors": {
-      "no_valid_ids": "No valid IDs found. Please enter comma-separated numbers."
-    },
     "error": {
       "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
       "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again.",

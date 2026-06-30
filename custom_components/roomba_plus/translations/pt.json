@@ -204,9 +204,6 @@
         }
       }
     },
-    "errors": {
-      "no_valid_ids": "Nenhum ID válido encontrado. Introduz números separados por vírgulas."
-    },
     "error": {
       "cloud_auth_failed": "Falha na autenticação cloud. Verifica o teu email e palavra-passe iRobot.",
       "cloud_unavailable": "Não foi possível aceder ao cloud iRobot. Verifica a tua ligação à Internet e tenta novamente.",

@@ -204,9 +204,6 @@
         }
       }
     },
-    "errors": {
-      "no_valid_ids": "Geen geldige ID's gevonden. Voer kommagescheiden nummers in."
-    },
     "error": {
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
