@@ -4989,8 +4989,39 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
         return rec.get("result") if rec else None
 
     @property
+    def _region_map_and_umf(self) -> tuple[dict[str, str], dict[str, str] | None]:
+        """v3.1.1 ROOM-COVERAGE-IN-SUMMARY — build (region_map, umf_regions)
+        exactly like vacuum.py's extra_state_attributes does, so
+        latest_cleaned_rooms()/latest_room_coverage() resolve room display
+        names the same way on both entities.
+        """
+        data = self._entry.runtime_data
+        region_map: dict[str, str] = {}
+        if data.has_cloud and data.cloud_coordinator is not None:
+            region_map = {
+                r["id"]: r["name"]
+                for r in data.cloud_coordinator.regions
+                if r.get("id")
+            }
+        umf_regions: dict[str, str] | None = None
+        if not region_map and data.umf_aligner and data.umf_aligner.aligned:
+            umf_regions = data.umf_aligner.rid_to_name()
+        return region_map, umf_regions
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose all mission fields as attributes for easy automation use."""
+        """Expose all mission fields as attributes for easy automation use.
+
+        v3.1.1 ROOM-COVERAGE-IN-SUMMARY — fixes a pre-existing bug where
+        cleaned_rooms always returned None: the MissionStore record itself
+        never carries a "last_cleaned_rooms" key (that name only exists as
+        vacuum.py's *computed* attribute name, derived on the fly from
+        timeline.finEvents via MissionStore.latest_cleaned_rooms() — it was
+        never a literal stored field). Both cleaned_rooms and the new
+        room_coverage attribute now call the same MissionStore methods
+        vacuum.py uses, with the same region_map/umf_regions resolution,
+        instead of reading a record key that was never populated.
+        """
         rec = self._latest
         if rec is None:
             return {
@@ -4998,6 +5029,7 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
                 "duration_min": None,
                 "area_sqft": None,
                 "cleaned_rooms": None,
+                "room_coverage": None,
                 "cleaning_passes": None,
                 "battery_start_pct": None,
                 "battery_end_pct": None,
@@ -5009,11 +5041,22 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
                 "started_at": None,
                 "ended_at": None,
             }
+
+        store = self._entry.runtime_data.mission_store
+        cleaned_rooms = None
+        room_coverage = None
+        if store is not None:
+            region_map, umf_regions = self._region_map_and_umf
+            if region_map or umf_regions:
+                cleaned_rooms = store.latest_cleaned_rooms(region_map, umf_regions)
+                room_coverage = store.latest_room_coverage(region_map, umf_regions)
+
         return {
             "result": rec.get("result"),
             "duration_min": rec.get("duration_min"),
             "area_sqft": rec.get("area_sqft"),
-            "cleaned_rooms": rec.get("last_cleaned_rooms"),
+            "cleaned_rooms": cleaned_rooms,
+            "room_coverage": room_coverage,
             "cleaning_passes": rec.get("cleaning_passes"),
             "battery_start_pct": rec.get("battery_start_pct"),
             "battery_end_pct": rec.get("battery_end_pct"),
