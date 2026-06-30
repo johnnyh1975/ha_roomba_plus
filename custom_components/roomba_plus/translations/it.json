@@ -121,10 +121,6 @@
         "data_description": {
           "region_ids": "Esempio: 5, 12, 7",
           "zone_names": "Una voce per riga: 21=Corridoio, 22=Cucina, ecc."
-        },
-        "error": {
-          "no_valid_ids": "Nessuna voce valida trovata. Usa il formato id=Nome, una per riga.",
-          "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova."
         }
       },
       "cloud_credentials": {
@@ -203,7 +199,9 @@
       "cloud_auth_failed": "Autenticazione cloud non riuscita. Controlla email e password iRobot.",
       "cloud_unavailable": "Impossibile raggiungere il cloud iRobot. Controlla la connessione Internet e riprova.",
       "invalid_cloud_credentials": "Autenticazione cloud non riuscita. Controlla e-mail e password iRobot.",
-      "cannot_connect": "Impossibile connettersi. Controlla la connessione internet e riprova."
+      "cannot_connect": "Impossibile connettersi. Controlla la connessione internet e riprova.",
+      "no_valid_ids": "Nessuna voce valida trovata. Usa il formato id=Nome, una per riga.",
+      "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",

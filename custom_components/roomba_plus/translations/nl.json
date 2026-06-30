@@ -121,10 +121,6 @@
         "data_description": {
           "region_ids": "Voorbeeld: 5, 12, 7",
           "zone_names": "Eén invoer per regel: 21=Gang, 22=Keuken, enz."
-        },
-        "error": {
-          "no_valid_ids": "Geen geldige invoer gevonden. Gebruik het formaat id=Naam, één per regel.",
-          "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw."
         }
       },
       "cloud_credentials": {
@@ -203,7 +199,9 @@
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
       "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
-      "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw."
+      "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw.",
+      "no_valid_ids": "Geen geldige invoer gevonden. Gebruik het formaat id=Naam, één per regel.",
+      "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",

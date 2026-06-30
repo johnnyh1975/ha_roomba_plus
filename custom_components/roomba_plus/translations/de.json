@@ -121,10 +121,6 @@
         "data_description": {
           "region_ids": "Beispiel: 5, 12, 7",
           "zone_names": "Eine Zeile pro Zone: 21=Korridor, 22=Küche, usw."
-        },
-        "error": {
-          "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone.",
-          "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist."
         }
       },
       "cloud_credentials": {
@@ -203,7 +199,9 @@
       "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
       "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung.",
       "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
-      "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
+      "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.",
+      "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone.",
+      "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist."
     },
     "abort": {
       "integration_not_loaded": "Die Integration konnte nicht geladen werden. Prüfe die Protokolle und lade neu, bevor du die Einstellungen öffnest.",
