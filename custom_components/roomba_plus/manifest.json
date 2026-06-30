@@ -22,7 +22,6 @@
     "paho_mqtt",
     "roombapy"
   ],
-  "services": "services.yaml",
   "requirements": [
     "roombapy==1.9.1"
   ],
