@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Deriva del mapa detectada",
-      "description": "El mapa de posición del Roomba ha derivado significativamente. Reconfirma el diseño de tus habitaciones para mantener la precisión del mapa.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Reconfirmar diseño de habitaciones"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Contador de tiempo posiblemente reiniciado",
       "description": "El contador bbrun.hr es inferior a las baselines para: {parts}. Las estimaciones no son fiables. Reinicia todos los consumibles."

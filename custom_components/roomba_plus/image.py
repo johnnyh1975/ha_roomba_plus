@@ -1075,15 +1075,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             translation_key="zones_need_naming",
         )
 
-    async def _trigger_drift_issue(self) -> None:
-        from homeassistant.components import repairs as ir
-        ir.async_create_issue(
-            self.hass, DOMAIN, "geometry_drifted",
-            is_fixable=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="geometry_drifted",
-        )
-
     async def _trigger_drift_issue_enriched(self, dx: float, dy: float) -> None:
         """F6d -- fire the drift Repair Issue with bearing/magnitude enrichment."""
         from .repairs import async_enrich_drift_issue

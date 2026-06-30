@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Map drift detected",
-      "description": "The Roomba’s position map has drifted significantly. Re-confirm your room layout to keep the map accurate.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Re-confirm room layout"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Robot runtime counter may have reset",
       "description": "The robot's bbrun.hr runtime counter is lower than the stored reset baselines for: {parts}. This usually means a firmware update silently reset the counter. Remaining-hours estimates for consumables are now unreliable. Reset all consumables using the Reset buttons."

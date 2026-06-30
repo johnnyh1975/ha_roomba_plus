@@ -867,17 +867,6 @@
       "title": "Erhöhte Relokalisierungsrate",
       "description": "Der Roboter musste sich deutlich häufiger neu lokalisieren als es seiner eigenen etablierten Baseline entspricht ({baseline} pro Mission im Schnitt). Das kann auf eine Verschlechterung der Smart Map hindeuten — erwäge die Karte zu löschen und neu zu trainieren, falls zusätzlich Meldungen wie \"Neuer Bereich gefunden\" auftreten oder die Raumverfolgung ungenau wird. Dieser Hinweis verschwindet automatisch, sobald sich die Rate in den nächsten Missionen wieder normalisiert."
     },
-    "geometry_drifted": {
-      "title": "Kartenverschiebung erkannt",
-      "description": "Die Positionskarte des Roomba hat sich erheblich verschoben. Bestätigen Sie Ihr Raumlayout neu, um die Karte korrekt zu halten.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Raumlayout neu bestätigen"
-          }
-        }
-      }
-    },
     "observed_zones_detected": {
       "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
       "description": "Ihre iRobot-Cloud-Karte enthält {zone_count} roboter-erkannte Hinderniszone(n). Führen Sie einige Reinigungsmissionen durch, damit Roomba+ diese lokal bestätigen kann."

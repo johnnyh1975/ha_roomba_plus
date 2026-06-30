@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Dérive de carte détectée",
-      "description": "La carte de position du Roomba a dérivé significativement. Reconfirmez la disposition de vos pièces pour maintenir la précision de la carte.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Reconfirmer la disposition des pièces"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Compteur de temps peut-être réinitialisé",
       "description": "Le compteur bbrun.hr est inférieur aux baselines pour : {parts}. Réinitialisez tous les consommables."

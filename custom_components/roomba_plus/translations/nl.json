@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Kaartafwijking gedetecteerd",
-      "description": "De positiekaart van de Roomba is aanzienlijk afgeweken. Bevestig je kamerindeling opnieuw om de kaartnauwkeurigheid te behouden.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Kamerindeling opnieuw bevestigen"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Looptijdteller mogelijk gereset",
       "description": "De teller is lager dan de baselines voor: {parts}. Reset alle verbruiksartikelen."

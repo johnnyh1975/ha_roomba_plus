@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Deriva do mapa detetada",
-      "description": "O mapa de posição do Roomba derivou significativamente. Reconfirma o layout das tuas divisões para manter a precisão do mapa.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Reconfirmar layout das divisões"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Contador de tempo possivelmente reiniciado",
       "description": "O contador é inferior às baselines para: {parts}. Redefine todos os consumíveis."

@@ -831,17 +831,6 @@
         }
       }
     },
-    "geometry_drifted": {
-      "title": "Deriva mappa rilevata",
-      "description": "La mappa di posizione del Roomba ha subito una deriva significativa. Riconferma il layout delle stanze per mantenere la precisione della mappa.",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Riconferma il layout delle stanze"
-          }
-        }
-      }
-    },
     "maintenance_baselines_reset": {
       "title": "Contatore runtime possibilmente azzerato",
       "description": "Il contatore è inferiore alle baseline per: {parts}. Reimposta tutti i materiali di consumo."
