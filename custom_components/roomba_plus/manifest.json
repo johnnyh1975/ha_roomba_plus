@@ -6,9 +6,12 @@
     "@johnnyh1975"
   ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "http"
+  ],
   "after_dependencies": [
     "dhcp",
+    "recorder",
     "zeroconf"
   ],
   "documentation": "https://github.com/johnnyh1975/ha_roomba_plus",
@@ -50,7 +53,5 @@
       "name": "roomba-*",
       "type": "_amzn-alexa._tcp.local."
     }
-  ],
-  "is_built_in": false,
-  "overwrites_built_in": false
+  ]
 }
