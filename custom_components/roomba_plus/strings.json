@@ -886,7 +886,7 @@
     },
     "error_recurrence": {
       "title": "Recurring error: {label}",
-      "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase '{phase}', location '{room}'. Recommended action: {action}"
+      "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase {phase}, location {room}. Recommended action: {action}"
     },
     "cancellation_recurrence": {
       "title": "Recurring cancellations",

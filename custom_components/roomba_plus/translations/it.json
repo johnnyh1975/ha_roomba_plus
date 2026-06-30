@@ -884,7 +884,7 @@
     },
     "error_recurrence": {
       "title": "Errore ricorrente: {label}",
-      "description": "L'errore {error_code} ({label}) si è verificato {count} volta/e negli ultimi 30 giorni. Più recente: fase '{phase}', posizione '{room}'. Azione consigliata: {action}"
+      "description": "L'errore {error_code} ({label}) si è verificato {count} volta/e negli ultimi 30 giorni. Più recente: fase {phase}, posizione {room}. Azione consigliata: {action}"
     },
     "cancellation_recurrence": {
       "title": "Annullamenti ricorrenti",

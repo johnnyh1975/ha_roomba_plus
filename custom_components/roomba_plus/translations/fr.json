@@ -884,7 +884,7 @@
     },
     "error_recurrence": {
       "title": "Erreur récurrente : {label}",
-      "description": "L'erreur {error_code} ({label}) s'est produite {count} fois au cours des 30 derniers jours. Dernier : phase '{phase}', emplacement '{room}'. Action recommandée : {action}"
+      "description": "L'erreur {error_code} ({label}) s'est produite {count} fois au cours des 30 derniers jours. Dernier : phase {phase}, emplacement {room}. Action recommandée : {action}"
     },
     "cancellation_recurrence": {
       "title": "Annulations récurrentes",

@@ -884,7 +884,7 @@
     },
     "error_recurrence": {
       "title": "Terugkerende fout: {label}",
-      "description": "Fout {error_code} ({label}) is de afgelopen 30 dagen {count} keer opgetreden. Meest recent: fase '{phase}', locatie '{room}'. Aanbevolen actie: {action}"
+      "description": "Fout {error_code} ({label}) is de afgelopen 30 dagen {count} keer opgetreden. Meest recent: fase {phase}, locatie {room}. Aanbevolen actie: {action}"
     },
     "cancellation_recurrence": {
       "title": "Terugkerende annuleringen",

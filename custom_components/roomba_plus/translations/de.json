@@ -884,7 +884,7 @@
     },
     "error_recurrence": {
       "title": "Wiederkehrender Fehler: {label}",
-      "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase '{phase}', Ort '{room}'. Empfohlene Maßnahme: {action}"
+      "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase {phase}, Ort {room}. Empfohlene Maßnahme: {action}"
     },
     "cancellation_recurrence": {
       "title": "Wiederkehrende Abbrüche",
