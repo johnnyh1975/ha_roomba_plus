@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  package-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG} -> Version: ${VERSION}"
+
+      - name: Validate manifest.json version matches tag
+        run: |
+          MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('custom_components/roomba_plus/manifest.json'))['version'])")
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::manifest.json version ($MANIFEST_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version check passed: $MANIFEST_VERSION"
+
+      - name: Prepare release notes
+        id: notes
+        run: |
+          NOTES_FILE="RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No $NOTES_FILE found — release will be created without notes body. Commit it before tagging next time."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build HACS-install ZIP
+        # CRITICAL: filename must exactly match hacs.json's "filename" key
+        # (ha_roomba_plus.zip), NOT a version-suffixed name — HACS looks
+        # for this exact filename on every release when zip_release=true.
+        run: |
+          mkdir -p /tmp/hacs-package
+          cp -r custom_components /tmp/hacs-package/
+          cp hacs.json /tmp/hacs-package/
+          cd /tmp/hacs-package
+          zip -r "${GITHUB_WORKSPACE}/ha_roomba_plus.zip" .
+
+      - name: Build full-review ZIP
+        run: |
+          mkdir -p /tmp/full-package
+          cp -r custom_components /tmp/full-package/
+          cp -r tests /tmp/full-package/
+          cp -r docs /tmp/full-package/
+          cp hacs.json /tmp/full-package/
+          cp README.md /tmp/full-package/
+          if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
+            cp "${{ steps.notes.outputs.path }}" /tmp/full-package/
+          fi
+          cd /tmp/full-package
+          zip -r "${GITHUB_WORKSPACE}/ha_roomba_plus-${{ steps.version.outputs.tag }}-full.zip" .
+
+      - name: Create GitHub Release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.found == 'true' && steps.notes.outputs.path || '' }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, 'b') || contains(steps.version.outputs.tag, 'rc') }}
+          files: |
+            ha_roomba_plus.zip
+            ha_roomba_plus-${{ steps.version.outputs.tag }}-full.zip
