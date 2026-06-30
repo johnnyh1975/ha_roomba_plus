@@ -166,11 +166,6 @@
         "data_description": {
           "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
           "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
-        },
-        "placeholders": {
-          "zone_name": {
-            "example": "Soggiorno"
-          }
         }
       },
       "presence_scheduling": {

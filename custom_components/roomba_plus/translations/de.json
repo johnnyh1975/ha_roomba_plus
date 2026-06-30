@@ -166,11 +166,6 @@
         "data_description": {
           "display_name": "Benutzerdefinierter Name in Auswahlmenüs. Leer lassen für den Standardnamen.",
           "hidden": "Ausgeblendete Zonen werden aus Auswahlmenüs entfernt und lösen keine Benennungs-Reparaturmeldungen aus."
-        },
-        "placeholders": {
-          "zone_name": {
-            "example": "Wohnzimmer"
-          }
         }
       },
       "presence_scheduling": {
