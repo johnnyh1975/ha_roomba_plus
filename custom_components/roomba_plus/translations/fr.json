@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Nouvelles pièces détectées",
-      "description": "Roomba+ a détecté de nouvelles zones. Ouvrez les paramètres pour les nommer.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Nommer les pièces détectées"
+            "title": "Nommer les pièces détectées",
+            "description": "Roomba+ a détecté de nouvelles zones. Ouvrez les paramètres pour les nommer."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Nouvelles zones Smart Map découvertes",
-      "description": "Roomba+ a découvert {zone_count} nouvelle(s) zone(s) ({zone_ids}) sans nom. Ouvrez les paramètres pour les nommer.",
       "fix_flow": {
         "step": {
           "init": {

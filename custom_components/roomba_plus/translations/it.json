@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Nuove stanze rilevate",
-      "description": "Roomba+ ha rilevato nuove aree. Apri le impostazioni per nominarle.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Nomina le stanze rilevate"
+            "title": "Nomina le stanze rilevate",
+            "description": "Roomba+ ha rilevato nuove aree. Apri le impostazioni per nominarle."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Nuove zone Smart Map scoperte",
-      "description": "Roomba+ ha scoperto {zone_count} nuova/e zona/e ({zone_ids}) senza nome. Apri le impostazioni per nominarle.",
       "fix_flow": {
         "step": {
           "init": {

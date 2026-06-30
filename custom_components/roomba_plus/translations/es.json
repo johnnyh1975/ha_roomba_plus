@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Nuevas habitaciones detectadas",
-      "description": "Roomba+ ha detectado nuevas áreas. Abre la configuración para nombrarlas.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Nombrar habitaciones detectadas"
+            "title": "Nombrar habitaciones detectadas",
+            "description": "Roomba+ ha detectado nuevas áreas. Abre la configuración para nombrarlas."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Nuevas zonas Smart Map descubiertas",
-      "description": "Roomba+ ha descubierto {zone_count} zona(s) nueva(s) ({zone_ids}) sin nombre. Abre la configuración para nombrarlas.",
       "fix_flow": {
         "step": {
           "init": {

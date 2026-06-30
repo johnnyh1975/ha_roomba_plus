@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Nieuwe kamers gedetecteerd",
-      "description": "Roomba+ heeft nieuwe gebieden gedetecteerd. Open de instellingen om ze een naam te geven.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Gevonden kamers een naam geven"
+            "title": "Gevonden kamers een naam geven",
+            "description": "Roomba+ heeft nieuwe gebieden gedetecteerd. Open de instellingen om ze een naam te geven."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Nieuwe Smart Map-zones gevonden",
-      "description": "Roomba+ heeft {zone_count} nieuwe zone(s) ({zone_ids}) zonder naam gevonden. Open de instellingen om ze een naam te geven.",
       "fix_flow": {
         "step": {
           "init": {

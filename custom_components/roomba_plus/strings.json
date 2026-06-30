@@ -802,18 +802,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "New rooms detected",
-      "description": "Roomba+ has detected new areas. Open the settings to name them.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Name detected rooms"
+            "title": "Name detected rooms",
+            "description": "Roomba+ has detected new areas. Open the settings to name them."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "New Smart Map zones discovered",
-      "description": "Roomba+ discovered {zone_count} new zone(s) ({zone_ids}) with no name yet. Open the settings to name them.",
       "fix_flow": {
         "step": {
           "init": {

@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Neue Räume erkannt",
-      "description": "Roomba+ hat nach der letzten Mission neue Bereiche erkannt. Öffne die Einstellungen um sie zu benennen.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Räume benennen"
+            "title": "Räume benennen",
+            "description": "Roomba+ hat nach der letzten Mission neue Bereiche erkannt. Öffne die Einstellungen um sie zu benennen."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Neue Smart-Map-Zonen entdeckt",
-      "description": "Roomba+ hat {zone_count} neue Zone(n) entdeckt (IDs: {zone_ids}), die noch keinen Namen haben. Bitte in den Einstellungen benennen.",
       "fix_flow": {
         "step": {
           "init": {

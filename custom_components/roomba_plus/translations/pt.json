@@ -800,18 +800,17 @@
   "issues": {
     "zones_need_naming": {
       "title": "Novas divisões detetadas",
-      "description": "O Roomba+ detetou novas áreas. Abre as definições para as nomear.",
       "fix_flow": {
         "step": {
           "zones": {
-            "title": "Nomear divisões detetadas"
+            "title": "Nomear divisões detetadas",
+            "description": "O Roomba+ detetou novas áreas. Abre as definições para as nomear."
           }
         }
       }
     },
     "smart_zones_need_naming": {
       "title": "Novas zonas Smart Map descobertas",
-      "description": "O Roomba+ descobriu {zone_count} nova(s) zona(s) ({zone_ids}) sem nome. Abre as definições para as nomear.",
       "fix_flow": {
         "step": {
           "init": {
