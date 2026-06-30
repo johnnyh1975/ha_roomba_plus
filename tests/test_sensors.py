@@ -1351,25 +1351,27 @@ class TestWifiHealthSensorUsesQualityPct:
 
 
 class TestMopCleanMode:
+    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase slugs, was Capital-Case before."""
+
     def test_level_1_is_dry(self):
         e = _entity({"padWetness": {"disposable": 1}})
-        assert _mop_clean_mode(e) == "Dry"
+        assert _mop_clean_mode(e) == "dry"
 
     def test_level_2_is_wet(self):
         e = _entity({"padWetness": {"disposable": 2}})
-        assert _mop_clean_mode(e) == "Wet"
+        assert _mop_clean_mode(e) == "wet"
 
     def test_level_3_is_wet(self):
         e = _entity({"padWetness": {"reusable": 3}})
-        assert _mop_clean_mode(e) == "Wet"
+        assert _mop_clean_mode(e) == "wet"
 
     def test_missing_padwetness_is_unknown(self):
         e = _entity({})
-        assert _mop_clean_mode(e) == "Unknown"
+        assert _mop_clean_mode(e) == "unknown"
 
     def test_empty_dict_is_unknown(self):
         e = _entity({"padWetness": {}})
-        assert _mop_clean_mode(e) == "Unknown"
+        assert _mop_clean_mode(e) == "unknown"
 
     def test_sensor_description_in_sensors(self):
         keys = [d.key for d in SENSORS]
@@ -1382,29 +1384,33 @@ class TestMopCleanMode:
 
 
 class TestMopTankStatus:
+    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs, was
+    Capital-Case-with-spaces before (spaces were never valid as
+    translation_key state keys, this was a pre-existing hassfest violation)."""
+
     def test_all_ok_is_ready(self):
         e = _entity({"mopReady": {"tankPresent": True, "lidClosed": True, "fillRequired": False}})
-        assert _mop_tank_status(e) == "Ready"
+        assert _mop_tank_status(e) == "ready"
 
     def test_fill_required(self):
         e = _entity({"mopReady": {"tankPresent": True, "lidClosed": True, "fillRequired": True}})
-        assert _mop_tank_status(e) == "Fill Tank"
+        assert _mop_tank_status(e) == "fill_tank"
 
     def test_lid_open_takes_priority_over_fill(self):
         e = _entity({"mopReady": {"tankPresent": True, "lidClosed": False, "fillRequired": True}})
-        assert _mop_tank_status(e) == "Lid Open"
+        assert _mop_tank_status(e) == "lid_open"
 
     def test_tank_missing_highest_priority(self):
         e = _entity({"mopReady": {"tankPresent": False, "lidClosed": False, "fillRequired": True}})
-        assert _mop_tank_status(e) == "Tank Missing"
+        assert _mop_tank_status(e) == "tank_missing"
 
     def test_missing_mopready_is_unknown(self):
         e = _entity({})
-        assert _mop_tank_status(e) == "Unknown"
+        assert _mop_tank_status(e) == "unknown"
 
     def test_non_dict_mopready_is_unknown(self):
         e = _entity({"mopReady": 1})
-        assert _mop_tank_status(e) == "Unknown"
+        assert _mop_tank_status(e) == "unknown"
 
     def test_sensor_description_in_sensors(self):
         keys = [d.key for d in SENSORS]
@@ -1417,37 +1423,40 @@ class TestMopTankStatus:
 
 
 class TestMopBehavior:
+    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs, combination
+    modes join with "_" instead of the old " + " separator."""
+
     def test_rank_15_no_mop(self):
         e = _entity({"rankOverlap": 15})
-        assert _mop_behavior(e) == "No Mop"
+        assert _mop_behavior(e) == "no_mop"
 
     def test_rank_67_standard(self):
         e = _entity({"rankOverlap": 67})
-        assert _mop_behavior(e) == "Standard"
+        assert _mop_behavior(e) == "standard"
 
     def test_rank_85_deep(self):
         e = _entity({"rankOverlap": 85})
-        assert _mop_behavior(e) == "Deep"
+        assert _mop_behavior(e) == "deep"
 
     def test_unknown_rank(self):
         e = _entity({"rankOverlap": 99})
-        assert _mop_behavior(e) == "Unknown"
+        assert _mop_behavior(e) == "unknown"
 
     def test_flag_combination_dry_only(self):
         e = _entity({"padDryAllowed": 1, "padWashAllowed": 0, "padDirtyPause": 0})
-        assert _mop_behavior(e) == "Dry"
+        assert _mop_behavior(e) == "dry"
 
     def test_flag_combination_dirty_pause_plus_dry_plus_wash(self):
         e = _entity({"padDirtyPause": 1, "padDryAllowed": 1, "padWashAllowed": 1})
-        assert _mop_behavior(e) == "Dirty Pause + Dry + Wash"
+        assert _mop_behavior(e) == "dirty_pause_dry_wash"
 
     def test_no_flags_is_unknown(self):
         e = _entity({"padDryAllowed": 0, "padWashAllowed": 0})
-        assert _mop_behavior(e) == "Unknown"
+        assert _mop_behavior(e) == "unknown"
 
     def test_rankOverlap_takes_precedence_over_flags(self):
         e = _entity({"rankOverlap": 25, "padDryAllowed": 1})
-        assert _mop_behavior(e) == "Extended"
+        assert _mop_behavior(e) == "extended"
 
     def test_sensor_description_in_sensors(self):
         keys = [d.key for d in SENSORS]
@@ -3869,3 +3878,56 @@ class TestRelocalisationRateSensor:
             rps.update_reloc_baseline(10)
         sensor = _make_reloc_sensor(rps=rps)
         assert sensor.extra_state_attributes["alert"] is True
+
+
+class TestMopSensorSlugConsistency:
+    """v3.1.0 MOP-SENSOR-SLUG-FIX: guards against the exact inconsistency
+    found during the fix — mop_tank_status's options array had 5 entries
+    but strings.json was missing "unknown" entirely. Ensures the
+    descriptor's `options` and strings.json's `state` keys always match.
+    """
+
+    def test_options_match_strings_json_keys(self):
+        import json, os
+        path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "custom_components", "roomba_plus", "strings.json"
+        )
+        with open(path, encoding="utf-8") as f:
+            strings_data = json.load(f)
+
+        for sensor_key in ("mop_clean_mode", "mop_tank_status", "mop_ars_behavior"):
+            desc = next(d for d in SENSORS if d.key == sensor_key)
+            options = set(desc.options)
+            translation_keys = set(strings_data["entity"]["sensor"][sensor_key]["state"].keys())
+            assert options == translation_keys, (
+                f"{sensor_key}: options={options} vs strings.json keys={translation_keys}, "
+                f"diff={options ^ translation_keys}"
+            )
+
+    def test_all_options_are_hassfest_valid_slugs(self):
+        import re
+        pattern = re.compile(r"^[a-z0-9_-]+$")
+        for sensor_key in ("mop_clean_mode", "mop_tank_status", "mop_ars_behavior"):
+            desc = next(d for d in SENSORS if d.key == sensor_key)
+            for option in desc.options:
+                assert pattern.match(option), f"{sensor_key}: {option!r} invalid slug"
+                assert not option.startswith(("-", "_")), f"{sensor_key}: {option!r} starts with -/_"
+                assert not option.endswith(("-", "_")), f"{sensor_key}: {option!r} ends with -/_"
+
+    def test_all_seven_translations_have_matching_keys(self):
+        import json, os
+        base = os.path.join(
+            os.path.dirname(__file__),
+            "..", "custom_components", "roomba_plus", "translations"
+        )
+        for sensor_key in ("mop_clean_mode", "mop_tank_status", "mop_ars_behavior"):
+            desc = next(d for d in SENSORS if d.key == sensor_key)
+            options = set(desc.options)
+            for lang in ("en", "de", "fr", "it", "es", "nl", "pt"):
+                with open(os.path.join(base, f"{lang}.json"), encoding="utf-8") as f:
+                    data = json.load(f)
+                translation_keys = set(data["entity"]["sensor"][sensor_key]["state"].keys())
+                assert options == translation_keys, (
+                    f"{lang}/{sensor_key}: options={options} vs keys={translation_keys}"
+                )
