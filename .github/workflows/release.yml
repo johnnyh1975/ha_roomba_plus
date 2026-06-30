@@ -56,7 +56,7 @@ jobs:
       - name: Prepare release notes
         id: notes
         run: |
-          NOTES_FILE="RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
+          NOTES_FILE="release-notes/${{ steps.version.outputs.tag }}.md"
           if [ -f "$NOTES_FILE" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
@@ -85,7 +85,7 @@ jobs:
           cp hacs.json /tmp/full-package/
           cp README.md /tmp/full-package/
           if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
-            cp "${{ steps.notes.outputs.path }}" /tmp/full-package/
+            cp "${{ steps.notes.outputs.path }}" "/tmp/full-package/RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
           fi
           cd /tmp/full-package
           zip -r "${GITHUB_WORKSPACE}/ha_roomba_plus-${{ steps.version.outputs.tag }}-full.zip" .
