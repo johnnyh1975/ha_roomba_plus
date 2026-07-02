@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from custom_components.roomba_plus.const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED
+from custom_components.roomba_plus.const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED, EVENT_STUCK
 from custom_components.roomba_plus.logbook import async_describe_events
 
 
@@ -111,9 +111,46 @@ class TestDescribeMaintenanceReset:
         assert "something_new" in result["message"]
 
 
+class TestDescribeStuck:
+    """v3.2.0 STUCK-CONTEXT — describe_stuck shares wording with the
+    push-notification-facing EVENT_STUCK payload, same dual-use pattern
+    as EVENT_MISSION_COMPLETED."""
+
+    def setup_method(self):
+        self.describe = _collect_describers()[EVENT_STUCK]
+
+    def test_basic_message(self):
+        result = self.describe(_event({"name": "Roomba 980"}))
+        assert result["name"] == "Roomba 980"
+        assert result["message"] == "got stuck"
+
+    def test_includes_room_when_known(self):
+        result = self.describe(_event({
+            "name": "Roomba 980", "last_room": "Kitchen",
+        }))
+        assert "Kitchen" in result["message"]
+
+    def test_includes_minutes_when_known(self):
+        result = self.describe(_event({
+            "name": "Roomba 980", "last_room": "Kitchen", "minutes_stuck": 5,
+        }))
+        assert result["message"] == "got stuck — Kitchen, 5 min"
+
+    def test_no_room_no_dash(self):
+        result = self.describe(_event({
+            "name": "Roomba 980", "minutes_stuck": 5,
+        }))
+        assert "—" not in result["message"]
+
+    def test_falls_back_to_roomba_plus_name(self):
+        result = self.describe(_event({}))
+        assert result["name"] == "Roomba+"
+
+
 class TestRegistersBothEvents:
     def test_both_event_types_registered(self):
         described = _collect_describers()
         assert EVENT_MISSION_COMPLETED in described
         assert EVENT_MAINTENANCE_RESET in described
-        assert len(described) == 2
+        assert EVENT_STUCK in described
+        assert len(described) == 3

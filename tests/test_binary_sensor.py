@@ -235,6 +235,7 @@ class TestMqttWatchdogRepairIssue:
 
         assert mock_create.call_args.kwargs["translation_key"] == "mqtt_watchdog_cloud_disconnected"
 
+
     def test_issue_cleared_on_recovery(self):
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
@@ -309,6 +310,116 @@ class TestMqttWatchdogRepairIssue:
                 tmock.time.return_value = now
                 s._async_watchdog_tick(None)
             assert not mock_create.called, f"phase={phase} must not fire the watchdog"
+
+
+class TestStuckContextEvent:
+    """v3.2.0 STUCK-CONTEXT — roomba_plus_stuck event, fired at the same
+    OFF->ON watchdog transition as the mqtt_watchdog Repair Issue."""
+
+    def _sensor_with_extras(
+        self, bbrun=None, pose=None, current_room=None, title="Test Robot",
+    ):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 7 * 60)
+        s._entry.title = title
+        reported = s.vacuum.master_state["state"]["reported"]
+        if bbrun is not None:
+            reported["bbrun"] = bbrun
+        if pose is not None:
+            reported["pose"] = pose
+        mts = MagicMock()
+        mts.current_room = current_room
+        s._entry.runtime_data.mission_timer_store = mts
+        return s, bs_mod, now
+
+    def test_event_fires_on_watchdog_transition(self):
+        s, bs_mod, now = self._sensor_with_extras()
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        s.hass.bus.async_fire.assert_called_once()
+        assert s.hass.bus.async_fire.call_args[0][0] == "roomba_plus_stuck"
+
+    def test_payload_completeness(self):
+        s, bs_mod, now = self._sensor_with_extras(
+            bbrun={"nStuck": 165}, current_room="Kitchen",
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        payload = s.hass.bus.async_fire.call_args[0][1]
+        assert payload["entry_id"] == "test_entry"
+        assert payload["name"] == "Test Robot"
+        assert payload["last_room"] == "Kitchen"
+        assert payload["phase"] == "run"
+        assert payload["stuck_count"] == 165
+        assert payload["minutes_stuck"] == 7
+
+    def test_ephemeral_pose_included_when_available(self):
+        s, bs_mod, now = self._sensor_with_extras(
+            pose={"theta": 61, "point": {"x": 171, "y": -113}},
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        payload = s.hass.bus.async_fire.call_args[0][1]
+        assert payload["last_known_position"] == {"x": 171, "y": -113}
+
+    def test_position_none_when_pose_absent(self):
+        """SMART-tier robots (or any robot without pose in this
+        snapshot) get last_known_position=None, not a crash or a
+        fabricated value."""
+        s, bs_mod, now = self._sensor_with_extras(pose=None)
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        payload = s.hass.bus.async_fire.call_args[0][1]
+        assert payload["last_known_position"] is None
+
+    def test_last_room_none_when_no_mission_timer_store(self):
+        s, bs_mod, now = self._sensor_with_extras()
+        s._entry.runtime_data.mission_timer_store = None
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        payload = s.hass.bus.async_fire.call_args[0][1]
+        assert payload["last_room"] is None
+
+    def test_stuck_count_none_when_bbrun_absent(self):
+        s, bs_mod, now = self._sensor_with_extras(bbrun=None)
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        payload = s.hass.bus.async_fire.call_args[0][1]
+        assert payload["stuck_count"] is None
+
+    def test_no_event_when_already_stale(self):
+        """No new transition (already ON) — no duplicate event fire."""
+        s, bs_mod, now = self._sensor_with_extras()
+        s._was_stale = True
+        with patch.object(bs_mod, "_time_mod") as tmock, \
+             patch.object(bs_mod.ir, "async_create_issue"):
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        s.hass.bus.async_fire.assert_not_called()
+
+    def test_no_event_when_not_stale(self):
+        """MQTT is fresh (recent message) — watchdog never transitions
+        ON, no event."""
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=now - 10)
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+        with patch.object(bs_mod, "_time_mod") as tmock:
+            tmock.time.return_value = now
+            s._async_watchdog_tick(None)
+        s.hass.bus.async_fire.assert_not_called()
 
 
 class TestMqttWatchdogStartGrace:
@@ -872,3 +983,92 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
         store.reset_battery.assert_called_once_with(123)
         payload = entity.hass.bus.async_fire.call_args[0][1]
         assert payload["component"] == "battery"
+
+
+def _make_layout_change_sensor(grid_store=None):
+    """Return a RoombaLayoutChangeDetected with the given GridStore
+    wired into runtime_data (or None to test the no-grid_store path)."""
+    from custom_components.roomba_plus.binary_sensor import RoombaLayoutChangeDetected
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = MagicMock()
+    entry.runtime_data.grid_store = grid_store
+    sensor = RoombaLayoutChangeDetected.__new__(RoombaLayoutChangeDetected)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_layout_change_detected"
+    return sensor
+
+
+class TestLayoutChangeDetected:
+    """v3.2.0 FURNITURE — RoombaLayoutChangeDetected binary sensor."""
+
+    def test_off_when_no_grid_store(self):
+        sensor = _make_layout_change_sensor(grid_store=None)
+        assert sensor.is_on is False
+        attrs = sensor.extra_state_attributes
+        assert attrs["cells_tracked"] == 0
+        assert attrs["missions_until_first_ready"] is None
+
+    def test_off_when_no_candidates(self):
+        gs = MagicMock()
+        gs.furniture_candidates.return_value = []
+        sensor = _make_layout_change_sensor(grid_store=gs)
+        assert sensor.is_on is False
+
+    def test_readiness_attributes_shown_even_without_candidates(self):
+        """v3.2.0 UX fix — before this, a fresh install with no
+        candidates yet showed identical (empty) attributes to a
+        long-established install with genuinely nothing to report. Now
+        the learning-progress fields are always present, so "still
+        building history" is distinguishable from "already checked, all
+        clear"."""
+        gs = MagicMock()
+        gs.furniture_candidates.return_value = []
+        gs.furniture_readiness.return_value = {
+            "cells_tracked": 12, "most_mature_cell_age": 9,
+            "missions_until_first_ready": 14,
+        }
+        sensor = _make_layout_change_sensor(grid_store=gs)
+        attrs = sensor.extra_state_attributes
+        assert attrs["cells_tracked"] == 12
+        assert attrs["missions_until_first_ready"] == 14
+
+    def test_on_when_candidates_exist(self):
+        gs = MagicMock()
+        gs.furniture_candidates.return_value = [
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+        ]
+        sensor = _make_layout_change_sensor(grid_store=gs)
+        assert sensor.is_on is True
+
+    def test_attributes_expose_first_candidate_location_and_count(self):
+        gs = MagicMock()
+        gs.furniture_candidates.return_value = [
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+            {"cell": (3, 4), "x_mm": 450.0, "y_mm": 600.0},
+        ]
+        sensor = _make_layout_change_sensor(grid_store=gs)
+        attrs = sensor.extra_state_attributes
+        assert attrs["approximate_location"] == {"x_mm": 150.0, "y_mm": 300.0}
+        assert attrs["candidate_count"] == 2
+
+    def test_readiness_attributes_still_present_alongside_candidate(self):
+        gs = MagicMock()
+        gs.furniture_candidates.return_value = [
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+        ]
+        gs.furniture_readiness.return_value = {
+            "cells_tracked": 30, "most_mature_cell_age": 23,
+            "missions_until_first_ready": 0,
+        }
+        sensor = _make_layout_change_sensor(grid_store=gs)
+        attrs = sensor.extra_state_attributes
+        assert attrs["cells_tracked"] == 30
+        assert attrs["candidate_count"] == 1
+
+    def test_is_device_class_problem(self):
+        from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+        sensor = _make_layout_change_sensor(grid_store=None)
+        assert sensor.device_class == BinarySensorDeviceClass.PROBLEM

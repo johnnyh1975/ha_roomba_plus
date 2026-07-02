@@ -206,6 +206,46 @@ class TestParseDerived:
         assert d["rooms_completed"]["19"]["passes"] == 2
         assert "21" in d["rooms_completed"]
 
+    def test_room_visits_captures_rid_and_ts(self):
+        """v3.2.0 ROOM-ACCESS — every room finEvent's (rid, ts) is kept,
+        confirmed against the real PyRoomba r.json schema (see
+        MISSIONSTORE_FIELD_REGISTRY.md)."""
+        raw = _raw(fin_events=[
+            {"type": "room", "ts": 1696660084,
+             "room": {"rid": "1", "status": 0, "passCount": 1, "totalArea": 174}},
+            {"type": "room", "ts": 1696660945,
+             "room": {"rid": "2", "status": 0, "passCount": 1, "totalArea": 90}},
+        ])
+        d = self.archive._parse_derived(raw)
+        assert d["room_visits"] == [
+            {"rid": "1", "ts": 1696660084},
+            {"rid": "2", "ts": 1696660945},
+        ]
+
+    def test_room_visits_preserves_original_order(self):
+        """Order matters — time-per-room is derived from consecutive
+        entries' ts deltas, so this must NOT be deduplicated or sorted by
+        rid (unlike traversal_rids, which intentionally is deduplicated)."""
+        raw = _raw(fin_events=[
+            {"type": "room", "ts": 100, "room": {"rid": "1", "status": 1}},
+            {"type": "room", "ts": 200, "room": {"rid": "2", "status": 1}},
+            {"type": "room", "ts": 300, "room": {"rid": "1", "status": 0}},
+        ])
+        d = self.archive._parse_derived(raw)
+        assert [v["rid"] for v in d["room_visits"]] == ["1", "2", "1"]
+
+    def test_room_visits_skips_events_without_ts(self):
+        raw = _raw(fin_events=[
+            {"type": "room", "room": {"rid": "1", "status": 0}},  # no ts
+        ])
+        d = self.archive._parse_derived(raw)
+        assert d["room_visits"] == []
+
+    def test_room_visits_empty_when_no_room_events(self):
+        raw = _raw(fin_events=[_traversal("19", "21")])
+        d = self.archive._parse_derived(raw)
+        assert d["room_visits"] == []
+
     def test_traversal_rids_extracted(self):
         raw = _raw(fin_events=[_traversal("19", "21")])
         d = self.archive._parse_derived(raw)
@@ -247,6 +287,118 @@ class TestParseDerived:
         raw["classified_result"] = "cancelled_by_user"
         d = self.archive._parse_derived(raw)
         assert d["result"] == "cancelled_by_user"
+
+
+class TestTimePerRoom:
+    """v3.2.0 ROOM-ACCESS — MissionArchive.time_per_room()."""
+
+    def test_empty_below_two_entries(self):
+        assert MissionArchive.time_per_room([]) == {}
+        assert MissionArchive.time_per_room([{"rid": "1", "ts": 100}]) == {}
+
+    def test_single_delta_attributed_to_first_room(self):
+        visits = [{"rid": "1", "ts": 100}, {"rid": "2", "ts": 160}]
+        assert MissionArchive.time_per_room(visits) == {"1": 60}
+
+    def test_last_entry_contributes_nothing(self):
+        """No 'next' event to delta the last room against."""
+        visits = [{"rid": "1", "ts": 100}, {"rid": "2", "ts": 160}]
+        result = MissionArchive.time_per_room(visits)
+        assert "2" not in result
+
+    def test_repeated_rid_accumulates(self):
+        """Re-entering the same room (e.g. after an interruption) adds to
+        its existing total rather than overwriting it."""
+        visits = [
+            {"rid": "1", "ts": 0},
+            {"rid": "2", "ts": 50},
+            {"rid": "1", "ts": 80},
+            {"rid": "3", "ts": 110},
+        ]
+        result = MissionArchive.time_per_room(visits)
+        assert result["1"] == 50 + 30   # two separate visits to room 1
+        assert result["2"] == 30
+
+    def test_matches_real_pyroomba_sample_shape(self):
+        """Realistic shape from the actual captured payload (see
+        MISSIONSTORE_FIELD_REGISTRY.md) — a single room event followed by
+        travel/pause events at a later ts still yields a sensible delta."""
+        visits = [{"rid": "1", "ts": 1696660084}]
+        # Only one room event in that sample — confirms the "< 2 entries"
+        # path is the realistic case for short/simple missions, not an
+        # edge case invented for testing.
+        assert MissionArchive.time_per_room(visits) == {}
+
+    def test_negative_or_zero_delta_ignored(self):
+        """Out-of-order or duplicate timestamps don't produce negative
+        dwell times."""
+        visits = [{"rid": "1", "ts": 100}, {"rid": "2", "ts": 100}]
+        assert MissionArchive.time_per_room(visits) == {}
+
+
+class TestFindByNMssn:
+    """v3.2.0 MISSION-REPLAY — MissionArchive.find_by_nMssn()."""
+
+    def setup_method(self):
+        self.archive = MissionArchive()
+
+    def test_none_when_no_records(self):
+        assert self.archive.find_by_nMssn(102) is None
+
+    def test_finds_matching_record(self):
+        self.archive._derived = [
+            {"nMssn": 101, "id": "a"},
+            {"nMssn": 102, "id": "b"},
+        ]
+        result = self.archive.find_by_nMssn(102)
+        assert result is not None
+        assert result["id"] == "b"
+
+    def test_none_when_no_match(self):
+        self.archive._derived = [{"nMssn": 101, "id": "a"}]
+        assert self.archive.find_by_nMssn(999) is None
+
+
+class TestMissionPath:
+    """v3.2.0 MISSION-REPLAY — MissionArchive.mission_path()."""
+
+    def test_empty_for_no_visits(self):
+        assert MissionArchive.mission_path([]) == []
+
+    def test_single_visit_passes_through(self):
+        visits = [{"rid": "1", "ts": 100}]
+        assert MissionArchive.mission_path(visits) == [{"rid": "1", "ts": 100}]
+
+    def test_collapses_consecutive_same_room(self):
+        """Multiple raw room finEvents for the same room (re-entry,
+        repeated status updates) collapse to one timeline entry, keeping
+        the FIRST (arrival) timestamp."""
+        visits = [
+            {"rid": "1", "ts": 100},
+            {"rid": "1", "ts": 150},
+            {"rid": "1", "ts": 200},
+        ]
+        assert MissionArchive.mission_path(visits) == [{"rid": "1", "ts": 100}]
+
+    def test_preserves_distinct_room_transitions(self):
+        visits = [
+            {"rid": "1", "ts": 100},
+            {"rid": "2", "ts": 200},
+            {"rid": "3", "ts": 300},
+        ]
+        result = MissionArchive.mission_path(visits)
+        assert [v["rid"] for v in result] == ["1", "2", "3"]
+
+    def test_revisit_after_leaving_is_a_new_entry(self):
+        """Kitchen -> Hallway -> Kitchen again is 3 entries, not
+        collapsed into 2 — only CONSECUTIVE duplicates collapse."""
+        visits = [
+            {"rid": "1", "ts": 100},
+            {"rid": "2", "ts": 200},
+            {"rid": "1", "ts": 300},
+        ]
+        result = MissionArchive.mission_path(visits)
+        assert [v["rid"] for v in result] == ["1", "2", "1"]
 
 
 class TestParseTimeline:

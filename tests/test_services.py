@@ -54,7 +54,7 @@ class TestServicesRegistration:
 
         return _FakeHass(), registered
 
-    def test_registers_all_eleven_services(self):
+    def test_registers_all_expected_services(self):
         from custom_components.roomba_plus.services import async_register_services
         from custom_components.roomba_plus.const import DOMAIN
 
@@ -76,6 +76,8 @@ class TestServicesRegistration:
             (DOMAIN, "reset_robot_profile"),
             # ADVANCE-ROOM-V2 (v2.8.0)
             (DOMAIN, "advance_room"),
+            # v3.2.0 ANOMALY-EXPLAIN
+            (DOMAIN, "explain_mission"),
         }
         assert expected == set(registered.keys())
 
@@ -90,9 +92,9 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 12
+        assert len(registered) == 13
 
-    def test_removes_all_eleven_services(self):
+    def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
             async_register_services,
             async_remove_services,
@@ -101,7 +103,7 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 12
+        assert len(registered) == 13
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -1007,3 +1009,163 @@ class TestCommandParams:
         state_v2 = {"pmaps": [{"map_a": "ts_new"}]}
         assert _resolve_pmapv_id_ref(state_v1, "map_a") == "ts_old"
         assert _resolve_pmapv_id_ref(state_v2, "map_a") == "ts_new"
+
+
+def _mission_record(
+    id="m_1", duration_min=60, area_sqft=200.0, recharge_min=0, dirt=10,
+    npicks_delta=0, error_code=None,
+):
+    from datetime import datetime, timezone
+    return {
+        "id": id, "duration_min": duration_min, "area_sqft": area_sqft,
+        "recharge_min": recharge_min, "dirt": dirt,
+        "npicks_delta": npicks_delta, "error_code": error_code,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "result": "completed",
+    }
+
+
+def _make_mission_store(records):
+    from custom_components.roomba_plus.mission_store import MissionStore
+    store = MissionStore()
+    store._records = records
+    return store
+
+
+class TestExplainMission:
+    """v3.2.0 ANOMALY-EXPLAIN — async_handle_explain_mission."""
+
+    def _make_call(self, entity_id="sensor.x_health_score", mission_id=None):
+        call = MagicMock()
+        data = {"entity_id": entity_id}
+        if mission_id is not None:
+            data["mission_id"] = mission_id
+        call.data = data
+        return call
+
+    async def _run(self, mission_store, mission_id=None,
+                    entity_id="sensor.x_health_score"):
+        from custom_components.roomba_plus.services import async_handle_explain_mission
+        entry = _make_config_entry(entry_id="e1")
+        entry.runtime_data.mission_store = mission_store
+        call = self._make_call(entity_id=entity_id, mission_id=mission_id)
+        call.hass.config_entries.async_get_entry.return_value = entry
+
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry("e1")
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        ):
+            return await async_handle_explain_mission(call)
+
+    @pytest.mark.asyncio
+    async def test_entity_not_found_raises(self):
+        from custom_components.roomba_plus.services import async_handle_explain_mission
+        from homeassistant.exceptions import ServiceValidationError
+        call = self._make_call()
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+        ) as mock_er:
+            mock_er.return_value.async_get.return_value = None
+            with pytest.raises(ServiceValidationError):
+                await async_handle_explain_mission(call)
+
+    @pytest.mark.asyncio
+    async def test_no_mission_store_raises(self):
+        from homeassistant.exceptions import ServiceValidationError
+        with pytest.raises(ServiceValidationError):
+            await self._run(mission_store=None)
+
+    @pytest.mark.asyncio
+    async def test_mission_id_not_found_raises(self):
+        from homeassistant.exceptions import ServiceValidationError
+        store = _make_mission_store([_mission_record(id="m_1")])
+        with pytest.raises(ServiceValidationError):
+            await self._run(store, mission_id="m_nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_latest_when_no_mission_id(self):
+        store = _make_mission_store([
+            _mission_record(id="m_1"), _mission_record(id="m_2"),
+        ])
+        result = await self._run(store)
+        assert result["mission_id"] == "m_2"
+
+    @pytest.mark.asyncio
+    async def test_explicit_mission_id_used(self):
+        store = _make_mission_store([
+            _mission_record(id="m_1"), _mission_record(id="m_2"),
+        ])
+        result = await self._run(store, mission_id="m_1")
+        assert result["mission_id"] == "m_1"
+
+    @pytest.mark.asyncio
+    async def test_not_anomalous_when_stats_unavailable(self):
+        """Fewer than 20 missions and no archive baseline → stats is None
+        → anomaly_reason gracefully skipped, not an error."""
+        store = _make_mission_store([_mission_record()])
+        result = await self._run(store)
+        assert result["is_anomalous"] is False
+        assert result["anomaly_reason"] is None
+        assert result["recommended_action"] is None
+
+    @pytest.mark.asyncio
+    async def test_anomaly_reason_and_recommendation_populated(self):
+        """20 normal missions establish stats, the 21st is a clear
+        obstacle_or_blockage case — full round-trip through real
+        compute_rolling_stats(), not a stubbed stats dict."""
+        normal = [
+            _mission_record(id=f"m_{i}", duration_min=60, area_sqft=200.0)
+            for i in range(20)
+        ]
+        anomalous = _mission_record(id="m_last", duration_min=200, area_sqft=30.0)
+        store = _make_mission_store(normal + [anomalous])
+        result = await self._run(store, mission_id="m_last")
+        assert result["is_anomalous"] is True
+        assert result["anomaly_reason"] == "obstacle_or_blockage"
+        assert result["recommended_action"] is not None
+
+    @pytest.mark.asyncio
+    async def test_robot_lifted_true_when_npicks_delta_positive(self):
+        store = _make_mission_store([_mission_record(npicks_delta=1)])
+        result = await self._run(store)
+        assert result["robot_lifted"] is True
+
+    @pytest.mark.asyncio
+    async def test_robot_lifted_false_when_npicks_delta_zero(self):
+        store = _make_mission_store([_mission_record(npicks_delta=0)])
+        result = await self._run(store)
+        assert result["robot_lifted"] is False
+
+    @pytest.mark.asyncio
+    async def test_robot_lifted_false_when_npicks_delta_missing(self):
+        """Older records recorded before ANOMALY-EXPLAIN shipped won't have
+        this field at all — must default safely to False, not crash."""
+        record = _mission_record()
+        del record["npicks_delta"]
+        store = _make_mission_store([record])
+        result = await self._run(store)
+        assert result["robot_lifted"] is False
+
+    @pytest.mark.asyncio
+    async def test_error_code_passed_through(self):
+        store = _make_mission_store([_mission_record(error_code=17)])
+        result = await self._run(store)
+        assert result["error_code"] == 17
+
+    @pytest.mark.asyncio
+    async def test_error_code_and_anomaly_reason_are_independent(self):
+        """A mission can have both an error_code AND an anomaly_reason —
+        neither should suppress the other."""
+        normal = [
+            _mission_record(id=f"m_{i}", duration_min=60, area_sqft=200.0)
+            for i in range(20)
+        ]
+        both = _mission_record(
+            id="m_last", duration_min=200, area_sqft=30.0, error_code=224,
+        )
+        store = _make_mission_store(normal + [both])
+        result = await self._run(store, mission_id="m_last")
+        assert result["anomaly_reason"] == "obstacle_or_blockage"
+        assert result["error_code"] == 224

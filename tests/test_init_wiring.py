@@ -341,12 +341,23 @@ class TestUpdateRobotProfileStoreMissionStats:
 
     @staticmethod
     def _ms_with_records(n: int, duration_min: int = 45, area_sqft: float = 300.0):
+        # v3.2.0 bug-hunt fix: was hardcoded to "2026-06-01T07:00:00+00:00",
+        # a fixed absolute date. query(days=30)'s cutoff is relative to
+        # wall-clock "now" — once real time passed the point where that
+        # fixed date fell outside the 30-day window, this test started
+        # failing not because of a code bug, but because the fixture
+        # itself had quietly gone stale. Use a relative offset instead so
+        # this can't happen again regardless of when the suite runs.
+        from homeassistant.util import dt as dt_util
+        import datetime
+        started = dt_util.now() - datetime.timedelta(days=5)
+        ended = started + datetime.timedelta(minutes=30)
         ms = _make_ms()
         ms._records = [
             {
                 "id": f"m_{i}",
-                "started_at": "2026-06-01T07:00:00+00:00",
-                "ended_at": "2026-06-01T07:30:00+00:00",
+                "started_at": started.isoformat(),
+                "ended_at": ended.isoformat(),
                 "duration_min": duration_min,
                 "area_sqft": area_sqft,
                 "result": "completed",

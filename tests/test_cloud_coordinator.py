@@ -668,6 +668,21 @@ class TestUmfProperties:
         coord = _make_coordinator()
         assert coord.keepout_zones == []
 
+    def test_region_suggestions_from_umf(self):
+        coord = _make_coordinator(umf_data={
+            "region_suggestions": [
+                {"region_id": "0", "suggested_types": [
+                    {"region_type": "living_room", "score": 0.62},
+                ]},
+            ],
+        })
+        assert len(coord.region_suggestions) == 1
+        assert coord.region_suggestions[0]["region_id"] == "0"
+
+    def test_region_suggestions_empty_when_absent(self):
+        coord = _make_coordinator()
+        assert coord.region_suggestions == []
+
     def test_observed_zone_centroids_cx_cy(self):
         coord = _make_coordinator(umf_data={
             "observed_zones": [{"cx": 750.0, "cy": 500.0, "space": "umf"}],

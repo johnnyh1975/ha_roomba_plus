@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import pytest
+from homeassistant.util import dt as dt_util
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.mission_store import DaySummary
 from custom_components.roomba_plus.mission_store import MissionWindow
@@ -795,6 +796,110 @@ class TestPresenceWindows:
         await store.async_append(r2)
         windows = store.presence_windows(7)
         assert windows[0].resulted_in_clean is False
+
+
+class TestRoomCoverageHealth:
+    """v3.2.0 COVERAGE-FREQ — MissionStore.room_coverage_health().
+
+    Self-calibrated per room (mean + stdev of that room's OWN historical
+    cleaning gaps) rather than a fixed global threshold — mirrors this
+    project's established pattern (L9-BATTERY, L10, ROOM-ACCESS).
+    """
+
+    def _now_iso(self):
+        return dt_util.now().isoformat()
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_room_data(self):
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=1))
+        assert store.room_coverage_health(self._now_iso()) == {}
+
+    @pytest.mark.asyncio
+    async def test_insufficient_data_below_min_intervals(self):
+        """Only 2 cleans of a room -> 1 gap -> below min_intervals=3."""
+        store = MissionStore()
+        for days_ago in (14, 7):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Kitchen"]
+            await store.async_append(rec)
+        result = store.room_coverage_health(self._now_iso())
+        assert result["Kitchen"]["status"] == "insufficient_data"
+        assert result["Kitchen"]["expected_interval_days"] is None
+        assert result["Kitchen"]["days_since_last"] is not None
+
+    @pytest.mark.asyncio
+    async def test_healthy_when_within_normal_rhythm(self):
+        """Kitchen cleaned every ~7 days, last clean 7 days ago — right
+        on schedule, not overdue."""
+        store = MissionStore()
+        for days_ago in (28, 21, 14, 7):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Kitchen"]
+            await store.async_append(rec)
+        result = store.room_coverage_health(self._now_iso())
+        assert result["Kitchen"]["status"] == "healthy"
+        assert result["Kitchen"]["expected_interval_days"] == pytest.approx(7.0, abs=0.5)
+
+    @pytest.mark.asyncio
+    async def test_overdue_when_far_beyond_own_normal_rhythm(self):
+        """Kitchen normally cleaned every ~7 days (tight pattern), but
+        the last clean was 30 days ago — clearly overdue relative to
+        its OWN established rhythm."""
+        store = MissionStore()
+        for days_ago in (37, 30, 23, 16):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Kitchen"]
+            await store.async_append(rec)
+        # No clean since day 16 — last_clean is 16 days ago from "now"
+        # (well beyond the ~7-day established rhythm).
+        result = store.room_coverage_health(self._now_iso())
+        assert result["Kitchen"]["status"] == "overdue"
+
+    @pytest.mark.asyncio
+    async def test_rooms_are_independent(self):
+        """Kitchen (frequent) and Bedroom (infrequent) get their own,
+        independently-calibrated expectations — not a shared global one."""
+        store = MissionStore()
+        for days_ago in (28, 21, 14, 7):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Kitchen"]
+            await store.async_append(rec)
+        for days_ago in (100, 75, 50, 25):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Bedroom"]
+            await store.async_append(rec)
+        result = store.room_coverage_health(self._now_iso(), days=120)
+        assert result["Kitchen"]["expected_interval_days"] < result["Bedroom"]["expected_interval_days"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_threshold_when_no_variance(self):
+        """Perfectly regular intervals (stdev=0) fall back to a
+        multiplier-based threshold (1.5x mean) rather than dividing by
+        zero or never triggering "overdue" at all."""
+        store = MissionStore()
+        for days_ago in (40, 30, 20, 10):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Kitchen"]
+            await store.async_append(rec)
+        # Exactly 10-day intervals -> stdev=0 -> fallback threshold = 15 days.
+        # Last clean 10 days ago -> well under 15 -> healthy.
+        result = store.room_coverage_health(self._now_iso())
+        assert result["Kitchen"]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_records_outside_lookback_window_excluded_from_intervals(self):
+        """Old visits beyond the `days` lookback window don't contribute
+        to the interval calculation, even though room_cleaning_history()
+        (the days_since_last source) has no such window."""
+        store = MissionStore()
+        # 3 visits far outside a 30-day window
+        for days_ago in (200, 190, 180):
+            rec = _make_record(days_ago=days_ago)
+            rec["last_cleaned_rooms"] = ["Attic"]
+            await store.async_append(rec)
+        result = store.room_coverage_health(self._now_iso(), days=30)
+        assert result["Attic"]["status"] == "insufficient_data"
 
 
 class TestSerialisation:
@@ -2688,11 +2793,22 @@ class TestQueryByError:
         ms._records = records
         return ms
 
-    def _rec(self, id_, started, ended, error_code, zones=None, result="error"):
+    def _rec(self, id_, days_ago, error_code, zones=None, result="error"):
+        # v3.2.0 bug-hunt fix: was hardcoded to fixed dates like
+        # "2026-06-01T08:00:00+00:00" — a query_by_error(days=30) window
+        # is relative to wall-clock "now", so a fixed date eventually
+        # drifts outside it purely from real time passing, not from any
+        # code bug (same class of issue found and fixed in
+        # test_init_wiring.py's TestUpdateRobotProfileStoreMissionStats).
+        # days_ago is relative to "now" so this can't happen again.
+        from homeassistant.util import dt as dt_util
+        import datetime
+        started = dt_util.now() - datetime.timedelta(days=days_ago)
+        ended = started + datetime.timedelta(minutes=30)
         return {
             "id": id_,
-            "started_at": started,
-            "ended_at": ended,
+            "started_at": started.isoformat(),
+            "ended_at": ended.isoformat(),
             "result": result,
             "error_code": error_code,
             "zones": zones or [],
@@ -2703,8 +2819,8 @@ class TestQueryByError:
 
     def test_returns_matching_error_code(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 17, ["Kitchen"]),
-            self._rec("m_2", "2026-06-02T08:00:00+00:00", "2026-06-02T08:30:00+00:00", None, [], "completed"),
+            self._rec("m_1", 5, 17, ["Kitchen"]),
+            self._rec("m_2", 4, None, [], "completed"),
         ])
         result = ms.query_by_error(17, days=30)
         assert len(result) == 1
@@ -2712,14 +2828,14 @@ class TestQueryByError:
 
     def test_different_error_code_not_returned(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 15),
+            self._rec("m_1", 5, 15),
         ])
         assert ms.query_by_error(17, days=30) == []
 
     def test_zone_filter_applied(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 17, ["Kitchen"]),
-            self._rec("m_2", "2026-06-02T08:00:00+00:00", "2026-06-02T08:30:00+00:00", 17, ["Hallway"]),
+            self._rec("m_1", 5, 17, ["Kitchen"]),
+            self._rec("m_2", 4, 17, ["Hallway"]),
         ])
         result = ms.query_by_error(17, days=30, zone="Kitchen")
         assert len(result) == 1
@@ -2727,8 +2843,8 @@ class TestQueryByError:
 
     def test_zone_none_returns_all_matching_code(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 17, ["A"]),
-            self._rec("m_2", "2026-06-02T08:00:00+00:00", "2026-06-02T08:30:00+00:00", 17, ["B"]),
+            self._rec("m_1", 5, 17, ["A"]),
+            self._rec("m_2", 4, 17, ["B"]),
         ])
         assert len(ms.query_by_error(17, days=30, zone=None)) == 2
 
@@ -2738,13 +2854,13 @@ class TestQueryByError:
 
     def test_zone_filter_no_match_returns_empty(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 17, ["Kitchen"]),
+            self._rec("m_1", 5, 17, ["Kitchen"]),
         ])
         assert ms.query_by_error(17, days=30, zone="Bedroom") == []
 
     def test_record_with_empty_zones_excluded_by_zone_filter(self):
         ms = self._ms_with_records([
-            self._rec("m_1", "2026-06-01T08:00:00+00:00", "2026-06-01T08:30:00+00:00", 17, []),
+            self._rec("m_1", 5, 17, []),
         ])
         assert ms.query_by_error(17, days=30, zone="Kitchen") == []
 
@@ -2880,6 +2996,56 @@ class TestImportEndpoint:
         assert result["imported"] == 2
         assert result["skipped"] == 0
         assert result["errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_type_malformed_record_rejected_not_persisted(self):
+        """v3.2.0 full-review fix — a record with a non-string ended_at
+        previously passed import validation (only `id` was checked),
+        got persisted, and then crashed room_coverage_health on every
+        subsequent cloud-refresh cycle, permanently. Must now be
+        rejected at the import gate with a per-record error."""
+        hass, entry = _make_hass_with_entry(records=[])
+        ms = entry.runtime_data.mission_store
+        view = MissionHistoryImportView()
+        body = {
+            "export_version": 1,
+            "records": [{"id": "poison", "ended_at": 12345, "zones": []}],
+        }
+        req = _make_post_request(hass, body)
+        resp = await view.post(req, "abc123")
+        result = json.loads(resp.body)
+        assert result["imported"] == 0
+        assert result["skipped"] == 1
+        assert any("ended_at" in e for e in result["errors"])
+        assert all(r.get("id") != "poison" for r in ms._records)
+
+    @pytest.mark.asyncio
+    async def test_non_string_zone_entries_rejected(self):
+        hass, entry = _make_hass_with_entry(records=[])
+        view = MissionHistoryImportView()
+        body = {
+            "export_version": 1,
+            "records": [{"id": "bad_zones", "zones": ["Kitchen", 42]}],
+        }
+        req = _make_post_request(hass, body)
+        resp = await view.post(req, "abc123")
+        result = json.loads(resp.body)
+        assert result["imported"] == 0
+        assert any("zones" in e for e in result["errors"])
+
+    @pytest.mark.asyncio
+    async def test_non_string_id_rejected(self):
+        hass, entry = _make_hass_with_entry(records=[])
+        view = MissionHistoryImportView()
+        body = {
+            "export_version": 1,
+            "records": [{"id": 12345, "zones": []}],
+        }
+        req = _make_post_request(hass, body)
+        resp = await view.post(req, "abc123")
+        result = json.loads(resp.body)
+        assert result["imported"] == 0
+        assert result["skipped"] == 1
 
     @pytest.mark.asyncio
     async def test_async_save_called_after_import(self):

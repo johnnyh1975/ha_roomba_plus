@@ -19,10 +19,12 @@ from custom_components.roomba_plus.grid_store import DECAY
 from custom_components.roomba_plus.grid_store import VISIT_INCREMENT
 from custom_components.roomba_plus.grid_store import PRUNE_THRESHOLD
 from custom_components.roomba_plus.grid_store import STUCK_HOTSPOT_THRESHOLD
+from custom_components.roomba_plus.grid_store import PAYLOAD_VERSION
 from custom_components.roomba_plus.grid_store import _mm_to_cell
 from custom_components.roomba_plus.grid_store import _cell_to_mm
 from custom_components.roomba_plus.grid_store import _bearing_deg
 from custom_components.roomba_plus.grid_store import _distance_mm
+from custom_components.roomba_plus.grid_store import _FURNITURE_WINDOW_BITS
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -192,6 +194,197 @@ class TestEmaUpdate:
         assert gs._cells.get(cell, 0) <= 1.0
 
 
+class TestFurnitureCandidates:
+    """v3.2.0 FURNITURE — rolling coverage-history bitmask + furniture_candidates()."""
+
+    def test_no_candidates_with_no_history(self):
+        gs = GridStore()
+        assert gs.furniture_candidates() == []
+
+    def test_no_candidate_when_still_being_covered(self):
+        """20 missions of consistent coverage, still being covered — not
+        a candidate even though the "established" bar is easily met."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        for _ in range(25):
+            gs.update_from_mission([cell_point], [])
+        assert gs.furniture_candidates() == []
+
+    def test_candidate_after_established_then_absent(self):
+        """20 missions covered, then 3 consecutive missions absent —
+        exactly the FURNITURE signature."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)   # keeps other cells "touched" so
+                                        # this isn't a zero-mission-length edge case
+        for _ in range(20):
+            gs.update_from_mission([cell_point], [])
+        for _ in range(3):
+            gs.update_from_mission([other_point], [])
+        candidates = gs.furniture_candidates()
+        cells = [c["cell"] for c in candidates]
+        assert _mm_to_cell(*cell_point) in cells
+
+    def test_not_a_candidate_below_min_hits(self):
+        """Established window needs >= 18/20 hits — 15/20 doesn't qualify."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)
+        pattern = [True] * 15 + [False] * 5   # 15 hits out of 20
+        for hit in pattern:
+            gs.update_from_mission([cell_point] if hit else [], [])
+        for _ in range(3):
+            gs.update_from_mission([other_point], [])
+        candidates = gs.furniture_candidates()
+        cells = [c["cell"] for c in candidates]
+        assert _mm_to_cell(*cell_point) not in cells
+
+    def test_not_a_candidate_when_recently_covered_once(self):
+        """Established, but covered at least once in the last 3 missions
+        — not "gone", so not a candidate."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        for _ in range(20):
+            gs.update_from_mission([cell_point], [])
+        gs.update_from_mission([], [])
+        gs.update_from_mission([cell_point], [])   # covered again mid-recent-window
+        gs.update_from_mission([], [])
+        candidates = gs.furniture_candidates()
+        cells = [c["cell"] for c in candidates]
+        assert _mm_to_cell(*cell_point) not in cells
+
+    def test_insufficient_history_not_a_false_positive(self):
+        """Fewer than _FURNITURE_WINDOW_BITS missions of total history —
+        must NOT be flagged just because the old, never-tracked bits look
+        like zeros. This is the fresh-install case."""
+        from custom_components.roomba_plus.grid_store import _FURNITURE_WINDOW_BITS
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)
+        # Only 5 missions covered, then 3 absent — total history is 8,
+        # well short of _FURNITURE_WINDOW_BITS (23).
+        for _ in range(5):
+            gs.update_from_mission([cell_point], [])
+        for _ in range(3):
+            gs.update_from_mission([other_point], [])
+        assert 8 < _FURNITURE_WINDOW_BITS
+        candidates = gs.furniture_candidates()
+        cells = [c["cell"] for c in candidates]
+        assert _mm_to_cell(*cell_point) not in cells
+
+    def test_bitmask_pruned_when_all_zero(self):
+        """A cell with no history left in the tracked window at all is
+        dropped from _coverage_history entirely, not kept around as 0."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)
+        gs.update_from_mission([cell_point], [])
+        cell = _mm_to_cell(*cell_point)
+        assert cell in gs._coverage_history
+        # Shift it out entirely with enough "not touched" missions
+        from custom_components.roomba_plus.grid_store import _FURNITURE_WINDOW_BITS
+        for _ in range(_FURNITURE_WINDOW_BITS):
+            gs.update_from_mission([other_point], [])
+        assert cell not in gs._coverage_history
+
+    def test_candidate_returns_mm_coordinates(self):
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)
+        for _ in range(20):
+            gs.update_from_mission([cell_point], [])
+        for _ in range(3):
+            gs.update_from_mission([other_point], [])
+        candidates = gs.furniture_candidates()
+        match = next(c for c in candidates if c["cell"] == _mm_to_cell(*cell_point))
+        assert "x_mm" in match and "y_mm" in match
+
+
+class TestFurnitureReadiness:
+    """v3.2.0 UX fix — GridStore.furniture_readiness(), so a fresh
+    install doesn't show an identical, unexplained empty state for
+    "still learning" vs "nothing to report"."""
+
+    def test_zero_when_never_tracked(self):
+        gs = GridStore()
+        result = gs.furniture_readiness()
+        assert result["cells_tracked"] == 0
+        assert result["most_mature_cell_age"] == 0
+        assert result["missions_until_first_ready"] == _FURNITURE_WINDOW_BITS
+
+    def test_progress_after_a_few_missions(self):
+        gs = GridStore()
+        for _ in range(5):
+            gs.update_from_mission([(75, 75)], [])
+        result = gs.furniture_readiness()
+        assert result["cells_tracked"] >= 1
+        assert result["most_mature_cell_age"] == 5
+        assert result["missions_until_first_ready"] == _FURNITURE_WINDOW_BITS - 5
+
+    def test_ready_after_enough_missions(self):
+        gs = GridStore()
+        for _ in range(_FURNITURE_WINDOW_BITS):
+            gs.update_from_mission([(75, 75)], [])
+        result = gs.furniture_readiness()
+        assert result["most_mature_cell_age"] == _FURNITURE_WINDOW_BITS
+        assert result["missions_until_first_ready"] == 0
+
+    def test_age_capped_at_window_size_even_with_more_missions(self):
+        """A cell tracked for far longer than the window still reports
+        age capped at the window size, not an ever-growing number."""
+        gs = GridStore()
+        for _ in range(_FURNITURE_WINDOW_BITS + 20):
+            gs.update_from_mission([(75, 75)], [])
+        result = gs.furniture_readiness()
+        assert result["most_mature_cell_age"] == _FURNITURE_WINDOW_BITS
+
+    def test_reports_the_most_mature_cell_among_several(self):
+        gs = GridStore()
+        # Cell A tracked for 10 missions, cell B for 3 — only touch A
+        # for the first 7, then both for the last 3.
+        for _ in range(7):
+            gs.update_from_mission([(75, 75)], [])
+        for _ in range(3):
+            gs.update_from_mission([(75, 75), (10000, 10000)], [])
+        result = gs.furniture_readiness()
+        assert result["most_mature_cell_age"] == 10
+        assert result["cells_tracked"] == 2
+
+
+class TestFurnitureDismissTracking:
+    """v3.2.0 FURNITURE — dismiss-suppression state helpers."""
+
+    def test_not_suppressed_when_never_dismissed(self):
+        gs = GridStore()
+        assert gs.furniture_dismiss_suppressed((1, 1), "2026-07-01") is False
+
+    def test_suppressed_immediately_after_dismiss(self):
+        gs = GridStore()
+        gs.record_furniture_dismissed((1, 1), "2026-07-01")
+        assert gs.furniture_dismiss_suppressed((1, 1), "2026-07-01") is True
+
+    def test_still_suppressed_within_30_days(self):
+        gs = GridStore()
+        gs.record_furniture_dismissed((1, 1), "2026-07-01")
+        assert gs.furniture_dismiss_suppressed((1, 1), "2026-07-20") is True
+
+    def test_no_longer_suppressed_after_30_days(self):
+        gs = GridStore()
+        gs.record_furniture_dismissed((1, 1), "2026-06-01")
+        assert gs.furniture_dismiss_suppressed((1, 1), "2026-07-02") is False
+
+    def test_clear_removes_suppression(self):
+        gs = GridStore()
+        gs.record_furniture_dismissed((1, 1), "2026-07-01")
+        gs.clear_furniture_dismissed((1, 1))
+        assert gs.furniture_dismiss_suppressed((1, 1), "2026-07-01") is False
+
+    def test_suppression_is_per_cell(self):
+        gs = GridStore()
+        gs.record_furniture_dismissed((1, 1), "2026-07-01")
+        assert gs.furniture_dismiss_suppressed((2, 2), "2026-07-01") is False
+
+
 class TestHotspots:
     def test_below_threshold_not_returned(self):
         gs = GridStore()
@@ -239,6 +432,102 @@ class TestHotspots:
         gs._stuck[cell] = {"count": 2, "times": []}
         assert gs.hotspots(threshold=2) != []
         assert gs.hotspots(threshold=3) == []
+
+
+class TestStuckClusters:
+    """v3.2.0 STUCK-HOTSPOT — GridStore.stuck_clusters()."""
+
+    def test_empty_when_no_hotspots(self):
+        gs = GridStore()
+        assert gs.stuck_clusters() == []
+
+    def test_single_isolated_cell_not_a_cluster(self):
+        """A lone hotspot cell with no adjacent hotspot neighbour doesn't
+        meet the min_cluster_size=2 floor."""
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        assert gs.stuck_clusters() == []
+
+    def test_two_adjacent_cells_form_a_cluster(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        clusters = gs.stuck_clusters()
+        assert len(clusters) == 1
+        assert len(clusters[0]["cells"]) == 2
+
+    def test_diagonal_adjacency_counts(self):
+        """8-connectivity — diagonal neighbours also merge into one cluster."""
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 11)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        clusters = gs.stuck_clusters()
+        assert len(clusters) == 1
+
+    def test_distant_cells_form_separate_clusters(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(50, 50)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(51, 50)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        clusters = gs.stuck_clusters()
+        assert len(clusters) == 2
+
+    def test_stuck_count_summed_across_cluster(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": 5, "times": []}
+        gs._stuck[(11, 10)] = {"count": 7, "times": []}
+        clusters = gs.stuck_clusters()
+        assert clusters[0]["stuck_count"] == 12
+
+    def test_sorted_by_stuck_count_descending(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": 3, "times": []}
+        gs._stuck[(11, 10)] = {"count": 3, "times": []}
+        gs._stuck[(50, 50)] = {"count": 10, "times": []}
+        gs._stuck[(51, 50)] = {"count": 10, "times": []}
+        clusters = gs.stuck_clusters()
+        assert clusters[0]["stuck_count"] == 20
+        assert clusters[1]["stuck_count"] == 6
+
+    def test_coverage_impact_none_without_surrounding_data(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        clusters = gs.stuck_clusters()
+        assert clusters[0]["coverage_impact_pp"] is None
+
+    def test_coverage_impact_negative_when_cluster_under_covered(self):
+        """Cluster cells have low EMA weight, surrounding cells have high
+        weight — the honest, computable "impact" signal."""
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._cells[(10, 10)] = 0.1
+        gs._cells[(11, 10)] = 0.1
+        # Surrounding cells well-covered
+        for dx, dy in [(-1, 0), (0, -1), (0, 1), (1, 1), (12, 10), (9, 10)]:
+            gs._cells[(10 + dx, 10 + dy)] = 0.9
+        clusters = gs.stuck_clusters()
+        impact = clusters[0]["coverage_impact_pp"]
+        assert impact is not None
+        assert impact < 0
+
+    def test_custom_min_cluster_size(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        assert gs.stuck_clusters(min_cluster_size=1) != []
+        assert gs.stuck_clusters(min_cluster_size=2) == []
+
+    def test_centroid_is_mean_of_member_cells(self):
+        gs = GridStore()
+        gs._stuck[(10, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        gs._stuck[(11, 10)] = {"count": STUCK_HOTSPOT_THRESHOLD, "times": []}
+        clusters = gs.stuck_clusters()
+        x1, y1 = _cell_to_mm(10, 10)
+        x2, y2 = _cell_to_mm(11, 10)
+        assert clusters[0]["x_mm"] == pytest.approx((x1 + x2) / 2)
+        assert clusters[0]["y_mm"] == pytest.approx((y1 + y2) / 2)
 
 
 class TestSeedFromObservedZones:
@@ -355,6 +644,50 @@ class TestPersistence:
 
         assert gs2._cells == {(1, 2): pytest.approx(0.6)}
         assert gs2._stuck == {(3, 4): {"count": 5, "times": []}}
+
+    @pytest.mark.asyncio
+    async def test_coverage_history_roundtrip(self):
+        """v3.2.0 FURNITURE — coverage_history/coverage_history_age
+        survive save/load."""
+        gs = GridStore()
+        gs._coverage_history[(1, 2)] = 0b1010101
+        gs._coverage_history_age[(1, 2)] = 23
+
+        saved_data: dict = {}
+        hass = MagicMock()
+        store_mock = AsyncMock()
+
+        async def _capture_save(data):
+            saved_data.update(data)
+
+        store_mock.async_save = _capture_save
+        store_mock.async_load = AsyncMock(return_value=None)
+
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(hass, "test_entry")
+
+        gs2 = GridStore()
+        store_mock.async_load = AsyncMock(return_value=saved_data)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs2.async_load(hass, "test_entry")
+
+        assert gs2._coverage_history == {(1, 2): 0b1010101}
+        assert gs2._coverage_history_age == {(1, 2): 23}
+
+    @pytest.mark.asyncio
+    async def test_coverage_history_missing_from_old_payload_defaults_empty(self):
+        """A payload saved before FURNITURE existed has no
+        coverage_history key at all — must load as empty, not error."""
+        gs = GridStore()
+        hass = MagicMock()
+        store_mock = AsyncMock()
+        store_mock.async_load = AsyncMock(return_value={
+            "version": PAYLOAD_VERSION, "cells": {}, "stuck": {},
+        })
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_load(hass, "test_entry")
+        assert gs._coverage_history == {}
+        assert gs._coverage_history_age == {}
 
     @pytest.mark.asyncio
     async def test_load_empty_starts_blank(self):

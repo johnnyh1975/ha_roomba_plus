@@ -999,6 +999,99 @@ class TestCoverageByPolygon:
         assert result["r2"] == 0.0
 
 
+class TestStuckByPolygon:
+    """v3.2.0 ROOM-ACCESS — GridStore.stuck_by_polygon(), same bounding-box
+    + point-in-polygon approach as coverage_by_polygon, applied to
+    self._stuck instead of self._cells."""
+
+    def _gs(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        return GridStore()
+
+    def test_empty_stuck_returns_empty_dict(self):
+        gs = self._gs()
+        poly = {"r1": [(0.0, 0.0), (3000.0, 0.0), (3000.0, 3000.0), (0.0, 3000.0)]}
+        assert gs.stuck_by_polygon(poly) == {}
+
+    def test_degenerate_polygon_zero(self):
+        gs = self._gs()
+        gs._stuck[(0, 0)] = {"count": 3}
+        result = gs.stuck_by_polygon({"r1": [(0.0, 0.0), (100.0, 0.0)]})
+        assert result == {"r1": 0}
+
+    def test_stuck_event_inside_polygon_counted(self):
+        gs = self._gs()
+        gs._stuck[(0, 0)] = {"count": 5}  # centre ~(75, 75) mm
+        poly = {"r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]}
+        result = gs.stuck_by_polygon(poly)
+        assert result["r1"] == 5
+
+    def test_stuck_event_outside_polygon_not_counted(self):
+        gs = self._gs()
+        gs._stuck[(100, 100)] = {"count": 5}  # far outside
+        poly = {"r1": [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0), (0.0, 500.0)]}
+        result = gs.stuck_by_polygon(poly)
+        assert result["r1"] == 0
+
+    def test_multiple_stuck_cells_accumulate(self):
+        gs = self._gs()
+        gs._stuck[(0, 0)] = {"count": 2}
+        gs._stuck[(1, 1)] = {"count": 3}
+        poly = {"r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]}
+        result = gs.stuck_by_polygon(poly)
+        assert result["r1"] == 5
+
+    def test_multiple_polygons(self):
+        gs = self._gs()
+        gs._stuck[(0, 0)] = {"count": 4}   # inside r1
+        gs._stuck[(40, 40)] = {"count": 2}  # outside both
+        polys = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)],
+            "r2": [(5000.0, 0.0), (6000.0, 0.0), (6000.0, 1000.0), (5000.0, 1000.0)],
+        }
+        result = gs.stuck_by_polygon(polys)
+        assert result["r1"] == 4
+        assert result["r2"] == 0
+
+
+class TestZoneCoverageHealthFormat:
+    """v3.2.0 COVERAGE-FREQ — format=zone_coverage_health.
+
+    A distinct format value rather than a field on format=summary's
+    existing bare-array response — see api_views.py's inline rationale.
+    Core room_coverage_health() logic already covered by
+    TestRoomCoverageHealth (test_mission_store.py); these tests focus on
+    the HTTP-level wiring.
+    """
+
+    def test_in_valid_formats(self):
+        assert "zone_coverage_health" in _VALID_FORMATS
+
+    @pytest.mark.asyncio
+    async def test_empty_dict_when_no_mission_store(self):
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = None
+        view = MissionHistoryView()
+        req = _make_request(hass, fmt="zone_coverage_health")
+        resp = await view.get(req, "abc123")
+        assert resp.status == 200
+        assert json.loads(resp.body) == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_room_coverage_health_result(self):
+        hass, entry = _make_hass_with_entry(records=[])
+        real_store = _real_mission_store([])
+        real_store.room_coverage_health = MagicMock(
+            return_value={"Kitchen": {"status": "healthy"}}
+        )
+        entry.runtime_data.mission_store = real_store
+        view = MissionHistoryView()
+        req = _make_request(hass, fmt="zone_coverage_health")
+        resp = await view.get(req, "abc123")
+        body = json.loads(resp.body)
+        assert body == {"Kitchen": {"status": "healthy"}}
+
+
 class TestExportEndpoint:
     def test_export_in_valid_formats(self):
         assert "export" in _VALID_FORMATS
@@ -1267,3 +1360,244 @@ class TestDailyDigestView:
         resp = await view.get(req, "abc123")
         body = json.loads(resp.body)
         assert body["missions"] == 0
+
+
+class TestExplainMissionView:
+    """v3.2.0 ANOMALY-EXPLAIN — REST counterpart to the explain_mission
+    service. Underlying explanation logic is covered by
+    TestExplainMissionMethod (test_dirt_threshold_manager.py) — these
+    tests focus on the HTTP-specific plumbing (404s, "latest" resolution,
+    JSON shape), using a REAL MissionStore (see _real_mission_store) since
+    the view calls .explain_mission(), not a MagicMock-friendly attribute.
+    """
+
+    def _make_request(self, hass: MagicMock) -> MagicMock:
+        req = MagicMock()
+        req.app = {"hass": hass}
+        return req
+
+    @pytest.mark.asyncio
+    async def test_entry_not_found_404(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, _ = _make_hass_with_entry(entry_present=False)
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "latest")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_not_ready_503(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, _ = _make_hass_with_entry(runtime_data_set=False)
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "latest")
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_no_mission_store_404(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = None
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "latest")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_latest_resolves_to_most_recent(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        rec1 = _make_record("m_1")
+        rec2 = _make_record("m_2", started_at="2026-05-01T10:00:00+00:00")
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = _real_mission_store([rec1, rec2])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "latest")
+        body = json.loads(resp.body)
+        assert body["mission_id"] == "m_2"
+
+    @pytest.mark.asyncio
+    async def test_explicit_mission_id_in_path(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        rec1 = _make_record("m_1")
+        rec2 = _make_record("m_2", started_at="2026-05-01T10:00:00+00:00")
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = _real_mission_store([rec1, rec2])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "m_1")
+        body = json.loads(resp.body)
+        assert body["mission_id"] == "m_1"
+
+    @pytest.mark.asyncio
+    async def test_unknown_mission_id_404(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = _real_mission_store([_make_record("m_1")])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "m_nonexistent")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_response_shape(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_store = _real_mission_store([_make_record("m_1")])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "latest")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        required = {
+            "mission_id", "is_anomalous", "anomaly_reason",
+            "robot_lifted", "error_code", "recommended_action",
+        }
+        assert required.issubset(body.keys())
+
+
+def _real_mission_archive(derived_records: list[dict]):
+    from custom_components.roomba_plus.mission_archive import MissionArchive
+    archive = MissionArchive()
+    archive._derived = derived_records
+    return archive
+
+
+class TestMissionPathView:
+    """v3.2.0 MISSION-REPLAY — GET /api/roomba_plus/{entry_id}/mission/{n_mssn}/path."""
+
+    def _make_request(self, hass: MagicMock) -> MagicMock:
+        req = MagicMock()
+        req.app = {"hass": hass}
+        return req
+
+    @pytest.mark.asyncio
+    async def test_entry_not_found_404(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, _ = _make_hass_with_entry(entry_present=False)
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_not_ready_503(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, _ = _make_hass_with_entry(runtime_data_set=False)
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_no_mission_archive_404(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = None
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_invalid_nmssn_400(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([])
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "not_a_number")
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_mission_not_found_404(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([])
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "999")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_timeline_with_smart_tier_region_names(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([{
+            "nMssn": 102,
+            "room_visits": [
+                {"rid": "1", "ts": 1696660084},
+                {"rid": "2", "ts": 1696660945},
+            ],
+        }])
+        cc = MagicMock()
+        cc.regions = [
+            {"id": "1", "name": "Kitchen"},
+            {"id": "2", "name": "Hallway"},
+        ]
+        entry.runtime_data.cloud_coordinator = cc
+        entry.runtime_data.room_seg_store = None
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        assert body["nMssn"] == 102
+        assert [p["room"] for p in body["path"]] == ["Kitchen", "Hallway"]
+
+    @pytest.mark.asyncio
+    async def test_timeline_falls_back_to_rid_when_unnamed(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([{
+            "nMssn": 102,
+            "room_visits": [{"rid": "99", "ts": 1696660084}],
+        }])
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.room_seg_store = None
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        body = json.loads(resp.body)
+        assert body["path"][0]["room"] == "99"
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_tier_uses_room_seg_store_names(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([{
+            "nMssn": 102,
+            "room_visits": [{"rid": "r1", "ts": 1696660084}],
+        }])
+        entry.runtime_data.cloud_coordinator = None
+        seg_room = MagicMock()
+        seg_room.name = "Living Room"
+        seg_store = MagicMock()
+        seg_store.rooms = {"r1": seg_room}
+        entry.runtime_data.room_seg_store = seg_store
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        body = json.loads(resp.body)
+        assert body["path"][0]["room"] == "Living Room"
+
+    @pytest.mark.asyncio
+    async def test_consecutive_same_room_collapsed_in_response(self):
+        from custom_components.roomba_plus.api_views import MissionPathView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.mission_archive = _real_mission_archive([{
+            "nMssn": 102,
+            "room_visits": [
+                {"rid": "1", "ts": 100},
+                {"rid": "1", "ts": 150},
+                {"rid": "2", "ts": 200},
+            ],
+        }])
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.room_seg_store = None
+        view = MissionPathView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "102")
+        body = json.loads(resp.body)
+        assert len(body["path"]) == 2

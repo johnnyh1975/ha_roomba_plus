@@ -16,6 +16,8 @@ from custom_components.roomba_plus.switch import (
     EdgeCleanSwitch,
     AlwaysFinishSwitch,
     ScheduleHoldSwitch,
+    ChildLockSwitch,
+    EcoChargeSwitch,
     async_setup_entry,
 )
 
@@ -136,6 +138,70 @@ class TestScheduleHoldSwitch:
         )
 
 
+# ── ChildLockSwitch: ON when childLock is True (NOT inverted) ────────────────
+
+class TestChildLockSwitch:
+    def test_on_when_childlock_true(self):
+        s = _make(ChildLockSwitch, {"childLock": True})
+        assert s.is_on is True
+
+    def test_off_when_childlock_false(self):
+        s = _make(ChildLockSwitch, {"childLock": False})
+        assert s.is_on is False
+
+    def test_default_off_when_key_missing(self):
+        s = _make(ChildLockSwitch, {})
+        assert s.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_turn_on_sends_childlock_true(self):
+        s = _make(ChildLockSwitch, {"childLock": False})
+        await s.async_turn_on()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "childLock", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_sends_childlock_false(self):
+        s = _make(ChildLockSwitch, {"childLock": True})
+        await s.async_turn_off()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "childLock", False
+        )
+
+
+# ── EcoChargeSwitch: ON when ecoCharge is True (NOT inverted) ────────────────
+
+class TestEcoChargeSwitch:
+    def test_on_when_ecocharge_true(self):
+        s = _make(EcoChargeSwitch, {"ecoCharge": True})
+        assert s.is_on is True
+
+    def test_off_when_ecocharge_false(self):
+        s = _make(EcoChargeSwitch, {"ecoCharge": False})
+        assert s.is_on is False
+
+    def test_default_off_when_key_missing(self):
+        s = _make(EcoChargeSwitch, {})
+        assert s.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_turn_on_sends_ecocharge_true(self):
+        s = _make(EcoChargeSwitch, {"ecoCharge": False})
+        await s.async_turn_on()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "ecoCharge", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_sends_ecocharge_false(self):
+        s = _make(EcoChargeSwitch, {"ecoCharge": True})
+        await s.async_turn_off()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "ecoCharge", False
+        )
+
+
 # ── async_setup_entry: gating by capability key presence ────────────────────
 
 class TestSwitchSetupGating:
@@ -172,12 +238,34 @@ class TestSwitchSetupGating:
         assert len(added) == 1
         assert isinstance(added[0], EdgeCleanSwitch)
 
-    def test_all_three_when_all_keys_present(self):
-        added = self._setup({"openOnly": False, "binPause": True, "schedHold": False})
+    def test_all_five_when_all_keys_present(self):
+        added = self._setup({
+            "openOnly": False,
+            "binPause": True,
+            "schedHold": False,
+            "childLock": False,
+            "ecoCharge": False,
+        })
         types = {type(e) for e in added}
-        assert types == {EdgeCleanSwitch, AlwaysFinishSwitch, ScheduleHoldSwitch}
+        assert types == {
+            EdgeCleanSwitch,
+            AlwaysFinishSwitch,
+            ScheduleHoldSwitch,
+            ChildLockSwitch,
+            EcoChargeSwitch,
+        }
 
     def test_clean_base_model_gets_always_finish(self):
         added = self._setup({"binPause": True})
         assert len(added) == 1
         assert isinstance(added[0], AlwaysFinishSwitch)
+
+    def test_only_child_lock_when_childlock_present(self):
+        added = self._setup({"childLock": True})
+        assert len(added) == 1
+        assert isinstance(added[0], ChildLockSwitch)
+
+    def test_only_eco_charge_when_ecocharge_present(self):
+        added = self._setup({"ecoCharge": False})
+        assert len(added) == 1
+        assert isinstance(added[0], EcoChargeSwitch)

@@ -1677,6 +1677,29 @@ class TestCompletionRateStuckAndResumed:
         assert self._rate([]) is None
 
 
+class TestLastMissionTeamId:
+    """v3.2.0 TEAM-INDICATOR — _last_mission_team_id reads team_id off the
+    most recent mission record, None-safe when absent or no history yet."""
+
+    def _team_id(self, latest):
+        from custom_components.roomba_plus.sensor import _last_mission_team_id
+
+        class _FakeStore:
+            def latest(self):
+                return latest
+
+        return _last_mission_team_id(_FakeStore())
+
+    def test_returns_team_id_when_present(self):
+        assert self._team_id({"id": "m_1", "team_id": "IplhZn-R"}) == "IplhZn-R"
+
+    def test_returns_none_when_team_id_absent_from_record(self):
+        assert self._team_id({"id": "m_1"}) is None
+
+    def test_returns_none_when_no_mission_history(self):
+        assert self._team_id(None) is None
+
+
 class TestCleaningPerformanceSensor:
 
     def test_returns_none_without_records(self):
@@ -2034,6 +2057,31 @@ class TestMissionsPerChargeSensor:
         assert sensor.native_value is None
 
 
+class TestDockFirmwareVersion:
+    def test_returns_fwver_when_present(self):
+        desc = _find_desc("dock_firmware_version")
+        e = _make_entity_v280_field_sensors({"dock": {"fwVer": "4.8.6", "known": True}})
+        assert desc.value_fn(e) == "4.8.6"
+
+    def test_returns_none_when_dock_absent(self):
+        desc = _find_desc("dock_firmware_version")
+        e = _make_entity_v280_field_sensors({})
+        assert desc.value_fn(e) is None
+
+    def test_filter_true_when_fwver_present(self):
+        desc = _find_desc("dock_firmware_version")
+        assert desc.filter_fn({"dock": {"fwVer": "4.8.6"}}) is True
+
+    def test_filter_false_when_dock_has_no_fwver(self):
+        """Braava's minimal dock ({'known': True}) has no fwVer — no sensor."""
+        desc = _find_desc("dock_firmware_version")
+        assert desc.filter_fn({"dock": {"known": True}}) is False
+
+    def test_filter_false_when_dock_absent(self):
+        desc = _find_desc("dock_firmware_version")
+        assert desc.filter_fn({}) is False
+
+
 class TestNavStatsProperty:
     def test_returns_bbnav_dict(self):
         e = _make_entity_v280_field_sensors({"bbnav": {"aMtrack": 0.92, "nGoodLmrks": 1843}})
@@ -2367,6 +2415,30 @@ class TestConsecutiveMissionAnomalies:
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(d for d in SENSORS if d.key == "consecutive_mission_anomalies")
         assert desc.entity_registry_enabled_default is False
+
+    def test_extra_attributes_exposes_last_mission_id(self):
+        """v3.2.0 ANOMALY-EXPLAIN — last_mission_id lets the card/automation
+        feed straight into explain_mission without a separate lookup."""
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(d for d in SENSORS if d.key == "consecutive_mission_anomalies")
+        ms = MagicMock()
+        ms.latest.return_value = {"id": "m_123"}
+        entry = _make_config_entry()
+        entry.runtime_data.mission_store = ms
+        e = _entity({})
+        e._config_entry = entry
+        assert desc.extra_attributes_fn(e) == {"last_mission_id": "m_123"}
+
+    def test_extra_attributes_empty_when_no_history(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(d for d in SENSORS if d.key == "consecutive_mission_anomalies")
+        ms = MagicMock()
+        ms.latest.return_value = None
+        entry = _make_config_entry()
+        entry.runtime_data.mission_store = ms
+        e = _entity({})
+        e._config_entry = entry
+        assert desc.extra_attributes_fn(e) == {}
 
 
 # ── Signal sensors (SNR, Noise, IP) ──────────────────────────────────────────
@@ -3819,6 +3891,89 @@ def _make_room_areas_sensor(umf_aligner=None, regions=None):
     return sensor
 
 
+class TestIdToDisplayName:
+    """v3.2.0 ROOM-TYPE-SUGGEST — _id_to_display_name(), the shared
+    fallback resolver used by ROOM-SIZE and ROOM-ACCESS."""
+
+    def test_none_coordinator_returns_empty(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        assert _id_to_display_name(None) == {}
+
+    def test_user_set_name_used_directly(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = [{"id": "1", "name": "Kitchen"}]
+        cc.region_suggestions = []
+        assert _id_to_display_name(cc) == {"1": "Kitchen"}
+
+    def test_falls_back_to_top_suggestion_when_unnamed(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = []
+        cc.region_suggestions = [
+            {"region_id": "1", "suggested_types": [
+                {"region_type": "living_room", "score": 0.62},
+                {"region_type": "office", "score": 0.17},
+            ]},
+        ]
+        result = _id_to_display_name(cc)
+        assert result["1"] == "Living Room"
+
+    def test_user_name_never_overridden_by_suggestion(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = [{"id": "1", "name": "My Custom Room"}]
+        cc.region_suggestions = [
+            {"region_id": "1", "suggested_types": [
+                {"region_type": "living_room", "score": 0.9},
+            ]},
+        ]
+        result = _id_to_display_name(cc)
+        assert result["1"] == "My Custom Room"
+
+    def test_negative_top_score_not_used(self):
+        """A negative score (confirmed real in field data — see
+        MISSIONSTORE_FIELD_REGISTRY.md) means "probably NOT this type",
+        not just "less confident" — must not be used as a label."""
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = []
+        cc.region_suggestions = [
+            {"region_id": "1", "suggested_types": [
+                {"region_type": "dining_room", "score": -0.9484},
+            ]},
+        ]
+        result = _id_to_display_name(cc)
+        assert "1" not in result
+
+    def test_picks_highest_scored_type_among_multiple(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = []
+        cc.region_suggestions = [
+            {"region_id": "2", "suggested_types": [
+                {"region_type": "hallway", "score": 1.8449},
+                {"region_type": "bathroom", "score": -0.9081},
+            ]},
+        ]
+        result = _id_to_display_name(cc)
+        assert result["2"] == "Hallway"
+
+    def test_no_suggestions_no_fallback(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = []
+        cc.region_suggestions = []
+        assert _id_to_display_name(cc) == {}
+
+    def test_missing_suggested_types_skipped_gracefully(self):
+        from custom_components.roomba_plus.sensor import _id_to_display_name
+        cc = MagicMock()
+        cc.regions = []
+        cc.region_suggestions = [{"region_id": "1", "suggested_types": []}]
+        assert _id_to_display_name(cc) == {}
+
+
 class TestRoomAreasSensor:
     """ROOM-SIZE (v3.1.0) — per-room floor area dictionary sensor."""
 
@@ -3857,6 +4012,113 @@ class TestRoomAreasSensor:
         sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=[])
         assert sensor.native_value == 0
         assert sensor.extra_state_attributes == {}
+
+
+def _make_room_accessibility_sensor(
+    umf_aligner=None, grid_store=None, mission_archive=None, regions=None,
+):
+    """Return a RoombaRoomAccessibilityScoresSensor with the given
+    collaborators wired in — mirrors _make_room_areas_sensor's pattern."""
+    from custom_components.roomba_plus.sensor import RoombaRoomAccessibilityScoresSensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = MagicMock()
+    rd = MagicMock()
+    cc = MagicMock()
+    cc.regions = regions or []
+    rd.umf_aligner = umf_aligner
+    rd.cloud_coordinator = cc if umf_aligner is not None else None
+    rd.grid_store = grid_store
+    rd.mission_archive = mission_archive
+    entry.runtime_data = rd
+    sensor = RoombaRoomAccessibilityScoresSensor.__new__(RoombaRoomAccessibilityScoresSensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._entry = entry
+    sensor._attr_unique_id = "test_blid_room_accessibility_scores"
+    return sensor
+
+
+class TestRoomAccessibilityScoresSensor:
+    """ROOM-ACCESS (v3.2.0) — per-room accessibility score dict sensor."""
+
+    def test_no_aligner_returns_zero(self):
+        sensor = _make_room_accessibility_sensor(umf_aligner=None)
+        assert sensor.native_value == 0
+        assert sensor.extra_state_attributes == {}
+
+    def test_no_polygons_returns_zero(self):
+        aligner = MagicMock()
+        aligner.room_polygons_umf.return_value = {}
+        sensor = _make_room_accessibility_sensor(umf_aligner=aligner)
+        assert sensor.native_value == 0
+
+    def test_coverage_only_scores_via_gridstore(self):
+        """No grid_store/mission_archive at all — still scores from
+        whatever's available (coverage requires grid_store though, so this
+        specifically checks the "gs is None" branch degrades to {})."""
+        aligner = MagicMock()
+        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_areas_m2 = {"1": 10.0}
+        sensor = _make_room_accessibility_sensor(
+            umf_aligner=aligner, grid_store=None, mission_archive=None,
+        )
+        # No grid_store -> no coverage/stuck signal, no mission_archive ->
+        # no time signal -> room_accessibility_scores gets nothing at all
+        # for this rid -> native_value 0.
+        assert sensor.native_value == 0
+
+    def test_full_pipeline_with_display_name_translation(self):
+        aligner = MagicMock()
+        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_areas_m2 = {"1": 10.0}
+
+        gs = MagicMock()
+        gs.coverage_by_polygon.return_value = {"1": 0.9}
+        gs.stuck_by_polygon.return_value = {"1": 2}
+
+        archive = MagicMock()
+        archive.all_derived_oldest_first.return_value = [
+            {"room_visits": [{"rid": "1", "ts": 0}, {"rid": "1", "ts": 60}]},
+        ]
+
+        regions = [{"id": "1", "name": "Kitchen"}]
+        sensor = _make_room_accessibility_sensor(
+            umf_aligner=aligner, grid_store=gs, mission_archive=archive,
+            regions=regions,
+        )
+        assert sensor.native_value == 1
+        attrs = sensor.extra_state_attributes
+        assert "Kitchen" in attrs
+        assert attrs["Kitchen"]["score"] is not None
+        assert "limiting_factor" in attrs["Kitchen"]
+
+    def test_unknown_rid_falls_back_to_rid(self):
+        aligner = MagicMock()
+        aligner.room_polygons_umf.return_value = {"99": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_areas_m2 = {"99": 5.0}
+        gs = MagicMock()
+        gs.coverage_by_polygon.return_value = {"99": 1.0}
+        gs.stuck_by_polygon.return_value = {}
+        sensor = _make_room_accessibility_sensor(
+            umf_aligner=aligner, grid_store=gs, mission_archive=None, regions=[],
+        )
+        assert "99" in sensor.extra_state_attributes
+
+    def test_no_mission_archive_still_scores_from_coverage(self):
+        """time_per_area signal absent (no mission_archive) shouldn't
+        block coverage/stuck-based scoring."""
+        aligner = MagicMock()
+        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_areas_m2 = {"1": 10.0}
+        gs = MagicMock()
+        gs.coverage_by_polygon.return_value = {"1": 1.0}
+        gs.stuck_by_polygon.return_value = {}
+        sensor = _make_room_accessibility_sensor(
+            umf_aligner=aligner, grid_store=gs, mission_archive=None,
+        )
+        assert sensor.native_value == 1
+        assert sensor.extra_state_attributes["1"]["score"] == 100.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3902,6 +4164,148 @@ def _make_reloc_sensor(rps=None):
     sensor._entry = entry
     sensor._attr_unique_id = "test_blid_relocalisation_rate"
     return sensor
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESET-DIAGNOSTICS (v3.2.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_reset_diagnostics_sensor(vacuum_state: dict):
+    """Return a RoombaResetDiagnosticsSensor with the given vacuum_state."""
+    from custom_components.roomba_plus.sensor import RoombaResetDiagnosticsSensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": vacuum_state}}
+    sensor = RoombaResetDiagnosticsSensor.__new__(RoombaResetDiagnosticsSensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor.vacuum_state = vacuum_state
+    sensor._attr_unique_id = "test_blid_reset_diagnostics"
+    return sensor
+
+
+class TestResetDiagnosticsSensor:
+    """RESET-DIAGNOSTICS (v3.2.0) — bbrstinfo reset-cause breakdown."""
+
+    def test_native_value_is_safety_reset_count(self):
+        sensor = _make_reset_diagnostics_sensor({
+            "bbrstinfo": {"nNavRst": 87, "nMobRst": 78, "nSafRst": 4, "safCauses": [18, 18, 21, 21]}
+        })
+        assert sensor.native_value == 4
+
+    def test_none_when_bbrstinfo_absent(self):
+        sensor = _make_reset_diagnostics_sensor({})
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {
+            "nav_resets": None, "mobility_resets": None,
+            "safety_resets": None, "safety_reset_causes": None,
+        }
+
+    def test_attributes_full_breakdown(self):
+        sensor = _make_reset_diagnostics_sensor({
+            "bbrstinfo": {"nNavRst": 87, "nMobRst": 78, "nSafRst": 4, "safCauses": [18, 18, 21, 21]}
+        })
+        attrs = sensor.extra_state_attributes
+        assert attrs["nav_resets"] == 87
+        assert attrs["mobility_resets"] == 78
+        assert attrs["safety_resets"] == 4
+        assert attrs["safety_reset_causes"] == [18, 18, 21, 21]
+        assert "oom_resets" not in attrs
+
+    def test_oom_resets_included_only_when_present(self):
+        """nOomRst confirmed j-series-only (absent on Braava) — must not
+        appear as None/0 on robots whose firmware never reports it."""
+        sensor = _make_reset_diagnostics_sensor({
+            "bbrstinfo": {"nNavRst": 197, "nOomRst": 2, "nMobRst": 199, "nSafRst": 0, "safCauses": []}
+        })
+        attrs = sensor.extra_state_attributes
+        assert attrs["oom_resets"] == 2
+
+    def test_no_oom_resets_key_on_braava(self):
+        sensor = _make_reset_diagnostics_sensor({
+            "bbrstinfo": {"nNavRst": 87, "nMapLoadRst": 0, "nMobRst": 78, "nSafRst": 4, "safCauses": []}
+        })
+        assert "oom_resets" not in sensor.extra_state_attributes
+
+
+def _make_health_trend_sensor(rps):
+    """Return a RoombaHealthScoreTrendSensor with the given robot_profile_store
+    (or None) wired into runtime_data."""
+    from custom_components.roomba_plus.sensor import RoombaHealthScoreTrendSensor
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = MagicMock()
+    entry.runtime_data.robot_profile_store = rps
+    sensor = RoombaHealthScoreTrendSensor.__new__(RoombaHealthScoreTrendSensor)
+    sensor._roomba = roomba
+    sensor._blid = "test_blid"
+    sensor._config_entry = entry
+    sensor._attr_unique_id = "test_blid_health_score_trend"
+    return sensor
+
+
+class TestHealthScoreTrendSensor:
+    """L10 (v3.2.0) — RoombaHealthScoreTrendSensor delegates to
+    RobotProfileStore.health_score_trend() / .health_score_declining_days().
+    """
+
+    def test_native_value_none_when_no_profile_store(self):
+        sensor = _make_health_trend_sensor(None)
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {}
+
+    def test_native_value_none_when_not_enough_history(self):
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        rps.record_health_score(80.0, "2026-06-01")
+        sensor = _make_health_trend_sensor(rps)
+        assert sensor.native_value is None
+
+    def test_native_value_reflects_declining_trend(self):
+        """v3.2.0 bug-hunt fix — 36 stable reference days keeps the
+        exclusion buffer (30 days) clean of the decline; 14 declining
+        days matches the Repair Issue's own trigger threshold."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        import datetime as _dt
+        rps = RobotProfileStore()
+        d0 = _dt.date(2026, 6, 1)
+        dates = [(d0 + _dt.timedelta(days=i)).isoformat() for i in range(36 + 14)]
+        for d in dates[:36]:
+            rps.record_health_score(85.0, d)
+        for d in dates[36:]:
+            rps.record_health_score(40.0, d)
+        sensor = _make_health_trend_sensor(rps)
+        assert sensor.native_value == "declining"
+
+    def test_attributes_expose_baseline_and_declining_days(self):
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        import datetime as _dt
+        rps = RobotProfileStore()
+        d0 = _dt.date(2026, 6, 1)
+        dates = [(d0 + _dt.timedelta(days=i)).isoformat() for i in range(36 + 14)]
+        for d in dates[:36]:
+            rps.record_health_score(85.0, d)
+        for d in dates[36:]:
+            rps.record_health_score(40.0, d)
+        sensor = _make_health_trend_sensor(rps)
+        attrs = sensor.extra_state_attributes
+        assert attrs["baseline_ready"] is True
+        assert attrs["days_recorded"] == 50
+        assert attrs["declining_days"] == 14
+        assert attrs["days_until_ready"] == 0
+
+    def test_days_until_ready_counts_down_before_baseline_ready(self):
+        """v3.2.0 UX fix — days_recorded alone required the user to
+        already know the 44-day threshold and do the subtraction
+        themselves. This makes it explicit."""
+        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
+        rps = RobotProfileStore()
+        for i in range(10):
+            rps.record_health_score(80.0, f"2026-06-{i + 1:02d}")
+        sensor = _make_health_trend_sensor(rps)
+        attrs = sensor.extra_state_attributes
+        assert attrs["baseline_ready"] is False
+        assert attrs["days_recorded"] == 10
+        assert attrs["days_until_ready"] == 34
 
 
 class TestRelocalisationRateSensor:

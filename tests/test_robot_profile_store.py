@@ -1469,3 +1469,340 @@ class TestEstcapNoiseBaseline:
         assert restored.estcap_noise_mean is None
         assert restored.estcap_noise_count == 0
         assert restored.last_estcap_mah is None
+
+
+def _consecutive_dates(n: int, start: str = "2026-06-01") -> list[str]:
+    """n consecutive ISO date strings starting from start, for L10 tests."""
+    import datetime as _dt
+    d0 = _dt.date.fromisoformat(start)
+    return [(d0 + _dt.timedelta(days=i)).isoformat() for i in range(n)]
+
+
+class TestHealthScoreHistory:
+    """L10 (v3.2.0) — record_health_score / health_score_trend /
+    health_score_declining_days.
+
+    Trend significance is judged against this robot's own learned
+    reference-period mean/stdev (mirrors TestEstcapNoiseBaseline's
+    self-calibration style) — but unlike estcap's lifetime-running Welford
+    stats, the reference period is deliberately kept strictly OLDER than
+    the current comparison window (see _reference_scores()'s docstring for
+    why a lifetime baseline doesn't work here: it absorbs an ongoing
+    decline into itself and inflates its own variance by mixing pre- and
+    post-decline values). Consequence: health_score_baseline_ready needs
+    _HEALTH_SCORE_BASELINE_MIN_DAYS (14) reference days on top of the
+    14-day recent window — 28 days total, not 14.
+    """
+
+    def test_first_record_seeds_history(self):
+        rps = RobotProfileStore()
+        rps.record_health_score(75.0, "2026-06-01")
+        assert rps.health_score_history == [{"date": "2026-06-01", "score": 75.0}]
+
+    def test_same_day_update_is_idempotent(self):
+        """Multiple calls on the same date update in place, not append
+        (a coordinator refresh can fire more than once per day)."""
+        rps = RobotProfileStore()
+        rps.record_health_score(75.0, "2026-06-01")
+        rps.record_health_score(80.0, "2026-06-01")
+        assert len(rps.health_score_history) == 1
+        assert rps.health_score_history[0]["score"] == 80.0
+
+    def test_new_day_appends(self):
+        rps = RobotProfileStore()
+        rps.record_health_score(75.0, "2026-06-01")
+        rps.record_health_score(78.0, "2026-06-02")
+        assert len(rps.health_score_history) == 2
+
+    def test_history_trimmed_to_90_days(self):
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(100):
+            rps.record_health_score(70.0, d)
+        assert len(rps.health_score_history) == 90
+        # Oldest 10 days were dropped — history starts from day 11.
+        assert rps.health_score_history[0]["date"] == _consecutive_dates(100)[10]
+
+    def test_stdev_none_below_two_reference_samples(self):
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(15):  # 1 reference day + 14 recent
+            rps.record_health_score(75.0, d)
+        assert rps.health_score_stdev is None
+
+    def test_stdev_computed_from_reference_period_only(self):
+        """30 reference days with jitter + 14 flat recent days — stdev
+        must reflect only the (varying) reference period, not be diluted
+        or inflated by the flat recent window."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(44)
+        jitter = [72, 78, 74, 80, 76] * 6
+        for d, score in zip(dates[:30], jitter):
+            rps.record_health_score(float(score), d)
+        for d in dates[30:]:
+            rps.record_health_score(75.0, d)
+        assert rps.health_score_stdev is not None
+        assert rps.health_score_stdev > 0
+
+    def test_baseline_not_ready_below_44_total_days(self):
+        """v3.2.0 bug-hunt fix — exclusion buffer widened from 14 to 30
+        days (see _HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS's docstring for
+        why), so the total minimum is now 30+14=44, not 28. 43 is not
+        enough."""
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(43):
+            rps.record_health_score(75.0, d)
+        assert rps.health_score_baseline_ready is False
+
+    def test_baseline_ready_at_44_total_days(self):
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(44):
+            rps.record_health_score(75.0, d)
+        assert rps.health_score_baseline_ready is True
+
+    def test_trend_none_when_not_ready(self):
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(10):
+            rps.record_health_score(50.0, d)
+        assert rps.health_score_trend() is None
+
+    def test_trend_stable_with_flat_scores(self):
+        rps = RobotProfileStore()
+        for d in _consecutive_dates(44):
+            rps.record_health_score(80.0, d)
+        assert rps.health_score_trend() == "stable"
+
+    def test_trend_declining_with_sustained_drop(self):
+        """30 reference days with natural jitter, then 14 days at a clear,
+        sustained lower score — should classify as declining. Also
+        covers the v3.2.0 bug-hunt fix directly: a decline this long
+        (14 days) previously risked reference contamination once it
+        exceeded the old 14-day exclusion width — 30 reference days here
+        confirms the wider buffer keeps this case clean."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(44)
+        jitter = [83, 86, 84, 87, 82, 85, 88, 83, 86, 84,
+                  85, 87, 82, 86, 84, 83, 85, 88, 84, 86,
+                  85, 83, 87, 84, 86, 82, 88, 85, 83, 87]
+        for d, score in zip(dates[:30], jitter):
+            rps.record_health_score(float(score), d)
+        for d in dates[30:]:
+            rps.record_health_score(50.0, d)
+        assert rps.health_score_trend() == "declining"
+
+    def test_trend_declining_survives_longer_than_old_exclusion_width(self):
+        """v3.2.0 bug-hunt fix — the actual reproduction case: a decline
+        lasting 25 days (longer than the OLD 14-day exclusion width, but
+        within the new 30-day one) must still classify as declining, not
+        silently absorbed back into "stable" the way it was before this
+        fix. 30 stable days followed by 25 declining days — the decline
+        alone is deliberately longer than the old exclusion width."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(55)
+        for d in dates[:30]:
+            rps.record_health_score(90.0, d)
+        for d in dates[30:]:
+            rps.record_health_score(60.0, d)
+        assert rps.health_score_trend() == "declining"
+        assert rps.health_score_declining_days() == 25
+
+    def test_trend_improving_with_sustained_rise(self):
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(44)
+        jitter = [48, 52, 47, 53, 50, 49, 51, 48, 52, 50,
+                  47, 53, 49, 51, 48, 52, 50, 47, 53, 49,
+                  48, 52, 47, 53, 50, 49, 51, 48, 52, 50]
+        for d, score in zip(dates[:30], jitter):
+            rps.record_health_score(float(score), d)
+        for d in dates[30:]:
+            rps.record_health_score(90.0, d)
+        assert rps.health_score_trend() == "improving"
+
+    def test_trend_uses_fallback_threshold_when_stdev_zero(self):
+        """Perfectly flat reference period → stdev is 0 → falls back to the
+        absolute deviation threshold rather than dividing by zero or
+        over-triggering on a trivially small change."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(44)
+        for d in dates[:30]:
+            rps.record_health_score(80.0, d)  # perfectly flat reference
+        for d in dates[30:]:
+            rps.record_health_score(75.0, d)  # small dip, below fallback bar
+        assert rps.health_score_trend() == "stable"
+
+    def test_declining_days_counts_from_most_recent(self):
+        """36 stable reference days + 8 declining days = 44 total, right
+        at the new minimum — reference (history[:-30], the first 14 of
+        the 36 stable days) stays clean of the decline, so the count
+        reflects exactly the 8 declining days."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(36 + 8)
+        for d in dates[:36]:
+            rps.record_health_score(85.0, d)
+        for d in dates[36:]:
+            rps.record_health_score(40.0, d)
+        assert rps.health_score_declining_days() == 8
+
+    def test_declining_days_stops_at_first_non_declining_entry(self):
+        """Scans backward from newest; stops counting at the first entry
+        that isn't below the cutoff, even if older entries also qualify.
+        36 stable reference days keeps history[:-30] (first 17 entries)
+        clean of the trailing decline pattern."""
+        rps = RobotProfileStore()
+        dates = _consecutive_dates(36 + 11)
+        for d in dates[:36]:
+            rps.record_health_score(85.0, d)
+        for d in dates[36:43]:
+            rps.record_health_score(40.0, d)          # would count...
+        rps.record_health_score(85.0, dates[43])       # ...but this breaks the streak
+        rps.record_health_score(40.0, dates[44])
+        rps.record_health_score(40.0, dates[45])
+        rps.record_health_score(40.0, dates[46])
+        assert rps.health_score_declining_days() == 3
+
+    def test_declining_days_zero_when_not_ready(self):
+        rps = RobotProfileStore()
+        rps.record_health_score(40.0, "2026-06-01")
+        assert rps.health_score_declining_days() == 0
+
+    def test_health_score_history_persistence_round_trip(self):
+        """health_score_history survives the same load/save attribute
+        pattern used by the real async_load()/async_save()."""
+        rps = RobotProfileStore()
+        for d, score in zip(_consecutive_dates(3), [72, 78, 74]):
+            rps.record_health_score(float(score), d)
+
+        persisted = {"health_score_history": rps.health_score_history}
+        restored = RobotProfileStore()
+        raw_history = persisted.get("health_score_history", [])
+        restored.health_score_history = [
+            {"date": str(e.get("date")), "score": float(e.get("score"))}
+            for e in raw_history
+        ]
+
+        assert restored.health_score_history == rps.health_score_history
+
+    def test_missing_health_score_fields_default_safely(self):
+        """A legacy payload without health_score_history loads with safe
+        defaults — no crash, history starts empty."""
+        legacy_payload = {"version": 1, "reloc_baseline": 0.5}
+        restored = RobotProfileStore()
+        raw_history = legacy_payload.get("health_score_history", [])
+        restored.health_score_history = [
+            {"date": str(e.get("date")), "score": float(e.get("score"))}
+            for e in raw_history
+        ]
+        assert restored.health_score_history == []
+
+
+class TestRoomAccessibilityScores:
+    """v3.2.0 ROOM-ACCESS — RobotProfileStore.room_accessibility_scores()."""
+
+    def test_empty_when_no_signals(self):
+        assert RobotProfileStore.room_accessibility_scores({}, {}, {}) == {}
+
+    def test_full_coverage_no_stuck_no_time_signal(self):
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={"1": 1.0}, stuck_by_room={}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 100.0
+        assert result["1"]["limiting_factor"] == "coverage_gap"
+
+    def test_partial_coverage_lowers_score(self):
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={"1": 0.5}, stuck_by_room={}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 50.0
+
+    def test_stuck_at_robot_average_scores_100(self):
+        """A room with exactly the robot's own average stuck rate isn't
+        penalised — only above-average rooms are."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={"1": 5, "2": 5}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 100.0
+        assert result["2"]["score"] == 100.0
+
+    def test_stuck_above_average_penalised(self):
+        """Room 1 has 3x the robot's own average stuck rate — clearly
+        elevated relative to this robot's other rooms."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={"1": 9, "2": 1}, time_per_area_by_room={},
+        )
+        # mean = 5; room 1 ratio = 1.8 -> 100 - 0.8*50 = 60
+        assert result["1"]["score"] == pytest.approx(60.0)
+        assert result["1"]["limiting_factor"] == "obstacle_density"
+
+    def test_time_per_area_above_average_penalised(self):
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={},
+            time_per_area_by_room={"1": 20.0, "2": 10.0},
+        )
+        # mean = 15; room 1 ratio = 1.333 -> 100 - 0.333*50 ≈ 83.3
+        assert result["1"]["score"] < 100.0
+        assert result["1"]["limiting_factor"] == "narrow_passages"
+        assert result["2"]["score"] == 100.0
+
+    def test_limiting_factor_picks_lowest_component(self):
+        """A room with good coverage but bad stuck rate should flag
+        obstacle_density, not coverage_gap."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={"1": 1.0},
+            stuck_by_room={"1": 9, "2": 1},
+            time_per_area_by_room={},
+        )
+        assert result["1"]["limiting_factor"] == "obstacle_density"
+
+    def test_score_never_below_zero(self):
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={"1": 100, "2": 1}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] >= 0.0
+
+    def test_combines_multiple_signals_as_mean(self):
+        """Full coverage + at-average stuck rate → mean of (100, 100) = 100."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={"1": 1.0},
+            stuck_by_room={"1": 5, "2": 5},
+            time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 100.0
+
+    def test_room_only_in_stuck_by_room_still_scored(self):
+        """A room absent from coverage_by_room (e.g. no UMF polygon data
+        yet for it) still gets scored from whatever signals ARE available."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={"1": 5}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 100.0
+
+    def test_explicit_none_value_does_not_crash(self):
+        """v3.2.0 bug-hunt fix — a dict with an explicit None value for a
+        present key (not just an absent key) must be treated as "no
+        signal for this room", not crash. Found via systematic review:
+        the mean-calculation step already filtered None defensively
+        (`if v is not None`), but the per-rid scoring step originally
+        didn't apply the same guard, so it wasn't just theoretical —
+        reproduced directly against the unpatched method during review."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={"1": None, "2": 5},
+            time_per_area_by_room={},
+        )
+        assert result["1"]["score"] is None
+        assert result["2"]["score"] == 100.0
+
+    def test_explicit_none_in_time_per_area_does_not_crash(self):
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={}, stuck_by_room={},
+            time_per_area_by_room={"1": None, "2": 10.0},
+        )
+        assert result["1"]["score"] is None
+        assert result["2"]["score"] == 100.0
+
+    def test_zero_coverage_still_scored_not_treated_as_missing(self):
+        """0.0 coverage is a real, meaningful signal (room genuinely
+        uncovered) — must not be confused with "no data for this room"
+        (which would be an absent key or explicit None)."""
+        result = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room={"1": 0.0}, stuck_by_room={}, time_per_area_by_room={},
+        )
+        assert result["1"]["score"] == 0.0
+        assert result["1"]["limiting_factor"] == "coverage_gap"

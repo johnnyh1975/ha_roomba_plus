@@ -273,17 +273,68 @@ class TestAsyncRecordMissionCompletedEvent:
             nstuck_delta=1,
         )
 
-        hass.bus.async_fire.assert_called_once_with(
-            EVENT_MISSION_COMPLETED,
-            {
-                "entry_id": entry.entry_id,
-                "name": entry.title,
-                "rooms_cleaned": 2,
-                "area_sqft": 250,
-                "stuck_count": 1,
-                "result": "stuck",
-            },
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_MISSION_COMPLETED
+        assert payload["entry_id"] == entry.entry_id
+        assert payload["name"] == entry.title
+        assert payload["rooms_cleaned"] == 2
+        assert payload["area_sqft"] == 250
+        assert payload["stuck_count"] == 1
+        assert payload["result"] == "stuck"
+
+    def test_explanation_fields_always_present_with_constant_shape(self):
+        """v3.2.0 UX fix — ANOMALY-EXPLAIN's result is folded into the
+        event payload so automations get the reason for free, without
+        knowing the explain_mission service exists. The three
+        explanation keys must ALWAYS be in the payload (null when not
+        anomalous) — constant shape means templates never have to guard
+        against missing keys."""
+        hass, entry = self._run(
+            {"phase": "charge", "error": 0, "sqft": 250}, {},
+            zones=["Kitchen"],
         )
+        payload = hass.bus.async_fire.call_args[0][1]
+        assert "is_anomalous" in payload
+        assert "anomaly_reason" in payload
+        assert "recommended_action" in payload
+        assert "robot_lifted" in payload
+        # Single ordinary mission with no baseline → not anomalous
+        assert payload["is_anomalous"] is False
+        assert payload["anomaly_reason"] is None
+
+    def test_anomalous_explanation_carried_into_payload(self):
+        """Wiring test — explain_mission's own logic has dedicated
+        coverage (37 ANOMALY-EXPLAIN tests); this verifies the event
+        payload actually carries its result through when a mission IS
+        anomalous."""
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        from unittest.mock import patch
+
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0, "sqft": 100}
+        start_ts = int(loop.time()) - 3600
+        canned = {
+            "mission_id": "m_x", "is_anomalous": True,
+            "anomaly_reason": "obstacle_or_blockage",
+            "robot_lifted": True, "error_code": None,
+            "recommended_action": "Check for an obstacle.",
+        }
+        try:
+            with patch.object(type(store), "explain_mission", return_value=canned):
+                loop.run_until_complete(
+                    async_record_mission(hass, entry, mission, {}, [], start_ts, 0)
+                )
+        finally:
+            loop.close()
+        payload = hass.bus.async_fire.call_args[0][1]
+        assert payload["is_anomalous"] is True
+        assert payload["anomaly_reason"] == "obstacle_or_blockage"
+        assert payload["recommended_action"] == "Check for an obstacle."
+        assert payload["robot_lifted"] is True
 
     def test_fires_even_with_no_zones(self):
         """NONE-tier (600-series) robots have no zone data at all — the
@@ -335,6 +386,160 @@ class TestAsyncRecordMissionBatteryCycles:
         """600-series has no bbchg3 at all — must be None, not 0."""
         rec = self._run({})
         assert rec["battery_cycles"] is None
+
+
+class TestAsyncRecordMissionTeamId:
+    """v3.2.0 TEAM-INDICATOR — team_id captured from lastCommand.params.team,
+    mirroring the existing zones extraction from lastCommand.regions."""
+
+    def _run(self, reported, start_ts=None):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0, "sqft": 100}
+
+        if start_ts is None:
+            start_ts = int(loop.time()) - 3600
+
+        try:
+            loop.run_until_complete(
+                async_record_mission(hass, entry, mission, reported, [], start_ts, 0)
+            )
+        finally:
+            loop.close()
+        return store.latest()
+
+    def test_team_id_captured_when_present(self):
+        rec = self._run({
+            "lastCommand": {"params": {"team": {"team_id": "IplhZn-R"}}}
+        })
+        assert rec["team_id"] == "IplhZn-R"
+
+    def test_none_when_no_team_key(self):
+        """Ordinary single-robot mission — params has no 'team' key at all."""
+        rec = self._run({
+            "lastCommand": {"params": {"padWetness": {"disposable": 3}}}
+        })
+        assert rec["team_id"] is None
+
+    def test_none_when_no_params_key(self):
+        rec = self._run({"lastCommand": {"command": "start"}})
+        assert rec["team_id"] is None
+
+    def test_none_when_lastcommand_absent(self):
+        rec = self._run({})
+        assert rec["team_id"] is None
+
+
+class TestAsyncRecordMissionNpicksDelta:
+    """v3.2.0 ANOMALY-EXPLAIN — npicks_delta is passed through to the
+    record as-is (unlike team_id, it's computed by the caller closure in
+    _on_mission_message and passed in as a parameter, not derived inside
+    async_record_mission itself — mirrors nstuck_delta's existing plumbing)."""
+
+    def _run(self, npicks_delta, start_ts=None):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0, "sqft": 100}
+
+        if start_ts is None:
+            start_ts = int(loop.time()) - 3600
+
+        try:
+            loop.run_until_complete(
+                async_record_mission(
+                    hass, entry, mission, {}, [], start_ts, 0,
+                    npicks_delta=npicks_delta,
+                )
+            )
+        finally:
+            loop.close()
+        return store.latest()
+
+    def test_npicks_delta_recorded(self):
+        rec = self._run(npicks_delta=1)
+        assert rec["npicks_delta"] == 1
+
+    def test_zero_npicks_delta_recorded(self):
+        """The ordinary case — robot was not picked up. Must be 0, not
+        None or absent, so downstream code can rely on it always being
+        an int."""
+        rec = self._run(npicks_delta=0)
+        assert rec["npicks_delta"] == 0
+
+    def test_default_is_zero_when_not_passed(self):
+        """Backward-compat default (e.g. any caller that doesn't yet pass
+        npicks_delta explicitly) is 0, not None."""
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0, "sqft": 100}
+        start_ts = int(loop.time()) - 3600
+        try:
+            loop.run_until_complete(
+                async_record_mission(hass, entry, mission, {}, [], start_ts, 0)
+            )
+        finally:
+            loop.close()
+        assert store.latest()["npicks_delta"] == 0
+
+    def test_two_consecutive_missions_have_independent_npicks_delta(self):
+        """v3.2.0 bug-hunt fix — npicks_at_start's mission-end reset was
+        missing (nstuck_at_start's parallel reset existed, npicks_at_start's
+        didn't). Verifies the practically-observable behaviour this
+        defends: back-to-back missions each get npicks_delta computed
+        against THEIR OWN start value, not bled over from the previous
+        mission — mission 1 has no pickup (delta=0), mission 2 has one
+        (delta>0), and the two must not interfere with each other."""
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        def _msg_with_picks(phase: str, npicks: int, mssn_strt_tm: int) -> dict:
+            return {
+                "state": {
+                    "reported": {
+                        "cleanMissionStatus": {
+                            "phase": phase, "sqft": 100,
+                            "mssnStrtTm": mssn_strt_tm,
+                            "initiator": "schedule", "error": 0,
+                        },
+                        "bbrun": {"nStuck": 0, "nPicks": npicks, "hr": 10},
+                    }
+                }
+            }
+
+        hass, entry, _recorded, _store = _make_callback_env()
+        cb = make_mission_callback(hass, entry)
+        captured: list[dict] = []
+
+        async def _capture(*args, **kwargs):
+            captured.append(dict(kwargs))
+
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+            mock_record.side_effect = _capture
+            # Mission 1: nPicks starts and stays at 5 (no pickup).
+            cb(_msg_with_picks("run", 5, 1700000000))
+            cb(_msg_with_picks("run", 5, 1700000000))
+            cb(_msg_with_picks("charge", 5, 1700000000))
+            cb(_msg_with_picks("charge", 5, 1700000000))
+            # Mission 2: nPicks starts at 5, rises to 8 (a pickup event).
+            cb(_msg_with_picks("run", 5, 1700010000))
+            cb(_msg_with_picks("run", 8, 1700010000))
+            cb(_msg_with_picks("charge", 8, 1700010000))
+            cb(_msg_with_picks("charge", 8, 1700010000))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert len(captured) == 2
+        assert captured[0].get("npicks_delta", 0) == 0
+        assert captured[1].get("npicks_delta", 0) == 3
 
 
 class TestAsyncRecordMissionTimestamps:
@@ -2172,3 +2377,120 @@ class TestFullLifecycleSequenceToResult:
             ("run", 0), ("pause", 0), ("run", 0),
         ])
         assert len(captured) == 0
+
+
+class TestCloudRefreshCallbackDispatchesV320Checks:
+    """v3.2.0 bug-hunt fix — make_cloud_refresh_callback's
+    _on_cloud_refresh_complete must actually dispatch all five v3.2.0
+    repair checks (health_trend_declining, room_accessibility,
+    furniture_change, stuck_hotspot, coverage_frequency).
+
+    Found via a systematic post-release audit: four of these five were
+    built and thoroughly unit-tested as standalone functions, but never
+    wired into anything the running integration actually calls — the
+    tests exercised the functions directly, which passed, but nothing in
+    production would ever have invoked them. This test asserts on the
+    actual dispatch call names so that gap can't silently reopen if this
+    callback is refactored later.
+    """
+
+    def _run_callback(self):
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = MagicMock()
+        rd.umf_aligner = MagicMock()
+        rd.robot_profile_store = MagicMock()
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}   # version_id absent -> no realign branch
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        return [
+            call.kwargs.get("name")
+            for call in hass.async_create_task.call_args_list
+        ]
+
+    def test_all_five_v320_checks_dispatched(self):
+        dispatched = self._run_callback()
+        expected = {
+            "roomba_plus_room_accessibility_check",
+            "roomba_plus_furniture_change_check",
+            "roomba_plus_stuck_hotspot_check",
+            "roomba_plus_coverage_frequency_check",
+        }
+        missing = expected - set(dispatched)
+        assert not missing, f"Missing dispatch(es): {missing}"
+
+    def test_room_accessibility_not_dispatched_without_umf_aligner(self):
+        """Correctly gated — no umf_aligner means no room polygons, so
+        dispatching the check would be pure overhead."""
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = MagicMock()
+        rd.umf_aligner = None
+        rd.robot_profile_store = MagicMock()
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        dispatched = [
+            call.kwargs.get("name")
+            for call in hass.async_create_task.call_args_list
+        ]
+        assert "roomba_plus_room_accessibility_check" not in dispatched
+
+    def test_grid_store_dependent_checks_not_dispatched_without_grid_store(self):
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = None
+        rd.umf_aligner = MagicMock()
+        rd.robot_profile_store = MagicMock()
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        dispatched = [
+            call.kwargs.get("name")
+            for call in hass.async_create_task.call_args_list
+        ]
+        assert "roomba_plus_furniture_change_check" not in dispatched
+        assert "roomba_plus_stuck_hotspot_check" not in dispatched
+        assert "roomba_plus_room_accessibility_check" not in dispatched

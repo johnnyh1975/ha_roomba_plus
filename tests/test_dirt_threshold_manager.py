@@ -486,3 +486,138 @@ class TestMissionAnomalyDetection:
         records = [_mission_rec(duration_min=60, area_sqft=200.0) for _ in range(22)]
         store = _make_store_with_records(records)
         assert store.consecutive_anomalous == 0
+
+
+class TestAnomalyReason:
+    """v3.2.0 ANOMALY-EXPLAIN — anomaly_reason() returns WHICH of the four
+    is_anomalous() conditions triggered, using the exact same fixtures as
+    TestMissionAnomalyDetection (is_anomalous() now delegates to this, so
+    the two must never disagree)."""
+
+    def test_obstacle_or_blockage(self):
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 0.0,  "dirt_p75": None,
+        }
+        record = _mission_rec(duration_min=85, area_sqft=175.0)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats) == "obstacle_or_blockage"
+
+    def test_dirt_spike(self):
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 0.0,  "dirt_p75": 20.0,
+        }
+        record = _mission_rec(duration_min=60, area_sqft=200.0, dirt=55)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats) == "dirt_spike"
+
+    def test_excessive_recharge(self):
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 30.0, "dirt_p75": None,
+        }
+        record = _mission_rec(duration_min=60, area_sqft=200.0, recharge_min=160)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats) == "excessive_recharge"
+
+    def test_incomplete_coverage_pre_20_fallback(self):
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": None,     "area_std": 0.0,
+            "recharge_mean": 0.0,  "dirt_p75": None,
+        }
+        profile = MagicMock()
+        profile.typical_coverage_sqft = 1000
+        record = _mission_rec(duration_min=60, area_sqft=50.0)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats, profile=profile) == "incomplete_coverage"
+
+    def test_none_for_normal_record(self):
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 0.0,  "dirt_p75": 20.0,
+        }
+        record = _mission_rec(duration_min=62, area_sqft=198.0, dirt=15)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats) is None
+
+    def test_priority_obstacle_before_dirt_spike(self):
+        """When a record technically satisfies both the struggling
+        signature AND the dirt-spike threshold, obstacle_or_blockage wins
+        — checked first in a fixed priority order."""
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 0.0,  "dirt_p75": 20.0,
+        }
+        # Satisfies condition 1 (duration=85>70, area=175<190) AND
+        # condition 3 (dirt=55>50) simultaneously.
+        record = _mission_rec(duration_min=85, area_sqft=175.0, dirt=55)
+        store = _make_store_with_records([])
+        assert store.anomaly_reason(record, stats) == "obstacle_or_blockage"
+
+    def test_is_anomalous_and_anomaly_reason_never_disagree(self):
+        """is_anomalous() is now a thin wrapper — property-style sanity
+        check across every fixture used above."""
+        stats = {
+            "duration_mean": 60.0, "duration_std": 5.0,
+            "area_mean": 200.0,    "area_std": 10.0,
+            "recharge_mean": 0.0,  "dirt_p75": 20.0,
+        }
+        store = _make_store_with_records([])
+        for record in [
+            _mission_rec(duration_min=85, area_sqft=175.0),
+            _mission_rec(duration_min=60, area_sqft=200.0, dirt=55),
+            _mission_rec(duration_min=62, area_sqft=198.0, dirt=15),
+        ]:
+            reason = store.anomaly_reason(record, stats)
+            assert store.is_anomalous(record, stats) == (reason is not None)
+
+
+class TestExplainMissionMethod:
+    """v3.2.0 ANOMALY-EXPLAIN — MissionStore.explain_mission(), the shared
+    logic both the service handler and REST view delegate to."""
+
+    def test_none_when_no_records(self):
+        store = _make_store_with_records([])
+        assert store.explain_mission() is None
+
+    def test_none_when_mission_id_not_found(self):
+        store = _make_store_with_records([_mission_rec()])
+        assert store.explain_mission("m_nonexistent") is None
+
+    def test_defaults_to_latest(self):
+        rec1 = _mission_rec()
+        rec2 = dict(_mission_rec())
+        rec2["id"] = rec1["id"] + "_later"   # distinct id, still "latest" by list order
+        store = _make_store_with_records([rec1, rec2])
+        result = store.explain_mission()
+        assert result["mission_id"] == rec2["id"]
+
+    def test_explicit_mission_id(self):
+        rec1 = _mission_rec()
+        rec2 = dict(_mission_rec())
+        rec2["id"] = rec1["id"] + "_later"
+        store = _make_store_with_records([rec1, rec2])
+        result = store.explain_mission(rec1["id"])
+        assert result["mission_id"] == rec1["id"]
+
+    def test_recommendation_matches_reason(self):
+        normal = [_mission_rec(duration_min=60, area_sqft=200.0) for _ in range(20)]
+        anomalous = dict(_mission_rec(duration_min=200, area_sqft=30.0))
+        anomalous["id"] = "m_distinct_anomalous"   # avoid same-second id collision with `normal`
+        store = _make_store_with_records(normal + [anomalous])
+        result = store.explain_mission(anomalous["id"])
+        assert result["anomaly_reason"] == "obstacle_or_blockage"
+        assert "cords" in result["recommended_action"] or "furniture" in result["recommended_action"]
+
+    def test_recommendation_none_when_not_anomalous(self):
+        store = _make_store_with_records([_mission_rec()])
+        result = store.explain_mission()
+        assert result["anomaly_reason"] is None
+        assert result["recommended_action"] is None
