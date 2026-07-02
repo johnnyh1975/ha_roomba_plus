@@ -24,7 +24,7 @@ from collections.abc import Callable
 from homeassistant.components.logbook import LOGBOOK_ENTRY_MESSAGE, LOGBOOK_ENTRY_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED
+from .const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED, EVENT_STUCK
 
 # Human-readable component names for the maintenance_reset message.
 _COMPONENT_LABELS: dict[str, str] = {
@@ -103,9 +103,32 @@ def async_describe_events(
             LOGBOOK_ENTRY_MESSAGE: message,
         }
 
+    @callback
+    def describe_stuck(event: Event) -> dict[str, str]:
+        """v3.2.0 STUCK-CONTEXT — same underlying data as the
+        mqtt_watchdog Repair Issue, phrased as a logbook sentence so the
+        push notification (built by the user from EVENT_STUCK directly)
+        and the searchable Logbook history share the same wording."""
+        data = event.data
+        message = "got stuck"
+        room = data.get("last_room")
+        if room:
+            message += f" — {room}"
+        minutes = data.get("minutes_stuck")
+        if minutes:
+            message += f", {minutes} min"
+
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: message,
+        }
+
     async_describe_event(
         DOMAIN, EVENT_MISSION_COMPLETED, describe_mission_completed
     )
     async_describe_event(
         DOMAIN, EVENT_MAINTENANCE_RESET, describe_maintenance_reset
+    )
+    async_describe_event(
+        DOMAIN, EVENT_STUCK, describe_stuck
     )

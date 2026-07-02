@@ -390,6 +390,19 @@ def _completion_rate_30d(store: Any) -> StateType:
     return round(completed / len(records) * 100, 1)
 
 
+def _last_mission_team_id(store: Any) -> StateType:
+    """v3.2.0 TEAM-INDICATOR — team_id of the most recent mission, if any.
+
+    None for the vast majority of missions (ordinary single-robot runs).
+    Purely informational — confirms whether the last mission was part of
+    an Imprint Link team clean, with no new control path.
+    """
+    latest = store.latest()
+    if latest is None:
+        return None
+    return latest.get("team_id")
+
+
 def _area_cleaned_today(store: Any) -> StateType:
     today = dt_util.now().date()
     records = store.query(1, result="completed")
@@ -1834,6 +1847,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
     ),
     RoombaSensorDescription(
+        key="dock_firmware_version",
+        translation_key="dock_firmware_version",
+        name="Dock firmware version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda s: "fwVer" in (s.get("dock") or {}),
+        value_fn=lambda e: (e.vacuum_state.get("dock") or {}).get("fwVer"),
+    ),
+    RoombaSensorDescription(
         key="dock_tank_level",
         translation_key="dock_tank_level",
         name="Dock tank level",
@@ -2081,6 +2102,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
     ),
     RoombaSensorDescription(
+        key="last_mission_team_id",
+        translation_key="last_mission_team_id",
+        name="Missions – Last mission team ID",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,  # niche — Imprint Link team-clean users only
+        value_fn=lambda e: _mission_store_value(e, _last_mission_team_id),
+    ),
+    RoombaSensorDescription(
         key="missions_last_30d",
         translation_key="missions_last_30d",
         name="Missions – Last 30 days",
@@ -2215,6 +2244,16 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             else None
         ),
         available_fn=lambda e: e._config_entry.runtime_data.mission_store is not None,
+        # v3.2.0 ANOMALY-EXPLAIN — surfaces the mission id to pass straight
+        # into the explain_mission service/REST endpoint, so the card (or
+        # an automation) doesn't need to separately query mission history
+        # just to find out which mission this count is even about.
+        extra_attributes_fn=lambda e: (
+            {"last_mission_id": e._config_entry.runtime_data.mission_store.latest().get("id")}
+            if e._config_entry.runtime_data.mission_store is not None
+            and e._config_entry.runtime_data.mission_store.latest() is not None
+            else {}
+        ),
     ),
 
     # ── v1.8.0 L6 — Presence Analytics ───────────────────────────────────────
@@ -2593,6 +2632,12 @@ async def async_setup_entry(
         entities.append(
             RoombaRobotHealthSensor(roomba, blid, data.cloud_coordinator, config_entry)
         )
+        # v3.2.0 L10 — self-calibrating health score trend, same gate as L8
+        # itself (the trend has nothing to track without the score it's
+        # derived from).
+        entities.append(
+            RoombaHealthScoreTrendSensor(roomba, blid, data.cloud_coordinator, config_entry)
+        )
 
     # Raw state sensor: opt-in, always created, exposes full MQTT state as attributes.
     entities.append(RawStateSensor(roomba, blid))
@@ -2615,6 +2660,15 @@ async def async_setup_entry(
     # v3.1.0 ROOM-SIZE — per-room floor area in m² from UMF polygons (SMART only).
     if data.umf_aligner is not None:
         entities.append(RoombaRoomAreasSensor(roomba, blid, config_entry))
+
+    # v3.2.0 ROOM-ACCESS — same gate as ROOM-SIZE (room polygons come from
+    # the same UmfAligner source).
+    if data.umf_aligner is not None:
+        entities.append(RoombaRoomAccessibilityScoresSensor(roomba, blid, config_entry))
+
+    # v3.2.0 RESET-DIAGNOSTICS — reset-cause breakdown, previously unread.
+    if "bbrstinfo" in state:
+        entities.append(RoombaResetDiagnosticsSensor(roomba, blid))
 
     # v3.1.0 L9-MAP — relocalisation rate (SMART only, mssnNavStats confirmed
     # absent on EPHEMERAL tier).
@@ -4601,13 +4655,22 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
         )
         stuck_rate = stuck_count / len(records_30d) if records_30d else None
 
-        return rps.compute_health_score(
+        score, breakdown = rps.compute_health_score(
             battery_retention_pct=bat_retention,
             nav_efficiency_ratio=nav_ratio,
             cleaning_speed_trend=trend,
             consecutive_anomalous=consecutive_anom,
             stuck_rate_30d=stuck_rate,
         )
+
+        # v3.2.0 L10 — snapshot into the rolling history whenever a real
+        # score is available. record_health_score() is idempotent per
+        # calendar day, so calling this from both native_value and
+        # extra_state_attributes reads on the same day is harmless.
+        if score is not None:
+            rps.record_health_score(score, dt_util.now().date().isoformat())
+
+        return score, breakdown
 
     @property
     def native_value(self) -> StateType:
@@ -4638,6 +4701,96 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
         @callback
         def _on_coordinator_update() -> None:
             self.async_write_ha_state()
+
+        self.async_on_remove(
+            self._coordinator.async_add_listener(_on_coordinator_update)
+        )
+
+
+class RoombaHealthScoreTrendSensor(IRobotEntity, SensorEntity):
+    """L10 (v3.2.0) — self-calibrating trend classification of the L8
+    health score, backed by RobotProfileStore.health_score_history.
+
+    State is 'improving' / 'stable' / 'declining', or None until this
+    robot's own baseline is established (>=14 days of recorded scores —
+    RobotProfileStore.health_score_baseline_ready). Trend is judged against
+    this robot's own learned mean/stdev, not a fixed point-difference
+    threshold — see health_score_trend()'s docstring for why.
+
+    Same update source as L8 itself (cloud coordinator refresh after every
+    mission end) — the trend has nothing new to say between mission ends.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="health_score_trend",
+        name="Health score trend",
+        translation_key="health_score_trend",
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        coordinator: IrobotCloudCoordinator,
+        config_entry: RoombaConfigEntry,
+    ) -> None:
+        super().__init__(roomba, blid)
+        self._coordinator = coordinator
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_health_score_trend"
+
+    @property
+    def _rps(self) -> Any | None:
+        return getattr(self._config_entry.runtime_data, "robot_profile_store", None)
+
+    @property
+    def native_value(self) -> StateType:
+        rps = self._rps
+        if rps is None:
+            return None
+        return rps.health_score_trend()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rps = self._rps
+        if rps is None:
+            return {}
+        from .robot_profile_store import (
+            _HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS,
+            _HEALTH_SCORE_BASELINE_MIN_DAYS,
+        )
+        days_recorded = len(rps.health_score_history)
+        min_days_needed = _HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS + _HEALTH_SCORE_BASELINE_MIN_DAYS
+        return {
+            "baseline_ready": rps.health_score_baseline_ready,
+            "days_recorded": days_recorded,
+            # v3.2.0 UX fix — days_recorded alone requires the user to
+            # already know the 44-day threshold from documentation and
+            # do the subtraction themselves. Explicit here instead.
+            "days_until_ready": max(0, min_days_needed - days_recorded),
+            "baseline_score": (
+                round(rps.health_score_baseline, 1)
+                if rps.health_score_baseline is not None else None
+            ),
+            "declining_days": rps.health_score_declining_days(),
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # updated by cloud coordinator only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+            if hasattr(self.hass, "is_running") and self.hass.is_running:
+                from .repairs import async_check_health_trend_declining
+                self.hass.async_create_task(
+                    async_check_health_trend_declining(self.hass, self._config_entry),
+                    name="roomba_plus_l10_health_trend_check",
+                )
 
         self.async_on_remove(
             self._coordinator.async_add_listener(_on_coordinator_update)
@@ -5122,6 +5275,47 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         return self._history
 
 
+def _id_to_display_name(cc: Any) -> dict[str, str]:
+    """v3.2.0 ROOM-TYPE-SUGGEST — shared {rid: display_name} resolver for
+    ROOM-SIZE and ROOM-ACCESS (the two sensors that fall back to a raw
+    region ID when a room isn't named — RoombaRoomCleaningHistorySensor
+    doesn't need this: its room names already come pre-resolved from
+    MissionStore's last_cleaned_rooms, not raw IDs).
+
+    Fallback chain: user-set cc.regions name (authoritative — never
+    overridden) -> iRobot's own top-scored region_suggestions type,
+    ONLY when that top score is positive (a negative score, confirmed in
+    real field data, means "probably NOT this type" — using it as a
+    label would be actively misleading, not just imprecise) -> the raw
+    rid as the final fallback, same as before this existed.
+
+    Reliability of region_suggestions across many pmaps beyond the one
+    sample seen (see MISSIONSTORE_FIELD_REGISTRY.md) is unconfirmed —
+    this conservative positive-score gate is deliberately cautious about
+    that uncertainty, not just about formatting the suggestion nicely.
+    """
+    if cc is None:
+        return {}
+    id_to_name: dict[str, str] = {
+        r["id"]: r["name"]
+        for r in (cc.regions or [])
+        if r.get("id") and r.get("name")
+    }
+    for suggestion in (cc.region_suggestions or []):
+        rid = suggestion.get("region_id")
+        if not rid or rid in id_to_name:
+            continue
+        types = suggestion.get("suggested_types") or []
+        if not types:
+            continue
+        best = max(types, key=lambda t: t.get("score", float("-inf")))
+        score = best.get("score")
+        region_type = best.get("region_type")
+        if score is not None and score > 0 and region_type:
+            id_to_name[rid] = region_type.replace("_", " ").title()
+    return id_to_name
+
+
 class RoombaRoomAreasSensor(IRobotEntity, SensorEntity):
     """ROOM-SIZE (v3.1.0) — per-room floor area in m² from UMF polygons.
 
@@ -5165,15 +5359,7 @@ class RoombaRoomAreasSensor(IRobotEntity, SensorEntity):
         areas_by_rid = aligner.room_areas_m2          # {rid: float}
         if not areas_by_rid:
             return {}
-        # Build rid → display_name map from cloud coordinator
-        cc = data.cloud_coordinator
-        id_to_name: dict[str, str] = {}
-        if cc is not None:
-            id_to_name = {
-                r["id"]: r["name"]
-                for r in (cc.regions or [])
-                if r.get("id") and r.get("name")
-            }
+        id_to_name = _id_to_display_name(data.cloud_coordinator)
         return {
             id_to_name.get(rid, rid): round(area, 2)
             for rid, area in areas_by_rid.items()
@@ -5188,6 +5374,165 @@ class RoombaRoomAreasSensor(IRobotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, float]:
         """Dict mapping room display name → floor area in m²."""
         return self._areas
+
+
+class RoombaRoomAccessibilityScoresSensor(IRobotEntity, SensorEntity):
+    """ROOM-ACCESS (v3.2.0) — per-room accessibility score 0-100, combining
+    three signals: coverage fraction (GridStore.coverage_by_polygon),
+    stuck-event rate (GridStore.stuck_by_polygon), and traversal time
+    efficiency (MissionArchive.time_per_room, aggregated across mission
+    history and normalised by ROOM-SIZE's room areas).
+
+    native_value = number of rooms with a computed score.
+    extra_state_attributes = {room_display_name: {"score": float,
+    "limiting_factor": str}} — dict-sensor design, deliberately not one
+    entity per room, matching the ROOM-CLEANING-HISTORY / ROOM-SIZE
+    precedent from v3.1.0's PRIMARY-SLIM direction (avoid entity sprawl)
+    rather than the original version-plan wording's implied per-room
+    entities.
+
+    Stuck-rate and time-efficiency sub-scores are judged against this
+    robot's OWN average across its OWN rooms — see
+    RobotProfileStore.room_accessibility_scores()'s docstring for why a
+    fixed external threshold doesn't work here.
+
+    Gate: SMART-tier + umf_aligner present (same as ROOM-SIZE — room
+    polygons come from the same source).
+    """
+
+    _attr_translation_key = "room_accessibility_scores"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_room_accessibility_scores"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "room_accessibility_scores"
+
+    @property
+    def _scores(self) -> dict[str, dict[str, Any]]:
+        """Return {display_name: {"score": float, "limiting_factor": str}},
+        or {} if the required inputs (UMF room polygons) aren't available."""
+        data = self._entry.runtime_data
+        aligner = data.umf_aligner
+        if aligner is None:
+            return {}
+        polygons = aligner.room_polygons_umf()
+        areas_m2 = aligner.room_areas_m2
+        if not polygons:
+            return {}
+
+        gs = data.grid_store
+        coverage_by_room = gs.coverage_by_polygon(polygons) if gs is not None else {}
+        stuck_by_room = gs.stuck_by_polygon(polygons) if gs is not None else {}
+
+        # Aggregate time-per-room across mission history, then normalise
+        # by each room's area to get seconds/m2 (comparable across
+        # differently-sized rooms).
+        time_by_room: dict[str, int] = {}
+        archive = data.mission_archive
+        if archive is not None:
+            from .mission_archive import MissionArchive
+            for record in archive.all_derived_oldest_first():
+                visits = record.get("room_visits") or []
+                for rid, seconds in MissionArchive.time_per_room(visits).items():
+                    time_by_room[rid] = time_by_room.get(rid, 0) + seconds
+
+        time_per_area_by_room: dict[str, float] = {}
+        for rid, seconds in time_by_room.items():
+            area = areas_m2.get(rid)
+            if area and area > 0:
+                time_per_area_by_room[rid] = seconds / area
+
+        from .robot_profile_store import RobotProfileStore
+        raw_scores = RobotProfileStore.room_accessibility_scores(
+            coverage_by_room, stuck_by_room, time_per_area_by_room,
+        )
+
+        id_to_name = _id_to_display_name(data.cloud_coordinator)
+        return {
+            id_to_name.get(rid, rid): v
+            for rid, v in raw_scores.items()
+            if v.get("score") is not None
+        }
+
+    @property
+    def native_value(self) -> int:
+        """Number of rooms with a computed accessibility score."""
+        return len(self._scores)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, dict[str, Any]]:
+        return self._scores
+
+
+class RoombaResetDiagnosticsSensor(IRobotEntity, SensorEntity):
+    """RESET-DIAGNOSTICS (v3.2.0) — bbrstinfo reset-cause breakdown.
+
+    Previously entirely unread. Deliberately NOT folded into the L8 health
+    score: L8's five weighted signals (25/20/20/20/15%) are a closed system
+    — adding a sixth would mean re-normalising every weight plus building
+    new 30-day windowed-rate infrastructure this field doesn't have yet.
+    nOomRst is also j-series-only (confirmed absent on Braava's bbrstinfo
+    in the KingAntDesigns field captures), so it would be structurally
+    unavailable for a large share of robots if it became a scored signal.
+    A plain diagnostic sensor avoids all of that.
+
+    native_value = nSafRst (safety-triggered resets — the most actionable
+    single counter; nav/mobility resets are comparatively routine).
+    extra_state_attributes carries the full breakdown, including nOomRst
+    (out-of-memory resets) only where the firmware actually reports it.
+
+    Gate: "bbrstinfo" in state — present on every robot captured so far
+    (both Braava and j-series), but treated as optional rather than
+    assumed universal, consistent with this project's general stance on
+    field presence.
+    """
+
+    _attr_translation_key = "reset_diagnostics"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_diagnostics"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "reset_diagnostics"
+
+    @property
+    def _info(self) -> dict[str, Any]:
+        return self.vacuum_state.get("bbrstinfo") or {}
+
+    @property
+    def native_value(self) -> int | None:
+        """Safety-triggered reset count — the most actionable single number."""
+        info = self._info
+        if not info:
+            return None
+        return info.get("nSafRst")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Full reset breakdown. nOomRst included only when the firmware
+        reports it (confirmed j-series-only; absent on Braava)."""
+        info = self._info
+        attrs: dict[str, Any] = {
+            "nav_resets": info.get("nNavRst"),
+            "mobility_resets": info.get("nMobRst"),
+            "safety_resets": info.get("nSafRst"),
+            "safety_reset_causes": info.get("safCauses"),
+        }
+        if "nOomRst" in info:
+            attrs["oom_resets"] = info.get("nOomRst")
+        return attrs
 
 
 class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):

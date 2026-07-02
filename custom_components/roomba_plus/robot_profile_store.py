@@ -86,6 +86,54 @@ _ESTCAP_REMAINING_CYCLES_SANITY_CAP = 10_000
 # the full _ESTCAP_NOISE_MIN_SAMPLES learning period.
 _ESTCAP_FALLBACK_MIN_RATE = 0.01
 
+# v3.2.0 L10 — minimum days in the REFERENCE period (the portion of
+# history strictly before the current comparison window) before that
+# period's mean/stdev is trusted for trend classification. Structurally
+# different population from estcap's 10 samples-per-mission: health_score
+# itself already requires >=20 missions in a 30-day window to be non-None
+# at all (see compute_health_score's own calibration gate), and is
+# snapshotted at most once per calendar day — so by the time any history
+# exists, substantial mission data already backs it. 14 chosen to match
+# the Repair Issue's own 14-day persistence trigger, but derived
+# independently: enough days for a first reasonable spread estimate
+# without an unnecessarily long wait.
+_HEALTH_SCORE_BASELINE_MIN_DAYS = 14
+# How many of the most recent days' scores form the "current" window
+# compared against the lifetime baseline.
+_HEALTH_SCORE_RECENT_WINDOW_DAYS = 14
+# v3.2.0 bug-hunt fix — how many of the most recent days are excluded
+# from the REFERENCE set, deliberately larger than
+# _HEALTH_SCORE_RECENT_WINDOW_DAYS. The original design excluded exactly
+# _HEALTH_SCORE_RECENT_WINDOW_DAYS (14) from the reference — which meant
+# a decline lasting LONGER than 14 days started bleeding its own older
+# days back into the "reference" set used to judge it, inflating that
+# reference's mean/stdev and masking the very decline it was supposed to
+# detect (reproduced directly: a 25-day decline from 90->60 was
+# classified "stable" with declining_days=0 under the old exclusion
+# width). A wider exclusion (30) creates a quarantine gap between the
+# recent window (last 14 days) and the reference window (everything
+# before day -30) — days -30..-14 count toward neither, so a decline
+# that started anywhere in that gap can't contaminate the reference
+# mean/stdev. Doesn't eliminate the underlying issue (a decline lasting
+# longer than this buffer would eventually contaminate it too), just
+# raises the threshold well past the 14-day point the Repair Issue
+# actually triggers at.
+_HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS = 30
+# Same significance-multiplier philosophy as L9-BATTERY's noise floor:
+# only classify improving/declining when the recent-window mean deviates
+# from this robot's own learned baseline by more than this multiple of its
+# own learned stdev — otherwise it's ordinary day-to-day score noise, not
+# a genuine trend. No field data yet to calibrate against, so this starts
+# at the same conservative 2.0 used for L9-BATTERY.
+_HEALTH_SCORE_SIGNIFICANCE_MULTIPLIER = 2.0
+# Fallback absolute-point threshold used only while the baseline isn't
+# ready yet (same "insufficient evidence, don't overclaim" spirit as
+# _ESTCAP_FALLBACK_MIN_RATE) — high enough that only an unambiguous swing
+# would classify as a trend before real personal calibration exists.
+_HEALTH_SCORE_FALLBACK_MIN_DEVIATION = 10.0
+# Rolling history retention window.
+_HEALTH_SCORE_HISTORY_MAX_DAYS = 90
+
 
 @dataclass
 class RobotProfileStore:
@@ -159,6 +207,18 @@ class RobotProfileStore:
     # reading-to-baseline.
     last_estcap_mah: float | None = None
 
+    # v3.2.0 L10 — 90-day rolling health_score history for trend
+    # classification. history: [{"date": "YYYY-MM-DD", "score": float}],
+    # newest last, trimmed to _HEALTH_SCORE_HISTORY_MAX_DAYS. No separate
+    # running-mean/variance fields — health_score_trend() computes its
+    # reference-period mean/stdev on demand from a strictly-older slice of
+    # this history (see _reference_scores()), deliberately NOT a
+    # continuously-updating lifetime baseline. A lifetime baseline would
+    # absorb an ongoing decline into itself and inflate its own variance
+    # estimate by mixing pre- and post-decline values, both of which mask
+    # the exact trend this is meant to detect.
+    health_score_history: list[dict[str, Any]] = field(default_factory=list)
+
     # v2.9.0 (J) — STALENESS TRACKING for total_cleaned_area (bbrun.sqft /
     # runtimeStats.sqft, the robot's own onboard lifetime area counter).
     # Field-confirmed (980 9-series + aftermarket NiMH battery): this value
@@ -230,6 +290,14 @@ class RobotProfileStore:
             lec = data.get("last_estcap_mah")
             self.last_estcap_mah = float(lec) if lec is not None else None
 
+            # v3.2.0 L10 — health score history
+            raw_history = data.get("health_score_history", [])
+            self.health_score_history = [
+                {"date": str(entry.get("date")), "score": float(entry.get("score"))}
+                for entry in raw_history
+                if entry.get("date") is not None and entry.get("score") is not None
+            ][-_HEALTH_SCORE_HISTORY_MAX_DAYS:]
+
             # v2.9.0 (J) — sqft staleness tracking
             lsv = data.get("lifetime_sqft_last_value")
             self.lifetime_sqft_last_value = float(lsv) if lsv is not None else None
@@ -263,6 +331,7 @@ class RobotProfileStore:
             "estcap_noise_m2": self.estcap_noise_m2,
             "estcap_noise_count": self.estcap_noise_count,
             "last_estcap_mah": self.last_estcap_mah,
+            "health_score_history": self.health_score_history,
             "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
             "lifetime_sqft_last_changed_at": self.lifetime_sqft_last_changed_at,
         })
@@ -290,6 +359,7 @@ class RobotProfileStore:
         self.estcap_noise_m2 = 0.0
         self.estcap_noise_count = 0
         self.last_estcap_mah = None
+        self.health_score_history = []
         self.lifetime_sqft_last_value = None
         self.lifetime_sqft_last_changed_at = None
         await self.async_save(hass, entry_id)
@@ -503,6 +573,236 @@ class RobotProfileStore:
         if remaining_cycles > _ESTCAP_REMAINING_CYCLES_SANITY_CAP:
             return None
         return remaining_cycles
+
+    def record_health_score(self, score: float, today_iso: str) -> None:
+        """v3.2.0 L10 — record today's L8 health score into the rolling
+        90-day history.
+
+        Idempotent per calendar day: if today_iso already matches the most
+        recent history entry's date, that entry's score is updated in place
+        rather than appended again (a robot's cloud coordinator can refresh
+        more than once per day; only the day's last-known score should
+        count once toward the history). Call once per health-score
+        computation with a non-None score — the caller (RoombaHealthScoreSensor)
+        already skips calling this when the calibration gate isn't met.
+        """
+        if self.health_score_history and self.health_score_history[-1]["date"] == today_iso:
+            self.health_score_history[-1]["score"] = score
+            return
+
+        self.health_score_history.append({"date": today_iso, "score": score})
+        self.health_score_history = self.health_score_history[-_HEALTH_SCORE_HISTORY_MAX_DAYS:]
+
+        _LOGGER.debug(
+            "RobotProfileStore: health_score recorded %.1f for %s (n=%d)",
+            score, today_iso, len(self.health_score_history),
+        )
+
+    def _reference_scores(self) -> list[float]:
+        """The older portion of history, excluding the current comparison
+        window AND a quarantine buffer beyond it — deliberately NOT the
+        full lifetime history, and deliberately NOT just the
+        _HEALTH_SCORE_RECENT_WINDOW_DAYS-sized slice either.
+
+        This is the key correction from an earlier version of this design:
+        a lifetime running mean/stdev absorbs an ongoing decline into
+        itself (the "baseline" drifts down right along with the thing it's
+        supposed to be measuring against), and mixing pre- and post-decline
+        values into one variance estimate inflates the noise floor to the
+        point a genuine sustained drop no longer clears the significance
+        threshold. Keeping the reference window strictly older than the
+        recent window avoids that FOR DECLINES SHORTER THAN THE EXCLUSION
+        WIDTH — but a decline lasting longer than the original 14-day
+        exclusion width bled its own older days back into the reference
+        set once enough time passed, silently reproducing the exact
+        problem this correction exists to prevent (confirmed directly: a
+        25-day 90->60 decline was misclassified "stable"). Excluding
+        _HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS (30, wider than the 14-day
+        recent window) instead pushes that failure point well past where
+        the Repair Issue's own 14-day trigger would already have fired.
+        """
+        return [
+            e["score"]
+            for e in self.health_score_history[:-_HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS]
+        ]
+
+    @property
+    def health_score_stdev(self) -> float | None:
+        """Sample standard deviation of the reference (pre-recent-window)
+        scores, or None if there aren't enough of them yet."""
+        reference = self._reference_scores()
+        if len(reference) < 2:
+            return None
+        return statistics.stdev(reference)
+
+    @property
+    def health_score_baseline(self) -> float | None:
+        """Mean of the reference (pre-recent-window) scores, or None if
+        there isn't a reference period yet. Public counterpart to
+        _reference_scores() for callers (e.g. the trend sensor's
+        diagnostic attributes) that want the number without reaching into
+        the private helper."""
+        reference = self._reference_scores()
+        if not reference:
+            return None
+        return statistics.mean(reference)
+
+    @property
+    def health_score_baseline_ready(self) -> bool:
+        """True once enough reference-period days exist (strictly before
+        the current comparison window) to trust a personal baseline for
+        trend classification — not just enough days in total."""
+        return len(self._reference_scores()) >= _HEALTH_SCORE_BASELINE_MIN_DAYS
+
+    def health_score_trend(self) -> str | None:
+        """v3.2.0 L10 — classify the recent trend as 'improving', 'stable',
+        or 'declining' relative to this robot's own learned baseline.
+
+        Compares the mean of the most recent _HEALTH_SCORE_RECENT_WINDOW_DAYS
+        days against the mean of the reference period before it, judging
+        significance against this robot's own learned stdev from that same
+        reference period — same self-calibration philosophy as L9-BATTERY's
+        degradation_rate_is_significant(), rather than a fixed
+        point-difference threshold that would be too strict for a
+        naturally noisy robot and too lenient for a stable one.
+
+        Returns None when there isn't enough reference-period history yet
+        to say anything (fewer than _HEALTH_SCORE_BASELINE_MIN_DAYS days
+        before the current window).
+        """
+        if not self.health_score_baseline_ready:
+            return None
+
+        recent = self.health_score_history[-_HEALTH_SCORE_RECENT_WINDOW_DAYS:]
+        reference = self._reference_scores()
+        if not recent or not reference:
+            return None
+
+        recent_mean = sum(e["score"] for e in recent) / len(recent)
+        reference_mean = statistics.mean(reference)
+        deviation = recent_mean - reference_mean
+
+        stdev = self.health_score_stdev
+        if stdev is None or stdev <= 0:
+            threshold = _HEALTH_SCORE_FALLBACK_MIN_DEVIATION
+        else:
+            threshold = stdev * _HEALTH_SCORE_SIGNIFICANCE_MULTIPLIER
+
+        if deviation < -threshold:
+            return "declining"
+        if deviation > threshold:
+            return "improving"
+        return "stable"
+
+    def health_score_declining_days(self) -> int:
+        """v3.2.0 L10 — how many of the most recent history entries fall
+        below (reference mean - significance threshold), scanning backward
+        from the newest entry until the first one that doesn't. Used by the
+        Repair Issue's 14-day persistence trigger — a simple debounce count
+        layered on top of the self-calibrated significance test above, same
+        pattern as async_check_performance_degradation's fixed
+        "3 consecutive updates" trigger.
+        """
+        if not self.health_score_baseline_ready:
+            return 0
+
+        reference = self._reference_scores()
+        stdev = self.health_score_stdev
+        threshold = (
+            stdev * _HEALTH_SCORE_SIGNIFICANCE_MULTIPLIER
+            if stdev is not None and stdev > 0
+            else _HEALTH_SCORE_FALLBACK_MIN_DEVIATION
+        )
+        cutoff = statistics.mean(reference) - threshold
+
+        count = 0
+        for entry in reversed(self.health_score_history):
+            if entry["score"] < cutoff:
+                count += 1
+            else:
+                break
+        return count
+
+    @staticmethod
+    def room_accessibility_scores(
+        coverage_by_room: dict[str, float],
+        stuck_by_room: dict[str, int],
+        time_per_area_by_room: dict[str, float],
+    ) -> dict[str, dict[str, Any]]:
+        """v3.2.0 ROOM-ACCESS — combine three signals into a 0-100
+        accessibility score per room:
+
+          - coverage_by_room: {rid: fraction 0-1} from GridStore.coverage_by_polygon()
+          - stuck_by_room: {rid: count} from GridStore.stuck_by_polygon()
+          - time_per_area_by_room: {rid: seconds/m2} from
+            MissionArchive.time_per_room(), aggregated across missions and
+            divided by ROOM-SIZE's room_areas_m2
+
+        Stuck rate and time-per-area are judged against THIS ROBOT's OWN
+        average across its OWN rooms — same self-calibration philosophy as
+        L9-BATTERY/L10 (a room only counts as a problem relative to how
+        this robot's other rooms behave, not a fixed one-size-fits-all
+        bar; a robot that's generally slow or generally prone to minor
+        stuck events everywhere shouldn't have every single room flagged
+        just because it's slower than some external absolute reference).
+        Coverage doesn't need this treatment — 100% covered is a
+        meaningful absolute target regardless of robot.
+
+        Returns {rid: {"score": float, "limiting_factor": str | None}}.
+        limiting_factor is one of "obstacle_density" (stuck sub-score
+        lowest), "narrow_passages" (time-efficiency sub-score lowest), or
+        "coverage_gap" (coverage sub-score lowest) — None only if a room
+        has no signals at all (shouldn't normally happen if it appears in
+        coverage_by_room, since that's the primary per-room signal every
+        room should have).
+        """
+        all_rids = set(coverage_by_room) | set(stuck_by_room) | set(time_per_area_by_room)
+        if not all_rids:
+            return {}
+
+        stuck_values = [v for v in stuck_by_room.values() if v is not None]
+        stuck_mean = sum(stuck_values) / len(stuck_values) if stuck_values else 0.0
+
+        time_values = [v for v in time_per_area_by_room.values() if v is not None and v > 0]
+        time_mean = sum(time_values) / len(time_values) if time_values else 0.0
+
+        results: dict[str, dict[str, Any]] = {}
+        for rid in all_rids:
+            components: list[tuple[str, float]] = []
+
+            coverage_val = coverage_by_room.get(rid)
+            if coverage_val is not None:
+                coverage_score = max(0.0, min(100.0, coverage_val * 100.0))
+                components.append(("coverage_gap", coverage_score))
+
+            stuck_val = stuck_by_room.get(rid)
+            if stuck_val is not None:
+                if stuck_mean <= 0:
+                    stuck_score = 100.0
+                else:
+                    ratio = stuck_val / stuck_mean
+                    # At the robot's own average ratio=1.0 -> 100pts;
+                    # 3x the average -> 0pts; linear between.
+                    stuck_score = max(0.0, min(100.0, 100.0 - (ratio - 1.0) * 50.0))
+                components.append(("obstacle_density", stuck_score))
+
+            time_val = time_per_area_by_room.get(rid)
+            if time_val is not None and time_val > 0 and time_mean > 0:
+                ratio = time_val / time_mean
+                time_score = max(0.0, min(100.0, 100.0 - (ratio - 1.0) * 50.0))
+                components.append(("narrow_passages", time_score))
+
+            if not components:
+                results[rid] = {"score": None, "limiting_factor": None}
+                continue
+
+            overall = sum(s for _, s in components) / len(components)
+            limiting_name, _ = min(components, key=lambda c: c[1])
+            results[rid] = {
+                "score": round(overall, 1),
+                "limiting_factor": limiting_name,
+            }
+        return results
 
     def update_lifetime_sqft_tracking(self, current_sqft: float) -> bool:
         """Compare the current lifetime sqft reading against the last seen

@@ -5,6 +5,8 @@ Binary on/off settings that map to set_preference() delta commands:
   EdgeCleanSwitch    — enable/disable edge cleaning along walls
   AlwaysFinishSwitch — continue cleaning even if bin is full (Clean Base models)
   ScheduleHoldSwitch — freeze the schedule without deleting it (e.g. during holidays)
+  ChildLockSwitch    — lock the robot's physical control buttons
+  EcoChargeSwitch    — enable/disable eco charging mode
 """
 from __future__ import annotations
 
@@ -48,6 +50,14 @@ async def async_setup_entry(
     # Schedule hold: present when schedHold key exists in state
     if "schedHold" in state:
         entities.append(ScheduleHoldSwitch(roomba, blid))
+
+    # Child lock: present when childLock key exists in state
+    if "childLock" in state:
+        entities.append(ChildLockSwitch(roomba, blid))
+
+    # Eco charge: present when ecoCharge key exists in state
+    if "ecoCharge" in state:
+        entities.append(EcoChargeSwitch(roomba, blid))
 
     async_add_entities(entities)
 
@@ -176,3 +186,86 @@ class ScheduleHoldSwitch(IRobotEntity, SwitchEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "schedHold" in new_state
+
+
+class ChildLockSwitch(IRobotEntity, SwitchEntity):
+    """Switch that locks the robot's physical control buttons.
+
+    The Roomba preference is called 'childLock':
+      childLock=True  -> physical buttons on the robot are locked
+      childLock=False -> physical buttons work normally (default)
+
+    Useful for households with kids or pets that might otherwise trigger
+    the robot's onboard Clean button by accident.
+
+    Only created on models that report this preference.
+    """
+
+    _attr_translation_key = "child_lock"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, roomba, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_child_lock"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when the physical buttons are locked."""
+        return bool(self.vacuum_state.get("childLock", False))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Lock the physical buttons."""
+        _LOGGER.debug("ChildLock: turning ON (childLock=True)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "childLock", True
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Unlock the physical buttons."""
+        _LOGGER.debug("ChildLock: turning OFF (childLock=False)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "childLock", False
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "childLock" in new_state
+
+
+class EcoChargeSwitch(IRobotEntity, SwitchEntity):
+    """Switch that enables/disables the robot's eco charging mode.
+
+    The Roomba preference is called 'ecoCharge':
+      ecoCharge=True  -> eco charging active
+      ecoCharge=False -> normal charging (default)
+
+    Only created on models that report this preference.
+    """
+
+    _attr_translation_key = "eco_charge"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, roomba, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_eco_charge"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when eco charging is active."""
+        return bool(self.vacuum_state.get("ecoCharge", False))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable eco charging."""
+        _LOGGER.debug("EcoCharge: turning ON (ecoCharge=True)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "ecoCharge", True
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable eco charging."""
+        _LOGGER.debug("EcoCharge: turning OFF (ecoCharge=False)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "ecoCharge", False
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "ecoCharge" in new_state

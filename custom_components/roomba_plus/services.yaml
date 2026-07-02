@@ -221,3 +221,29 @@ advance_room:
     entity:
       integration: roomba_plus
       domain: vacuum
+
+explain_mission:
+  name: Explain mission
+  description: >
+    Rule-based explanation for why a mission was flagged anomalous:
+    obstacle_or_blockage, excessive_recharge, dirt_spike, or
+    incomplete_coverage — plus whether the robot was picked up
+    (robot_lifted) and any recorded error_code, which can apply
+    independently of the primary reason. Defaults to the most recent
+    mission when mission_id is omitted.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity for the robot whose mission history to check.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+    mission_id:
+      name: Mission ID
+      description: >
+        Specific mission to explain (the "id" field from mission history,
+        e.g. "m_1719849600"). Omit to explain the most recent mission.
+      required: false
+      selector:
+        text:

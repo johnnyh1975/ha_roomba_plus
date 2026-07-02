@@ -232,6 +232,7 @@ async def async_record_mission(
     nstuck_delta: int,
     recharge_min: int = 0,
     result_override: str | None = None,
+    npicks_delta: int = 0,
 ) -> None:
     """Build and append a mission record to MissionStore.
 
@@ -247,6 +248,13 @@ async def async_record_mission(
         nstuck_delta:    bbrun.nStuck delta since mission start. Using the delta
                          rather than the lifetime counter prevents marking every
                          mission as stuck when bbrun arrives in the same packet.
+        npicks_delta:    v3.2.0 ANOMALY-EXPLAIN — bbrun.nPicks delta since mission
+                         start, same delta-not-lifetime-counter reasoning as
+                         nstuck_delta. >0 means the robot was physically picked
+                         up during this mission. Unlike nstuck_delta (only used
+                         to derive `result`), this IS stored directly on the
+                         record — there's no other field it could be inferred
+                         from later.
         recharge_min:    F4e — minutes spent recharging mid-mission, accumulated
                          from rechrgM fields across hmMidMsn phase entries.
         result_override: F6c — when set, overrides the computed result string
@@ -300,7 +308,9 @@ async def async_record_mission(
     # mission end, mirrors bbrun_hr above: a per-mission absolute-counter
     # snapshot, not a delta. api_views.py computes the cross-day delta the
     # same way it already does for bbrun_hr (filter_hours_today). None when
-    # bbchg3 is absent (600-series has no battery_stats at all).
+    # bbchg3 can be entirely absent (confirmed on 600-series AND on a j7+
+    # running sapphire firmware — not a 600-series-exclusive phenomenon,
+    # see MISSIONSTORE_FIELD_REGISTRY.md's raw vacuum_state findings).
     battery_cycles = active_charge_cycles(_merged_top_level(entry, reported, "bbchg3"))
 
     # F8b — capture error context at mission end
@@ -328,6 +338,17 @@ async def async_record_mission(
         None
     )
 
+    # v3.2.0 TEAM-INDICATOR — was this mission part of an Imprint Link
+    # team clean? lastCommand.params.team.team_id is only present when the
+    # mission was started as part of a multi-robot team routine (confirmed
+    # via KingAntDesigns' j7+ field data — three scheduled team routines +
+    # the actual last mission run). Purely informational; None on ordinary
+    # single-robot missions, which is the vast majority.
+    last_cmd_for_team = _merged_top_level(entry, reported, "lastCommand")
+    team_id: str | None = (
+        (last_cmd_for_team.get("params") or {}).get("team") or {}
+    ).get("team_id")
+
     record: dict[str, Any] = {
         "id": f"m_{int(started_at.timestamp())}",
         "started_at": started_at.isoformat(),
@@ -353,6 +374,8 @@ async def async_record_mission(
         "error_position_mm": error_position_mm,
         "phase_at_error":    phase_at_error,
         "self_recovered":    self_recovered,
+        "team_id": team_id,   # v3.2.0 TEAM-INDICATOR
+        "npicks_delta": npicks_delta,   # v3.2.0 ANOMALY-EXPLAIN
     }
 
     await data.mission_store.async_append(record)
@@ -403,6 +426,16 @@ async def async_record_mission(
     # v2.9.0 EVENT-BUS — fire roomba_plus_mission_completed for automations.
     # entry_id + name included (unlike the older L6 presence events) so
     # multi-robot installs can filter without a separate lookup.
+    #
+    # v3.2.0 UX fix — the ANOMALY-EXPLAIN result is folded directly into
+    # the payload instead of requiring the user to (a) know the
+    # explain_mission service exists and (b) call it themselves after
+    # every mission. The record was appended above, so explain_mission()
+    # sees it; the computation is once-per-mission-end, negligible.
+    # Payload shape is CONSTANT: the three explanation fields are always
+    # present (null when not anomalous) so automation templates never
+    # have to guard against missing keys depending on the mission.
+    explanation = data.mission_store.explain_mission(record["id"]) or {}
     hass.bus.async_fire(
         EVENT_MISSION_COMPLETED,
         {
@@ -412,6 +445,10 @@ async def async_record_mission(
             "area_sqft": record["area_sqft"],
             "stuck_count": nstuck_delta,
             "result": result,
+            "is_anomalous": bool(explanation.get("is_anomalous", False)),
+            "anomaly_reason": explanation.get("anomaly_reason"),
+            "recommended_action": explanation.get("recommended_action"),
+            "robot_lifted": bool(explanation.get("robot_lifted", False)),
         },
     )
 
@@ -464,6 +501,14 @@ def make_mission_callback(
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
+    # v3.2.0 ANOMALY-EXPLAIN — npicks (bbrun.nPicks, "robot picked up off
+    # the floor" events) at mission start, mirrors nstuck_at_start exactly.
+    # Unlike nStuck, nPicks has no existing proxy visible on the record
+    # (nstuck_delta only feeds into `result` classification, never stored
+    # directly) — npicks_delta needs its own record field since there's no
+    # other way to later tell "was this mission's anomaly caused by the
+    # robot being lifted".
+    npicks_at_start: int = 0
     # v2.8.1 (END-DEBOUNCE) — consecutive-message counter for the genuine-end
     # debounce below. Resets to 0 whenever a message does not look like a
     # genuine end (cycle still active, or phase back in an active phase).
@@ -504,6 +549,7 @@ def make_mission_callback(
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
+        nonlocal npicks_at_start
         nonlocal end_signal_streak, end_signal_first_ts
 
         reported = json_data.get("state", {}).get("reported", {})
@@ -551,6 +597,7 @@ def make_mission_callback(
             mission_start_ts = mission.get("mssnStrtTm") or 0
             bbrun = _merged_top_level(entry, reported, "bbrun")
             nstuck_at_start = bbrun.get("nStuck", 0)
+            npicks_at_start = bbrun.get("nPicks", 0)
             recharge_min_accumulator = 0
             current_leg_rechrgM = 0
             last_recharge_phase_ts = 0.0
@@ -947,6 +994,7 @@ def make_mission_callback(
             end_signal_first_ts = 0.0
             bbrun_end = _merged_top_level(entry, reported, "bbrun")
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
+            npicks_delta = max(0, bbrun_end.get("nPicks", 0) - npicks_at_start)
 
             # F6h — classify stuck recovery outcome
             result_override: str | None = None
@@ -976,6 +1024,7 @@ def make_mission_callback(
                     nstuck_delta=nstuck_delta,
                     recharge_min=recharge_min_accumulator + current_leg_rechrgM,  # F4e
                     result_override=result_override,         # F6h
+                    npicks_delta=npicks_delta,                # v3.2.0 ANOMALY-EXPLAIN
                 ),
                 hass.loop,
             )
@@ -987,6 +1036,13 @@ def make_mission_callback(
             current_mission_zones = []
             mission_start_ts = 0
             nstuck_at_start = 0
+            npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
+                                   # inconsistent with nstuck_at_start's
+                                   # defensive reset right above it (both
+                                   # get re-captured at the next mission's
+                                   # actual start too, but this guards
+                                   # against a stale cross-mission value if
+                                   # that re-capture were ever skipped)
             recharge_min_accumulator = 0
             current_leg_rechrgM = 0
             last_recharge_phase_ts = 0.0
@@ -1837,6 +1893,45 @@ def make_cloud_refresh_callback(
             hass.async_create_task(
                 async_check_stuck_pattern(hass, config_entry),
                 name="roomba_plus_l7_stuck_pattern_check",
+            )
+        # v3.2.0 bug-hunt fix — the following four checks (ROOM-ACCESS,
+        # FURNITURE, STUCK-HOTSPOT, COVERAGE-FREQ) were built and tested
+        # as standalone functions but never actually dispatched from
+        # anywhere in the running integration — the tests call them
+        # directly, which passed, but nothing in production ever would
+        # have. Found via a systematic post-release check for exactly
+        # this "function exists, never called" pattern (the same class of
+        # bug independently found twice earlier this session in
+        # pre-existing code). This is the correct hook: same
+        # cloud-refresh cadence L10's async_check_health_trend_declining
+        # already uses via its sensor's coordinator listener, and the
+        # same dispatch pattern every other repairs.py check on this
+        # callback already follows.
+        if (
+            config_entry.runtime_data.umf_aligner is not None
+            and config_entry.runtime_data.grid_store is not None
+        ):
+            from .repairs import async_check_room_accessibility
+            hass.async_create_task(
+                async_check_room_accessibility(hass, config_entry),
+                name="roomba_plus_room_accessibility_check",
+            )
+        if config_entry.runtime_data.grid_store is not None:
+            from .repairs import async_check_furniture_change
+            hass.async_create_task(
+                async_check_furniture_change(hass, config_entry),
+                name="roomba_plus_furniture_change_check",
+            )
+            from .repairs import async_check_stuck_hotspot
+            hass.async_create_task(
+                async_check_stuck_hotspot(hass, config_entry),
+                name="roomba_plus_stuck_hotspot_check",
+            )
+        if config_entry.runtime_data.mission_store is not None:
+            from .repairs import async_check_coverage_frequency
+            hass.async_create_task(
+                async_check_coverage_frequency(hass, config_entry),
+                name="roomba_plus_coverage_frequency_check",
             )
         from .repairs import async_check_smberr
         hass.async_create_task(

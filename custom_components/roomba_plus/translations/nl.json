@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Integratiegezondheid"
+      },
+      "dock_firmware_version": {
+        "name": "Dock-firmwareversie"
+      },
+      "last_mission_team_id": {
+        "name": "Missies – Team-ID van laatste missie"
+      },
+      "reset_diagnostics": {
+        "name": "Reset-diagnostiek"
+      },
+      "health_score_trend": {
+        "name": "Gezondheidsscore-trend",
+        "state": {
+          "improving": "Verbetert",
+          "stable": "Stabiel",
+          "declining": "Verslechtert",
+          "unknown": "Onbekend"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Toegankelijkheidsscores per kamer"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware bijgewerkt"
+      },
+      "layout_change_detected": {
+        "name": "Indelingswijziging gedetecteerd"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Instelling – Schema onderbreken"
+      },
+      "child_lock": {
+        "name": "Instelling – Kinderslot"
+      },
+      "eco_charge": {
+        "name": "Instelling – Eco opladen"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "MQTT-verbinding van robot verloren tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: onbekend (dit veld is niet beschikbaar op deze firmware). Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
+    },
+    "health_trend_declining": {
+      "title": "Gezondheidsscore-trend verslechtert",
+      "description": "Roomba+ heeft vastgesteld dat de samengestelde gezondheidsscore al {days} opeenvolgende dagen onder de eigen vastgestelde basislijn van deze robot ligt. Dit kan wijzen op beginnende mechanische slijtage, navigatieproblemen of veranderende omgevingsomstandigheden — controleer de afzonderlijke signalen (batterijbehoud, navigatie-efficiëntie, reinigingssnelheid, missie-anomalieën, vastloop-percentage) voor de waarschijnlijke oorzaak."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: lage toegankelijkheidsscore",
+      "description": "{room} behaalde een toegankelijkheidsscore van {score}/100, vanwege {reason}. Controleer deze kamer op obstakels, smalle doorgangen of meubels die het vermogen van de robot om effectief te reinigen kunnen beperken."
+    },
+    "layout_change_detected": {
+      "title": "Mogelijke indelingswijziging gedetecteerd",
+      "description": "Een plek bij ({x_mm}, {y_mm}) werd lange tijd betrouwbaar gereinigd en is nu meerdere missies achter elkaar overgeslagen — een teken dat nieuw meubilair of een ander obstakel deze plek kan blokkeren. Controleer het gebied, of negeer als dit verwacht was."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Terugkerende vastloopplek gedetecteerd",
+      "description": "De robot is herhaaldelijk vastgelopen bij een cluster van {cell_count} cellen in {room} (peiling {bearing}° vanaf het dock, {stuck_count} vastloopgebeurtenissen daar geregistreerd, momenteel duidelijk slechter gedekt dan de omgeving). Controleer het gebied op een obstakel."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} is mogelijk te lang niet gereinigd",
+      "description": "{room} is voor het laatst {days_since_last} dagen geleden gereinigd — merkbaar langer dan het ritme van ongeveer {expected_interval_days} dagen dat deze robot voor die kamer heeft vastgesteld op basis van zijn eigen reinigingsgeschiedenis. Controleer of het schema de kamer nog dekt, of de kamer onlangs ontoegankelijk was."
     }
   },
   "device_automation": {

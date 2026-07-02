@@ -630,6 +630,15 @@ class MissionArchive:
         traversal_rids: list[str] = []
         rooms_completed: dict[str, dict] = {}
         rooms_interrupted: list[str] = []
+        # v3.2.0 ROOM-ACCESS — every "room" finEvent's (rid, ts), regardless
+        # of status, in original finEvents order. Confirmed via a real
+        # captured cloud payload (PyRoomba r.json, see
+        # MISSIONSTORE_FIELD_REGISTRY.md) that finEvents[].ts is a genuine
+        # per-event timestamp, not a constant — this is what makes
+        # time-per-room derivable at all (ts deltas between consecutive
+        # room events), which traversal_rids alone (just a deduplicated rid
+        # list, no timing) can't provide.
+        room_visits: list[dict[str, Any]] = []
         recharge_count = 0
         evac_count = 0
         kidnap_count = 0
@@ -653,6 +662,9 @@ class MissionArchive:
                 status = room.get("status")
                 if not rid:
                     continue
+                ev_ts = _safe_int(ev.get("ts"))
+                if ev_ts:
+                    room_visits.append({"rid": rid, "ts": ev_ts})
                 if status in (0, 6):    # 0=complete, 6=complete after recovery
                     rooms_completed[rid] = {
                         "passes": _safe_int(room.get("passCount")),
@@ -734,6 +746,7 @@ class MissionArchive:
             "pmapv_id":           pmapv_id,
             # From finEvents
             "traversal_rids":     traversal_rids,
+            "room_visits":        room_visits,   # v3.2.0 ROOM-ACCESS
             "planned_room_order": planned_rids,
             "rooms_completed":    rooms_completed,
             "rooms_interrupted":  rooms_interrupted,
@@ -896,6 +909,65 @@ class MissionArchive:
         replacing the 100-record window previously used by raw_records.
         """
         return [r for r in self._derived if r.get("traversal_rids")]
+
+    def find_by_nMssn(self, n_mssn: int) -> dict[str, Any] | None:
+        """v3.2.0 MISSION-REPLAY — look up a specific derived record by
+        its nMssn (mission number), or None if not found. Mirrors
+        MissionStore.find_by_id()'s linear scan — record counts are
+        bounded (MAX_RECORDS), not a hot path worth indexing.
+        """
+        for r in self._derived:
+            if _safe_int(r.get("nMssn")) == n_mssn:
+                return r
+        return None
+
+    @staticmethod
+    def mission_path(room_visits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """v3.2.0 MISSION-REPLAY — collapse a mission's raw room_visits
+        into a clean room-transition timeline: consecutive entries for
+        the same rid collapse into one (keeping the FIRST timestamp of
+        that run — "when did the robot arrive here", not every individual
+        room finEvent). Room-name resolution deliberately isn't done here
+        — that needs cloud_coordinator.regions (SMART) or
+        room_seg_store.rooms (EPHEMERAL), neither of which MissionArchive
+        owns; the caller (api_views.py) resolves rid -> display name.
+
+        Returns [{"rid": str, "ts": int}, ...] in chronological order.
+        """
+        path: list[dict[str, Any]] = []
+        for visit in room_visits:
+            if path and path[-1]["rid"] == visit["rid"]:
+                continue
+            path.append({"rid": visit["rid"], "ts": visit["ts"]})
+        return path
+
+    @staticmethod
+    def time_per_room(room_visits: list[dict[str, Any]]) -> dict[str, int]:
+        """v3.2.0 ROOM-ACCESS — derive seconds spent per room from a single
+        mission's room_visits list, via ts deltas between consecutive
+        entries.
+
+        The delta between visit[i].ts and visit[i+1].ts is attributed to
+        visit[i].rid — i.e. "how long until the NEXT room event fired" is
+        treated as time spent in the room that just finished/was being
+        cleaned. The final entry has no "next" to delta against and
+        contributes nothing (its dwell time isn't bounded by this mission's
+        own data). Multiple entries for the same rid (re-entry after being
+        interrupted) accumulate.
+
+        Returns {} for fewer than 2 entries — a single event has no delta
+        to compute at all.
+        """
+        if len(room_visits) < 2:
+            return {}
+
+        totals: dict[str, int] = {}
+        for i in range(len(room_visits) - 1):
+            rid = room_visits[i]["rid"]
+            delta = room_visits[i + 1]["ts"] - room_visits[i]["ts"]
+            if delta > 0:
+                totals[rid] = totals.get(rid, 0) + delta
+        return totals
 
     def raw_finEvents(self, n_mssn: int) -> list | None:
         """Return Layer 3 raw finEvents for a given mission number, or None."""

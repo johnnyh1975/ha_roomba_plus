@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # F7o -- valid format values; unknown values return 400
-_VALID_FORMATS = {"summary", "records", "hazards", "export"}
+_VALID_FORMATS = {"summary", "records", "hazards", "export", "zone_coverage_health"}
 
 
 def _build_local_zones_index(mission_store_records: list[dict]) -> dict[int, list[str]]:
@@ -275,6 +275,21 @@ class MissionHistoryView(HomeAssistantView):
             ]
             return self.json(result)
 
+        # -- format=zone_coverage_health ---------------------------------------
+        # v3.2.0 COVERAGE-FREQ — per-room self-calibrated cleaning-cadence
+        # health. A distinct format value rather than a field bolted onto
+        # format=summary's response: that endpoint returns a bare array
+        # (the existing card already consumes it as such), and
+        # zone_coverage_health is a per-room snapshot, not a per-day
+        # metric — it doesn't have a natural slot inside a day-by-day
+        # array without either breaking that array's existing shape or
+        # duplicating the same room data onto every day entry.
+        if fmt == "zone_coverage_health":
+            if data.mission_store is None:
+                return self.json({}, status_code=200)
+            result = data.mission_store.room_coverage_health(dt_util.now().isoformat())
+            return self.json(result)
+
         # -- format=hazards ---------------------------------------------------
         # F9 — returns GridStore stuck hotspots and UMF-seeded obstacle zones.
         if fmt == "hazards":
@@ -418,6 +433,119 @@ class MissionHistoryView(HomeAssistantView):
         return self.json(records)
 
 
+class ExplainMissionView(HomeAssistantView):
+    """GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
+
+    v3.2.0 ANOMALY-EXPLAIN — REST counterpart to the explain_mission
+    service. Both delegate to MissionStore.explain_mission() so the
+    explanation logic lives in exactly one place.
+
+    mission_id path segment "latest" resolves to the most recent mission
+    instead of requiring the caller to already know a specific mission id
+    (mirrors the service's mission_id=None default).
+    """
+
+    url = "/api/roomba_plus/{entry_id}/mission/{mission_id}/explain"
+    name = "api:roomba_plus:mission_explain"
+    requires_auth = True
+
+    async def get(
+        self, request: web.Request, entry_id: str, mission_id: str
+    ) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN:
+            return self.json_message("Entry not found", status_code=404)
+
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            return self.json_message("Integration initialising", status_code=503)
+
+        data: RoombaData = entry.runtime_data
+        if data.mission_store is None:
+            return self.json_message("No mission history available", status_code=404)
+
+        resolved_id = None if mission_id == "latest" else mission_id
+        result = data.mission_store.explain_mission(resolved_id)
+        if result is None:
+            return self.json_message("Mission not found", status_code=404)
+
+        return self.json(result)
+
+
+class MissionPathView(HomeAssistantView):
+    """GET /api/roomba_plus/{entry_id}/mission/{nMssn}/path
+
+    v3.2.0 MISSION-REPLAY — room-granular post-hoc reconstruction of a
+    mission's path: "Robot was in Kitchen at 09:05, Hallway at 09:23,
+    Bedroom at 09:31." Not pixel-accurate pose tracking — built from
+    MissionArchive.mission_path()'s collapsed room_visits (same data
+    ROOM-ACCESS's traversal-efficiency signal already uses), so this
+    needed far less new code than originally scoped: the underlying
+    room_visits extraction already existed.
+
+    Room-name resolution: cloud_coordinator.regions (SMART tier) or
+    room_seg_store.rooms[rid].name (EPHEMERAL tier) — whichever the
+    entry has available. Falls back to the raw rid when neither
+    resolves a name for a given room.
+    """
+
+    url = "/api/roomba_plus/{entry_id}/mission/{n_mssn}/path"
+    name = "api:roomba_plus:mission_path"
+    requires_auth = True
+
+    async def get(
+        self, request: web.Request, entry_id: str, n_mssn: str
+    ) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None or entry.domain != DOMAIN:
+            return self.json_message("Entry not found", status_code=404)
+
+        if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+            return self.json_message("Integration initialising", status_code=503)
+
+        data: RoombaData = entry.runtime_data
+        archive = getattr(data, "mission_archive", None)
+        if archive is None:
+            return self.json_message("No mission archive available", status_code=404)
+
+        try:
+            n_mssn_int = int(n_mssn)
+        except ValueError:
+            return self.json_message("Invalid mission number", status_code=400)
+
+        record = archive.find_by_nMssn(n_mssn_int)
+        if record is None:
+            return self.json_message("Mission not found", status_code=404)
+
+        from .mission_archive import MissionArchive, _ts_to_iso
+        room_visits = record.get("room_visits") or []
+        path = MissionArchive.mission_path(room_visits)
+
+        id_to_name: dict[str, str] = {}
+        cc = data.cloud_coordinator
+        if cc is not None and cc.regions:
+            id_to_name = {
+                r["id"]: r["name"] for r in cc.regions if r.get("id") and r.get("name")
+            }
+        elif getattr(data, "room_seg_store", None) is not None:
+            id_to_name = {
+                rid: room.name
+                for rid, room in data.room_seg_store.rooms.items()
+                if room.name
+            }
+
+        timeline = [
+            {
+                "room": id_to_name.get(step["rid"], step["rid"]),
+                "time": _ts_to_iso(step["ts"]),
+            }
+            for step in path
+        ]
+
+        return self.json({"nMssn": n_mssn_int, "path": timeline})
+
+
 class MissionHistoryImportView(HomeAssistantView):
     """POST /api/roomba_plus/{entry_id}/mission_history/import
 
@@ -486,14 +614,44 @@ class MissionHistoryImportView(HomeAssistantView):
         skipped = 0
         errors: list[str] = []
 
+        def _record_type_errors(rec: dict) -> str | None:
+            """v3.2.0 full-review fix — field-TYPE validation, previously
+            absent entirely: a record only needed an `id` to be accepted,
+            so e.g. `\"ended_at\": 12345` (int instead of ISO string) was
+            persisted as-is and then crashed room_coverage_health() — and
+            every other consumer that feeds timestamps to
+            dt_util.parse_datetime — on EVERY subsequent cloud-refresh
+            cycle, permanently, since the poisoned record survives
+            restarts. Reproduced directly before this fix. Validating
+            once at the import gate beats making every one of the many
+            store consumers individually defensive."""
+            for key in ("started_at", "ended_at", "result", "initiator"):
+                if key in rec and rec[key] is not None and not isinstance(rec[key], str):
+                    return f"field {key!r} must be a string or null"
+            for key in ("duration_min", "area_sqft", "error_code", "bbrun_hr"):
+                if key in rec and rec[key] is not None and not isinstance(rec[key], (int, float)):
+                    return f"field {key!r} must be a number or null"
+            for key in ("zones", "last_cleaned_rooms"):
+                if key in rec and rec[key] is not None:
+                    if not isinstance(rec[key], list) or not all(
+                        isinstance(z, str) for z in rec[key]
+                    ):
+                        return f"field {key!r} must be a list of strings or null"
+            return None
+
         for i, rec in enumerate(incoming):
             if not isinstance(rec, dict):
                 errors.append(f"Record at index {i} is not a dict — skipped")
                 skipped += 1
                 continue
             rec_id = rec.get("id")
-            if not rec_id:
-                errors.append(f"Record at index {i} has no id field — skipped")
+            if not rec_id or not isinstance(rec_id, str):
+                errors.append(f"Record at index {i} has no string id field — skipped")
+                skipped += 1
+                continue
+            type_error = _record_type_errors(rec)
+            if type_error is not None:
+                errors.append(f"Record {rec_id!r}: {type_error} — skipped")
                 skipped += 1
                 continue
             if rec_id in existing_ids:

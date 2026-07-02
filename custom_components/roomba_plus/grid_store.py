@@ -45,6 +45,23 @@ VISIT_INCREMENT        = 0.30
 PRUNE_THRESHOLD        = 0.05
 STUCK_HOTSPOT_THRESHOLD = 3
 
+# v3.2.0 FURNITURE — rolling per-cell coverage-history bitmask, bit 0 =
+# most recent mission. Recent-absence window (bits 0..2) must be all-zero
+# for a cell to be a candidate; the established window (bits 3..22, the
+# 20 missions before that) needs at least _FURNITURE_ESTABLISHED_MIN_HITS
+# set — not all 20, so a robot that occasionally misses a cell for
+# unrelated reasons (mid-mission stop, brief obstacle) doesn't reset the
+# "this used to be reliably covered" signal.
+_FURNITURE_RECENT_ABSENT       = 3
+_FURNITURE_ESTABLISHED_WINDOW  = 20
+_FURNITURE_ESTABLISHED_MIN_HITS = 18
+_FURNITURE_WINDOW_BITS = _FURNITURE_RECENT_ABSENT + _FURNITURE_ESTABLISHED_WINDOW
+_FURNITURE_HISTORY_MASK = (1 << _FURNITURE_WINDOW_BITS) - 1
+_FURNITURE_RECENT_MASK = (1 << _FURNITURE_RECENT_ABSENT) - 1
+_FURNITURE_ESTABLISHED_MASK = (
+    ((1 << _FURNITURE_ESTABLISHED_WINDOW) - 1) << _FURNITURE_RECENT_ABSENT
+)
+
 
 def _mm_to_cell(x_mm: float, y_mm: float) -> tuple[int, int]:
     """Convert dock-relative mm coordinates to integer grid cell indices."""
@@ -131,6 +148,22 @@ class GridStore:
         # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
         # can coexist safely if future callers use non-default parameters.
         self._edge_ratio_cache: dict[float, float] = {}
+        # v3.2.0 FURNITURE — rolling per-cell coverage-history bitmask
+        # (bit 0 = most recent mission) + a companion age counter so a
+        # freshly-tracked cell (fewer than _FURNITURE_WINDOW_BITS missions
+        # of history) isn't mistaken for "was covered, now isn't" — the
+        # zero-padding from before the cell was ever tracked would
+        # otherwise look identical to genuine absence.
+        self._coverage_history: dict[tuple[int, int], int] = {}
+        self._coverage_history_age: dict[tuple[int, int], int] = {}
+        # v3.2.0 FURNITURE — when a cell's Repair Issue has been dismissed
+        # by the user, records WHEN (HA's own issue registry tracks THAT
+        # it was dismissed via dismissed_version, but not WHEN — see
+        # repairs.py's async_check_furniture_change). ISO timestamp
+        # string, keyed by cell. Cleared once 30 days have passed, at
+        # which point the issue is allowed to fire again if the
+        # candidate condition still holds.
+        self._furniture_dismissed_at: dict[tuple[int, int], str] = {}
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -179,10 +212,34 @@ class GridStore:
                 "GridStore: loaded %d cell(s), %d stuck cell(s) for %s",
                 len(self._cells), len(self._stuck), entry_id,
             )
+            # v3.2.0 FURNITURE — additive field, no PAYLOAD_VERSION bump
+            # needed: a payload saved before this existed simply has no
+            # "coverage_history" key, which is indistinguishable from (and
+            # exactly as safe as) a fresh cold start for this specific
+            # tracker — unlike the v1->v2 pose-units case above, old data
+            # here isn't wrong, just incomplete.
+            raw_history = data.get("coverage_history") or {}
+            self._coverage_history = {
+                (int(k.split(",")[0]), int(k.split(",")[1])): int(v)
+                for k, v in raw_history.items()
+            }
+            raw_age = data.get("coverage_history_age") or {}
+            self._coverage_history_age = {
+                (int(k.split(",")[0]), int(k.split(",")[1])): int(v)
+                for k, v in raw_age.items()
+            }
+            raw_dismissed = data.get("furniture_dismissed_at") or {}
+            self._furniture_dismissed_at = {
+                (int(k.split(",")[0]), int(k.split(",")[1])): str(v)
+                for k, v in raw_dismissed.items()
+            }
         except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
             self._stuck = {}
+            self._coverage_history = {}
+            self._coverage_history_age = {}
+            self._furniture_dismissed_at = {}
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
@@ -194,6 +251,15 @@ class GridStore:
             "stuck": {
                 f"{gx},{gy}": {"count": v["count"], "times": v["times"]}
                 for (gx, gy), v in self._stuck.items()
+            },
+            "coverage_history": {
+                f"{gx},{gy}": bm for (gx, gy), bm in self._coverage_history.items()
+            },
+            "coverage_history_age": {
+                f"{gx},{gy}": age for (gx, gy), age in self._coverage_history_age.items()
+            },
+            "furniture_dismissed_at": {
+                f"{gx},{gy}": ts for (gx, gy), ts in self._furniture_dismissed_at.items()
             },
         })
 
@@ -263,6 +329,18 @@ class GridStore:
             touched = {_mm_to_cell(x, y) for x, y in pose_points}
         for cell in touched:
             self._cells[cell] = min(1.0, self._cells.get(cell, 0.0) + VISIT_INCREMENT)
+
+        # v3.2.0 FURNITURE — shift every tracked cell's coverage-history
+        # bitmask by one mission, same "applies to every tracked cell
+        # regardless of whether THIS mission went anywhere near it"
+        # characteristic as the EMA decay above (step 1) — a partial-home
+        # clean will shift in a 0 for untouched rooms' cells exactly like
+        # it already decays their EMA score. Known trade-off: a robot
+        # doing frequent single-room quick-cleans could reach the
+        # "3 consecutive misses" threshold for other rooms sooner than a
+        # robot doing mostly full-home cleans. Not specially guarded
+        # against here, matching the existing EMA precedent.
+        self._update_coverage_history(touched)
 
         # 3. Record stuck events with optional time context
         for x_mm, y_mm in stuck_points:
@@ -426,6 +504,102 @@ class GridStore:
             })
         return sorted(result, key=lambda h: h["stuck_count"], reverse=True)
 
+    def stuck_clusters(
+        self,
+        threshold: int = STUCK_HOTSPOT_THRESHOLD,
+        min_cluster_size: int = 2,
+    ) -> list[dict[str, Any]]:
+        """v3.2.0 STUCK-HOTSPOT — group adjacent hotspot cells (8-connectivity)
+        into clusters, one physical obstacle typically spanning multiple
+        150mm cells.
+
+        Reinterpreted from the original "cluster stuck-rate > 40%" spec
+        wording — GridStore doesn't track missions-that-passed-nearby, so
+        a genuine rate isn't computable. Two or more independently
+        hotspot-qualifying adjacent cells is itself a stronger signal than
+        a single outlier cell would be (physically near-impossible to be
+        coincidence at 150mm cell size — that's roughly furniture-leg
+        scale), so the min_cluster_size floor does real work here rather
+        than being an arbitrary substitute.
+
+        coverage_impact_pp: cluster's mean EMA coverage weight minus the
+        mean EMA weight of the cells immediately surrounding it (each
+        cluster cell's 8-neighbours that aren't themselves in the
+        cluster) — in percentage points. A meaningfully NEGATIVE value
+        (cluster covered far less than its own surroundings) is the
+        honestly-computable stand-in for "coverage impact": None when
+        there's no surrounding-cell data to compare against yet.
+
+        Returns clusters sorted by total stuck count, descending. Each:
+        {"cells": [(gx,gy), ...], "stuck_count": int, "x_mm": float,
+         "y_mm": float, "coverage_impact_pp": float | None}
+        """
+        hotspot_cells = {
+            cell for cell, v in self._stuck.items() if v["count"] >= threshold
+        }
+        if not hotspot_cells:
+            return []
+
+        visited: set[tuple[int, int]] = set()
+        clusters: list[dict[str, Any]] = []
+
+        for start in hotspot_cells:
+            if start in visited:
+                continue
+            # Flood-fill via BFS over 8-connected hotspot neighbours
+            group = {start}
+            frontier = [start]
+            visited.add(start)
+            while frontier:
+                gx, gy = frontier.pop()
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        neighbour = (gx + dx, gy + dy)
+                        if neighbour in hotspot_cells and neighbour not in visited:
+                            visited.add(neighbour)
+                            group.add(neighbour)
+                            frontier.append(neighbour)
+
+            if len(group) < min_cluster_size:
+                continue
+
+            total_stuck = sum(self._stuck[cell]["count"] for cell in group)
+            xs, ys = zip(*(_cell_to_mm(*cell) for cell in group))
+            centroid_x, centroid_y = sum(xs) / len(xs), sum(ys) / len(ys)
+
+            surrounding: set[tuple[int, int]] = set()
+            for gx, gy in group:
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        neighbour = (gx + dx, gy + dy)
+                        if neighbour not in group:
+                            surrounding.add(neighbour)
+
+            coverage_impact_pp: float | None = None
+            surrounding_weights = [
+                self._cells[c] for c in surrounding if c in self._cells
+            ]
+            if surrounding_weights:
+                cluster_mean = sum(
+                    self._cells.get(c, 0.0) for c in group
+                ) / len(group)
+                surrounding_mean = sum(surrounding_weights) / len(surrounding_weights)
+                coverage_impact_pp = (cluster_mean - surrounding_mean) * 100.0
+
+            clusters.append({
+                "cells": sorted(group),
+                "stuck_count": total_stuck,
+                "x_mm": centroid_x,
+                "y_mm": centroid_y,
+                "coverage_impact_pp": coverage_impact_pp,
+            })
+
+        return sorted(clusters, key=lambda c: c["stuck_count"], reverse=True)
+
     def stuck_pattern(
         self,
         threshold: int = 8,
@@ -524,6 +698,173 @@ class GridStore:
                         visited += 1
             result[rid] = visited / total if total > 0 else 0.0
         return result
+
+    def stuck_by_polygon(
+        self,
+        polygons_pose: dict[str, list[tuple[float, float]]],
+    ) -> dict[str, int]:
+        """v3.2.0 ROOM-ACCESS — return per-room stuck-event count from
+        polygon intersection.
+
+        Same bounding-box + ray-casting point-in-polygon approach as
+        coverage_by_polygon(), applied to self._stuck instead of
+        self._cells. Returns raw counts (not a rate/fraction) — the
+        caller (RobotProfileStore's room-accessibility scoring) decides
+        how to normalise against room size / visited-cell count; this
+        method stays a plain data provider, same division of
+        responsibility as stuck_event_count() (also a raw int, no scoring
+        built in).
+
+        polygons_pose: {rid: [(x_mm, y_mm), ...]} — vertices in pose space (mm).
+        Returns {rid: count}. Empty dict when no stuck events recorded at all.
+        """
+        result: dict[str, int] = {}
+        if not self._stuck:
+            return result
+
+        for rid, polygon in polygons_pose.items():
+            if len(polygon) < 3:
+                result[rid] = 0
+                continue
+            half = CELL_SIZE_MM / 2
+            min_x = min(p[0] for p in polygon) - half
+            max_x = max(p[0] for p in polygon) + half
+            min_y = min(p[1] for p in polygon) - half
+            max_y = max(p[1] for p in polygon) + half
+
+            count = 0
+            for (gx, gy), v in self._stuck.items():
+                cx, cy = _cell_to_mm(gx, gy)
+                if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
+                    continue
+                if not _point_in_polygon_grid(cx, cy, polygon):
+                    continue
+                count += v.get("count", 0)
+            result[rid] = count
+        return result
+
+    def _update_coverage_history(self, touched: set[tuple[int, int]]) -> None:
+        """v3.2.0 FURNITURE — shift every tracked cell's rolling coverage
+        bitmask by one mission (bit 0 = most recent), setting bit 0 when
+        the cell is in `touched` this mission. Tracks every cell that
+        either has existing history OR was touched this mission — bounded
+        by the same visited-cell set the EMA/stuck tracking already uses,
+        not the full grid.
+
+        A cell whose bitmask decays to 0 (no history left in the tracked
+        window at all) is dropped from _coverage_history entirely, same
+        pruning spirit as EMA's PRUNE_THRESHOLD cleanup — keeps the dict
+        from retaining cells with nothing left to say.
+        """
+        cells_to_update = set(self._coverage_history.keys()) | touched
+        for cell in cells_to_update:
+            bitmask = self._coverage_history.get(cell, 0)
+            bitmask = (bitmask << 1) & _FURNITURE_HISTORY_MASK
+            if cell in touched:
+                bitmask |= 1
+            age = self._coverage_history_age.get(cell, 0)
+            # Cap the age counter — it only needs to reach
+            # _FURNITURE_WINDOW_BITS to unlock "established" eligibility;
+            # let it keep incrementing a little past that for headroom,
+            # but there's no reason to let it grow unbounded forever.
+            self._coverage_history_age[cell] = min(age + 1, _FURNITURE_WINDOW_BITS * 2)
+
+            if bitmask == 0:
+                self._coverage_history.pop(cell, None)
+                self._coverage_history_age.pop(cell, None)
+            else:
+                self._coverage_history[cell] = bitmask
+
+    def furniture_candidates(self) -> list[dict[str, Any]]:
+        """v3.2.0 FURNITURE — cells that were reliably covered for a long
+        stretch and have now been absent for _FURNITURE_RECENT_ABSENT
+        consecutive missions — a candidate signature for new furniture or
+        another obstacle now blocking that spot.
+
+        Returns a list of {"cell": (gx, gy), "x_mm": float, "y_mm": float}
+        dicts, one per candidate cell. Empty list when nothing qualifies
+        (the common case — most cells are either still being covered, or
+        never had enough history to judge either way).
+        """
+        results: list[dict[str, Any]] = []
+        for cell, bitmask in self._coverage_history.items():
+            if self._coverage_history_age.get(cell, 0) < _FURNITURE_WINDOW_BITS:
+                continue  # not enough history yet to distinguish from "never tracked"
+            if bitmask & _FURNITURE_RECENT_MASK != 0:
+                continue  # covered at least once in the recent window — not "gone"
+            established_hits = bin(bitmask & _FURNITURE_ESTABLISHED_MASK).count("1")
+            if established_hits < _FURNITURE_ESTABLISHED_MIN_HITS:
+                continue  # wasn't reliably covered before either — nothing changed
+            x_mm, y_mm = _cell_to_mm(*cell)
+            results.append({"cell": cell, "x_mm": x_mm, "y_mm": y_mm})
+        return results
+
+    def furniture_readiness(self) -> dict[str, Any]:
+        """v3.2.0 UX fix — progress indicator for FURNITURE's learning
+        phase, so a fresh install shows something more informative than
+        a silently empty binary_sensor.*_layout_change_detected for the
+        first _FURNITURE_WINDOW_BITS (23) missions, with no way to tell
+        "still learning" apart from "nothing to report, everything's
+        fine" (the two states currently look identical, which was
+        exactly the gap this method exists to close).
+
+        most_mature_cell_age is the highest _coverage_history_age value
+        across all currently-tracked cells — a proxy for "how far along
+        is the most-established part of the floor plan", since readiness
+        is inherently per-cell, not a single robot-wide count the way
+        L10's day-based history is.
+
+        Returns {"cells_tracked": int, "most_mature_cell_age": int,
+        "missions_until_first_ready": int}.
+        """
+        if not self._coverage_history_age:
+            return {
+                "cells_tracked": 0,
+                "most_mature_cell_age": 0,
+                "missions_until_first_ready": _FURNITURE_WINDOW_BITS,
+            }
+        most_mature = min(
+            max(self._coverage_history_age.values()), _FURNITURE_WINDOW_BITS
+        )
+        return {
+            "cells_tracked": len(self._coverage_history_age),
+            "most_mature_cell_age": most_mature,
+            "missions_until_first_ready": max(0, _FURNITURE_WINDOW_BITS - most_mature),
+        }
+
+    def furniture_dismiss_suppressed(
+        self, cell: tuple[int, int], now_iso: str, suppress_days: int = 30,
+    ) -> bool:
+        """v3.2.0 FURNITURE — True if this cell's Repair Issue was
+        dismissed less than `suppress_days` ago (GridStore stays
+        HA-free — caller passes now_iso as a plain ISO string, same
+        pattern as stuck_wh elsewhere in this file).
+
+        Parses both timestamps as plain date-only comparisons (YYYY-MM-DD
+        prefix) to avoid needing a datetime/timezone dependency in this
+        module — a day's worth of imprecision at the suppression boundary
+        doesn't matter for a 30-day window.
+        """
+        dismissed_at = self._furniture_dismissed_at.get(cell)
+        if dismissed_at is None:
+            return False
+        try:
+            from datetime import date
+            d_dismissed = date.fromisoformat(dismissed_at[:10])
+            d_now = date.fromisoformat(now_iso[:10])
+        except ValueError:
+            return False
+        return (d_now - d_dismissed).days < suppress_days
+
+    def record_furniture_dismissed(self, cell: tuple[int, int], now_iso: str) -> None:
+        """Record that this cell's issue was just observed as dismissed."""
+        self._furniture_dismissed_at[cell] = now_iso
+
+    def clear_furniture_dismissed(self, cell: tuple[int, int]) -> None:
+        """Clear a cell's dismiss record — called once the 30-day window
+        has elapsed, allowing the issue to fire again if still a
+        candidate."""
+        self._furniture_dismissed_at.pop(cell, None)
 
     def render_heatmap(self, size_px: int = 400) -> bytes | None:
         """Render the occupancy grid as a PNG heatmap.

@@ -38,6 +38,7 @@ from .const import (
     MAP_UPDATING_NOT_READY_BIT,
     SERVICE_CLEAN_ROOM,
     SERVICE_CLEAN_SEQUENCE,
+    SERVICE_EXPLAIN_MISSION,
     SERVICE_RESET_BATTERY,
     SERVICE_RESET_BRUSH,
     SERVICE_RESET_FILTER,
@@ -662,6 +663,52 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
         _LOGGER.info("reset_robot_profile: executed for %s", eid)
 
 
+# ── v3.2.0 ANOMALY-EXPLAIN ──────────────────────────────────────────────────
+
+async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
+    """Handle roomba_plus.explain_mission.
+
+    Rule-based explanation for why a mission was flagged anomalous (L3).
+    Resolves in this order:
+      1. mission_id explicitly given → look it up directly.
+      2. mission_id omitted → most recent mission, whether anomalous or not
+         (the response's is_anomalous field tells the caller which case it is
+         — this lets "explain the last mission" work as a general-purpose
+         call, not just for missions already known to be anomalous).
+
+    Returns three independent pieces of information, not a single merged
+    verdict — anomaly_reason (one of a fixed priority order, or None),
+    robot_lifted (bbrun.nPicks delta > 0 during that specific mission), and
+    error_code (the mission's own recorded error, if any) can all apply
+    simultaneously and don't compete with each other for "the" explanation.
+    """
+    entity_id: str = call.data["entity_id"]
+    mission_id: str | None = call.data.get("mission_id")
+
+    ent_reg = er.async_get(call.hass)
+    entry_reg = ent_reg.async_get(entity_id)
+    if entry_reg is None:
+        raise ServiceValidationError(f"explain_mission: entity not found: {entity_id}")
+    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    if config_entry is None:
+        raise ServiceValidationError(
+            f"explain_mission: config entry not found for {entity_id}"
+        )
+
+    data: RoombaData = config_entry.runtime_data
+    mission_store = getattr(data, "mission_store", None)
+    if mission_store is None:
+        raise ServiceValidationError(f"explain_mission: no mission history for {entity_id}")
+
+    result = mission_store.explain_mission(mission_id)
+    if result is None:
+        raise ServiceValidationError(
+            f"explain_mission: mission not found for {entity_id}"
+            + (f" (id={mission_id})" if mission_id is not None else "")
+        )
+    return result
+
+
 # ── F10d — clean_sequence ─────────────────────────────────────────────────────
 
 _CLEAN_SEQUENCE_SCHEMA = vol.Schema({
@@ -872,6 +919,20 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_SEQUENCE)
 
+    # ── v3.2.0 ANOMALY-EXPLAIN — explain_mission ───────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_EXPLAIN_MISSION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_EXPLAIN_MISSION,
+            async_handle_explain_mission,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Optional("mission_id"): cv.string,
+            }),
+            supports_response=SupportsResponse.ONLY,
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_EXPLAIN_MISSION)
+
     # ── ADVANCE-ROOM-V2 (v2.8.0) — manual room-progress override ─────────────
     if not hass.services.has_service(DOMAIN, "advance_room"):
         hass.services.async_register(
@@ -982,6 +1043,7 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "reset_bin_cleaning",
         "reset_robot_profile",
         "advance_room",
+        SERVICE_EXPLAIN_MISSION,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

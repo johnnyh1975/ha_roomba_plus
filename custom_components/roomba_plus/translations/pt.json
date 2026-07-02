@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Integridade da integração"
+      },
+      "dock_firmware_version": {
+        "name": "Versão do firmware da base"
+      },
+      "last_mission_team_id": {
+        "name": "Missões – ID da equipa da última missão"
+      },
+      "reset_diagnostics": {
+        "name": "Diagnóstico de reinícios"
+      },
+      "health_score_trend": {
+        "name": "Tendência da pontuação de saúde",
+        "state": {
+          "improving": "A melhorar",
+          "stable": "Estável",
+          "declining": "A piorar",
+          "unknown": "Desconhecido"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Pontuações de acessibilidade por divisão"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware atualizado"
+      },
+      "layout_change_detected": {
+        "name": "Alteração de disposição detetada"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Definição – Suspender agendamento"
+      },
+      "child_lock": {
+        "name": "Definição – Bloqueio infantil"
+      },
+      "eco_charge": {
+        "name": "Definição – Carga eco"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "Ligação MQTT do robot perdida durante a missão",
       "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: desconhecido (este campo não está disponível neste firmware). Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
+    },
+    "health_trend_declining": {
+      "title": "Tendência da pontuação de saúde a piorar",
+      "description": "O Roomba+ detetou que a pontuação de saúde composta está abaixo da linha de base própria estabelecida deste robô há {days} dias consecutivos. Isto pode indicar desgaste mecânico em desenvolvimento, problemas de navegação ou alterações ambientais — verifica os sinais individuais (retenção da bateria, eficiência de navegação, velocidade de limpeza, anomalias de missão, taxa de encravamento) para a causa provável."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: pontuação de acessibilidade baixa",
+      "description": "{room} obteve uma pontuação de acessibilidade de {score}/100, devido a {reason}. Verifica esta divisão quanto a obstáculos, passagens estreitas ou mobiliário que possam estar a limitar a capacidade do robô de a limpar eficazmente."
+    },
+    "layout_change_detected": {
+      "title": "Possível alteração de disposição detetada",
+      "description": "Um local perto de ({x_mm}, {y_mm}) foi limpo de forma fiável durante muito tempo e agora foi ignorado em várias missões consecutivas — um sinal de que mobiliário novo ou outro obstáculo pode estar a bloqueá-lo. Verifica a área, ou dispensa se isto era esperado."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Ponto de encravamento recorrente detetado",
+      "description": "O robô ficou repetidamente encravado perto de um agrupamento de {cell_count} células em {room} (marcação {bearing}° a partir da base, {stuck_count} eventos de encravamento registados aí, atualmente com uma cobertura visivelmente pior do que a área circundante). Verifica a área quanto a um obstáculo."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} pode estar atrasada para limpeza",
+      "description": "{room} foi limpa pela última vez há {days_since_last} dias — visivelmente mais do que o ritmo de aproximadamente {expected_interval_days} dias que este robô estabeleceu para essa divisão com base no seu próprio histórico de limpeza. Verifica se o horário ainda a cobre, ou se a divisão esteve inacessível recentemente."
     }
   },
   "device_automation": {

@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Integration health"
+      },
+      "dock_firmware_version": {
+        "name": "Dock firmware version"
+      },
+      "last_mission_team_id": {
+        "name": "Missions – Last mission team ID"
+      },
+      "reset_diagnostics": {
+        "name": "Reset diagnostics"
+      },
+      "health_score_trend": {
+        "name": "Health score trend",
+        "state": {
+          "improving": "Improving",
+          "stable": "Stable",
+          "declining": "Declining",
+          "unknown": "Unknown"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Room accessibility scores"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware updated"
+      },
+      "layout_change_detected": {
+        "name": "Layout change detected"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Setting – Schedule hold"
+      },
+      "child_lock": {
+        "name": "Setting – Child lock"
+      },
+      "eco_charge": {
+        "name": "Setting – Eco charge"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "Robot MQTT connection lost during mission",
       "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: unknown (this field isn't available on this firmware). If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
+    },
+    "health_trend_declining": {
+      "title": "Health score trend declining",
+      "description": "Roomba+ has detected the composite health score has been below this robot's own established baseline for {days} consecutive days. This may indicate developing mechanical wear, navigation issues, or environmental changes — check the individual health-score signals (battery retention, navigation efficiency, cleaning speed, mission anomalies, stuck rate) for the likely cause."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: low accessibility score",
+      "description": "{room} scored {score}/100 for accessibility, due to {reason}. Check this room for obstacles, narrow passages, or furniture that may be limiting the robot's ability to clean it effectively."
+    },
+    "layout_change_detected": {
+      "title": "Possible layout change detected",
+      "description": "A spot near ({x_mm}, {y_mm}) was reliably cleaned for a long stretch and has now been missed for several consecutive missions — a sign new furniture or another obstacle may be blocking it. Check the area, or dismiss if this was expected (e.g. a rug was added on purpose)."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Recurring stuck spot detected",
+      "description": "The robot has repeatedly gotten stuck near a {cell_count}-cell cluster in {room} (bearing {bearing}° from dock, {stuck_count} stuck events recorded there, currently covered noticeably worse than the surrounding area). Check the area for an obstacle — cords, a low gap, or something the robot keeps catching on."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} may be overdue for cleaning",
+      "description": "{room} was last cleaned {days_since_last} days ago — noticeably longer than the roughly {expected_interval_days}-day rhythm this robot has established for that room based on its own cleaning history. Check whether the schedule still covers it, or whether the room has been inaccessible recently."
     }
   },
   "device_automation": {

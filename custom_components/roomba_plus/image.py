@@ -449,7 +449,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         self.vacuum_state = roomba_reported_state(self.vacuum)
         current_phase = (
-            self.vacuum_state.get("cleanMissionStatus", {}).get("phase", "")
+            (self.vacuum_state.get("cleanMissionStatus") or {}).get("phase", "")
         )
 
         # v2.8.2 — resolve any checkpoint loaded at startup against this,
@@ -475,7 +475,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # needed so a later checkpoint (saved on a stuck event)
                     # can be matched against the live mission on restart.
                     self._mission_checkpoint_mssn_strt_tm = (
-                        self.vacuum_state.get("cleanMissionStatus", {}).get("mssnStrtTm") or 0
+                        (self.vacuum_state.get("cleanMissionStatus") or {}).get("mssnStrtTm") or 0
                     )
                     _LOGGER.debug("Map: mission started, renderer reset")
 
@@ -510,7 +510,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # pose-only/bbrun-only updates that don't represent a new mission
         # status reading at all.
         if "cleanMissionStatus" in state:
-            _cycle = self.vacuum_state.get("cleanMissionStatus", {}).get("cycle", "")
+            _cycle = (self.vacuum_state.get("cleanMissionStatus") or {}).get("cycle", "")
             _is_inter_room_transition = _cycle in ("clean", "quick")
             _looks_like_end = (
                 current_phase in MISSION_END_PHASES and not _is_inter_room_transition
@@ -558,7 +558,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Stuck detection
         if "bbrun" in state and self._renderer:
-            stuck = self.vacuum_state.get("bbrun", {}).get("nStuck", 0)
+            stuck = (self.vacuum_state.get("bbrun") or {}).get("nStuck", 0) or 0
             if stuck > self._last_stuck_count:
                 self._renderer.mark_stuck()
                 # Record stuck position in mm for GridStore
@@ -952,7 +952,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             return
 
         live_mssn_strt_tm = (
-            self.vacuum_state.get("cleanMissionStatus", {}).get("mssnStrtTm") or 0
+            (self.vacuum_state.get("cleanMissionStatus") or {}).get("mssnStrtTm") or 0
         )
         checkpoint_mssn_strt_tm = checkpoint.get("mssn_strt_tm") or 0
 

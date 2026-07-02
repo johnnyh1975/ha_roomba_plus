@@ -130,7 +130,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # Vacuum is the primary entity — its unique_id IS the device identifier.
         self._attr_unique_id = self.robot_unique_id
         self._cap_position: bool = (
-            self.vacuum_state.get("cap", {}).get("pose") == 1
+            (self.vacuum_state.get("cap") or {}).get("pose") == 1
         )
 
     @property
@@ -246,8 +246,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # Position (models with cap.pose == 1)
         if self._cap_position:
             pos_state = state.get("pose", {})
-            pos_x_raw = pos_state.get("point", {}).get("x")
-            pos_y_raw = pos_state.get("point", {}).get("y")
+            pos_x_raw = (pos_state.get("point") or {}).get("x")
+            pos_y_raw = (pos_state.get("point") or {}).get("y")
             theta = pos_state.get("theta")
             if all(v is not None for v in (pos_x_raw, pos_y_raw, theta)):
                 # v2.9.0 — firmware reports cm, not mm. See

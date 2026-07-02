@@ -272,7 +272,7 @@ _DISPOSABLE_PAD_DESC = RoombaPlusSelectDescription(
     unique_id_suffix="disposable_pad_wetness",
     options=_PAD_WET_OPTIONS,
     current_option_fn=lambda state: (
-        str(v) if (v := state.get("padWetness", {}).get("disposable")) is not None else None
+        str(v) if (v := (state.get("padWetness") or {}).get("disposable")) is not None else None
     ),
     select_fn=_select_disposable_wetness,
     state_filter_keys=("padWetness",),
@@ -285,7 +285,7 @@ _REUSABLE_PAD_DESC = RoombaPlusSelectDescription(
     unique_id_suffix="reusable_pad_wetness",
     options=_PAD_WET_OPTIONS,
     current_option_fn=lambda state: (
-        str(v) if (v := state.get("padWetness", {}).get("reusable")) is not None else None
+        str(v) if (v := (state.get("padWetness") or {}).get("reusable")) is not None else None
     ),
     select_fn=_select_reusable_wetness,
     state_filter_keys=("padWetness",),

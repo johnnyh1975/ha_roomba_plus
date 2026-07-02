@@ -29,10 +29,12 @@ Unauthorized requests receive a `401` from the HA framework (`{"message": "Unaut
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/roomba_plus/{entry_id}/mission_history` | Mission history (summary / records / hazards / export) |
+| `GET` | `/api/roomba_plus/{entry_id}/mission_history` | Mission history (summary / records / hazards / export / zone_coverage_health) |
 | `POST` | `/api/roomba_plus/{entry_id}/mission_history/import` | Import a history export bundle |
 | `GET` | `/api/roomba_plus/{entry_id}/digest` | One-day summary for a single robot (v2.9.0) |
 | `GET` | `/api/roomba_plus/household` | Household aggregate across all robots |
+| `GET` | `/api/roomba_plus/{entry_id}/mission/{mission_id}/explain` | Anomaly explanation for a specific mission (v3.2.0) |
+| `GET` | `/api/roomba_plus/{entry_id}/mission/{n_mssn}/path` | Room-granular path reconstruction for a mission (v3.2.0) |
 
 ### HTTP status codes
 
@@ -221,6 +223,40 @@ curl -H "Authorization: Bearer <token>" \
 
 ---
 
+### format=zone_coverage_health
+
+Per-room cleaning-cadence health, self-calibrated against each room's own historical rhythm — not a fixed schedule. A room is `overdue` only relative to its own typical interval between cleans, learned from `last_cleaned_rooms` timestamps over the last 90 days.
+
+**Gate:** requires cloud enrichment (`last_cleaned_rooms` data) — returns `{}` for 600-series robots or before enough room-tagged mission history exists.
+
+```json
+{
+  "Kitchen": {
+    "days_since_last": 21.0,
+    "expected_interval_days": 7.0,
+    "status": "overdue"
+  },
+  "Bedroom": {
+    "days_since_last": 3.0,
+    "expected_interval_days": null,
+    "status": "insufficient_data"
+  }
+}
+```
+
+| Field | Type | Null? | Notes |
+|---|---|---|---|
+| `days_since_last` | float | Never | Days since this room's last recorded clean |
+| `expected_interval_days` | float | Yes — while under 3 recorded intervals | This robot's own mean interval between cleans of this room |
+| `status` | string | Never | `healthy` / `overdue` / `insufficient_data` |
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=zone_coverage_health"
+```
+
+---
+
 ## POST /mission_history/import
 
 Import a bundle produced by `format=export`. Records are deduplicated by `id` — existing records are never overwritten. Safe to run multiple times.
@@ -334,6 +370,79 @@ GET /api/roomba_plus/household?days=28
 ```bash
 curl -H "Authorization: Bearer <token>" \
      "https://<ha>/api/roomba_plus/household?days=14"
+```
+
+---
+
+## GET /mission/{mission_id}/explain
+
+Rule-based explanation for why a mission was (or wasn't) flagged anomalous — same logic as the `roomba_plus.explain_mission` service, exposed as REST for external tooling. `{mission_id}` accepts `latest` to explain the most recent mission regardless of whether it was anomalous.
+
+```
+GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
+GET /api/roomba_plus/{entry_id}/mission/latest/explain
+```
+
+```json
+{
+  "mission_id": "m_20260616_0912",
+  "is_anomalous": true,
+  "anomaly_reason": "obstacle_or_blockage",
+  "robot_lifted": false,
+  "error_code": null,
+  "recommended_action": "Check for an obstacle or narrow gap the robot may be stuck navigating around."
+}
+```
+
+| Field | Type | Null? | Notes |
+|---|---|---|---|
+| `anomaly_reason` | string | Yes — when not anomalous | `obstacle_or_blockage` / `excessive_recharge` / `dirt_spike` / `incomplete_coverage` |
+| `robot_lifted` | bool | Never | `bbrun.nPicks` increased during this mission — independent of `anomaly_reason` |
+| `error_code` | int | Yes | This mission's own recorded error, if any — independent of `anomaly_reason` |
+| `recommended_action` | string | Yes — when not anomalous | Plain-language suggestion matching `anomaly_reason` |
+
+`robot_lifted` and `error_code` are reported alongside `anomaly_reason`, not folded into it — a mission can be lifted and/or error-coded regardless of whether any of the four anomaly reasons also applies.
+
+Returns `404` if `mission_id` doesn't match any recorded mission.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission/latest/explain"
+```
+
+---
+
+## GET /mission/{n_mssn}/path
+
+Room-granular post-hoc reconstruction of a mission's path — not pixel-accurate pose tracking. Consecutive visits to the same room collapse into a single timeline entry (arrival time, not every individual room re-entry event).
+
+```
+GET /api/roomba_plus/{entry_id}/mission/{n_mssn}/path
+```
+
+`{n_mssn}` is the robot's own mission number (`nMssn`), not the local `id` used elsewhere in this API — this endpoint is cloud-history-backed (`MissionArchive`), matching how the robot itself numbers missions.
+
+```json
+{
+  "nMssn": 102,
+  "path": [
+    {"room": "Kitchen", "time": "2026-06-16T09:05:12Z"},
+    {"room": "Hallway", "time": "2026-06-16T09:23:40Z"},
+    {"room": "Bedroom", "time": "2026-06-16T09:31:05Z"}
+  ]
+}
+```
+
+| Field | Type | Null? | Notes |
+|---|---|---|---|
+| `room` | string | Never — falls back to the raw region id | Resolved from cloud region names (SMART) or RoomSegStore names (EPHEMERAL) |
+| `time` | string | Never | ISO timestamp of arrival in that room |
+
+**Gate:** requires `mission_archive` (cloud enrichment). Returns `404` if `n_mssn` doesn't match any archived mission, or if no mission archive is available at all.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+     "https://<ha>/api/roomba_plus/<entry_id>/mission/102/path"
 ```
 
 ---

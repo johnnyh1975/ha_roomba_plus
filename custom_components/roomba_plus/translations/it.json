@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Salute dell'integrazione"
+      },
+      "dock_firmware_version": {
+        "name": "Versione firmware della base"
+      },
+      "last_mission_team_id": {
+        "name": "Missioni – ID team dell'ultima missione"
+      },
+      "reset_diagnostics": {
+        "name": "Diagnostica dei reset"
+      },
+      "health_score_trend": {
+        "name": "Tendenza punteggio salute",
+        "state": {
+          "improving": "In miglioramento",
+          "stable": "Stabile",
+          "declining": "In peggioramento",
+          "unknown": "Sconosciuto"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Punteggi di accessibilità per stanza"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware aggiornato"
+      },
+      "layout_change_detected": {
+        "name": "Cambio di layout rilevato"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Impostazione – Sospendi pianificazione"
+      },
+      "child_lock": {
+        "name": "Impostazione – Blocco bambini"
+      },
+      "eco_charge": {
+        "name": "Impostazione – Carica eco"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "Connessione MQTT del robot persa durante la missione",
       "description": "Roomba+ non ha ricevuto messaggi MQTT dal robot per {minutes} minuti mentre era attiva una missione di pulizia. Ultima fase nota prima del silenzio: {last_phase}. Connettività cloud del robot: sconosciuto (questo campo non è disponibile su questo firmware). Se il robot sembra essere fisicamente bloccato o in pausa, potrebbe non trattarsi di un vero problema di rete: controlla prima il robot di persona."
+    },
+    "health_trend_declining": {
+      "title": "Tendenza punteggio salute in peggioramento",
+      "description": "Roomba+ ha rilevato che il punteggio di salute composito è al di sotto della linea di base propria stabilita di questo robot per {days} giorni consecutivi. Questo potrebbe indicare usura meccanica in corso, problemi di navigazione o cambiamenti ambientali — controlla i singoli segnali (ritenzione della batteria, efficienza di navigazione, velocità di pulizia, anomalie di missione, tasso di blocco) per la causa probabile."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: punteggio di accessibilità basso",
+      "description": "{room} ha ottenuto un punteggio di accessibilità di {score}/100, a causa di {reason}. Controlla questa stanza per ostacoli, passaggi stretti o mobili che potrebbero limitare la capacità del robot di pulirla efficacemente."
+    },
+    "layout_change_detected": {
+      "title": "Possibile cambio di layout rilevato",
+      "description": "Un punto vicino a ({x_mm}, {y_mm}) è stato pulito in modo affidabile per molto tempo ed è stato ora saltato per diverse missioni consecutive — un segnale che nuovi mobili o un altro ostacolo potrebbero bloccarlo. Controlla l'area, oppure ignora se previsto."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Punto di blocco ricorrente rilevato",
+      "description": "Il robot si è bloccato ripetutamente vicino a un gruppo di {cell_count} celle in {room} (rilevamento {bearing}° dalla base, {stuck_count} eventi di blocco registrati lì, copertura attualmente notevolmente peggiore rispetto all'area circostante). Controlla l'area per un ostacolo."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} potrebbe essere in ritardo per la pulizia",
+      "description": "{room} è stata pulita l'ultima volta {days_since_last} giorni fa — notevolmente più a lungo del ritmo di circa {expected_interval_days} giorni che questo robot ha stabilito per quella stanza in base alla propria cronologia di pulizia. Controlla se il programma la copre ancora, o se la stanza è stata inaccessibile di recente."
     }
   },
   "device_automation": {

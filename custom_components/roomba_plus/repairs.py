@@ -401,6 +401,398 @@ async def async_check_performance_degradation(
     )
 
 
+async def async_check_health_trend_declining(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v3.2.0 L10 — fire Repair Issue when the composite health score has
+    been below this robot's own self-calibrated baseline for 14+ days.
+
+    The "declining" judgment itself is self-calibrated (RobotProfileStore.
+    health_score_trend() compares against this robot's own learned mean/
+    stdev, not a fixed threshold — see its docstring). The 14-day count
+    here is a separate, fixed persistence debounce on top of that — same
+    pattern as async_check_performance_degradation's fixed 3-update
+    trigger — so a single noisy bad day doesn't fire an issue, only a
+    sustained decline does.
+
+    Auto-resolves (issue deleted) once the decline streak breaks, mirroring
+    async_check_observed_zones's dismiss-on-recovery pattern.
+    """
+    data = entry.runtime_data
+    rps = getattr(data, "robot_profile_store", None)
+    if rps is None:
+        return
+
+    declining_days = rps.health_score_declining_days()
+
+    if declining_days < 14:
+        ir.async_delete_issue(hass, DOMAIN, "health_trend_declining")
+        return
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "health_trend_declining",
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="health_trend_declining",
+        translation_placeholders={"days": str(declining_days)},
+    )
+    _LOGGER.warning(
+        "Roomba+: health score trend declining for %d consecutive days",
+        declining_days,
+    )
+
+
+async def async_check_furniture_change(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v3.2.0 FURNITURE — one Repair Issue per candidate cell from
+    GridStore.furniture_candidates(), with real dismiss-aware 30-day
+    suppression.
+
+    First Repair Issue in this codebase to actually check the user's
+    dismiss action before re-firing (see the design discussion this was
+    built from): HA's issue registry tracks THAT an issue was dismissed
+    (dismissed_version) but not WHEN, so GridStore records the timestamp
+    itself the first time a dismissal is observed, and this function
+    skips calling async_create_issue entirely while within the 30-day
+    window — deliberately not calling create-and-hope-it-stays-dismissed,
+    since it's unconfirmed whether HA's own registry would treat a fresh
+    async_create_issue call as un-dismissing an issue.
+
+    The companion binary_sensor.*_layout_change_detected is NOT affected
+    by this suppression — it always reflects GridStore's true current
+    state (see its docstring for why).
+    """
+    data = entry.runtime_data
+    gs = getattr(data, "grid_store", None)
+    if gs is None:
+        return
+
+    now_iso = dt_util.now().isoformat()
+    candidates = gs.furniture_candidates()
+    candidate_cells = {c["cell"] for c in candidates}
+
+    # Auto-resolve: delete issues for cells that are no longer candidates
+    # (dismiss-tracking for those cells is stale once resolved — clear it
+    # too, so a FUTURE recurrence at the same cell isn't pre-suppressed
+    # by an old dismissal of an unrelated, already-resolved event).
+    for cell in list(gs._furniture_dismissed_at.keys()):
+        if cell not in candidate_cells:
+            gs.clear_furniture_dismissed(cell)
+
+    reg = ir.async_get(hass)
+
+    for c in candidates:
+        cell = c["cell"]
+        issue_id = f"furniture_{cell[0]}_{cell[1]}"
+
+        existing = reg.async_get_issue(DOMAIN, issue_id)
+        if existing is not None and existing.dismissed_version is not None:
+            if cell not in gs._furniture_dismissed_at:
+                gs.record_furniture_dismissed(cell, now_iso)
+
+        if gs.furniture_dismiss_suppressed(cell, now_iso):
+            continue  # still within the 30-day post-dismiss window
+
+        # Not suppressed — either never dismissed, or dismissed 30+ days
+        # ago. In the latter case, clear the now-stale record so a
+        # genuinely new recurrence isn't silently treated as a fresh
+        # notification with leftover state.
+        #
+        # v3.2.0 bug-hunt fix — confirmed against HA's actual
+        # IssueRegistry.async_get_or_create() source: when an issue
+        # already exists, it's updated via dataclasses.replace(issue,
+        # ...) which does NOT include dismissed_version in the
+        # overridden fields, so a dismissed issue's dismissed_version
+        # survives every subsequent async_create_issue call untouched.
+        # Without this delete first, the issue below would silently stay
+        # dismissed forever after the 30-day window elapses — the user
+        # would never see it resurface even though this code "intended"
+        # to un-suppress it. Deleting first forces HA's async_get_or_create
+        # down its "issue is None" branch, which does set
+        # dismissed_version=None on the fresh entry.
+        if cell in gs._furniture_dismissed_at:
+            gs.clear_furniture_dismissed(cell)
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="layout_change_detected",
+            translation_placeholders={
+                "x_mm": str(int(c["x_mm"])),
+                "y_mm": str(int(c["y_mm"])),
+            },
+        )
+
+
+# v3.2.0 STUCK-HOTSPOT — coverage_impact_pp at or below this counts as
+# "still meaningfully under-covered relative to its surroundings". Above
+# this, the cluster is treated as resolved even though its stuck_count
+# (a lifetime counter that never decreases — see async_check_stuck_hotspot's
+# docstring) still shows history. This threshold, not stuck_count, is
+# what "auto-resolves once GridStore fills back in" actually depends on.
+_STUCK_HOTSPOT_RESOLVED_IMPACT_PP = -10.0
+
+
+async def async_check_stuck_hotspot(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v3.2.0 STUCK-HOTSPOT — one Repair Issue per stuck cell cluster from
+    GridStore.stuck_clusters().
+
+    Auto-resolve nuance worth calling out: self._stuck counts are a
+    lifetime counter that only ever increases (no decay, unlike the EMA
+    coverage weight) — so a cluster, once formed, would never naturally
+    disappear from stuck_clusters()'s output just because the obstacle
+    was removed. The actual "has this recovered" signal is
+    coverage_impact_pp: once the cluster's cells are being covered
+    roughly as well as their surroundings again (impact no longer
+    meaningfully negative), the issue is treated as resolved regardless
+    of the permanent stuck-count history.
+
+    Room name resolution (SMART-tier only) requires the pose-space ->
+    UMF-space transform BEFORE calling room_name_at() — mirrors
+    api_views.py's existing hazards-endpoint logic exactly (that endpoint
+    already does this same two-step conversion for stuck_events-sourced
+    hazards).
+    """
+    data = entry.runtime_data
+    gs = getattr(data, "grid_store", None)
+    if gs is None:
+        return
+
+    clusters = gs.stuck_clusters()
+
+    active_anchors = set()
+    for cluster in clusters:
+        anchor = cluster["cells"][0]
+        impact = cluster["coverage_impact_pp"]
+        resolved = impact is not None and impact > _STUCK_HOTSPOT_RESOLVED_IMPACT_PP
+        issue_id = f"stuck_hotspot_{anchor[0]}_{anchor[1]}"
+
+        if resolved:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+            continue
+
+        active_anchors.add(anchor)
+
+        x_mm, y_mm = cluster["x_mm"], cluster["y_mm"]
+        from .grid_store import _bearing_deg
+        bearing = _bearing_deg(x_mm, y_mm)
+        room_name: str | None = None
+        aligner = getattr(data, "umf_aligner", None)
+        if aligner is not None and getattr(aligner, "aligned", False):
+            pt_umf = aligner.pose_to_umf(x_mm, y_mm)
+            if pt_umf:
+                room_name = aligner.room_name_at(*pt_umf)
+
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="stuck_hotspot_detected",
+            translation_placeholders={
+                "room": room_name or "an unnamed area",
+                "bearing": str(bearing),
+                "cell_count": str(len(cluster["cells"])),
+                "stuck_count": str(cluster["stuck_count"]),
+            },
+        )
+
+    # v3.2.0 bug-hunt fix — active_anchors was being built above but
+    # never actually used, leaving stale issues behind whenever a
+    # cluster's membership shifts (the anchor is cells[0], the smallest
+    # sorted cell — a newly-adjacent hotspot cell joining, or a cluster
+    # splitting, can change which cell that is). Enumerate this domain's
+    # existing stuck_hotspot_* issues directly from the registry and
+    # delete any whose anchor is no longer part of any current cluster.
+    reg = ir.async_get(hass)
+    for (issue_domain, issue_id), _issue in list(reg.issues.items()):
+        if issue_domain != DOMAIN or not issue_id.startswith("stuck_hotspot_"):
+            continue
+        anchor_str = issue_id[len("stuck_hotspot_"):]
+        parts = anchor_str.rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            anchor = (int(parts[0]), int(parts[1]))
+        except ValueError:
+            continue
+        if anchor not in active_anchors:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+async def async_check_coverage_frequency(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v3.2.0 COVERAGE-FREQ — fire a Repair Issue per room whose
+    MissionStore.room_coverage_health() status is "overdue" (self-
+    calibrated against that room's OWN historical cleaning cadence, not a
+    fixed schedule — see room_coverage_health()'s docstring). One issue
+    per affected room, same per-room pattern as ROOM-ACCESS/STUCK-HOTSPOT.
+    Auto-resolves once the room's status is no longer "overdue".
+    """
+    data = entry.runtime_data
+    ms = getattr(data, "mission_store", None)
+    if ms is None:
+        return
+
+    now_iso = dt_util.now().isoformat()
+    health = ms.room_coverage_health(now_iso)
+
+    active_issue_ids = {f"coverage_frequency_{room}" for room in health}
+
+    for room, info in health.items():
+        issue_id = f"coverage_frequency_{room}"
+        if info.get("status") != "overdue":
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+            continue
+
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="coverage_frequency_overdue",
+            translation_placeholders={
+                "room": room,
+                "days_since_last": str(info["days_since_last"]),
+                "expected_interval_days": str(info["expected_interval_days"]),
+            },
+        )
+
+    # v3.2.0 bug-hunt fix — same orphaned-issue risk as STUCK-HOTSPOT's
+    # active_anchors cleanup, but room names (unlike numeric grid
+    # coordinates) can contain arbitrary characters, so reverse-parsing
+    # the issue_id back to a room name isn't reliable. Compares the full
+    # issue_id directly against active_issue_ids instead — if the user
+    # renames a room in the iRobot app, the OLD issue_id simply won't be
+    # in this set anymore and gets cleaned up, without needing to parse
+    # anything back out of it.
+    reg = ir.async_get(hass)
+    for (issue_domain, issue_id), _issue in list(reg.issues.items()):
+        if issue_domain != DOMAIN or not issue_id.startswith("coverage_frequency_"):
+            continue
+        if issue_id not in active_issue_ids:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+async def async_check_room_accessibility(
+    hass: HomeAssistant,
+    entry: Any,
+) -> None:
+    """v3.2.0 ROOM-ACCESS — fire a Repair Issue per room scoring below 60.
+
+    One issue per affected room (issue_id includes the rid, so multiple
+    low-scoring rooms each get their own entry rather than one issue
+    trying to describe several rooms at once). Auto-resolves per room
+    once that room's score recovers — mirrors async_check_observed_zones's
+    dismiss-on-recovery pattern.
+
+    Deliberately does NOT fabricate the specific coordinates / %
+    improvement-estimate language from the original version-plan mockup
+    ("Frequent stuck events near (180, 230)... could improve coverage by
+    ~18%") — RobotProfileStore.room_accessibility_scores() doesn't compute
+    either of those numbers, and inventing plausible-looking specifics
+    that aren't actually derived from real data would be worse than a
+    plainer, honest description.
+    """
+    data = entry.runtime_data
+    aligner = getattr(data, "umf_aligner", None)
+    if aligner is None:
+        return
+    gs = getattr(data, "grid_store", None)
+    if gs is None:
+        return
+
+    polygons = aligner.room_polygons_umf()
+    if not polygons:
+        return
+
+    from .mission_archive import MissionArchive
+    from .robot_profile_store import RobotProfileStore
+
+    coverage_by_room = gs.coverage_by_polygon(polygons)
+    stuck_by_room = gs.stuck_by_polygon(polygons)
+
+    time_by_room: dict[str, int] = {}
+    archive = getattr(data, "mission_archive", None)
+    if archive is not None:
+        for record in archive.all_derived_oldest_first():
+            visits = record.get("room_visits") or []
+            for rid, seconds in MissionArchive.time_per_room(visits).items():
+                time_by_room[rid] = time_by_room.get(rid, 0) + seconds
+    areas_m2 = aligner.room_areas_m2
+    time_per_area_by_room = {
+        rid: seconds / areas_m2[rid]
+        for rid, seconds in time_by_room.items()
+        if areas_m2.get(rid, 0) > 0
+    }
+
+    scores = RobotProfileStore.room_accessibility_scores(
+        coverage_by_room, stuck_by_room, time_per_area_by_room,
+    )
+
+    id_to_name = {
+        r["id"]: r["name"]
+        for r in (data.cloud_coordinator.regions or [])
+        if r.get("id") and r.get("name")
+    } if data.cloud_coordinator is not None else {}
+
+    _reason_text = {
+        "obstacle_density": "an elevated rate of stuck events relative to this robot's other rooms",
+        "narrow_passages": "taking noticeably longer per square metre than this robot's other rooms",
+        "coverage_gap": "consistently incomplete coverage",
+    }
+
+    for rid, room_polygon in polygons.items():
+        result = scores.get(rid)
+        issue_id = f"room_accessibility_{rid}"
+        if result is None or result.get("score") is None or result["score"] >= 60:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+            continue
+
+        room_name = id_to_name.get(rid, rid)
+        reason = _reason_text.get(
+            result.get("limiting_factor"), "reduced accessibility"
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="room_accessibility_low",
+            translation_placeholders={
+                "room": room_name,
+                "score": str(int(result["score"])),
+                "reason": reason,
+            },
+        )
+        _LOGGER.warning(
+            "Roomba+: %s accessibility score %d/100 (%s)",
+            room_name, int(result["score"]), result.get("limiting_factor"),
+        )
+
+
 async def async_check_battery_recharge(
     hass: HomeAssistant,
     entry: Any,

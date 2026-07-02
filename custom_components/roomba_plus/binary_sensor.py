@@ -35,6 +35,7 @@ from .const import (
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
     DOMAIN,
+    EVENT_STUCK,
     MQTT_WATCHDOG_SECONDS,
     MQTT_WATCHDOG_START_GRACE_SECONDS,
     has_smart_map,
@@ -86,6 +87,10 @@ async def async_setup_entry(
     # v1.7.0 L2 — Maintenance due sensor
     if config_entry.runtime_data.maintenance_store is not None:
         entities.append(RoombaMaintenanceDue(roomba, blid, config_entry))
+
+    # v3.2.0 FURNITURE — layout change detection (requires GridStore)
+    if config_entry.runtime_data.grid_store is not None:
+        entities.append(RoombaLayoutChangeDetected(roomba, blid, config_entry))
 
     # v1.7.0 L5 — Start blocked sensor (only when blocking sensors configured)
     if config_entry.options.get(CONF_BLOCKING_SENSORS):
@@ -977,6 +982,33 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
                     "last_phase": last_phase,
                 },
             )
+
+            # v3.2.0 STUCK-CONTEXT — same OFF->ON transition, same data
+            # already computed above (last_phase, silence_min) — fires an
+            # actionable event alongside the Repair Issue so users can
+            # build a notification without template work, and so
+            # logbook.py can record a searchable "Roomba got stuck"
+            # entry (mirrors EVENT_MISSION_COMPLETED's existing dual use).
+            reported = roomba_reported_state(self.vacuum)
+            stuck_count = (reported.get("bbrun") or {}).get("nStuck")
+            mts = getattr(data, "mission_timer_store", None)
+            last_room = mts.current_room if mts is not None else None
+            pose = reported.get("pose")
+            last_known_position = None
+            if isinstance(pose, dict):
+                point = pose.get("point")
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    last_known_position = {"x": point["x"], "y": point["y"]}
+
+            self.hass.bus.async_fire(EVENT_STUCK, {
+                "entry_id": self._entry.entry_id,
+                "name": self._entry.title,
+                "last_room": last_room,
+                "phase": last_phase,
+                "stuck_count": stuck_count,
+                "minutes_stuck": silence_min,
+                "last_known_position": last_known_position,
+            })
         elif not now_stale and self._was_stale:
             # Transition ON → OFF: MQTT traffic resumed.
             ir.async_delete_issue(
@@ -1081,3 +1113,73 @@ class RoombaFirmwareUpdated(IRobotEntity, BinarySensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "softwareVer" in new_state
+
+
+class RoombaLayoutChangeDetected(IRobotEntity, BinarySensorEntity):
+    """FURNITURE (v3.2.0) — ON when GridStore has at least one candidate
+    cell: reliably covered for a long stretch, now absent for several
+    consecutive missions (see GridStore.furniture_candidates()'s
+    docstring for the exact bitmask-based detection).
+
+    Deliberately a pure ground-truth reflection of GridStore's current
+    state — NOT affected by the companion Repair Issue's dismiss/30-day
+    suppression (see repairs.py's async_check_furniture_change). An
+    automation relying on this entity's state should see the real
+    situation regardless of whether a human has acknowledged the
+    notification; the Issue is the separate "please look at this now"
+    layer, same separation this project uses elsewhere (e.g.
+    consecutive_mission_anomalies always shows the true count).
+
+    extra_state_attributes exposes approximate_location for the first
+    candidate cell (x_mm, y_mm) plus the full candidate count — a
+    dashboard/automation wanting every candidate's location can call
+    GridStore.furniture_candidates() directly via a template.
+    """
+
+    entity_description = BinarySensorEntityDescription(
+        key="layout_change_detected",
+        name="Layout change detected",
+        translation_key="layout_change_detected",
+    )
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_layout_change_detected"
+
+    def _candidates(self) -> list[dict[str, Any]]:
+        gs = self._entry.runtime_data.grid_store
+        if gs is None:
+            return []
+        return gs.furniture_candidates()
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._candidates())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """v3.2.0 UX fix — always includes furniture_readiness()'s
+        learning-progress fields, not just when there's an active
+        candidate. Before this fix, a fresh install and a genuinely
+        "nothing to report, everything's fine" state looked identical
+        (both empty attributes) — there was no way to tell "still
+        learning" apart from "already checked, all clear"."""
+        gs = self._entry.runtime_data.grid_store
+        readiness = gs.furniture_readiness() if gs is not None else {
+            "cells_tracked": 0, "most_mature_cell_age": 0,
+            "missions_until_first_ready": None,
+        }
+        candidates = self._candidates()
+        if not candidates:
+            return readiness
+        first = candidates[0]
+        return {
+            **readiness,
+            "approximate_location": {"x_mm": first["x_mm"], "y_mm": first["y_mm"]},
+            "candidate_count": len(candidates),
+        }
+

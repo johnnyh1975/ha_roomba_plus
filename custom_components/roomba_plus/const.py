@@ -79,6 +79,7 @@ EVENT_MAP_RETRAIN_COMPLETED: Final = f"{DOMAIN}_map_retrain_completed"
 # both the roomba_plus.reset_* services AND the Filter/Brush/Battery reset
 # buttons (button.py) — one event regardless of which path the user took.
 EVENT_MAINTENANCE_RESET: Final = f"{DOMAIN}_maintenance_reset"
+EVENT_STUCK: Final = f"{DOMAIN}_stuck"  # v3.2.0 STUCK-CONTEXT
 
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
 # F11 — demand-based cleaning (DirtThresholdManager)
@@ -165,6 +166,7 @@ MAX_DOOR_WIDTH_MM: Final = 1200.0 # Wider -> likely open archway
 
 # ── v2.2.0 — new service ──────────────────────────────────────────────────────
 SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when robot A finishes
+SERVICE_EXPLAIN_MISSION: Final = "explain_mission"  # v3.2.0 ANOMALY-EXPLAIN
 
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width

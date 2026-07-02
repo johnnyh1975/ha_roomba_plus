@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Santé de l'intégration"
+      },
+      "dock_firmware_version": {
+        "name": "Version du firmware de la base"
+      },
+      "last_mission_team_id": {
+        "name": "Missions – ID d'équipe de la dernière mission"
+      },
+      "reset_diagnostics": {
+        "name": "Diagnostic des réinitialisations"
+      },
+      "health_score_trend": {
+        "name": "Tendance du score de santé",
+        "state": {
+          "improving": "En amélioration",
+          "stable": "Stable",
+          "declining": "En baisse",
+          "unknown": "Inconnu"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Scores d'accessibilité par pièce"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware mis à jour"
+      },
+      "layout_change_detected": {
+        "name": "Changement de disposition détecté"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Paramètre – Suspension de la planification"
+      },
+      "child_lock": {
+        "name": "Paramètre – Verrouillage enfant"
+      },
+      "eco_charge": {
+        "name": "Paramètre – Charge éco"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "Connexion MQTT du robot perdue pendant la mission",
       "description": "Roomba+ n'a reçu aucun message MQTT du robot depuis {minutes} minutes alors qu'une mission de nettoyage était active. Dernière phase connue avant le silence : {last_phase}. Connectivité cloud du robot : inconnu (ce champ n'est pas disponible sur ce firmware). Si le robot semble physiquement coincé ou en pause, il ne s'agit peut-être pas d'un vrai problème réseau -- verifiez d'abord le robot en personne."
+    },
+    "health_trend_declining": {
+      "title": "Tendance du score de santé en baisse",
+      "description": "Roomba+ a détecté que le score de santé composite est en dessous de la référence propre établie de ce robot depuis {days} jours consécutifs. Cela peut indiquer une usure mécanique naissante, des problèmes de navigation ou des changements environnementaux — vérifiez les signaux individuels (rétention de la batterie, efficacité de navigation, vitesse de nettoyage, anomalies de mission, taux de blocage) pour la cause probable."
+    },
+    "room_accessibility_low": {
+      "title": "{room} : score d'accessibilité faible",
+      "description": "{room} a obtenu un score d'accessibilité de {score}/100, en raison de {reason}. Vérifiez cette pièce pour des obstacles, des passages étroits ou des meubles qui pourraient limiter la capacité du robot à la nettoyer efficacement."
+    },
+    "layout_change_detected": {
+      "title": "Changement de disposition possible détecté",
+      "description": "Un endroit près de ({x_mm}, {y_mm}) a été nettoyé de manière fiable pendant longtemps et a maintenant été manqué pendant plusieurs missions consécutives — cela peut indiquer un nouveau meuble ou un autre obstacle. Vérifiez la zone, ou ignorez si c'était prévu."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Point de blocage récurrent détecté",
+      "description": "Le robot s'est bloqué à plusieurs reprises près d'un groupe de {cell_count} cellules dans {room} (relèvement {bearing}° depuis la base, {stuck_count} événements de blocage enregistrés, couverture actuellement nettement inférieure à celle de la zone environnante). Vérifiez la zone à la recherche d'un obstacle."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} pourrait être en retard de nettoyage",
+      "description": "{room} a été nettoyée pour la dernière fois il y a {days_since_last} jours — nettement plus long que le rythme d'environ {expected_interval_days} jours que ce robot a établi pour cette pièce d'après son propre historique. Vérifiez si le planning la couvre toujours, ou si la pièce a été inaccessible récemment."
     }
   },
   "device_automation": {

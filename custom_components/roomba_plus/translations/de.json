@@ -612,6 +612,27 @@
       },
       "integration_health": {
         "name": "Integrationsgesundheit"
+      },
+      "dock_firmware_version": {
+        "name": "Dock-Firmware-Version"
+      },
+      "last_mission_team_id": {
+        "name": "Missionen – Team-ID der letzten Mission"
+      },
+      "reset_diagnostics": {
+        "name": "Reset-Diagnostik"
+      },
+      "health_score_trend": {
+        "name": "Gesundheits-Score-Trend",
+        "state": {
+          "improving": "Verbessert sich",
+          "stable": "Stabil",
+          "declining": "Verschlechtert sich",
+          "unknown": "Unbekannt"
+        }
+      },
+      "room_accessibility_scores": {
+        "name": "Raum-Zugänglichkeits-Scores"
       }
     },
     "binary_sensor": {
@@ -685,6 +706,9 @@
       },
       "firmware_updated": {
         "name": "Firmware aktualisiert"
+      },
+      "layout_change_detected": {
+        "name": "Raumlayout-Änderung erkannt"
       }
     },
     "button": {
@@ -740,6 +764,12 @@
       },
       "schedule_hold": {
         "name": "Einstellung – Zeitplan pausieren"
+      },
+      "child_lock": {
+        "name": "Einstellung – Kindersicherung"
+      },
+      "eco_charge": {
+        "name": "Einstellung – Öko-Laden"
       }
     },
     "select": {
@@ -933,6 +963,26 @@
     "mqtt_watchdog_cloud_unknown": {
       "title": "Roboter-MQTT-Verbindung während Mission verloren",
       "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: unbekannt (Feld fehlt auf dieser Firmware). Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
+    },
+    "health_trend_declining": {
+      "title": "Gesundheits-Score-Trend verschlechtert sich",
+      "description": "Roomba+ hat festgestellt, dass der zusammengesetzte Gesundheits-Score seit {days} aufeinanderfolgenden Tagen unter der eigenen etablierten Basislinie dieses Roboters liegt. Das kann auf beginnenden Verschleiß, Navigationsprobleme oder veränderte Umgebungsbedingungen hindeuten — prüfe die einzelnen Signale (Akku-Kapazität, Navigationseffizienz, Reinigungsgeschwindigkeit, Missionsanomalien, Steckenbleib-Rate) auf die wahrscheinliche Ursache."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: niedriger Zugänglichkeits-Score",
+      "description": "{room} erreichte einen Zugänglichkeits-Score von {score}/100, aufgrund von {reason}. Prüfe diesen Raum auf Hindernisse, enge Durchgänge oder Möbel, die den Roboter beim effektiven Reinigen einschränken könnten."
+    },
+    "layout_change_detected": {
+      "title": "Mögliche Layout-Änderung erkannt",
+      "description": "Eine Stelle bei ({x_mm}, {y_mm}) wurde lange zuverlässig gereinigt und wurde jetzt mehrere Missionen in Folge ausgelassen — ein Hinweis auf neue Möbel oder ein anderes Hindernis. Prüfe den Bereich, oder verwerfe die Meldung, falls das erwartet war (z. B. wurde absichtlich ein Teppich hinzugefügt)."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Wiederkehrende Stuck-Stelle erkannt",
+      "description": "Der Roboter ist wiederholt in der Nähe eines {cell_count}-Zellen-Clusters in {room} hängen geblieben (Peilung {bearing}° vom Dock, {stuck_count} dort verzeichnete Stuck-Ereignisse, aktuell merklich schlechter abgedeckt als die Umgebung). Prüfe den Bereich auf ein Hindernis — Kabel, einen niedrigen Spalt oder etwas, an dem der Roboter hängen bleibt."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} könnte überfällig für eine Reinigung sein",
+      "description": "{room} wurde zuletzt vor {days_since_last} Tagen gereinigt — deutlich länger als der rund {expected_interval_days}-Tage-Rhythmus, den dieser Roboter für diesen Raum aus seiner eigenen Reinigungshistorie etabliert hat. Prüfe, ob der Zeitplan den Raum noch abdeckt, oder ob er zuletzt unzugänglich war."
     }
   },
   "device_automation": {

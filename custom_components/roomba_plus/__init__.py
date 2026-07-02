@@ -65,7 +65,7 @@ from .const import (
     has_pose,
     has_smart_map,
 )
-from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView
+from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView, ExplainMissionView, MissionPathView
 from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
@@ -2829,6 +2829,8 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
         hass.http.register_view(HouseholdSummaryView())
         hass.http.register_view(MissionHistoryImportView())
         hass.http.register_view(DailyDigestView())
+        hass.http.register_view(ExplainMissionView())
+        hass.http.register_view(MissionPathView())
         hass.data["_roomba_plus_view_registered"] = True
 
     async_register_services(hass)

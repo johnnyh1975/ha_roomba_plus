@@ -179,6 +179,72 @@ class MissionStore:
         """Return the most recent record, or None."""
         return self._records[-1] if self._records else None
 
+    def find_by_id(self, mission_id: str) -> dict[str, Any] | None:
+        """v3.2.0 ANOMALY-EXPLAIN — look up a specific record by its
+        `id` field (the "m_{unix_start_ts}" format used throughout this
+        store), or None if no record matches. Linear scan — record counts
+        are bounded (MAX_RECORDS), so this is not a hot path worth
+        indexing."""
+        for record in self._records:
+            if record.get("id") == mission_id:
+                return record
+        return None
+
+    _ANOMALY_RECOMMENDATIONS: dict[str, str] = {
+        "obstacle_or_blockage": (
+            "Check for cords, rugs, or furniture the robot may have gotten "
+            "stuck on or struggled to navigate around."
+        ),
+        "excessive_recharge": (
+            "Battery may be degrading — check the battery capacity retention "
+            "sensor, or the robot may be having trouble finding its dock."
+        ),
+        "dirt_spike": (
+            "An unusually dirty area was detected — check for a spill, "
+            "tracked-in debris, or a pet accident."
+        ),
+        "incomplete_coverage": (
+            "The robot covered noticeably less area than expected for a "
+            "typical mission — check whether a door was closed or a room "
+            "was inaccessible."
+        ),
+    }
+
+    def explain_mission(self, mission_id: str | None = None) -> dict[str, Any] | None:
+        """v3.2.0 ANOMALY-EXPLAIN — shared explanation-assembly logic used
+        by both the explain_mission service (services.py) and its REST
+        counterpart (api_views.py), so the two never drift out of sync.
+
+        mission_id=None defaults to the most recent mission (whether
+        anomalous or not — is_anomalous in the result tells the caller
+        which case it is, so this doubles as a general "explain the last
+        mission" call).
+
+        Returns None only when no matching mission exists at all (bad
+        mission_id, or empty history) — callers translate that into
+        whatever's appropriate for their transport (ServiceValidationError
+        for the service, 404 for the REST view).
+        """
+        record = self.find_by_id(mission_id) if mission_id is not None else self.latest()
+        if record is None:
+            return None
+
+        stats = self.compute_rolling_stats()
+        if stats is None:
+            stats = self.archive_baseline   # L3-ARC fallback, same as consecutive_anomalous
+
+        reason = self.anomaly_reason(record, stats) if stats is not None else None
+        npicks_delta = record.get("npicks_delta") or 0
+
+        return {
+            "mission_id": record.get("id"),
+            "is_anomalous": reason is not None,
+            "anomaly_reason": reason,
+            "robot_lifted": npicks_delta > 0,
+            "error_code": record.get("error_code"),
+            "recommended_action": self._ANOMALY_RECOMMENDATIONS.get(reason),
+        }
+
     # All result values that represent a stuck/failure event.
     STUCK_RESULTS: frozenset[str] = frozenset({
         "stuck", "stuck_and_resumed", "stuck_and_abandoned"
@@ -481,11 +547,126 @@ class MissionStore:
         for rec in reversed(self._records):
             ended_at = rec.get("ended_at")
             rooms: list[str] = rec.get("last_cleaned_rooms") or []
-            if not ended_at or not rooms:
+            # v3.2.0 full-review fix — same defence-in-depth guard as
+            # room_coverage_health: a non-string ended_at (poisoned
+            # import from before the api_views.py type gate) must be
+            # skipped here at the SOURCE, since this method's output
+            # flows into room_coverage_health's parse_datetime calls.
+            if not ended_at or not isinstance(ended_at, str) or not rooms:
                 continue
             for room in rooms:
                 if room not in result:
                     result[room] = ended_at
+        return result
+
+    def room_coverage_health(
+        self,
+        now_iso: str,
+        days: int = 90,
+        significance_multiplier: float = 2.0,
+        min_intervals: int = 3,
+    ) -> dict[str, dict[str, Any]]:
+        """v3.2.0 COVERAGE-FREQ — is each room being cleaned in its OWN
+        normal rhythm, self-calibrated per room rather than against a
+        fixed global threshold.
+
+        Reinterpreted from the original spec text ("GridStore EMA-decay
+        curve -> recommended interval"): EMA decay is per-MISSION, not
+        per-day, and converting it to a days-based recommendation would
+        need an extra, somewhat arbitrary missions-per-day conversion
+        step. Deriving the room's own historical cleaning cadence
+        directly from its own timestamp gaps answers the same underlying
+        question ("is this room being cleaned like it normally is")
+        without that detour — and follows this project's established
+        self-calibration philosophy (L9-BATTERY, L10, ROOM-ACCESS): a
+        room is "overdue" only relative to ITS OWN typical interval, not
+        an external one-size-fits-all number.
+
+        For each room with a known last-clean timestamp (from
+        room_cleaning_history()):
+          - days_since_last: days since that room was last cleaned
+          - expected_interval_days: mean gap between consecutive cleans
+            of that specific room, from `last_cleaned_rooms` timestamps
+            in the last `days` days. None when fewer than min_intervals
+            gaps exist yet.
+          - status: "overdue" when days_since_last exceeds the room's own
+            mean + significance_multiplier * stdev (or mean * 1.5 as a
+            fallback when there isn't enough variance data yet — same
+            conservative-fallback spirit as L9-BATTERY's
+            _ESTCAP_FALLBACK_MIN_RATE); "healthy" otherwise;
+            "insufficient_data" when expected_interval_days is None.
+
+        Returns {} when no room has ever been cleaned (no last_cleaned_rooms
+        data at all — 600-series or a robot with no cloud enrichment yet).
+        """
+        cutoff = dt_util.now() - timedelta(days=days)
+        visits_by_room: dict[str, list[str]] = {}
+        for rec in self._records:
+            ended_at = rec.get("ended_at")
+            rooms: list[str] = rec.get("last_cleaned_rooms") or []
+            # v3.2.0 full-review fix — defence in depth alongside the
+            # import-gate type validation in api_views.py: a store that
+            # was ALREADY poisoned with a non-string timestamp (imported
+            # before that gate existed) must degrade to skipping the bad
+            # record, not crash this method on every cloud-refresh cycle.
+            if not ended_at or not isinstance(ended_at, str) or not rooms:
+                continue
+            ended_dt = dt_util.parse_datetime(ended_at)
+            if ended_dt is None:
+                continue
+            if ended_dt.tzinfo is None:
+                ended_dt = ended_dt.replace(tzinfo=timezone.utc)
+            if ended_dt < cutoff:
+                continue
+            for room in rooms:
+                visits_by_room.setdefault(room, []).append(ended_at)
+
+        now_dt = dt_util.parse_datetime(now_iso)
+        result: dict[str, dict[str, Any]] = {}
+
+        for room, last_clean_iso in self.room_cleaning_history().items():
+            last_dt = dt_util.parse_datetime(last_clean_iso)
+            if now_dt is None or last_dt is None:
+                continue
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            days_since_last = (now_dt - last_dt).total_seconds() / 86400.0
+
+            timestamps = sorted(visits_by_room.get(room, []))
+            intervals: list[float] = []
+            for i in range(len(timestamps) - 1):
+                t1 = dt_util.parse_datetime(timestamps[i])
+                t2 = dt_util.parse_datetime(timestamps[i + 1])
+                if t1 is None or t2 is None:
+                    continue
+                gap_days = (t2 - t1).total_seconds() / 86400.0
+                if gap_days > 0:
+                    intervals.append(gap_days)
+
+            if len(intervals) < min_intervals:
+                result[room] = {
+                    "days_since_last": round(days_since_last, 1),
+                    "expected_interval_days": None,
+                    "status": "insufficient_data",
+                }
+                continue
+
+            mean_interval = statistics.mean(intervals)
+            stdev_interval = (
+                statistics.stdev(intervals) if len(intervals) >= 2 else 0.0
+            )
+            threshold = (
+                mean_interval + significance_multiplier * stdev_interval
+                if stdev_interval > 0
+                else mean_interval * 1.5
+            )
+            status = "overdue" if days_since_last > threshold else "healthy"
+            result[room] = {
+                "days_since_last": round(days_since_last, 1),
+                "expected_interval_days": round(mean_interval, 1),
+                "status": status,
+            }
+
         return result
 
     def presence_windows(self, days: int) -> list[MissionWindow]:
@@ -841,36 +1022,40 @@ class MissionStore:
             "dirt_p75":      dirt_p75,
         }
 
-    def is_anomalous(
+    def anomaly_reason(
         self,
         record: dict,
         stats: dict,
         profile: Any = None,
-    ) -> bool:
-        """Return True when a record is statistically anomalous.
+    ) -> str | None:
+        """v3.2.0 ANOMALY-EXPLAIN — same four conditions as is_anomalous()
+        (which now delegates here), but returns WHICH one triggered instead
+        of a bare bool. Checked in this fixed priority order when more than
+        one would technically apply (rare in practice, since each is an
+        early return on the same record — a mission that's both slow+low-
+        coverage AND has an extreme dirt spike is an unusual combination):
 
-        L3 conditions (any one triggers):
-          - duration > mean + 2×std AND area < mean_area − 1×std
-            → robot spending more time covering less area (obstacle / brush issue)
-          - recharge_min > learned_avg + 120 min
-            → unusually long recharge mid-mission (battery degrading)
-          - dirt > p75 × 2.5
-            → extreme dirt event (spill, accident, pet)
+          1. "obstacle_or_blockage" — slow AND low coverage
+          2. "excessive_recharge"   — unusually long mid-mission recharge
+          3. "dirt_spike"           — extreme dirt event
+          4. "incomplete_coverage"  — pre-20-mission fallback vs robot profile
 
-        Pre-20-mission fallback (profile required):
-          - area < profile.typical_coverage_sqft × SQFT_TO_M2 × 0.4
+        Returns None when the record isn't anomalous by any of these.
 
-        Args:
-            record: a single MissionStore record dict.
-            stats:  output of compute_rolling_stats(); must not be None.
-            profile: RobotProfile instance or None; only used for pre-20-mission check.
+        Deliberately does NOT cover robot_lifted or error_code — those are
+        independent facts about a mission (see async_handle_explain_mission
+        in services.py), not additional anomaly_reason categories. A
+        mission can be robot_lifted and/or have an error_code regardless
+        of whether any of the four reasons above also applies, so folding
+        them into this priority chain would misrepresent them as
+        competing explanations rather than orthogonal ones.
         """
         dur   = record.get("duration_min")
         area  = record.get("area_sqft")
         rch   = record.get("recharge_min")
         dirt  = record.get("dirt")
 
-        # Condition 1 — struggling: slow AND low coverage
+        # 1 — struggling: slow AND low coverage
         if (
             dur is not None
             and stats["duration_std"] > 0
@@ -880,37 +1065,50 @@ class MissionStore:
             and stats["area_std"] > 0
             and area < stats["area_mean"] - stats["area_std"]
         ):
-            return True
+            return "obstacle_or_blockage"
 
-        # Condition 2 — excessive recharge
+        # 2 — excessive recharge
         if rch is not None and rch > stats["recharge_mean"] + 120:
-            return True
+            return "excessive_recharge"
 
-        # Condition 3 — extreme dirt spike
+        # 3 — extreme dirt spike
         if (
             dirt is not None
             and stats["dirt_p75"] is not None
             and stats["dirt_p75"] > 0
             and dirt > stats["dirt_p75"] * 2.5
         ):
-            return True
+            return "dirt_spike"
 
-        # Pre-20-mission fallback via robot profile.
-        # Only engaged when no area statistics are available (stats["area_mean"]
-        # is None), which happens when either:
-        #   a) fewer than 20 missions exist in the window, OR
-        #   b) no mission in the window has area_sqft data (600-series).
-        # With a full statistical baseline (area_mean is not None), this check
-        # is intentionally skipped to avoid flagging legitimate partial room
+        # 4 — pre-20-mission fallback via robot profile. Only engaged when
+        # no area statistics are available (stats["area_mean"] is None),
+        # which happens when either fewer than 20 missions exist in the
+        # window, or no mission in the window has area_sqft data
+        # (600-series). With a full statistical baseline, this check is
+        # intentionally skipped to avoid flagging legitimate partial room
         # cleans (e.g. single-room scheduled clean) as anomalous.
         if profile is not None and area is not None and stats["area_mean"] is None:
             typical = getattr(profile, "typical_coverage_sqft", None)
             if typical is not None and typical > 0:
                 typical_m2 = typical * SQFT_TO_M2
                 if area * SQFT_TO_M2 < typical_m2 * 0.4:
-                    return True
+                    return "incomplete_coverage"
 
-        return False
+        return None
+
+    def is_anomalous(
+        self,
+        record: dict,
+        stats: dict,
+        profile: Any = None,
+    ) -> bool:
+        """Return True when a record is statistically anomalous.
+
+        L3 conditions (any one triggers) — see anomaly_reason() for the
+        full detail and the specific reason each one maps to; this is now
+        a thin wrapper so the two never drift out of sync with each other.
+        """
+        return self.anomaly_reason(record, stats, profile) is not None
 
     @property
     def consecutive_anomalous(self) -> int:

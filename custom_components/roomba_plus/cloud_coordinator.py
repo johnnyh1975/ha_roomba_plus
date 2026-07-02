@@ -925,6 +925,17 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.umf_data.get("keepoutzones", [])
 
     @property
+    def region_suggestions(self) -> list[dict[str, Any]]:
+        """v3.2.0 ROOM-TYPE-SUGGEST — iRobot's own ML room-type classifier
+        output from the active UMF floor plan: [{"region_id": str,
+        "suggested_types": [{"region_type": str, "score": float}, ...]}].
+        Confirmed field shape from a real captured pmap (see
+        MISSIONSTORE_FIELD_REGISTRY.md) — reliability across many pmaps
+        beyond that one sample is unconfirmed, hence the conservative
+        score-gating in sensor.py's id_to_display_name()."""
+        return self.umf_data.get("region_suggestions", [])
+
+    @property
     def observed_zone_centroids(self) -> list[dict[str, Any]]:
         """Return observed obstacle zone centroids for GridStore seeding.
 
@@ -1052,6 +1063,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             geo: dict[str, Any] = {
                 "points2d": [], "keepoutzones": [],
                 "observed_zones": [], "regions": [],
+                "region_suggestions": [],   # v3.2.0 ROOM-TYPE-SUGGEST
             }
             for m in maps:
                 if not isinstance(m, dict):
@@ -1062,6 +1074,14 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Regions from UMF maps contain geometry.ids — needed by UmfAligner
                 # to resolve room polygons. Regions from get_pmaps() only have metadata.
                 geo["regions"].extend(m.get("regions") or [])
+                # v3.2.0 ROOM-TYPE-SUGGEST — iRobot's own ML room-type
+                # classifier output, confirmed present in a real captured
+                # pmap (PyRoomba r.json, July 2026 — see
+                # MISSIONSTORE_FIELD_REGISTRY.md). Reliability across many
+                # pmaps unconfirmed (only one sample seen) — used only as
+                # a conservative fallback, never overriding a user-set
+                # region name. See sensor.py's id_to_display_name().
+                geo["region_suggestions"].extend(m.get("region_suggestions") or [])
 
             _LOGGER.debug(
                 "iRobot cloud: UMF parsed — "
@@ -1085,6 +1105,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ],
                 "points2d":   geo["points2d"],
                 "regions":    geo["regions"],
+                "region_suggestions": geo["region_suggestions"],   # v3.2.0 ROOM-TYPE-SUGGEST
                 "pmap_id":    active_id,
                 "version_id": version_id,
             }

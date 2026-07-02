@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-3.1.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-3.1.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -198,6 +198,10 @@ Each robot is a separate integration entry with its own device, entities, and st
 | Sleep | Sends the robot to low-power sleep state |
 | Power off | Powers the robot off completely |
 
+#### Child lock & eco charge switches (v3.2.0)
+
+Two config-category switches, created only on models that report the underlying preference: **Child lock** (`childLock`) disables the robot's physical onboard buttons — useful for households with kids or pets that might otherwise trigger a clean by accident. **Eco charge** (`ecoCharge`) toggles the robot's reduced-power charging mode. `sensor.*_dock_firmware_version` (diagnostic, disabled by default) exposes the dock's own firmware version separately from the robot's.
+
 ---
 
 ### 🟠 Cleaning & zones
@@ -310,9 +314,19 @@ Automatic room segmentation from the same coverage data used for the heatmap (di
 
 If you're updating from an earlier version and had already named zones, those names are carried over automatically the first time this version starts up — no action needed.
 
+#### Room type suggestion (v3.2.0, SMART-tier)
+
+Rooms you haven't named yourself (in the iRobot app or via Options Flow) fall back to iRobot's own ML room-type classification instead of a bare region ID — e.g. "Living Room" instead of "19" — wherever ROOM-SIZE or room accessibility scores are shown. Only used when the suggestion's confidence score is clearly positive; a negative score means "probably not this type" and is never shown. A name you've set yourself always takes priority and is never overridden by a suggestion.
+
 #### Map drift detection (v3.1.0, EPHEMERAL-tier)
 
 A Repair Issue (`map_drift_detected`) fires when the robot's recent missions show elevated drift from its expected dock position — tracked over a 10-mission sliding window rather than a lifetime total, so a robot with a long history of normal drift fluctuation doesn't trigger a permanent false positive. The issue clears automatically (with hysteresis to prevent flapping) once drift returns to normal over subsequent missions. Usually indicates the dock was moved or the robot is having difficulty relocating; re-dock and allow a fresh mapping run if it persists.
+
+#### Layout change detection (v3.2.0)
+
+`binary_sensor.*_layout_change_detected` turns on when a spot that was reliably covered for 20+ missions has now been missed for 3 consecutive ones — a sign new furniture or another obstacle may now be blocking it. A companion Repair Issue with the approximate location can be dismissed for 30 days if the change was expected (e.g. a rug added on purpose); the binary sensor itself always reflects the true current state regardless of dismissal, so automations relying on it see reality, not a suppressed notification.
+
+Needs 23 missions of per-cell coverage history before it can judge anything — `cells_tracked` and `missions_until_first_ready` attributes are shown from the very first mission, so you can see it's building history rather than wondering whether it's just quietly broken.
 
 #### Battery / dock contact monitoring (v2.10.0)
 
@@ -419,6 +433,18 @@ Monitors three dock-contact counters (`nChatters`, `nKnockoffs`, `nAborts`) and 
 
 Battery capacity (mAh) · Navigation panic events · Cliff events front / rear · Navigation landmark quality (9-series) · Optical / piezo dirt detections, navigation orientations (i/s-series) · Dock contact chatters / knockoffs / charge aborts (v2.8.0) · Wi-Fi last channel, channel stability, missions per charge (v2.8.0)
 
+#### Health score trend (v3.2.0)
+
+`sensor.*_health_score_trend` classifies the recent trend in the existing integration health score as `improving`, `stable`, or `declining` — self-calibrated against this specific robot's own learned baseline and noise level, not a fixed point threshold. Needs 44 days of history before it can judge (30-day reference period + 14-day comparison window); a Repair Issue fires once a decline has persisted 14+ days and auto-resolves once it recovers. A `days_until_ready` attribute counts down the wait so it's not just an opaque `Unknown` in the meantime.
+
+#### Reset diagnostics (v3.2.0)
+
+`sensor.*_reset_diagnostics` (diagnostic) exposes the robot's own reset-cause breakdown (`bbrstinfo`) that was previously entirely unread: navigation resets, mobility resets, and safety-triggered resets (the native value — the most actionable single counter) as extra attributes, plus out-of-memory resets on firmware that reports them. Deliberately a plain diagnostic sensor, not folded into the integration health score.
+
+#### Cleaning cadence health (v3.2.0)
+
+Learns each room's own typical interval between cleans from its cleaning history, then flags rooms that have gone noticeably longer than their own normal rhythm without being cleaned — self-calibrated per room, not a fixed schedule. Exposed via `format=zone_coverage_health` on the [REST history API](docs/API.md#format=zone_coverage_health) and a per-room Repair Issue when overdue.
+
 ---
 
 ### 🟢 Mission history & intelligence
@@ -438,6 +464,7 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Last mission summary | Most recent mission as a single entity — 14 attributes (duration, area, battery delta, recharges, dirt events, initiator, timestamps) for automation triggers without digging through history (v3.1.0) |
 | Room cleaning history | Dictionary sensor: `{room_name: last_cleaned_timestamp}` across all recorded missions, SMART-tier with cloud access (v3.1.0) |
 | Consecutive anomalous missions | Count of consecutive most-recent missions classified as anomalous (v3.0.0, disabled by default — threshold ≥ 3 triggers the Card C5-ANOMALY banner) |
+| Last mission team ID | `team_id` of the most recent mission, if part of an Imprint Link team clean — `null` for the vast majority of ordinary single-robot runs (v3.2.0, disabled by default) |
 
 Every mission also writes a searchable Logbook entry and fires `roomba_plus_mission_completed` — see [Events & device triggers](#events--device-triggers).
 
@@ -478,6 +505,8 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 
 `sensor.{name}_room_areas` (v3.1.0) — dictionary sensor: `{room_name: floor_area_m2}`, calculated from UMF polygon data. The only automatically-measured room area available without a tape measure.
 
+`sensor.{name}_room_accessibility_scores` (v3.2.0) — dictionary sensor: `{room_name: {score, limiting_factor}}`, a 0–100 score combining stuck-event rate, coverage gap, and time-per-area — each judged against this robot's own average across its other rooms, not a fixed threshold. `limiting_factor` names which signal (`obstacle_density` / `coverage_gap` / `narrow_passages`) is pulling the score down. A per-room Repair Issue fires below 60.
+
 #### Error intelligence
 
 | Sensor | Notes |
@@ -494,9 +523,19 @@ Monitors each mission against the last 30 days of your robot's personal history.
 
 > **v2.8.0:** if you have cloud credentials and prior mission history in the iRobot app, the anomaly baseline and per-room dirt index are bootstrapped from that full cloud history at first setup — both features can activate within days instead of needing several weeks of fresh local history.
 
+#### Anomaly explanation (v3.2.0)
+
+The `roomba_plus.explain_mission` service (and its [REST equivalent](docs/API.md#get-missionmission_idexplain)) turns a flagged anomaly into a plain-language reason: `obstacle_or_blockage`, `excessive_recharge`, `dirt_spike`, or `incomplete_coverage`, plus a matching recommended action. `robot_lifted` (the robot was picked up during the mission) and `error_code` are reported alongside, independently — a mission can have either regardless of which anomaly reason applies, if any.
+
+The same explanation is also included directly in every `roomba_plus_mission_completed` event payload (see [Event bus](#event-bus-v286)) — a notification automation gets `anomaly_reason` and `recommended_action` for free, without calling the service.
+
 #### Stuck pattern time-correlation (v2.7+)
 
 Tracks the weekday and hour of every stuck event per grid cell. When a cell accumulates ≥ 8 stucks with more than 60 % concentrated in the same time slot, a **Repair Issue** is raised: *"Your Roomba gets stuck near Kitchen most often on Tuesday mornings."* Auto-clears when the pattern changes. Existing stuck data from v2.6.x migrates automatically.
+
+#### Stuck hotspot clusters (v3.2.0)
+
+Groups adjacent stuck-event grid cells (two or more neighbouring cells independently qualifying is itself a strong signal — physically near-impossible to be coincidence at the 150mm cell size involved) into a Repair Issue with compass bearing, room name (Smart Map robots), and cell count. Since a robot's lifetime stuck count never decreases, resolution is judged by whether the cluster's coverage has recovered relative to its surroundings, not by the stuck count itself — a permanent stuck-history doesn't keep the issue open forever once the actual obstacle is gone.
 
 #### Performance sensors
 
@@ -533,11 +572,15 @@ Roomba+ backfills up to 365 days of mission history into HA Long-Term Statistics
 #### REST history API
 
 ```
-GET /api/roomba_plus/{entry_id}/mission_history?format=summary|records|hazards|export
+GET /api/roomba_plus/{entry_id}/mission_history?format=summary|records|hazards|export|zone_coverage_health
 POST /api/roomba_plus/{entry_id}/mission_history/import
 GET /api/roomba_plus/{entry_id}/digest?date=YYYY-MM-DD
 GET /api/roomba_plus/household
+GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
+GET /api/roomba_plus/{entry_id}/mission/{n_mssn}/path
 ```
+
+The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-by-room timeline — "Kitchen at 09:05, Hallway at 09:23, Bedroom at 09:31" — room-granular, not pixel-accurate pose tracking.
 
 > Full parameter reference, response shapes, and curl examples: **[docs/API.md](docs/API.md)**
 
@@ -671,15 +714,16 @@ Roomba+ fires events on the HA event bus that automations can react to directly 
 
 | Event | Fires when | Payload |
 |---|---|---|
-| `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` |
+| `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` — plus (v3.2.0) `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for ordinary missions), so a notification automation gets the anomaly reason without calling any service |
 | `roomba_plus_room_completed` | AUTO-ADVANCE-ROOM confirms a room finished | `entry_id`, `name`, `room_name`, `room_idx` |
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
 | `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |
+| `roomba_plus_stuck` (v3.2.0) | MQTT watchdog detects the robot went silent during an active mission | `entry_id`, `name`, `last_room`, `phase`, `stuck_count`, `minutes_stuck`, `last_known_position` (if pose data available) |
 | `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean` | Presence-aware scheduling (see above) | — |
 | `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
 
-`roomba_plus_mission_completed` and `roomba_plus_maintenance_reset` also produce rich, searchable **Logbook** entries automatically — no setup needed.
+`roomba_plus_mission_completed`, `roomba_plus_maintenance_reset`, and `roomba_plus_stuck` also produce rich, searchable **Logbook** entries automatically — no setup needed.
 
 ### Device triggers
 
@@ -871,6 +915,14 @@ No config entry migration — the persisted schema is unchanged. New self-calibr
 `FAN_SPEED_AUTOMATIC`/`ECO`/`PERFORMANCE` changed from `Automatic`/`Eco`/`Performance` to lowercase (`automatic`/`eco`/`performance`) for Home Assistant compliance. Existing automations using the old Capital-Case values continue to work unchanged — both `select.select_option` and `vacuum.set_fan_speed` accept either form.
 
 `mop_clean_mode`, `mop_tank_status`, and `mop_ars_behavior` sensor states changed similarly — e.g. `"Dirty Pause + Dry"` → `"dirty_pause_dry"`. Update any automation that checks these sensors' raw `state` value with the old Capital-Case text.
+
+### Upgrading to v3.2.0
+
+No config entry migration — all persisted data is additive, existing stored data loads unchanged. Several new self-calibrating features need a stretch of mission history before they show a real value rather than `Unknown`/`insufficient_data`, learning your specific robot's own normal behaviour rather than using a fixed threshold — expected, not a bug:
+
+- `sensor.*_health_score_trend`: 44 days of recorded health-score history — watch it count down via the `days_until_ready` attribute
+- `binary_sensor.*_layout_change_detected`: 23 missions of coverage history per grid cell — `cells_tracked` and `missions_until_first_ready` are shown from the start, even before any candidate is found, so "still learning" no longer looks the same as "nothing to report"
+- Room accessibility scores, stuck hotspot clusters, cleaning cadence health: a handful of missions with the relevant signal (stuck events, room-tagged cleans) before a meaningful score/status appears
 
 ---
 
