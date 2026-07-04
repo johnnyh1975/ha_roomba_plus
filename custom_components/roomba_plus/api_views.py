@@ -100,6 +100,19 @@ def _inject_zones(
     return record
 
 
+def _safe_int(value: Any) -> int | None:
+    """v3.2.1 — int-or-null for unified-record fields.
+
+    nMssn arrives as int from cloud_coordinator's type-narrowing, but the
+    import endpoint and pre-v3.2.0 stores may hold strings or garbage —
+    the converters must never raise on a single bad record.
+    """
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     """Convert a raw cloud /missionhistory record to the unified per-mission shape."""
     start_ts = record.get("startTime")
@@ -142,6 +155,11 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         # v2.3.0 — from CR4 timeline merge; alignment_confidence injected in get()
         "room_coverage":        record.get("room_coverage"),
         "alignment_confidence": None,
+        # v3.2.1 — lifetime mission counter, the key of MissionPathView
+        # (/mission/{n_mssn}/path).  Unblocks card F4 (path replay): the
+        # card needs it per-row to build the replay request.  Every raw
+        # cloud record carries nMssn (see cloud_coordinator.py).
+        "n_mssn":       _safe_int(record.get("nMssn")),
     }
 
 
@@ -173,6 +191,11 @@ def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         # v2.3.0 — from CR4 timeline merge; alignment_confidence always null for local
         "room_coverage":        record.get("room_coverage"),
         "alignment_confidence": None,
+        # v3.2.1 — card F4 (path replay), see _cloud_record_to_unified.
+        # Local records never get nMssn at creation (callbacks.py); it
+        # arrives via backfill_from_cloud() (_CLOUD_MERGE_SCALAR) — null
+        # until enriched, which the card treats as "replay unavailable".
+        "n_mssn":       _safe_int(record.get("nMssn")),
     }
 
 

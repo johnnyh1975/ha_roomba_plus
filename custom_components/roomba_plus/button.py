@@ -160,11 +160,18 @@ async def async_setup_entry(
         BatteryResetButton(roomba, blid, config_entry),
     ])
 
-    # Zone clean button: EPHEMERAL only, appears after first room detected.
-    # ROOM-SEG Stage 3 — gated on room_seg_store now, not zone_store.
-    data = config_entry.runtime_data
-    if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
-        entities.append(ZoneCleanButton(roomba, blid, config_entry))
+    # v3.2.1 REMOVED — ZoneCleanButton used to be created for EPHEMERAL
+    # (900-series) robots too. On this tier it always sent a plain
+    # "start" command regardless of what was selected (the 900-series
+    # MQTT API has no coordinate/region targeting at all — see
+    # ZoneCleanButton's own docstring and the matching ZoneSelect
+    # removal in select.py for the full rationale). A button labelled
+    # "clean this zone" that silently cleans the whole floor instead is
+    # worse than no button — it promises targeted-room cleaning on
+    # hardware that architecturally cannot do it. SMART-tier robots
+    # (i/s/j/m with pmaps) are unaffected — they get a real
+    # region-targeting command path via the cloud-sourced select
+    # entities noted in const.py.
 
     # Repeat last mission: whenever lastCommand is present in state
     if state.get("lastCommand"):

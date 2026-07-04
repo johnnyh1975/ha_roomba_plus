@@ -163,7 +163,29 @@ class GridStore:
         # string, keyed by cell. Cleared once 30 days have passed, at
         # which point the issue is allowed to fire again if the
         # candidate condition still holds.
+        # v3.2.1 DUAL-GRID (structure inference) — a SECOND, independent
+        # cell-weight dict, updated with the exact centre cell of each pose
+        # point only, never disk-filled. Same EMA decay/prune mechanics as
+        # self._cells, entirely separate accumulation.
+        #
+        # Rationale: self._cells is disk-filled (v2.9.0, robot_radius_mm
+        # sweep) — correct for coverage tracking (it IS the real swept
+        # area) but wrong as segmentation input: a sweep radius wide
+        # enough to reach a nearby interior wall from both sides erases
+        # the wall from the visited-cell footprint entirely. Confirmed on
+        # real field data: a single mission's centre-only trace produced
+        # 315 thin-separator (candidate-wall) cells; the SAME mission
+        # disk-filled produced only 75 — the disk-fill erases ~76% of the
+        # structural signal before segmentation ever sees it.
+        #
+        # Deliberately NOT yet consumed by room_segmentation.py — this is
+        # data-collection scaffolding. GridStore.cells (disk-filled) stays
+        # the sole segmentation input until structure_cells has enough
+        # accumulated history to validate against, per the honest
+        # end-to-end evaluation this idea still needs (proxy-metric only
+        # so far, from a single mission).
         self._furniture_dismissed_at: dict[tuple[int, int], str] = {}
+        self._structure_cells: dict[tuple[int, int], float] = {}
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -233,6 +255,15 @@ class GridStore:
                 (int(k.split(",")[0]), int(k.split(",")[1])): str(v)
                 for k, v in raw_dismissed.items()
             }
+            # v3.2.1 DUAL-GRID — additive field, same no-version-bump
+            # rationale as the FURNITURE fields above: a payload saved
+            # before this existed simply has no "structure_cells" key,
+            # indistinguishable from a fresh cold start for this tracker.
+            raw_structure = data.get("structure_cells") or {}
+            self._structure_cells = {
+                (int(k.split(",")[0]), int(k.split(",")[1])): float(v)
+                for k, v in raw_structure.items()
+            }
         except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
@@ -240,6 +271,7 @@ class GridStore:
             self._coverage_history = {}
             self._coverage_history_age = {}
             self._furniture_dismissed_at = {}
+            self._structure_cells = {}
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
@@ -260,6 +292,9 @@ class GridStore:
             },
             "furniture_dismissed_at": {
                 f"{gx},{gy}": ts for (gx, gy), ts in self._furniture_dismissed_at.items()
+            },
+            "structure_cells": {
+                f"{gx},{gy}": w for (gx, gy), w in self._structure_cells.items()
             },
         })
 
@@ -329,6 +364,25 @@ class GridStore:
             touched = {_mm_to_cell(x, y) for x, y in pose_points}
         for cell in touched:
             self._cells[cell] = min(1.0, self._cells.get(cell, 0.0) + VISIT_INCREMENT)
+
+        # v3.2.1 DUAL-GRID — same decay/prune/increment mechanics as
+        # self._cells above, but always centre-only, independent of
+        # robot_radius_mm. See the field docstring in __init__ for why
+        # this needs to be a wholly separate accumulator, not derivable
+        # from self._cells after the fact (disk-fill is lossy).
+        centre_touched = {_mm_to_cell(x, y) for x, y in pose_points}
+        structure_prune = [
+            cell for cell, weight in self._structure_cells.items()
+            if weight * DECAY < PRUNE_THRESHOLD
+        ]
+        for cell in structure_prune:
+            del self._structure_cells[cell]
+        for cell in self._structure_cells:
+            self._structure_cells[cell] *= DECAY
+        for cell in centre_touched:
+            self._structure_cells[cell] = min(
+                1.0, self._structure_cells.get(cell, 0.0) + VISIT_INCREMENT
+            )
 
         # v3.2.0 FURNITURE — shift every tracked cell's coverage-history
         # bitmask by one mission, same "applies to every tracked cell
@@ -410,6 +464,16 @@ class GridStore:
         caller does with the returned dict.
         """
         return dict(self._cells)
+
+    @property
+    def structure_cells(self) -> dict[tuple[int, int], float]:
+        """Read-only snapshot of the DUAL-GRID centre-only cell weights.
+
+        v3.2.1 — data-collection scaffolding for a room-segmentation
+        input candidate; not yet consumed anywhere. See the field
+        docstring in __init__ for the disk-fill-vs-structure rationale.
+        """
+        return dict(self._structure_cells)
 
     @property
     def stuck_event_count(self) -> int:

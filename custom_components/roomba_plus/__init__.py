@@ -75,6 +75,8 @@ from .cloud_coordinator import IrobotCloudCoordinator
 from .blocking_manager import BlockingManager
 from .dirt_threshold_manager import DirtThresholdManager
 from .outline_store import OutlineStore
+from .mission_trajectory_store import MissionTrajectoryStore
+from .freeze_snapshot_store import FreezeSnapshotStore
 from .maintenance_store import MaintenanceStore
 from .robot_profile_store import RobotProfileStore  # v2.6 L4
 from .mission_timer_store import MissionTimerStore  # v2.6 MP1
@@ -2172,6 +2174,65 @@ async def async_migrate_entry(
         )
         current = 24
 
+    if current == 24:
+        # v24 → v25 (v3.2.1): re-enable the device_tracker (current-room
+        # position) entity for EXISTING installations.
+        #
+        # Root cause (already fixed in v2.10.3, see device_tracker.py):
+        # entity_registry_enabled_default=False (the pre-v2.10.3 implicit
+        # default, since neither mac_address nor device_info is set) only
+        # prevents auto-enabling on *new* registrations. The code-level fix
+        # (_attr_entity_registry_enabled_default = True) has no effect on
+        # entities already present in the registry as disabled from before
+        # that fix shipped — exactly the community report this migration
+        # is named for ("I don't seem to have that entity on my i7+"):
+        # the fix has been in the code all along, but does nothing for
+        # anyone who installed before it existed.
+        #
+        # Only clears disabled_by when it is exactly INTEGRATION (i.e. the
+        # entity was auto-disabled by the old default) — a user who
+        # deliberately disabled this entity themselves (disabled_by=USER)
+        # is left untouched; their own choice is not overridden.
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+
+        entity_reg = er.async_get(hass)
+        blid = config_entry.data.get("blid", "")
+        reenabled_count = 0
+        if not blid:
+            _LOGGER.warning(
+                "Roomba+: v24→v25 migration — blid not in config entry data, "
+                "skipping device_tracker re-enable pass"
+            )
+        else:
+            expected_uid = f"roomba_plus_{blid}_position"
+            for entry in list(entity_reg.entities.values()):
+                if entry.platform != DOMAIN:
+                    continue
+                if entry.domain != "device_tracker":
+                    continue
+                if entry.unique_id != expected_uid:
+                    continue
+                if entry.disabled_by != RegistryEntryDisabler.INTEGRATION:
+                    continue  # not disabled, or disabled by the user — leave as-is
+                entity_reg.async_update_entity(
+                    entry.entity_id,
+                    disabled_by=None,
+                )
+                reenabled_count += 1
+                _LOGGER.debug(
+                    "Roomba+: re-enabled current-room device_tracker %s",
+                    entry.entity_id,
+                )
+
+        hass.config_entries.async_update_entry(config_entry, version=25)
+        _LOGGER.info(
+            "Roomba+: migrated entry %s to version 25 "
+            "(%d current-room device_tracker entit(y/ies) re-enabled)",
+            config_entry.entry_id, reenabled_count,
+        )
+        current = 25
+
     if current == config_entry.version:
         _LOGGER.debug(
             "Roomba+: config entry %s already at version %d — no migration needed",
@@ -2327,6 +2388,8 @@ class _SetupContext:
     cloud_coordinator: IrobotCloudCoordinator | None = None
     umf_aligner: Any = None
     outline_store: OutlineStore | None = None
+    trajectory_store: MissionTrajectoryStore | None = None
+    freeze_snapshot_store: FreezeSnapshotStore | None = None
     dirt_threshold_manager: DirtThresholdManager | None = None
     robot_profile_store: RobotProfileStore | None = None
     mission_timer_store: MissionTimerStore | None = None
@@ -2581,8 +2644,9 @@ async def _phase_data(ctx: _SetupContext) -> None:
 async def _phase_cloud(ctx: _SetupContext) -> None:
     """Phase 4 — Create cloud coordinator; load all cloud-dependent stores.
 
-    Populates: cloud_coordinator, umf_aligner, outline_store,
-               dirt_threshold_manager, robot_profile_store, mission_timer_store.
+    Populates: cloud_coordinator, umf_aligner, outline_store, trajectory_store,
+               freeze_snapshot_store, dirt_threshold_manager, robot_profile_store,
+               mission_timer_store.
     """
     hass = ctx.hass
     config_entry = ctx.config_entry
@@ -2654,6 +2718,33 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
         _LOGGER.debug(
             "Roomba+ OutlineStore: loaded %d points for %s",
             outline_store.contour_point_count, config_entry.data[CONF_BLID],
+        )
+
+    # v3.2.1 — MissionTrajectoryStore (EPHEMERAL + map enabled, same gate
+    # as OutlineStore): bounded last-N-missions raw pose history. Data-
+    # collection scaffolding, see mission_trajectory_store.py docstring.
+    trajectory_store: MissionTrajectoryStore | None = None
+    if (map_capability == MapCapability.EPHEMERAL
+            and config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)):
+        trajectory_store = MissionTrajectoryStore()
+        await trajectory_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "Roomba+ MissionTrajectoryStore: loaded %d mission(s) for %s",
+            trajectory_store.mission_count, config_entry.data[CONF_BLID],
+        )
+
+    # v3.2.1 — FreezeSnapshotStore (EPHEMERAL + map enabled, same gate):
+    # periodic immutable RoomSeg+Outline backup, insurance against the
+    # firmware pose-cutoff risk. See freeze_snapshot_store.py docstring.
+    freeze_snapshot_store: FreezeSnapshotStore | None = None
+    if (map_capability == MapCapability.EPHEMERAL
+            and config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)):
+        freeze_snapshot_store = FreezeSnapshotStore()
+        await freeze_snapshot_store.async_load(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "Roomba+ FreezeSnapshotStore: loaded snapshot from %s for %s",
+            freeze_snapshot_store.snapshotted_at or "(none yet)",
+            config_entry.data[CONF_BLID],
         )
 
     # DirtThresholdManager (SMART + cloud + demand enabled)
@@ -2730,6 +2821,8 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
     ctx.cloud_coordinator = cloud_coordinator
     ctx.umf_aligner = umf_aligner
     ctx.outline_store = outline_store
+    ctx.trajectory_store = trajectory_store
+    ctx.freeze_snapshot_store = freeze_snapshot_store
     ctx.dirt_threshold_manager = dirt_threshold_manager
     ctx.robot_profile_store = robot_profile_store
     ctx.mission_timer_store = mission_timer_store
@@ -2756,6 +2849,8 @@ def _build_runtime_data(ctx: _SetupContext) -> RoombaData:
         umf_aligner=ctx.umf_aligner,
         dirt_threshold_manager=ctx.dirt_threshold_manager,
         outline_store=ctx.outline_store,
+        trajectory_store=ctx.trajectory_store,
+        freeze_snapshot_store=ctx.freeze_snapshot_store,
         robot_profile=get_robot_profile(
             ctx.state.get("sku"),
             battery_type=ctx.state.get("batteryType"),
@@ -2820,6 +2915,14 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     if ctx.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
+
+    # v3.2.1 — MQTT-watchdog stamp callback MUST be registered before the
+    # platforms: entities register their on_message callbacks during setup,
+    # and roombapy calls callbacks in registration order.  Registering this
+    # first guarantees last_mqtt_message_ts is fresh before RoombaMqttStale
+    # (or any other entity) evaluates the message that ended a silence.
+    from .callbacks import make_mqtt_stamp_callback
+    roomba.register_on_message_callback(make_mqtt_stamp_callback(config_entry))
 
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 

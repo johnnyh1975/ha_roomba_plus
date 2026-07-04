@@ -18,6 +18,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from dataclasses import dataclass, field
 from typing import Any
@@ -62,6 +63,34 @@ _RELOC_WINDOW = 10
 # once per mission and a slow-changing signal needs fewer samples to
 # characterise its noise floor than a sparse event-count signal does.
 _ESTCAP_NOISE_MIN_SAMPLES = 10
+
+# v3.2.1 DOCK-ANCHOR — dock_theta_baseline: learned reference heading for
+# "what theta does the firmware report when genuinely docked". Needed
+# because, unlike dock POSITION (0,0 by definition, never needs learning),
+# dock THETA depends on the dock's physical orientation in the room, which
+# nothing tells us in advance — only observing enough undisturbed
+# (non-buffered) dockings can. See Dock_Anchor_Korrektur_Plan.md for the
+# full rationale (why v2/rotation correction cannot start from an
+# unvalidated first observation without risking a systematic, confidently
+# wrong rotation baked into every future mission).
+#
+# Deliberately NOT the same pattern as coverage_baseline/reloc_baseline
+# (pure mission-count thresholds, no variance check): those are left
+# untouched (already productive, no evidence they fire too early/late).
+# dock_theta_baseline adds a stdev gate on top of a small count floor,
+# because the physical reasoning here specifically predicts fast, tight
+# convergence (mechanically forced alignment via the charging contacts —
+# unlike coverage_ratio's genuine furniture/mode-driven variability, or
+# reloc's genuine navigation-behaviour drift) — a pure low count floor
+# risks mistaking a few coincidentally-similar early readings for
+# established convergence (the same trap as an early, too-small sample
+# looking deceptively consistent).
+_DOCK_THETA_MIN_SAMPLES = 5
+# Circular standard deviation threshold, in degrees. Tunable — deliberately
+# left as a round, conservative starting guess pending real field
+# validation (see design doc); not derived from any dataset yet.
+_DOCK_THETA_STDEV_THRESHOLD_DEG = 5.0
+
 # A degradation_rate must exceed the learned noise floor by this multiple
 # before _estimated_battery_eol trusts it enough to extrapolate from.
 # Conservative: with only oscillating, non-degrading field data so far,
@@ -201,6 +230,15 @@ class RobotProfileStore:
     estcap_noise_mean: float | None = None
     estcap_noise_m2: float = 0.0   # Welford's running sum of squared deviations
     estcap_noise_count: int = 0
+
+    # v3.2.1 DOCK-ANCHOR — dock_theta_baseline via circular statistics
+    # (running sum of unit vectors, NOT a linear Welford mean/M2 — theta
+    # wraps around at 360°/0°, where a naive linear mean would be wrong,
+    # e.g. mean of 359° and 1° must be 0°, not 180°). See
+    # _DOCK_THETA_MIN_SAMPLES docstring for the full rationale.
+    dock_theta_sin_sum: float = 0.0
+    dock_theta_cos_sum: float = 0.0
+    dock_theta_count: int = 0
     # Last observed converted-mAh estCap value, used to compute the delta fed
     # into update_estcap_noise(). Separate from baseline_estcap (the install-time
     # reference in MaintenanceStore) — this tracks reading-to-reading, not
@@ -287,6 +325,12 @@ class RobotProfileStore:
             self.estcap_noise_mean = float(enm) if enm is not None else None
             self.estcap_noise_m2 = float(data.get("estcap_noise_m2", 0.0))
             self.estcap_noise_count = int(data.get("estcap_noise_count", 0))
+            # v3.2.1 DOCK-ANCHOR — additive fields, same no-version-bump
+            # precedent used throughout this codebase: a payload saved
+            # before this existed simply has no such keys.
+            self.dock_theta_sin_sum = float(data.get("dock_theta_sin_sum", 0.0))
+            self.dock_theta_cos_sum = float(data.get("dock_theta_cos_sum", 0.0))
+            self.dock_theta_count = int(data.get("dock_theta_count", 0))
             lec = data.get("last_estcap_mah")
             self.last_estcap_mah = float(lec) if lec is not None else None
 
@@ -330,6 +374,9 @@ class RobotProfileStore:
             "estcap_noise_mean": self.estcap_noise_mean,
             "estcap_noise_m2": self.estcap_noise_m2,
             "estcap_noise_count": self.estcap_noise_count,
+            "dock_theta_sin_sum": self.dock_theta_sin_sum,
+            "dock_theta_cos_sum": self.dock_theta_cos_sum,
+            "dock_theta_count": self.dock_theta_count,
             "last_estcap_mah": self.last_estcap_mah,
             "health_score_history": self.health_score_history,
             "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
@@ -358,6 +405,9 @@ class RobotProfileStore:
         self.estcap_noise_mean = None
         self.estcap_noise_m2 = 0.0
         self.estcap_noise_count = 0
+        self.dock_theta_sin_sum = 0.0
+        self.dock_theta_cos_sum = 0.0
+        self.dock_theta_count = 0
         self.last_estcap_mah = None
         self.health_score_history = []
         self.lifetime_sqft_last_value = None
@@ -526,6 +576,79 @@ class RobotProfileStore:
     def estcap_noise_ready(self) -> bool:
         """True once enough delta observations exist to trust the noise floor."""
         return self.estcap_noise_count >= _ESTCAP_NOISE_MIN_SAMPLES
+
+    def update_dock_theta_baseline(self, theta_deg: float) -> None:
+        """Feed one CLEAN (non-buffered, undisturbed) dock-contact theta
+        reading into the circular running baseline.
+
+        Only ever call this for dockings NOT preceded by a stuck-event
+        buffering phase — a disturbed docking's theta is exactly the
+        unreliable reading this baseline must not be contaminated by.
+
+        Uses running sums of sin/cos (a standard circular-statistics
+        technique) rather than Welford's linear mean/variance: theta is
+        an angle, and averaging raw degree values directly breaks at the
+        0°/360° wraparound.
+        """
+        rad = math.radians(theta_deg)
+        self.dock_theta_sin_sum += math.sin(rad)
+        self.dock_theta_cos_sum += math.cos(rad)
+        self.dock_theta_count += 1
+        _LOGGER.debug(
+            "RobotProfileStore: dock_theta_baseline -> %.1f° (n=%d, stdev=%s)",
+            self.dock_theta_baseline or 0.0, self.dock_theta_count,
+            f"{self.dock_theta_circular_stdev_deg:.2f}"
+            if self.dock_theta_circular_stdev_deg is not None else "n/a",
+        )
+
+    @property
+    def dock_theta_baseline(self) -> float | None:
+        """Circular mean heading at dock contact, in degrees [0, 360),
+        or None with zero observations so far."""
+        if self.dock_theta_count == 0:
+            return None
+        mean_rad = math.atan2(
+            self.dock_theta_sin_sum / self.dock_theta_count,
+            self.dock_theta_cos_sum / self.dock_theta_count,
+        )
+        return math.degrees(mean_rad) % 360.0
+
+    @property
+    def dock_theta_resultant_length(self) -> float | None:
+        """Mean resultant vector length R ∈ [0, 1] — 1.0 means every
+        observation had (near-)identical theta, 0.0 means uniformly
+        scattered with no consistent heading at all. None with zero
+        observations."""
+        if self.dock_theta_count == 0:
+            return None
+        n = self.dock_theta_count
+        return (
+            (self.dock_theta_sin_sum / n) ** 2 + (self.dock_theta_cos_sum / n) ** 2
+        ) ** 0.5
+
+    @property
+    def dock_theta_circular_stdev_deg(self) -> float | None:
+        """Circular standard deviation in degrees (Mardia's definition:
+        sqrt(-2 ln R)). None if R is at or near 0 (undefined — maximally
+        scattered; a small epsilon guards against floating-point residue
+        from summed sin/cos never landing at EXACTLY 0.0 even for
+        perfectly cancelling angles) or with zero observations."""
+        r = self.dock_theta_resultant_length
+        if r is None or r <= 1e-9:
+            return None
+        return math.degrees((-2.0 * math.log(r)) ** 0.5)
+
+    @property
+    def dock_theta_baseline_ready(self) -> bool:
+        """True once enough CLEAN dock observations exist AND they're
+        tight enough (circular stdev under threshold) to trust the
+        baseline for v2 rotation correction. Both conditions required —
+        see _DOCK_THETA_MIN_SAMPLES docstring for why a count-only gate
+        isn't enough here."""
+        if self.dock_theta_count < _DOCK_THETA_MIN_SAMPLES:
+            return False
+        stdev = self.dock_theta_circular_stdev_deg
+        return stdev is not None and stdev <= _DOCK_THETA_STDEV_THRESHOLD_DEG
 
     def record_estcap_observation(self, current_estcap_mah: float) -> None:
         """v3.1.0 L9-BATTERY — record one estCap reading, computing the delta

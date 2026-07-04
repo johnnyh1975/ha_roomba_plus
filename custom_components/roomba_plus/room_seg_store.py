@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,6 +68,49 @@ ROOM_MATCH_JACCARD = 0.30
 # project history), so a generous-but-not-trivial threshold avoids
 # migrating a name onto the wrong room.
 MIGRATION_MATCH_THRESHOLD = 0.5
+
+# v3.2.1 STALE-ROOM CLEANUP — field-confirmed bug: a persisted room that
+# lost every match this round (see ROOM_MATCH_JACCARD above) is normally
+# kept forever, by design — GridStore cells can drop out of a recompute's
+# clusters from ordinary grid churn without the room having genuinely
+# disappeared. But when an unmatched room's ENTIRE former territory has
+# been reclaimed by a DIFFERENT room that WAS matched this round, that is
+# a different situation: the old room's cells now overlap a currently-
+# live room, not merely "absent this round". On a real OG this produced
+# a 122-cell phantom room 100% contained inside a 521-cell live room,
+# complete with 3 doors connecting the phantom to rooms it no longer
+# bordered anywhere. STALE_ABSORPTION_RATIO is the fraction of an
+# unmatched room's cells that must now belong to one single currently-
+# matched room before it's deleted as absorbed, rather than kept as
+# possibly-just-decayed. Conservative (0.8, not the whole cell set) so a
+# room that merely SHARES a large fringe with its neighbour after a
+# recompute boundary wobble isn't deleted — only near-total absorption is.
+STALE_ABSORPTION_RATIO = 0.8
+
+# v3.2.1 DOOR-DISTANCE-GATE — _match_doors previously kept exactly ONE
+# SegDoor per unordered room-pair, matched purely on which two rooms it
+# connects. In an open-plan layout, two rooms can share more than one
+# real doorway/opening; on a real OG two door observations for the same
+# pair measured 2.35 m and 1.96 m apart — almost certainly two distinct
+# physical openings, not sensor noise around one. A newly-detected
+# crossing only merges into an existing door of that pair if it falls
+# within this radius of it; otherwise it becomes a new, additional door
+# for the same pair. 800mm is comfortably larger than the largest
+# genuine single-doorway measurement jitter seen in the field data
+# (max spread among doors NOT suspected of being two openings: 765mm)
+# while remaining well under the two suspect pairs' 1956mm/2348mm gaps.
+DOOR_MERGE_DISTANCE_MM = 800.0
+
+# v3.2.1 BOUNDARY-HISTORY — rolling window of room-pair adjacency sets
+# across recomputes, for a future temporal-stability confidence signal.
+# Simulated (BFS-growth-approximated) end-to-end testing against real
+# field data showed NO effect versus the current single-snapshot
+# behaviour — every room-pair boundary was already 60-100% stable once
+# aggregated per pair, not per individual cell edge. Kept as cheap
+# scaffolding for re-evaluation once genuine multi-week recompute
+# history exists (the simulation could only approximate growth, not
+# replace real time), not because a benefit is expected here.
+MAX_BOUNDARY_HISTORY = 15
 
 
 @dataclass
@@ -207,6 +251,10 @@ class RoomSegStore:
         self._min_distance_cells = min_distance_cells
         self._merge_ratio = merge_ratio
         self.migrated_from_zonestore: bool = False
+        # v3.2.1 BOUNDARY-HISTORY — see MAX_BOUNDARY_HISTORY docstring.
+        # Each entry: sorted list of [room_a, room_b] pairs adjacent
+        # (connected by a door) at that recompute.
+        self._boundary_history: deque[list[list[str]]] = deque(maxlen=MAX_BOUNDARY_HISTORY)
 
     # ── Recompute ────────────────────────────────────────────────────────────
 
@@ -231,6 +279,11 @@ class RoomSegStore:
         )
         label_to_id = self._match_rooms(result)
         self._match_doors(result, label_to_id)
+        # v3.2.1 BOUNDARY-HISTORY — snapshot this recompute's room-pair
+        # adjacency (from the just-updated door list) into the rolling
+        # window. See MAX_BOUNDARY_HISTORY docstring for status.
+        pairs = sorted({_unordered_key(d.room_a, d.room_b) for d in self.doors})
+        self._boundary_history.append([[a, b] for a, b in pairs])
 
     def _match_rooms(self, result: RoomSegmentationResult) -> dict[int, str]:
         """Match each new cluster (keyed by its segment_rooms() integer
@@ -267,15 +320,58 @@ class RoomSegStore:
                 self.rooms[rid] = SegRoom(id=rid, cells=set(new_cells))
                 label_to_id[label] = rid
 
+        # v3.2.1 STALE-ROOM CLEANUP — see STALE_ABSORPTION_RATIO docstring
+        # above. Runs AFTER matching so `self.rooms[mid].cells` already
+        # reflects THIS round's freshly-matched cell sets, not last
+        # round's. Deletion happens before _match_doors runs (called
+        # right after this method in _recompute()), so the existing
+        # "both connected rooms still exist" door-preservation guard in
+        # _match_doors automatically drops any door that pointed at a
+        # room deleted here — no separate cascade-delete needed.
+        #
+        # v3.2.1 FIELD FIX — generalised from "one single absorber
+        # reaches the ratio" to "the UNION of everything absorbed by
+        # matched rooms reaches the ratio". Field-confirmed gap in the
+        # original single-absorber version: a real post-3.2.1 recompute
+        # produced a room 100% claimed elsewhere but split across THREE
+        # different matched rooms (72.7% / 10.0% / 17.2%) — no single
+        # absorber crossed 80%, so the original `any(...)` check missed
+        # a case that was, in aggregate, exactly as stale as the
+        # original single-absorber room_7 case this cleanup was built
+        # for. Union (not sum) of the per-absorber overlaps, in case a
+        # cell were ever double-claimed by two matched rooms at once
+        # (shouldn't happen post-recompute, but a union costs nothing
+        # extra and is correct either way).
+        stale_ids = []
+        for rid, room in self.rooms.items():
+            if rid in matched_existing or not room.cells:
+                continue
+            absorbed = set()
+            for mid in matched_existing:
+                absorbed |= (room.cells & self.rooms[mid].cells)
+            if len(absorbed) / len(room.cells) >= STALE_ABSORPTION_RATIO:
+                stale_ids.append(rid)
+        for rid in stale_ids:
+            _LOGGER.debug(
+                "RoomSegStore: deleting %s — %d cells absorbed into another room",
+                rid, len(self.rooms[rid].cells),
+            )
+            del self.rooms[rid]
+
         return label_to_id
 
     def _match_doors(
         self, result: RoomSegmentationResult, label_to_id: dict[int, str]
     ) -> None:
-        existing_by_pair: dict[tuple[str, str], SegDoor] = {
-            _unordered_key(d.room_a, d.room_b): d for d in self.doors
-        }
-        matched_pairs: set[tuple[str, str]] = set()
+        # v3.2.1 DOOR-DISTANCE-GATE — see DOOR_MERGE_DISTANCE_MM docstring.
+        # Was dict[pair, SegDoor] (exactly one door per pair); now
+        # dict[pair, list[SegDoor]] so genuinely distinct openings between
+        # the same two rooms (open-plan layouts) can coexist.
+        existing_by_pair: dict[tuple[str, str], list[SegDoor]] = {}
+        for d in self.doors:
+            existing_by_pair.setdefault(_unordered_key(d.room_a, d.room_b), []).append(d)
+
+        matched_door_ids: set[str] = set()
         new_doors: list[SegDoor] = []
         for d in result.doors:
             room_a = label_to_id.get(d["a"])
@@ -283,12 +379,23 @@ class RoomSegStore:
             if room_a is None or room_b is None:
                 continue
             key = _unordered_key(room_a, room_b)
-            matched_pairs.add(key)
-            existing = existing_by_pair.get(key)
-            if existing is not None:
-                existing.update_position(d["cell"])
-                existing.saddle_mm = d["saddle_mm"]
-                new_doors.append(existing)
+            new_x_mm, new_y_mm = d["cell"][0] * CELL_MM, d["cell"][1] * CELL_MM
+
+            # Find the CLOSEST existing door of this pair, if any is
+            # within DOOR_MERGE_DISTANCE_MM — closest, not first, so a
+            # pair with two existing doors merges into whichever one this
+            # detection actually belongs to.
+            best_existing, best_dist = None, None
+            for existing in existing_by_pair.get(key, []):
+                dist = ((existing.cx - new_x_mm) ** 2 + (existing.cy - new_y_mm) ** 2) ** 0.5
+                if best_dist is None or dist < best_dist:
+                    best_existing, best_dist = existing, dist
+
+            if best_existing is not None and best_dist <= DOOR_MERGE_DISTANCE_MM:
+                best_existing.update_position(d["cell"])
+                best_existing.saddle_mm = d["saddle_mm"]
+                matched_door_ids.add(best_existing.id)
+                new_doors.append(best_existing)
             else:
                 door = SegDoor(
                     id=f"door_{self._next_door_n}",
@@ -297,6 +404,7 @@ class RoomSegStore:
                 )
                 door.update_position(d["cell"])
                 self._next_door_n += 1
+                matched_door_ids.add(door.id)
                 new_doors.append(door)
 
         # Mirror the room-preservation policy (module docstring + see
@@ -308,15 +416,16 @@ class RoomSegStore:
         # having genuinely stopped existing. Wiping the door in that
         # case loses its entire `observations` history and stable `id`,
         # defeating the point of update_position()'s median smoothing.
-        # Kept only while both connected rooms still exist; rooms are
-        # never auto-deleted either, so today this is effectively
-        # "kept forever" — the guard just makes that explicit in case
-        # room deletion is ever added later.
-        for key, door in existing_by_pair.items():
+        # Kept only while both connected rooms still exist — rooms ARE
+        # now auto-deleted on absorption (v3.2.1 STALE-ROOM CLEANUP,
+        # _match_rooms above), which is exactly the case this guard
+        # exists to cascade into: a door pointing at a just-deleted
+        # phantom room is dropped here, no separate cleanup needed.
+        for door in self.doors:
             if (
-                key not in matched_pairs
-                and key[0] in self.rooms
-                and key[1] in self.rooms
+                door.id not in matched_door_ids
+                and door.room_a in self.rooms
+                and door.room_b in self.rooms
             ):
                 new_doors.append(door)
 
@@ -482,6 +591,20 @@ class RoomSegStore:
             self._next_room_n = int(data.get("next_room_n", 1))
             self._next_door_n = int(data.get("next_door_n", 1))
             self.migrated_from_zonestore = bool(data.get("migrated_from_zonestore", False))
+            # v3.2.1 BOUNDARY-HISTORY — additive field, same no-version-
+            # bump precedent as GridStore's FURNITURE/DUAL-GRID fields: a
+            # payload saved before this existed simply has no key, which
+            # is indistinguishable from a fresh cold start for this
+            # tracker specifically.
+            raw_history = data.get("boundary_history") or []
+            self._boundary_history = deque(
+                (
+                    [[str(a), str(b)] for a, b in entry]
+                    for entry in raw_history
+                    if isinstance(entry, list)
+                ),
+                maxlen=MAX_BOUNDARY_HISTORY,
+            )
             _LOGGER.debug(
                 "RoomSegStore: loaded %d rooms, %d doors for %s",
                 len(self.rooms), len(self.doors), entry_id,
@@ -489,6 +612,18 @@ class RoomSegStore:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("RoomSegStore: failed to load data for %s: %s", entry_id, exc)
             self.__init__()
+
+    def _boundary_stability(self, room_a: str, room_b: str) -> float:
+        """v3.2.1 — fraction of the boundary-history window in which
+        (room_a, room_b) appeared as an adjacent (door-connected) pair.
+        1.0 if history is empty (nothing to contradict stability yet).
+        Not yet consumed anywhere — scaffolding, see MAX_BOUNDARY_HISTORY.
+        """
+        if not self._boundary_history:
+            return 1.0
+        key = list(_unordered_key(room_a, room_b))
+        hits = sum(1 for entry in self._boundary_history if key in entry)
+        return hits / len(self._boundary_history)
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
@@ -500,6 +635,7 @@ class RoomSegStore:
             "next_room_n": self._next_room_n,
             "next_door_n": self._next_door_n,
             "migrated_from_zonestore": self.migrated_from_zonestore,
+            "boundary_history": list(self._boundary_history),
         })
         _LOGGER.debug(
             "RoomSegStore: saved %d rooms, %d doors for %s",

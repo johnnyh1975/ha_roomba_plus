@@ -1067,6 +1067,20 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
             mission_age_sec = _time_mod.time() - mission_start_ts
             if mission_age_sec < MQTT_WATCHDOG_START_GRACE_SECONDS:
                 return False
+        # v3.2.1 RESUME-GRACE — same benign undock gap (Wi-Fi reassociation
+        # while moving away from the router) exists at a RESUME after
+        # Zwischenladung or stuck recovery, but mssnStrtTm keeps the
+        # ORIGINAL mission start (field-confirmed: 2h20 old at a recharge
+        # resume), so the grace above can never cover it.  Gate on the last
+        # observed transition into phase="run" instead, stamped by
+        # make_mqtt_stamp_callback.  0.0 (no transition seen — e.g. HA
+        # restarted mid-mission) falls through to the normal silence check,
+        # exactly like a missing mssnStrtTm does above.
+        run_transition_ts = data.last_run_transition_ts
+        if run_transition_ts:
+            run_age_sec = _time_mod.time() - run_transition_ts
+            if run_age_sec < MQTT_WATCHDOG_START_GRACE_SECONDS:
+                return False
         return (_time_mod.time() - ts) > MQTT_WATCHDOG_SECONDS
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:

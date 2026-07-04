@@ -488,6 +488,53 @@ async def async_record_mission(
 
 # ── Callback factories ────────────────────────────────────────────────────────
 
+def make_mqtt_stamp_callback(entry: RoombaConfigEntry) -> Any:
+    """v3.2.1 — MQTT-watchdog timestamp stamping, extracted from
+    make_mission_callback and moved to the FRONT of the callback chain.
+
+    Must be registered BEFORE async_forward_entry_setups so it runs before
+    any entity's on_message callback (roombapy invokes callbacks in
+    registration order).  Otherwise RoombaMqttStale evaluates the very
+    message that ends a silence against the not-yet-refreshed timestamp —
+    the root cause of the false "Problem" blip at Zwischenladung resume.
+
+    Two writes, both plain float stores (GIL-atomic, paho thread safe —
+    same reasoning as last_mqtt_message_ts in models.py):
+
+      last_mqtt_message_ts   — on EVERY message.  Deliberately broader than
+        the old inline stamp, which only fired for messages containing
+        cleanMissionStatus: the watchdog diagnoses MQTT *connectivity*, and
+        a pose-only or bbrun-only message proves the link is alive just as
+        well.  Under the old gate, firmware that pushes pose updates but no
+        cleanMissionStatus for >5 min during a run would false-positive.
+
+      last_run_transition_ts — when cleanMissionStatus.phase enters "run"
+        from any other phase.  Grants RoombaMqttStale.is_on the same
+        undock grace at a RESUME (recharge → run, stuck → run) that a
+        fresh start already gets via mssnStrtTm — which stays at the
+        original mission start and is useless for resumes.
+
+    Never invoked synthetically: _async_recheck_stuck_end_state re-injects
+    cached state by calling _on_mission_message directly, bypassing the
+    registered callback chain entirely.
+    """
+    last_seen_phase: str = ""
+
+    def _on_any_message(json_data: dict[str, Any]) -> None:
+        nonlocal last_seen_phase
+        entry.runtime_data.last_mqtt_message_ts = _time_mod.time()
+        reported = json_data.get("state", {}).get("reported", {})
+        mission = reported.get("cleanMissionStatus")
+        if not isinstance(mission, dict):
+            return
+        phase = mission.get("phase", "")
+        if phase == "run" and last_seen_phase != "run":
+            entry.runtime_data.last_run_transition_ts = _time_mod.time()
+        last_seen_phase = phase
+
+    return _on_any_message
+
+
 def make_mission_callback(
     hass: Any,
     entry: RoombaConfigEntry,
@@ -556,14 +603,19 @@ def make_mission_callback(
         if "cleanMissionStatus" not in reported:
             return
 
-        # v2.8.3 — MQTT-watchdog: stamp every message so RoombaMqttStale
-        # binary sensor can detect silence during phase=run.
-        # v2.9.0 — skipped for synthetic re-checks (see
-        # _async_recheck_stuck_end_state below): those re-inject the
-        # cached state on a timer, not a real MQTT arrival, and stamping
-        # this here would mask genuine MQTT staleness from the watchdog.
-        if not _synthetic:
-            entry.runtime_data.last_mqtt_message_ts = _time_mod.time()
+        # v3.2.1 — MQTT-watchdog stamping MOVED to make_mqtt_stamp_callback,
+        # registered in __init__.py BEFORE async_forward_entry_setups.  It
+        # used to live right here (v2.8.3), but entities register their
+        # on_message callbacks during platform setup — i.e. before this
+        # callback — and roombapy invokes callbacks in registration order,
+        # so RoombaMqttStale.is_on evaluated the very message that ended a
+        # silence with the timestamp still un-stamped: phase already "run",
+        # last_mqtt_message_ts still minutes old → a false "Problem" blip
+        # (field-confirmed at a Zwischenladung resume, 8 s until the next
+        # message corrected it).  The synthetic-recheck exemption (v2.9.0)
+        # carries over structurally: _async_recheck_stuck_end_state calls
+        # THIS function directly, never the registered callback chain, so
+        # the stamp callback is inherently never invoked synthetically.
 
         # v2.8.3 — FW-SENSOR: track softwareVer changes for binary_sensor.*_firmware_updated.
         # Only fires once per actual firmware upgrade (not on every message).

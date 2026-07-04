@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from .presence_manager import PresenceManager    # v1.8.0 L6
     from .dirt_threshold_manager import DirtThresholdManager  # v2.4 F11
     from .outline_store import OutlineStore                    # v2.4 F-EPHEMERAL
+    from .mission_trajectory_store import MissionTrajectoryStore  # v3.2.1
+    from .freeze_snapshot_store import FreezeSnapshotStore        # v3.2.1
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
     from .mission_timer_store import MissionTimerStore        # v2.6 MP1
 
@@ -103,6 +105,16 @@ class RoombaData:
     dirt_threshold_manager: "DirtThresholdManager | None" = None
     # v2.4.0 — Room outline accumulator (F-EPHEMERAL, 900-series only)
     outline_store: "OutlineStore | None" = None
+    # v3.2.1 — bounded last-N-missions trajectory history (F-EPHEMERAL,
+    # 900-series only). Data-collection scaffolding: MapRenderer resets
+    # its own path every mission by design, so this is the only place a
+    # "last few missions" view or future curvature-based structural
+    # signal could read multi-mission path data from.
+    trajectory_store: "MissionTrajectoryStore | None" = None
+    # v3.2.1 — periodic immutable RoomSeg+Outline backup (F-EPHEMERAL,
+    # 900-series only), insurance against the firmware-3.20.7-class
+    # pose-delivery cutoff risk (see RoomSeg v2 design doc Abschnitt 0).
+    freeze_snapshot_store: "FreezeSnapshotStore | None" = None
     # v2.5.0 — Manufacturer reference profile for self-calibrating features (RF0)
     robot_profile: "RobotProfile | None" = None
     # v2.6.0 — Centralised learned state store (L4)
@@ -123,6 +135,18 @@ class RoombaData:
     # float reads/writes atomic so no explicit locking is needed.
     # 0.0 = no message received yet (watchdog must not fire until first message).
     last_mqtt_message_ts: float = 0.0
+
+    # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
+    # observed phase transition INTO "run" from any non-run phase (fresh
+    # start, resume after recharge, stuck recovery).  Written by
+    # make_mqtt_stamp_callback in callbacks.py; read by RoombaMqttStale.is_on
+    # to grant the same undock grace a fresh start already gets via
+    # mssnStrtTm — which a resume cannot use, because mssnStrtTm keeps the
+    # original mission start (field-confirmed: 2h20 old at resume, grace
+    # long expired → false "Problem" blip at every Zwischenladung resume).
+    # 0.0 = no run transition observed yet (e.g. HA restarted mid-mission;
+    # the mssnStrtTm grace path still covers that case).
+    last_run_transition_ts: float = 0.0
 
     # v2.8.3 — FW-SENSOR: firmware version tracking.
     # last_firmware_version: most recent non-None softwareVer seen from MQTT.

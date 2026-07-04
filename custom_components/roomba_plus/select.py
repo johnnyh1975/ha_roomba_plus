@@ -99,12 +99,26 @@ async def async_setup_entry(
     if has_carpet_boost(state):
         entities.append(CarpetBoostSelect(roomba, blid))
 
-    # Zone select: only for EPHEMERAL (900-series with detected rooms).
-    # ROOM-SEG Stage 3 — backed by RoomSegStore now, not ZoneStore (the
-    # gap heuristic proved unreliable; same unique_id/entity_id kept for
-    # a seamless transition, see ROOM_SEGMENTATION_NOTES.md).
-    if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
-        entities.append(ZoneSelect(roomba, blid, config_entry))
+    # v3.2.1 REMOVED — ZoneSelect used to be created for EPHEMERAL
+    # (900-series) robots too. Confirmed dead weight, not just
+    # incomplete: its only consumer anywhere in this codebase was
+    # ZoneCleanButton, which read the selection purely to log it, then
+    # sent the exact same plain "start" command regardless of what was
+    # selected (the 900-series MQTT API has no coordinate/region
+    # targeting at all — confirmed independently via rest980's docs,
+    # via this project's own mission_archive data showing pmap_id=None
+    # on every EPHEMERAL mission ever recorded, and via ZoneCleanButton's
+    # own implementation). No automation, template sensor, or other
+    # entity in this integration reads zone_select's state either. A
+    # selector with zero functional consumers and a button that ignores
+    # it is worse than no control at all — it suggests targeted-room
+    # cleaning is possible on hardware that architecturally cannot do
+    # it. See ZoneCleanButton's removal below for the matching half of
+    # this fix.
+    #
+    # SMART-tier robots (i/s/j/m with pmaps) are unaffected — see
+    # SmartZoneSelect / CloudSmartZoneSelect below, which DO have a real
+    # region-targeting command path.
 
     # Smart Zone select: for Smart Map robots (i/s/j/m) with pmaps.
     # When cloud is active, cloud-sourced selects replace the repair-flow

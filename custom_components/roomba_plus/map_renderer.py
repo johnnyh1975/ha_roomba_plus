@@ -32,6 +32,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import time as _time_mod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -148,6 +149,16 @@ SUGGEST_DASH       = (6, 4)  # px on/off for dashed suggestion outlines
 # ── Storage version — bump when dump_state() format changes ──────────────────
 _STATE_VERSION  = 1
 
+# v3.2.1 LANDMARK-LOG — a sustained pose jump accepted after
+# _MAX_CONSECUTIVE_REJECTED_JUMPS rejections corresponds, per the 980's
+# documented vSLAM sensor-fusion pipeline, to either a genuine move or a
+# camera-landmark relocalisation correction. Logging WHERE these land
+# (not just counting them, as before) is data-collection scaffolding for
+# a future "landmark cluster" structural signal — never consumed
+# anywhere yet. Capped, not unbounded: this is meant to reveal spatial
+# clustering across many missions, not to be a full history.
+MAX_ACCEPTED_JUMP_LOG = 500
+
 
 @dataclass
 class RendererConfig:
@@ -201,6 +212,16 @@ class MapRenderer:
         # rejected jumps so a real, sustained move isn't permanently stranded
         # behind one stale anchor point.
         self._consecutive_rejected_jumps: int = 0
+        # v3.2.1 LANDMARK-LOG — deliberately NOT cleared in reset(): the
+        # whole point is cross-mission accumulation, unlike self._points
+        # which is intentionally wiped every mission (see reset()).
+        # Widened to include theta_deg: a position jump WITH an
+        # unexplained heading jump is much stronger evidence of a genuine
+        # pickup/relocalisation event than position alone (see the
+        # Dock-Anchor-Korrektur design doc) — feeds both the future
+        # landmark-cluster idea and a potential stuck-independent
+        # detector for exactly this scenario.
+        self._accepted_jump_log: list[tuple[float, float, float, float]] = []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -243,26 +264,38 @@ class MapRenderer:
     # instead of an indefinite, often mission-long, rejection cascade.
     _MAX_CONSECUTIVE_REJECTED_JUMPS: int = 2
 
-    def add_pose(self, x_mm: float, y_mm: float, theta_deg: float) -> None:
+    def add_pose(self, x_mm: float, y_mm: float, theta_deg: float) -> bool:
         """Record a new pose point from the MQTT state update.
 
         roombapy convention: co_ords["x"] = pose_point_y (swapped axes).
-        Callers pass already-corrected x_mm / y_mm relative to dock origin.
+        Callers pass already-corrected x_mm / y_mm relative to dock origin
+        — true since v3.2.1's axis-swap fix in image.py::_handle_pose()
+        (this docstring line predates that fix; the swap was documented
+        here as an assumption long before it was actually implemented at
+        the call site — confirmed via roombapy's own source, see
+        _handle_pose()'s comment for the full rationale).
         Ignores (0, 0, any_theta) at mission start to avoid bogus dock point.
         Rejects jumps > _MAX_POSE_JUMP_MM from the previous point — these
         indicate stuck-recovery relocalisation or firmware bogus updates and
         would otherwise draw a line across the entire map. See
         _MAX_CONSECUTIVE_REJECTED_JUMPS above: this rejection self-heals
         after a short streak instead of cascading indefinitely.
+
+        Returns True if THIS call was an accepted sustained jump (added to
+        accepted_jump_log) — v3.2.1 DOCK-ANCHOR: callers use this to mark
+        interpolation waypoints within a buffered post-stuck segment (see
+        Dock_Anchor_Korrektur_Plan.md, 4c). False for a normal point, a
+        rejected jump, or the skipped dock-start point.
         """
         if x_mm == 0.0 and y_mm == 0.0 and not self._points:
-            return  # First point at dock — skip
+            return False  # First point at dock — skip
 
         # Reject implausibly large jumps from the previous pose point.
         # v2.6.3 B1 — use cfg constants (not _fit_scale/_fit_cx/cy) for the
         # inverse transform.  _fit_* values change after every render() call;
         # using them here caused the inverse to produce wildly wrong mm values
         # after auto-fit activated, rejecting up to 99% of legitimate poses.
+        was_accepted_jump = False
         if self._points:
             prev_px, prev_py = self._points[-1]
             orig_cx = orig_cy = self._cfg.size_px // 2
@@ -280,7 +313,7 @@ class MapRenderer:
                     jump_mm, prev_x_mm, prev_y_mm, x_mm, y_mm,
                     self._consecutive_rejected_jumps,
                 )
-                return
+                return False
             if jump_mm > self._MAX_POSE_JUMP_MM:
                 _LOGGER.info(
                     "MapRenderer: accepting sustained pose jump %.0f mm "
@@ -288,12 +321,52 @@ class MapRenderer:
                     "move/relocalisation, not a glitch",
                     jump_mm, self._consecutive_rejected_jumps,
                 )
+                self._accepted_jump_log.append((x_mm, y_mm, theta_deg, _time_mod.time()))
+                if len(self._accepted_jump_log) > MAX_ACCEPTED_JUMP_LOG:
+                    self._accepted_jump_log = self._accepted_jump_log[-MAX_ACCEPTED_JUMP_LOG:]
+                was_accepted_jump = True
 
         self._consecutive_rejected_jumps = 0
         px, py = self._mm_to_px(x_mm, y_mm)
         self._points.append((px, py))
         self._robot_px = (px, py)
         self._theta = theta_deg
+        return was_accepted_jump
+
+    def replace_range(
+        self, start_index: int, corrected_points_mm: list[tuple[float, float]],
+    ) -> None:
+        """v3.2.1 DOCK-ANCHOR — retroactively replace an already-rendered
+        range of points with corrected (x_mm, y_mm) values, then force a
+        re-render.
+
+        Needed because self._renderer.add_pose() is called per pose
+        message in real time (unlike GridStore/RoomSeg/Outline, which are
+        only fed once at mission end) — a buffered, potentially-distorted
+        segment is already drawn and cached by the time a dock-anchor
+        correction is computed. This does NOT clear or reset anything
+        outside [start_index:] — points before the buffered segment stay
+        untouched, exactly as they were.
+
+        start_index: index into self._points where the correction begins
+        (the first point of the buffered segment). Silently clamped/no-op
+        if out of range (e.g. a reset() happened in between) rather than
+        raising — a stale correction arriving late should not crash the
+        live map.
+        """
+        if start_index < 0 or start_index > len(self._points):
+            _LOGGER.debug(
+                "MapRenderer.replace_range: start_index %d out of range "
+                "for %d points — ignoring (renderer state changed since "
+                "the correction was computed)",
+                start_index, len(self._points),
+            )
+            return
+        new_px_points = [self._mm_to_px(x, y) for x, y in corrected_points_mm]
+        self._points = self._points[:start_index] + new_px_points
+        if new_px_points:
+            self._robot_px = new_px_points[-1]
+        self._last_png = None  # force re-render; the cache reflects stale data
 
     def mark_stuck(self) -> None:
         """Record a stuck event at the current robot position."""
@@ -505,6 +578,11 @@ class MapRenderer:
             "stuck_px": list(self._stuck_px),       # list[tuple[int, int]]
             "robot_px": list(self._robot_px) if self._robot_px else None,
             "theta": self._theta,
+            # v3.2.1 LANDMARK-LOG — additive field, no _STATE_VERSION
+            # bump needed (same precedent as GridStore's FURNITURE/
+            # DUAL-GRID fields): a state dump saved before this existed
+            # simply has no "accepted_jump_log" key.
+            "accepted_jump_log": [list(j) for j in self._accepted_jump_log],
         }
 
     def restore_state(self, state: dict[str, Any]) -> bool:
@@ -532,6 +610,17 @@ class MapRenderer:
             self._robot_px = tuple(robot_px) if robot_px else None
             self._theta = float(state.get("theta", 0.0))
             self._last_png = None  # will be re-rendered on demand
+            # v3.2.1 LANDMARK-LOG — .get() with [] default: old dumps
+            # simply predate this field, not an error. Also handles the
+            # OLDER 3-element shape (x,y,timestamp), from before theta_deg
+            # was added: those entries get a placeholder theta=0.0 rather
+            # than being dropped or raising.
+            self._accepted_jump_log = [
+                (float(j[0]), float(j[1]), float(j[2]), float(j[3]))
+                if len(j) >= 4 else
+                (float(j[0]), float(j[1]), 0.0, float(j[2]))
+                for j in state.get("accepted_jump_log", [])
+            ]
 
             _LOGGER.debug(
                 "MapRenderer: restored %d points, %d stuck events",
@@ -545,67 +634,23 @@ class MapRenderer:
 
     # ── Read-only properties ──────────────────────────────────────────────────
 
-    def render_for_outline(self) -> bytes | None:
-        """Render cleaning path only — no canvas border or geometry overlays.
-
-        v2.6.3 B4 — the normal render() draws a FLOOR_BORDER rectangle around
-        the entire canvas.  extract_contour_from_png() detected this border as
-        the dominant edge (stronger than any cleaning-path edge), producing an
-        OutlineStore that stores the canvas perimeter instead of the room shape.
-
-        This method renders only the cleaned-area fill on a plain white canvas
-        so the only edges are the actual cleaning path boundaries.
-        Returns None when no pose points have been recorded yet.
-
-        v2.8.2 — deliberately does NOT use self._compute_fit() / auto-fit.
-        Auto-fit independently scales and centres each mission's content to
-        fill the canvas based on *that mission's own* bounding box. Since
-        self._points are already stored in a fixed pixel space (via
-        self._mm_to_px, using self._cfg.scale — constant across missions for
-        a given config entry), skipping auto-fit here means pixel (x, y) in
-        this mission's outline render always corresponds to the same real
-        -world position as pixel (x, y) in every other mission's outline
-        render. _merge_contours() EMA-blends two PNGs pixel-by-pixel — that
-        is only meaningful if both PNGs share one coordinate system. With
-        auto-fit, a mission confined to a small area gets zoomed to fill the
-        canvas, while a mission covering most of the home does not — the
-        same pixel position means two unrelated real-world locations, and
-        the blended result is closer to noise than to a room outline.
-        Confirmed against live data: an OutlineStore that had only ever seen
-        auto-fit renders had 73% of its accumulated contour points sitting
-        exactly on the canvas border (0/599 of a 600x600 canvas) — not a
-        room shape, an artefact of blending incompatible coordinate spaces.
-        Trade-off: a mission covering only a small area now renders as a
-        small blob on a mostly blank canvas rather than a canvas-filling
-        zoomed view. That is the correct behaviour here — the outline is
-        meant to accumulate a stable picture of the home over many missions,
-        not to look good as a single-mission snapshot.
+    @property
+    def accepted_jump_log(self) -> list[tuple[float, float, float, float]]:
+        """Read-only snapshot of (x_mm, y_mm, theta_deg, unix_time) for
+        every sustained pose jump accepted after the reject-streak (see
+        MAX_ACCEPTED_JUMP_LOG docstring). Data-collection scaffolding;
+        not yet consumed anywhere.
         """
-        if not self._points:
-            return None
+        return list(self._accepted_jump_log)
 
-        import io as _io
-        size = self._cfg.size_px
-        orig_cx = orig_cy = size // 2
-        # Fixed transform — identical to the "too little content" fallback
-        # branch of _compute_fit(), but used unconditionally here so every
-        # mission's outline render shares the same coordinate system.
-        fit_ratio, tx, ty, new_scale = 1.0, 0.0, 0.0, self._cfg.scale
-        old_scale, old_cx, old_cy = self._fit_scale, self._fit_cx, self._fit_cy
-        self._fit_scale, self._fit_cx, self._fit_cy = new_scale, orig_cx, orig_cy
-
-        try:
-            img = Image.new("RGBA", (size, size), BG_COLOUR)
-            draw = ImageDraw.Draw(img)
-            # NO FLOOR_BORDER — intentional, prevents false edge capture
-            def _fit_px(px: int, py: int) -> tuple[int, int]:
-                return (int(px * fit_ratio + tx), int(py * fit_ratio + ty))
-            self._draw_cleaned_area(draw, _fit_px)
-            buf = _io.BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue()
-        finally:
-            self._fit_scale, self._fit_cx, self._fit_cy = old_scale, old_cx, old_cy
+    # v3.2.1 REMOVED — render_for_outline() and the whole fixed-window
+    # PNG-extraction pipeline it fed (extract_contour_from_png,
+    # _merge_contours in outline_store.py) are gone. The room outline is
+    # now derived directly from GridStore's unbounded cell dict
+    # (outline_store.compute_boundary_points_mm) instead of a 6x6m PNG
+    # render — see outline_store.py PAYLOAD_VERSION 4 for the full
+    # rationale (field-confirmed: 57% of a real OG's grid fell outside
+    # the fixed window and could never appear in the outline).
 
     @property
     def has_data(self) -> bool:
@@ -681,26 +726,49 @@ class MapRenderer:
 
     def render_room_outline(
         self,
-        contour_points: list[tuple[int, int]],
+        contour_points_mm: list[tuple[float, float]],
     ) -> bytes | None:
         """F-EPHEMERAL — Overlay accumulated room outline on _last_png.
 
+        v3.2.1 REDESIGN — contour_points_mm are now real-world millimetre
+        coordinates (GridStore boundary-cell centres — see
+        outline_store.compute_boundary_points_mm), not pre-rendered pixels
+        from a fixed 6x6m canvas. This fixes two field-confirmed bugs at
+        once, both stemming from the old PNG-based pipeline:
+
+          1. OFFSET — contour pixels were stored in a FIXED identity px
+             space (render_for_outline(), v2.8.2) but composited onto an
+             auto-fitted _last_png. On a real 980 OG this displaced the
+             entire outline ~2.4 m from the cleaning path (fit_ratio 0.667,
+             dock fitted to (332,137) vs. outline anchored at (300,300)).
+          2. CLIPPING — the fixed 600x600px / 10mm-per-px canvas is a hard
+             6x6m window around the dock. On the same OG, 57% of the
+             house's known GridStore footprint (1603/2798 cells) fell
+             outside that window and could never appear in the outline,
+             however many missions accumulated.
+
+        mm coordinates are converted with _mm_to_px_fit() — the SAME
+        transform every other geometry overlay (walls, doors, zones) uses
+        — so the outline is always pixel-aligned with the current
+        auto-fitted render and is never window-clipped, since GridStore
+        itself is unbounded.
+
         Mirrors render_keepout_zones() compositing pattern.
         Colour: grey (180, 180, 180, 140) — visible but not distracting.
-        Width: 2px.
         Returns new PNG bytes, or None when _last_png is None or no points.
         """
-        if not contour_points or self._last_png is None:
+        if not contour_points_mm or self._last_png is None:
             return None
         import io as _io
         from PIL import Image as PILImage, ImageDraw
         base    = PILImage.open(_io.BytesIO(self._last_png)).convert("RGBA")
         overlay = PILImage.new("RGBA", base.size, (0, 0, 0, 0))
         draw    = ImageDraw.Draw(overlay)
-        for (x, y) in contour_points:
+        for (x_mm, y_mm) in contour_points_mm:
+            fx, fy = self._mm_to_px_fit(x_mm, y_mm)
             # Draw a 2×2 pixel dot per contour point
-            if 0 <= x < base.width and 0 <= y < base.height:
-                draw.rectangle([x, y, x + 1, y + 1], fill=(180, 180, 180, 140))
+            if 0 <= fx < base.width and 0 <= fy < base.height:
+                draw.rectangle([fx, fy, fx + 1, fy + 1], fill=(180, 180, 180, 140))
         composite     = PILImage.alpha_composite(base, overlay).convert("RGB")
         buf           = _io.BytesIO()
         composite.save(buf, format="PNG")

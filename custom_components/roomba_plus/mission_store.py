@@ -77,7 +77,7 @@ class DaySummary:
     completed: int
     stuck: int
     area_sqft: float | None   # sum for day; None if 600-series
-    result: str               # dominant: "error" > "stuck" > "completed" > "cancelled" > "none"
+    result: str               # dominant: "stuck" > "error" > "completed" > "cancelled" > "none" (v3.2.1 order; error matches error_* variants)
     dirt_density: float | None = None  # F12b — median dirt events/m² for day; None without cloud
 
 
@@ -343,13 +343,31 @@ class MissionStore:
             )
             areas = [r["area_sqft"] for r in records if r.get("area_sqft") is not None]
             area_sqft: float | None = float(sum(areas)) if areas else None
-            # Dominant result: error > stuck > completed > cancelled > none
+            # Dominant result: stuck > error > completed > cancelled > none
+            #
+            # v3.2.1 — two fixes from card-development round 2.2:
+            #   1. stuck now ranks ABOVE error.  A stuck robot needs physical
+            #      intervention (wedged, cliff, lost) and is the more
+            #      actionable signal for the card's day cell; a coded error
+            #      often self-describes and frequently self-resolves.
+            #   2. error_* variants ("error_17", "error_battery",
+            #      "cancelled_by_user") reach the store via the import
+            #      endpoint and rest980 migration despite the local enum
+            #      convention (see B1-EXT note) — the exact string match
+            #      missed them, so an error_battery-only day ranked "none".
+            #      Prefix-match error_*, and count cancelled_by_user under
+            #      cancelled (same fall-through class of bug).
             results = {r.get("result") for r in records}
+            has_error = any(
+                isinstance(res, str)
+                and (res == "error" or res.startswith("error_"))
+                for res in results
+            )
             dominant = (
-                "error" if "error" in results else
                 "stuck" if results & {"stuck", "stuck_and_abandoned"} else
+                "error" if has_error else
                 "completed" if results & {"completed", "stuck_and_resumed"} else
-                "cancelled" if "cancelled" in results else
+                "cancelled" if results & {"cancelled", "cancelled_by_user"} else
                 "none"
             )
             summaries[day] = DaySummary(

@@ -1,26 +1,44 @@
 """OutlineStore — accumulated room boundary for EPHEMERAL robots (F-EPHEMERAL, v2.4.0).
 
 900-series robots have no persistent Cloud map — every mission starts fresh.
-NickWaterton's roomba980-Python library shows that a usable room outline can
-be derived from accumulated pose paths using PIL edge detection.
-
-This module extracts a contour from each mission's rendered cleaning image,
-EMA-merges it across missions, and persists the result so the outline
-sharpens progressively without Cloud dependency.
+This module derives a room boundary from GridStore's accumulated visited-cell
+grid and persists the result for restart-continuity.
 
 Gate: EPHEMERAL robots only. SMART robots use UmfAligner room polygons.
 
+v3.2.1 REDESIGN — replaced the original per-mission PNG edge-detection +
+EMA-blend pipeline (extract_contour_from_png / _merge_contours, v2.4.0–v3.2.0)
+with direct boundary-cell extraction from GridStore.cells. Two field-confirmed
+bugs drove this:
+
+  1. OFFSET — contour pixels were extracted from a render in a FIXED
+     identity px space (render_for_outline(), v2.8.2) but composited onto
+     an auto-fitted live-map render at display time. On a real 980 OG this
+     displaced the entire outline ~2.4 m from the cleaning path.
+  2. CLIPPING — the fixed 600x600px / 10mm-per-px render canvas is a hard
+     6x6m window around the dock. On the same OG, 57% of the house's known
+     GridStore footprint (1603/2798 cells) fell outside that window and
+     could never appear in the outline, however many missions accumulated.
+
+GridStore.cells is already unbounded (a plain dict, no canvas), already
+accumulates across missions, and is already the input room_segmentation.py
+uses for EPHEMERAL room detection — deriving the outline from the same
+source means it can never clip and is trivially consistent with whatever
+the house's explored footprint actually is. The derivation is also now a
+deterministic pure function of the CURRENT grid rather than an EMA blend of
+noisy per-mission PNG edges, so there is no accumulated-artifact drift to
+correct for: every recompute reflects exactly what GridStore currently
+holds, no more and no less.
+
 Design:
-  - extract_contour_from_png() runs in executor at mission end.
-  - EMA merge: rasterise both contours onto same-size masks, blend, re-extract.
+  - compute_boundary_points_mm() runs synchronously (Python dict, no PIL) —
+    called at mission end from image.py, AFTER GridStore.update_from_mission()
+    so the just-finished mission's cells are already included.
   - Storage key: roomba_plus_outline_{entry_id}.
   - ready property: mission_count >= MIN_MISSIONS_TO_SHOW.
-
-Reference: NickWaterton/Roomba980-Python draw_final_map() + draw_room_outline()
 """
 from __future__ import annotations
 
-import io
 import logging
 from typing import Any
 
@@ -54,131 +72,96 @@ STORAGE_KEY_PREFIX   = "roomba_plus_outline"
 #
 # v2.8.2 bumped what was then a single combined constant 1 -> 2 specifically
 # to discard contour_points accumulated from incompatible per-mission
-# auto-fit renders (see render_for_outline() docstring in map_renderer.py).
-# That payload-discard intent was correct; routing it through Store()'s own
-# version parameter was the bug.
+# auto-fit renders.
 #
-# v2.9.0 bumps PAYLOAD_VERSION again, 2 -> 3, for an unrelated second reason:
-# pose.point.x/y were confirmed 10x too small everywhere (cm reported,
-# treated as mm — see POSE_POINT_CM_TO_MM in const.py). Every accumulated
-# contour_points entry was extracted from PNGs rendered at the wrong scale,
-# regardless of whether it already survived the v2.8.2 coordinate-space
-# fix. Old contours are spatially wrong, not just stale.
+# v2.9.0 bumped PAYLOAD_VERSION again, 2 -> 3: pose.point.x/y were confirmed
+# 10x too small everywhere (cm reported, treated as mm). Every accumulated
+# contour_points entry was extracted from PNGs rendered at the wrong scale.
+#
+# v3.2.1 bumps PAYLOAD_VERSION a third time, 3 -> 4, for the redesign above:
+# contour_points changes MEANING from a list of (int, int) PIXELS in a fixed
+# 600x600 render canvas to a list of (float, float) real-world MILLIMETRES
+# (GridStore boundary-cell centres). Old pixel-space contours would silently
+# render as if they were 10mm-per-unit mm coordinates — a 600px-wide contour
+# would claim to span 6 metres correctly by coincidence (the old canvas WAS
+# 10mm/px), but every point would be individually wrong (window-clipped,
+# offset, EMA-blurred). Must be discarded, not reinterpreted.
 _HA_STORE_VERSION    = 1
-PAYLOAD_VERSION      = 3
+PAYLOAD_VERSION      = 4
 
 # Don't show outline until we have at least this many missions
 MIN_MISSIONS_TO_SHOW = 2
-# Weight of new contour vs accumulated (higher = faster to adapt)
-EMA_ALPHA            = 0.4
-# Minimum contour points needed for a meaningful outline
+# Minimum boundary points needed for a meaningful outline. v3.2.1 — this
+# used to gate PIXEL count on a dense edge-detected image (hundreds to
+# thousands typical); it now gates boundary-CELL count, which is far
+# sparser (a modest single floor's perimeter is commonly 60-150 cells at
+# 150mm/cell) but structurally one point per cell of actual open perimeter,
+# not per rendered pixel — 50 remains a reasonable "not just a doorway
+# sliver" floor for either metric.
 MIN_CONTOUR_POINTS   = 50
-# Edge-detection threshold (0–255): only strong edges kept
-EDGE_THRESHOLD       = 200
+
+# Cell size must match GridStore.CELL_MM — kept as a separate constant
+# rather than importing GridStore here, following the CELL_MM precedent in
+# room_seg_store.py (avoids a store-to-store import for one float).
+CELL_MM = 150.0
 
 
-def extract_contour_from_png(png_bytes: bytes) -> list[tuple[int, int]] | None:
-    """Extract room boundary contour from a cleaning-path PNG using PIL edge detection.
+def compute_boundary_points_mm(
+    cells: dict[tuple[int, int], Any],
+    cell_mm: float = CELL_MM,
+) -> list[tuple[float, float]]:
+    """Derive room-boundary points from GridStore's visited-cell grid.
 
-    Mirrors NickWaterton draw_final_map() PIL fallback — no OpenCV required:
-      1. Convert to greyscale and smooth to reduce noise in the pose path
-      2. FIND_EDGES to detect the boundary of the cleaned area
-      3. Invert and threshold to get a binary edge mask
-      4. Extract non-zero pixel coordinates as the contour
+    A visited cell is a BOUNDARY cell if at least one of its 4 orthogonal
+    neighbours is NOT visited (4-connectivity, not 8: an 8-connectivity
+    check would miss thin single-cell-wide corridor walls where only the
+    orthogonal neighbour, not the diagonal, is unvisited — under-counting
+    exactly the narrow-passage boundaries a doorway/corridor outline most
+    needs to show).
 
-    Returns list of (x, y) pixel points, or None when the image has fewer
-    than MIN_CONTOUR_POINTS pixels (too sparse to produce a useful outline).
+    Returns each boundary cell's CENTRE in real-world dock-relative
+    millimetres — (gx*cell_mm + cell_mm/2, gy*cell_mm + cell_mm/2) — ready
+    for MapRenderer._mm_to_px_fit(). Deliberately NOT a traced polygon:
+    a scattered point cloud composites identically to the pixel-dot
+    approach the renderer already used for the old PNG-extracted contour,
+    with none of the ordering/winding complexity a real polygon trace
+    would add, for a diagnostic overlay that only needs to suggest wall
+    position, not render a filled shape.
 
-    Gate: caller is responsible for EPHEMERAL-only invocation.
-    This function has no map-capability awareness.
+    Pure function, no I/O — safe to call synchronously from the event loop
+    even for a few thousand cells (single dict pass + neighbour lookups).
     """
-    try:
-        from PIL import Image, ImageFilter, ImageOps
-        img = Image.open(io.BytesIO(png_bytes)).convert("L")
-        smoothed = img.filter(ImageFilter.SMOOTH_MORE)
-        edges = smoothed.filter(ImageFilter.FIND_EDGES)
-        edges = ImageOps.invert(edges)
-        # Threshold: keep only strong edges
-        edges = edges.point(lambda p: 255 if p > EDGE_THRESHOLD else 0)
-        # Extract dark (edge) pixels — inverted so edges are black (0)
-        points = [
-            (x, y)
-            for y in range(edges.height)
-            for x in range(edges.width)
-            if edges.getpixel((x, y)) == 0
-        ]
-        return points if len(points) >= MIN_CONTOUR_POINTS else None
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("OutlineStore: extract_contour_from_png failed", exc_info=True)
-        return None
-
-
-def _merge_contours(
-    existing: list[tuple[int, int]],
-    new_points: list[tuple[int, int]],
-    size: tuple[int, int],
-) -> list[tuple[int, int]]:
-    """EMA-merge two contour point sets onto the same canvas.
-
-    Rasterises both contours onto same-size binary masks, blends with EMA_ALPHA,
-    then re-extracts points from the blended mask. Avoids point-matching complexity.
-
-    Args:
-        existing: accumulated contour pixels from previous missions.
-        new_points: contour pixels from the latest mission.
-        size: (width, height) canvas size in pixels.
-
-    Returns merged contour as a list of (x, y) pixels.
-    """
-    try:
-        from PIL import Image
-        w, h = size
-
-        def _to_mask(points: list[tuple[int, int]]) -> Image.Image:
-            mask = Image.new("L", (w, h), 0)
-            for x, y in points:
-                if 0 <= x < w and 0 <= y < h:
-                    mask.putpixel((x, y), 255)
-            return mask
-
-        mask_old = _to_mask(existing)
-        mask_new = _to_mask(new_points)
-
-        # EMA blend: new × alpha + old × (1 - alpha)
-        blended = Image.blend(mask_old, mask_new, alpha=EMA_ALPHA)
-        # Threshold the blend at 50% to produce a binary mask
-        blended = blended.point(lambda p: 255 if p > 127 else 0)
-        merged = [
-            (x, y)
-            for y in range(h)
-            for x in range(w)
-            if blended.getpixel((x, y)) > 127
-        ]
-        return merged if len(merged) >= MIN_CONTOUR_POINTS else new_points
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("OutlineStore: _merge_contours failed", exc_info=True)
-        return new_points
+    if not cells:
+        return []
+    boundary: list[tuple[float, float]] = []
+    for (gx, gy) in cells:
+        if (
+            (gx + 1, gy) not in cells
+            or (gx - 1, gy) not in cells
+            or (gx, gy + 1) not in cells
+            or (gx, gy - 1) not in cells
+        ):
+            boundary.append((gx * cell_mm + cell_mm / 2, gy * cell_mm + cell_mm / 2))
+    return boundary
 
 
 class OutlineStore:
-    """Accumulates room boundary outline from pose path images across missions.
-
-    After each EPHEMERAL mission, extract_contour_from_png() extracts a contour
-    from the rendered cleaning image. Contours are EMA-merged so the outline
-    sharpens progressively. Persisted as a list of (x, y) pixel points.
+    """Accumulates room boundary outline from GridStore's visited-cell grid.
 
     Lifecycle:
       - Instantiate in async_setup_entry for EPHEMERAL robots with map_enabled.
       - Call async_load() immediately after.
       - Store in entry.runtime_data.outline_store.
-      - Call async_update_from_png() at mission end (image.py _handle_mission_end).
-      - render_room_outline() reads contour_points from this store.
+      - Call async_recompute() at mission end (image.py _handle_mission_end),
+        AFTER GridStore.update_from_mission() so the just-finished mission's
+        cells are included.
+      - render_room_outline() reads contour_points (now real-world mm) from
+        this store.
     """
 
     def __init__(self) -> None:
         self._mission_count: int = 0
-        self._contour_points: list[tuple[int, int]] = []
-        self._canvas_size: tuple[int, int] | None = None
+        self._contour_points: list[tuple[float, float]] = []
         # P2: Store is stateless — construct once and reuse across load/save calls
         self._store: Any = None
 
@@ -205,13 +188,10 @@ class OutlineStore:
                 self._mission_count = int(data.get("mission_count") or 0)
                 raw = data.get("contour_points") or []
                 self._contour_points = [
-                    (int(p[0]), int(p[1]))
+                    (float(p[0]), float(p[1]))
                     for p in raw
                     if isinstance(p, (list, tuple)) and len(p) == 2
                 ]
-                canvas = data.get("canvas_size")
-                if isinstance(canvas, (list, tuple)) and len(canvas) == 2:
-                    self._canvas_size = (int(canvas[0]), int(canvas[1]))
             except (TypeError, ValueError, KeyError, AttributeError, IndexError) as exc:
                 _LOGGER.warning(
                     "OutlineStore: failed to load for %s — %s; starting empty",
@@ -219,7 +199,6 @@ class OutlineStore:
                 )
                 self._mission_count = 0
                 self._contour_points = []
-                self._canvas_size = None
         _LOGGER.debug(
             "OutlineStore: loaded mission_count=%d contour_points=%d",
             self._mission_count, len(self._contour_points),
@@ -232,71 +211,73 @@ class OutlineStore:
             "version": PAYLOAD_VERSION,
             "mission_count": self._mission_count,
             "contour_points": list(self._contour_points),
-            "canvas_size": list(self._canvas_size) if self._canvas_size else None,
         })
 
     # ── Update ─────────────────────────────────────────────────────────────────
 
-    async def async_update_from_png(
+    def recompute_sync(self, cells: dict[tuple[int, int], Any]) -> None:
+        """Pure, synchronous half of async_recompute — updates
+        self._contour_points/_mission_count immediately, no I/O.
+
+        v3.2.1 FIELD FIX — extracted so a caller needing the FRESH
+        contour right away (e.g. FreezeSnapshotStore, which must not
+        read a stale/previous-mission contour) can call this directly
+        before scheduling persistence, instead of only being able to
+        reach the up-to-date value after an async_recompute() coroutine
+        — scheduled via run_coroutine_threadsafe from a sync callback
+        thread — has actually finished running. Confirmed in the field:
+        the very first FreezeSnapshotStore snapshot captured
+        outline_points=0 because it read contour_points before this
+        mission's async_recompute had executed at all (fires on the
+        first-ever recompute, due() being unconditionally True with no
+        prior snapshot — and the outline recompute call in image.py
+        sits in a separate, LATER code block).
+
+        compute_boundary_points_mm() is cheap pure Python (confirmed:
+        a single dict pass over a few thousand cells) — safe to call
+        twice per mission (once here, once inside async_recompute for
+        persistence) rather than restructure the async ordering itself.
+        """
+        if not cells:
+            return
+        try:
+            self._contour_points = compute_boundary_points_mm(cells)
+            self._mission_count += 1
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("OutlineStore: unexpected error in recompute_sync")
+
+    async def async_recompute(
         self,
-        png_bytes: bytes | None,
+        cells: dict[tuple[int, int], Any],
         hass: Any,
         entry_id: str,
     ) -> None:
-        """Extract contour from mission PNG and merge into accumulated outline.
+        """Recompute the boundary from GridStore's current cell grid and persist.
 
-        Runs extract_contour_from_png in executor (PIL is synchronous).
-        Saves to hass.storage on success.
+        v3.2.1 — replaces async_update_from_png(). Deterministic pure
+        recompute (no EMA merge): GridStore.cells already accumulates
+        every mission's visited cells with no window and no decay, so the
+        boundary derived from it at any point in time already reflects
+        the full accumulated history — blending against a prior contour
+        would only reintroduce the artifacts (offset, clipping) this
+        redesign removes.
+
+        Recomputes via recompute_sync() again even if a caller already
+        called it this mission (see that method's docstring) — cheap,
+        and keeps this method's own behaviour/contract unchanged for
+        every existing caller.
         """
-        if not png_bytes:
+        if not cells:
             return
         try:
-            new_points = await hass.async_add_executor_job(
-                extract_contour_from_png, png_bytes
-            )
-            if new_points is None:
-                _LOGGER.debug(
-                    "OutlineStore: contour extraction yielded too few points — skipping"
-                )
-                return
-
-            # Determine canvas size from the image
-            canvas_size = await hass.async_add_executor_job(
-                self._get_image_size, png_bytes
-            )
-
-            if self._contour_points and canvas_size:
-                merged = await hass.async_add_executor_job(
-                    _merge_contours,
-                    self._contour_points,
-                    new_points,
-                    canvas_size,
-                )
-                self._contour_points = merged
-            else:
-                self._contour_points = new_points
-
-            if canvas_size:
-                self._canvas_size = canvas_size
-
-            self._mission_count += 1
+            self.recompute_sync(cells)
             await self.async_save(hass, entry_id)
             _LOGGER.debug(
-                "OutlineStore: updated mission_count=%d contour_points=%d",
+                "OutlineStore: recomputed mission_count=%d contour_points=%d",
                 self._mission_count, len(self._contour_points),
             )
         except Exception:  # noqa: BLE001
-            _LOGGER.exception("OutlineStore: unexpected error in async_update_from_png")
-
-    @staticmethod
-    def _get_image_size(png_bytes: bytes) -> tuple[int, int] | None:
-        """Return (width, height) of a PNG without full decode."""
-        try:
-            from PIL import Image
-            with Image.open(io.BytesIO(png_bytes)) as img:
-                return img.size
-        except Exception:  # noqa: BLE001
-            return None
+            _LOGGER.exception("OutlineStore: unexpected error in async_recompute")
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -314,8 +295,8 @@ class OutlineStore:
         return self._mission_count
 
     @property
-    def contour_points(self) -> list[tuple[int, int]]:
-        """List of (x, y) pixel points forming the accumulated room boundary."""
+    def contour_points(self) -> list[tuple[float, float]]:
+        """Accumulated room boundary as (x_mm, y_mm) dock-relative points."""
         return self._contour_points
 
     @property

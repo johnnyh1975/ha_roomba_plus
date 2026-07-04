@@ -213,6 +213,86 @@ def _check_dock_drift(final_position_mm: tuple[float, float]) -> tuple[float, fl
     return (0.0, 0.0)
 
 
+def _compute_dock_correction(
+    measured_final_pos: tuple[float, float],
+    measured_final_theta: float,
+    dock_theta_baseline: float | None,
+) -> tuple[float, float, float]:
+    """v3.2.1 DOCK-ANCHOR — compute the (dx, dy, rotation_rad) correction
+    that maps measured_final_pos/theta onto the known-true dock state
+    (position always (0,0); heading dock_theta_baseline if available).
+
+    Automatic v1→v2 upgrade, no manual switch: dock_theta_baseline is
+    None until RobotProfileStore.dock_theta_baseline_ready — until then
+    this returns rotation_rad=0.0 (pure translation, same as the
+    existing _check_dock_drift, just restructured to also carry a
+    rotation component once available). See Dock_Anchor_Korrektur_Plan.md
+    for why rotation cannot safely start from an unvalidated first
+    theta observation.
+    """
+    dx, dy = -measured_final_pos[0], -measured_final_pos[1]
+    if dock_theta_baseline is None:
+        return (dx, dy, 0.0)
+    rotation_rad = math.radians(dock_theta_baseline - measured_final_theta)
+    # Rotation is applied to segment points *before* translation elsewhere
+    # (see _apply_dock_correction) — the translation component here must
+    # be computed against the ALREADY-ROTATED final position, not the raw
+    # measured one, or the two corrections would fight each other.
+    cos_r, sin_r = math.cos(rotation_rad), math.sin(rotation_rad)
+    mx, my = measured_final_pos
+    rotated_x = mx * cos_r - my * sin_r
+    rotated_y = mx * sin_r + my * cos_r
+    return (-rotated_x, -rotated_y, rotation_rad)
+
+
+def _apply_dock_correction(
+    point: tuple[float, float], dx: float, dy: float, rotation_rad: float,
+) -> tuple[float, float]:
+    """Apply one (dx, dy, rotation_rad) correction to a single point —
+    rotate around the origin first, then translate. Order matters: see
+    _compute_dock_correction's docstring."""
+    x, y = point
+    if rotation_rad:
+        cos_r, sin_r = math.cos(rotation_rad), math.sin(rotation_rad)
+        x, y = x * cos_r - y * sin_r, x * sin_r + y * cos_r
+    return (x + dx, y + dy)
+
+
+def _interpolate_and_correct_segment(
+    points: list[tuple[float, float]],
+    dx: float, dy: float, rotation_rad: float,
+) -> list[tuple[float, float]]:
+    """v3.2.1 DOCK-ANCHOR (4c) — distribute a dock-verified correction
+    proportionally across a buffered segment instead of applying it
+    uniformly or only to the last point.
+
+    Rationale: drift accumulated since a stuck event is assumed to grow
+    gradually (odometry/vSLAM error compounding over time), not appear
+    in one jump right before the dock — so weight 0 at the FIRST
+    buffered point (still anchored to the last trusted pre-stuck
+    position) growing linearly to weight 1 (the full measured
+    correction) at the LAST buffered point (right before dock contact).
+
+    Internal accepted jumps within the segment (see MapRenderer.add_pose
+    return value) are intentionally NOT treated as separate interpolation
+    breakpoints in this first version — see Dock_Anchor_Korrektur_Plan.md
+    4c: confidence-weighting for jump-adjacent sub-segments was
+    deliberately deferred pending real field validation, not implemented
+    speculatively ahead of evidence that simple linear interpolation
+    isn't good enough.
+    """
+    n = len(points)
+    if n == 0:
+        return []
+    if n == 1:
+        return [_apply_dock_correction(points[0], dx, dy, rotation_rad)]
+    out = []
+    for i, p in enumerate(points):
+        weight = i / (n - 1)
+        out.append(_apply_dock_correction(p, dx * weight, dy * weight, rotation_rad * weight))
+    return out
+
+
 class RoombaMapImage(IRobotEntity, ImageEntity):
     """Live cleaning map as an ImageEntity.
 
@@ -255,7 +335,80 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._last_phase: str = ""
         self._last_stuck_count: int = 0
         self._mission_points: list[tuple[float, float]] = []
+        # v3.2.1 — parallel theta list, same index alignment as
+        # self._mission_points (mission_thetas[i] is the heading for
+        # mission_points[i]). Kept SEPARATE rather than widening
+        # _mission_points itself to (x,y,theta): that list is consumed
+        # in many places as strict (x,y) pairs (GridStore.
+        # update_from_mission, _check_dock_drift's final-position check,
+        # etc.) — changing its shape would ripple through all of them.
+        # Additive, no behaviour change: existing consumers are
+        # untouched, new consumers (MissionTrajectoryStore, future
+        # Dock-Anchor-Korrektur rotation math) read this list alongside.
+        self._mission_thetas: list[float] = []
         self._stuck_mission_points: list[tuple[float, float]] = []
+        # v3.2.1 DOCK-ANCHOR — replaces the old binary
+        # _room_data_frozen_after_stuck with a proper buffer + state flag.
+        # Field-confirmed rationale: a stuck event is exactly the moment a
+        # human is most likely to have physically lifted and repositioned
+        # the robot to free it — vSLAM's continuous camera-landmark
+        # tracking breaks the instant the robot leaves the floor, and
+        # after being set back down (possibly at a slightly different
+        # heading than before), the pose stream may resume reporting
+        # self-consistent-looking but subtly MISALIGNED positions relative
+        # to everything recorded before the stuck event. A robot's own
+        # motor-driven self-recovery (backing out, trying another angle)
+        # does NOT necessarily break this — but we can't reliably tell the
+        # two apart from the data alone, so the conservative rule applies
+        # to every stuck event: only the DOCK gives a precise, independent
+        # re-anchor (IR/contact-based, not vSLAM-dependent).
+        #
+        # While _dock_anchor_buffering is True, new pose points go into
+        # _pending_segment_points/_thetas instead of _mission_points/
+        # _mission_thetas. On a confirmed dock contact (see
+        # _dock_contact_streak below), the buffered segment is corrected
+        # (see _compute_dock_correction/_interpolate_and_correct_segment)
+        # and merged INTO _mission_points/_mission_thetas — replacing the
+        # old "freeze then discard at next mission start" behaviour with
+        # "freeze then retroactively correct and keep, where possible".
+        # Never touches self._renderer.add_pose() — the live-map visual
+        # still shows the full path live (useful for troubleshooting);
+        # only the GridStore/RoomSegStore/OutlineStore-feeding
+        # _mission_points is affected, corrected in place once resolved.
+        # See Dock_Anchor_Korrektur_Plan.md for the full design.
+        self._dock_anchor_buffering: bool = False
+        self._pending_segment_points: list[tuple[float, float]] = []
+        self._pending_segment_thetas: list[float] = []
+        # v3.2.1 DOCK-ANCHOR — index into _mission_points/_mission_thetas
+        # marking the start of the segment since the LAST confirmed dock
+        # contact (or mission start, index 0, if none yet this mission).
+        # Used by Fall B (a clean recharge-and-resume, no buffering) to
+        # know how much of _mission_points to correct — everything since
+        # this index, not the whole mission.
+        self._last_dock_anchor_index: int = 0
+        # v3.2.1 DOCK-ANCHOR — separate debounce counter from
+        # _end_signal_streak (below). "Confirmed at the dock" fires on
+        # ANY sustained charge/hmPostMsn phase, whether the mission is
+        # ending (Fall A/B end-of-mission) or just recharging mid-mission
+        # (Fall B, mission continues) — unlike _end_signal_streak, this
+        # doesn't need the extra END_SIGNAL_MIN_HOLD_SECONDS grace period
+        # (that grace period exists to decide "is this really the END",
+        # a question this mechanism doesn't need answered first).
+        self._dock_contact_streak: int = 0
+        # v3.2.1 DOCK-ANCHOR — field-confirmed gap in the FIRST version of
+        # this mechanism: a rapid ~21ms firmware burst reporting
+        # charge/hmPostMsn during a normal inter-room transition (the
+        # EXACT scenario the existing END-DEBOUNCE mechanism's
+        # END_SIGNAL_MIN_HOLD_SECONDS hold-time exists to filter out)
+        # would satisfy a pure count-based streak threshold just as
+        # easily as a genuine dock contact — count alone doesn't
+        # distinguish "sustained" from "coincidentally happened twice
+        # fast." Can't reuse _end_signal_first_ts/_end_signal_streak
+        # directly: that mechanism deliberately RESETS its own streak for
+        # exactly the Fall-B scenario this needs to catch (cycle=clean +
+        # phase=charge, i.e. _looks_like_end=False) — needs independent
+        # tracking, not shared state.
+        self._dock_contact_first_ts: float = 0.0
         # v2.6.3 A+D — True once robot enters CLEANING_PHASES in this mission.
         # Replaces last_phase-in-CLEANING_PHASES guard; fixes stuck-bypass and
         # false mission-restart on stuck → run recovery.
@@ -469,7 +622,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 if self._renderer:
                     self._renderer.reset()
                     self._mission_points = []
+                    self._mission_thetas = []
                     self._stuck_mission_points = []
+                    # v3.2.1 DOCK-ANCHOR — a new mission starting means any
+                    # still-buffered segment from the PREVIOUS mission never
+                    # got a dock-contact confirmation (stuck_and_abandoned,
+                    # see Dock_Anchor_Korrektur_Plan.md Abschnitt 5) — it is
+                    # discarded here exactly as the old flag-based version
+                    # discarded it, just via clearing the buffer instead of
+                    # flipping a boolean.
+                    self._dock_anchor_buffering = False
+                    self._pending_segment_points = []
+                    self._pending_segment_thetas = []
+                    self._last_dock_anchor_index = 0
+                    self._dock_contact_streak = 0
+                    self._dock_contact_first_ts = 0.0
                     self._mission_start_ts: str | None = dt_util.now().isoformat()
                     # v2.8.2 — cached the same way callbacks.py caches it:
                     # needed so a later checkpoint (saved on a stuck event)
@@ -516,6 +683,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 current_phase in MISSION_END_PHASES and not _is_inter_room_transition
             )
             _ambiguous_end_phase = current_phase in ROOM_TRANSITION_CANDIDATE_PHASES
+            # v3.2.1 DOCK-ANCHOR — captured BEFORE the mission-end block
+            # below can reset self._had_cleaning_phase to False. Without
+            # this, a message that BOTH confirms mission-end AND is the
+            # dock-contact-confirming message would see
+            # self._had_cleaning_phase already flipped False and silently
+            # skip dock-contact detection for that message.
+            _was_in_cleaning_phase_this_message = self._had_cleaning_phase
 
             if self._had_cleaning_phase:
                 if not _looks_like_end:
@@ -528,6 +702,65 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 else:
                     # Unambiguous terminal phase (stop) — confirm immediately.
                     self._end_signal_streak = END_SIGNAL_DEBOUNCE_COUNT
+
+            # v3.2.1 DOCK-ANCHOR — MUST run before the mission-end block
+            # below, not after (this was a real bug in the first version
+            # of this feature, caught before shipping): _handle_mission_end()
+            # calls grid_store.update_from_mission(self._mission_points, ...)
+            # — a SINGLE, one-shot feed of GridStore/RoomSegStore/
+            # OutlineStore. If the dock-anchor correction ran AFTER that
+            # call (as it did in the first version), the most important
+            # case this whole mechanism exists for — a stuck-buffered
+            # segment resolving exactly at the mission's final dock
+            # contact — would have its correction applied only to the
+            # live map, never reaching the stores at all for that
+            # mission's contribution. Running first here guarantees
+            # _mission_points already reflects the correction by the
+            # time _handle_mission_end() reads it.
+            #
+            # v3.2.1 DOCK-ANCHOR — separate, simpler debounce than
+            # _end_signal_streak: "confirmed at the dock" fires on ANY
+            # SUSTAINED charge/hmPostMsn phase, whether the mission is
+            # ending (Fall A/B, handled above too) or just a mid-mission
+            # recharge (Fall B only, mission continues —
+            # _handle_mission_end() is NOT called for this case, so
+            # without this block Fall B would never be detected at all).
+            #
+            # Field-confirmed gap in the first version of this block: it
+            # originally skipped the hold-time check, reasoning that
+            # END_SIGNAL_MIN_HOLD_SECONDS only exists to decide "is this
+            # really the END." Wrong — a real regression test
+            # (TestImageEndDebounceV281, the exact ~21ms lewis-firmware
+            # burst scenario) showed the hold-time ALSO filters out
+            # transient firmware glitches reporting charge/hmPostMsn
+            # during a normal room transition, which is not a dock
+            # contact at all. Count alone can't tell "sustained" from
+            # "coincidentally happened twice fast" — the hold-time is
+            # required for both purposes, not just the first.
+            if (
+                self._map_capability == MapCapability.EPHEMERAL
+                and current_phase in ROOM_TRANSITION_CANDIDATE_PHASES
+                and _was_in_cleaning_phase_this_message
+            ):
+                if self._dock_contact_streak >= 0:
+                    if self._dock_contact_streak == 0:
+                        self._dock_contact_first_ts = _time_mod.monotonic()
+                    self._dock_contact_streak += 1
+                    if (
+                        self._dock_contact_streak >= END_SIGNAL_DEBOUNCE_COUNT
+                        and (_time_mod.monotonic() - self._dock_contact_first_ts)
+                        >= END_SIGNAL_MIN_HOLD_SECONDS
+                    ):
+                        self._handle_dock_contact_confirmed()
+                        # Sentinel -1: already handled this contact episode;
+                        # re-arms to 0 only once phase leaves the contact
+                        # set (see the else-branch below) — otherwise every
+                        # subsequent message while simply parked charging
+                        # would re-fire the (harmless but wasteful) handler.
+                        self._dock_contact_streak = -1
+            else:
+                self._dock_contact_streak = 0
+                self._dock_contact_first_ts = 0.0
 
             # v2.6.3 A — use _had_cleaning_phase so stuck → stop/charge
             # (stuck_and_abandoned) correctly triggers _handle_mission_end().
@@ -564,6 +797,28 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 # Record stuck position in mm for GridStore
                 if self._mission_points:
                     self._stuck_mission_points.append(self._mission_points[-1])
+                # v3.2.1 DOCK-ANCHOR — EPHEMERAL only, matching the old
+                # _check_dock_drift block's own established scoping
+                # (field-confirmed gap: this check was originally
+                # missing entirely). SMART robots get authoritative room
+                # data from the cloud's own persistent, self-correcting
+                # map — GridStore/RoomSegStore/OutlineStore (the actual
+                # beneficiaries of this correction) are themselves
+                # EPHEMERAL-only constructs, so buffering/correcting a
+                # SMART robot's local _mission_points would fix data
+                # nothing downstream consumes, while still doing
+                # unnecessary live-map replace_range() work and feeding
+                # dock_theta_baseline/geometry_store.record_drift() for
+                # a robot whose vSLAM-continuity story is different
+                # (persistent cloud map, not a fresh-per-mission local
+                # reconstruction).
+                if self._map_capability == MapCapability.EPHEMERAL:
+                    # v3.2.1 DOCK-ANCHOR — enter BUFFERING for the rest of
+                    # this mission (or until a confirmed dock contact, see
+                    # _handle_dock_contact_confirmed). See
+                    # Dock_Anchor_Korrektur_Plan.md for the full rationale
+                    # (vSLAM continuity risk after a likely pickup).
+                    self._dock_anchor_buffering = True
                 # v2.8.2 — checkpoint the in-progress mission. A stuck event
                 # is exactly the moment a mission is most at risk of never
                 # reaching a clean end (HA restart, manual intervention) —
@@ -587,15 +842,221 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         point this value first enters the system, so every downstream
         consumer (MapRenderer, self._mission_points -> GridStore/ZoneStore/
         OutlineStore) receives genuine millimetres and needs no changes.
+
+        v3.2.1 DOCK-ANCHOR — while self._dock_anchor_buffering is True (a
+        stuck event occurred and no confirmed dock contact has resolved
+        it yet), points go into _pending_segment_points/_thetas instead
+        of _mission_points/_mission_thetas — buffered for retroactive
+        correction (see _handle_dock_contact_confirmed), not discarded
+        outright as the old flag-based version did. The live MapRenderer
+        visual is deliberately NOT frozen — add_pose() still runs
+        unconditionally, so the on-screen path keeps showing what
+        actually happened (troubleshooting value) until the buffered
+        segment is corrected and merged in place.
         """
         point = pose.get("point", {})
-        x = float(point.get("x", 0)) * POSE_POINT_CM_TO_MM
-        y = float(point.get("y", 0)) * POSE_POINT_CM_TO_MM
+        # v3.2.1 AXIS-SWAP FIX — roombapy's own source (roomba.py) does
+        # `pose_point_x -> co_ords["y"]`, `pose_point_y -> co_ords["x"]`
+        # ("# x and y are reversed..."), matching add_pose()'s own
+        # long-standing docstring claim ("roombapy convention: co_ords['x']
+        # = pose_point_y"). This code never actually applied that swap —
+        # confirmed, independent bug from the raw firmware fields to this
+        # single entry point. Tested in isolation (visualised trajectory)
+        # and confirmed NOT to be the explanation for the "live map
+        # doesn't match real room layout" symptom investigated this
+        # session — that was the vSLAM continuity loss after stuck
+        # events, fixed separately via the Dock-Anchor-Korrektur
+        # mechanism. Fixed here anyway because it is a real, independently
+        # confirmed discrepancy from the documented convention, not
+        # because it explains that symptom.
+        #
+        # BREAKING DISCONTINUITY, not a silent one-line fix: every
+        # downstream consumer of x/y (MapRenderer, GridStore, RoomSegStore,
+        # OutlineStore, MissionTrajectoryStore) has been accumulating data
+        # under the OLD (unswapped) axis meaning. Data recorded before
+        # this fix and data recorded after it do NOT represent the same
+        # physical directions — old and new history will not spatially
+        # align if mixed. Combined with the already-recommended "fresh
+        # start" for GridStore/RoomSegStore (stuck-event contamination
+        # predating the Dock-Anchor-Korrektur, see that plan) rather than
+        # attempting a coordinate-transform migration of old data.
+        x = float(point.get("y", 0)) * POSE_POINT_CM_TO_MM
+        y = float(point.get("x", 0)) * POSE_POINT_CM_TO_MM
         theta = float(pose.get("theta", 0))
+        # v3.2.1 DOCK-ANCHOR — the very FIRST pose reading of a mission
+        # (x=y=0, robot still literally on the dock before departure) is
+        # arguably the CLEANEST possible dock_theta_baseline sample: the
+        # robot is certainly at the dock, certainly stationary, and this
+        # is before any stuck event or disturbance could have occurred
+        # this mission — better grounds for "clean" than even a Fall B
+        # recharge-return sample. MapRenderer.add_pose() already skips
+        # this exact point for its own (unrelated) reasons, discarding
+        # the theta entirely; captured here instead, roughly doubling
+        # the sampling rate for dock_theta_baseline maturation (once at
+        # start, once at end/recharge, per mission).
+        if (
+            self._map_capability == MapCapability.EPHEMERAL
+            and x == 0.0 and y == 0.0
+            and not self._dock_anchor_buffering
+            and not self._mission_points
+        ):
+            if self._config_entry is not None:
+                data = getattr(self._config_entry, "runtime_data", None)
+                robot_profile_store = getattr(data, "robot_profile_store", None) if data else None
+                if robot_profile_store is not None:
+                    robot_profile_store.update_dock_theta_baseline(theta)
         if self._renderer:
+            # v3.2.1 DOCK-ANCHOR — return value (accepted-jump flag) not
+            # yet consumed here: confidence-weighting by internal jump
+            # position was deliberately deferred (see
+            # Dock_Anchor_Korrektur_Plan.md 4c) pending real field
+            # validation that simple linear interpolation isn't enough.
             self._renderer.add_pose(x, y, theta)
-        self._mission_points.append((x, y))
+        if self._dock_anchor_buffering:
+            self._pending_segment_points.append((x, y))
+            self._pending_segment_thetas.append(theta)
+        else:
+            self._mission_points.append((x, y))
+            self._mission_thetas.append(theta)
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+
+    def _handle_dock_contact_confirmed(self) -> None:
+        """v3.2.1 DOCK-ANCHOR — fires once per confirmed dock contact
+        (debounced in _on_message), whether the mission is ending or
+        just recharging mid-mission (Fall B). See
+        Dock_Anchor_Korrektur_Plan.md for the full design.
+
+        Fall A (self._dock_anchor_buffering True): a stuck event
+        happened earlier this mission and has not yet been resolved.
+        The buffered segment is corrected (interpolated, see
+        _interpolate_and_correct_segment) and merged into
+        _mission_points/_mission_thetas — rescued instead of discarded.
+        dock_theta_baseline is NOT fed from this contact: it followed a
+        disturbance, not a clean docking (see RobotProfileStore.
+        update_dock_theta_baseline's docstring).
+
+        Fall B (not buffering): a normal, undisturbed dock contact
+        (recharge-and-resume, or a clean mission end). No buffering
+        needed — directly correct the segment since the last dock
+        anchor. This IS a clean contact, so it feeds
+        dock_theta_baseline.
+
+        Live-map correction (MapRenderer.replace_range) is a best-effort
+        approximation: MapRenderer's own point list can be shorter than
+        _mission_points/_pending_segment_points (it silently drops
+        implausible-jump points that image.py's unfiltered pose stream
+        still recorded) — there is no guaranteed 1:1 index
+        correspondence between the two. Replacing MapRenderer's last N
+        points (N = corrected segment length) is therefore an
+        approximation, not an exact replay; acceptable because rejected
+        jumps are rare and the live map is a visual aid, not a data
+        source GridStore/RoomSeg/Outline depend on.
+        """
+        # v3.2.1 DOCK-ANCHOR — defensive belt-and-suspenders: the caller
+        # (the dock-contact debounce block) already gates on EPHEMERAL,
+        # so this should never actually be reached for a SMART robot in
+        # practice — kept anyway so a future refactor that calls this
+        # method from a new call site can't silently reintroduce the
+        # SMART-robot gap fixed here (see the buffering-entry gate for
+        # the full rationale).
+        if self._map_capability != MapCapability.EPHEMERAL:
+            return
+        robot_profile_store = None
+        if self._config_entry is not None:
+            data = getattr(self._config_entry, "runtime_data", None)
+            robot_profile_store = getattr(data, "robot_profile_store", None) if data else None
+
+        dock_theta_baseline = None
+        if robot_profile_store is not None and robot_profile_store.dock_theta_baseline_ready:
+            dock_theta_baseline = robot_profile_store.dock_theta_baseline
+
+        if self._dock_anchor_buffering:
+            segment = self._pending_segment_points
+            thetas = self._pending_segment_thetas
+            is_clean_contact = False
+        else:
+            segment = self._mission_points[self._last_dock_anchor_index:]
+            thetas = self._mission_thetas[self._last_dock_anchor_index:]
+            is_clean_contact = True
+
+        if segment:
+            measured_final_pos = segment[-1]
+            measured_final_theta = thetas[-1] if thetas else 0.0
+            dx, dy, rotation_rad = _compute_dock_correction(
+                measured_final_pos, measured_final_theta, dock_theta_baseline,
+            )
+            corrected_points = _interpolate_and_correct_segment(segment, dx, dy, rotation_rad)
+            rotation_deg = math.degrees(rotation_rad)
+            n = len(thetas)
+            corrected_thetas = [
+                (t + rotation_deg * (i / (n - 1) if n > 1 else 1.0)) % 360.0
+                for i, t in enumerate(thetas)
+            ]
+
+            if self._dock_anchor_buffering:
+                self._mission_points.extend(corrected_points)
+                self._mission_thetas.extend(corrected_thetas)
+            else:
+                self._mission_points[self._last_dock_anchor_index:] = corrected_points
+                self._mission_thetas[self._last_dock_anchor_index:] = corrected_thetas
+
+            if self._renderer is not None:
+                start_index = max(0, self._renderer.point_count - len(segment))
+                self._renderer.replace_range(start_index, corrected_points)
+
+            if is_clean_contact and robot_profile_store is not None:
+                robot_profile_store.update_dock_theta_baseline(measured_final_theta)
+
+            # v3.2.1 DOCK-ANCHOR — consolidates the old, disconnected
+            # _check_dock_drift()-only diagnostic (pure logging, no
+            # correction applied) into this single place that now both
+            # detects AND corrects. GeometryStore.record_drift() keeps
+            # its existing Repair-Issue-triggering behaviour, fed from
+            # the SAME correction vector this method just applied.
+            if self._config_entry is not None:
+                data = getattr(self._config_entry, "runtime_data", None)
+                geometry_store = getattr(data, "geometry_store", None) if data else None
+                if geometry_store is not None and (dx, dy) != (0.0, 0.0):
+                    threshold_exceeded = geometry_store.record_drift(dx, dy)
+                    if threshold_exceeded:
+                        # v3.2.1 field-fix — self.hass.loop, not
+                        # asyncio.get_event_loop(): this callback runs on
+                        # roombapy's paho-MQTT thread (see
+                        # _handle_mission_end's own "loop = self.hass.loop"
+                        # a few lines below for the established pattern),
+                        # not the HA event loop thread — get_event_loop()
+                        # there is not guaranteed to return the same loop
+                        # HA actually runs on.
+                        asyncio.run_coroutine_threadsafe(
+                            self._trigger_drift_issue_enriched(dx, dy), self.hass.loop,
+                        )
+                    # v3.2.1 field-fix — this save call was missing
+                    # entirely in the first version: the old
+                    # _check_dock_drift block always persisted
+                    # geometry_store after recording a drift sample, and
+                    # this new mechanism must too, or a HA restart right
+                    # after a correction would silently lose the
+                    # updated cumulative_drift_mm/recent_drifts_mm.
+                    asyncio.run_coroutine_threadsafe(
+                        geometry_store.async_save(self.hass, self._config_entry.entry_id),
+                        self.hass.loop,
+                    )
+
+        self._dock_anchor_buffering = False
+        self._pending_segment_points = []
+        self._pending_segment_thetas = []
+        self._last_dock_anchor_index = len(self._mission_points)
+        # v3.2.1 DOCK-ANCHOR — checkpoint right after a successful
+        # resolution too, not just at the stuck event that started
+        # buffering. Without this, an HA restart between a correction
+        # and the NEXT stuck event would restore the STALE pre-
+        # resolution checkpoint — reverting _dock_anchor_buffering back
+        # to True with the original, now-superseded pending segment,
+        # and losing whatever _mission_points accumulated afterward.
+        if self._config_entry is not None and self._had_cleaning_phase:
+            asyncio.run_coroutine_threadsafe(
+                self._async_save_mission_checkpoint(), self.hass.loop
+            )
 
     def _handle_mission_end(self, ending_phase: str = "") -> None:
         # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
@@ -624,41 +1085,37 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if not self._mission_points:
             return
 
-        # v2.6.3 B5 — only run drift detection when the robot actually returned
-        # to the dock.  For stuck-and-abandoned (ending_phase="stop") or user-
-        # abort missions, _mission_points[-1] is the stuck position, not the dock.
-        # Passing those coordinates to check_dock_drift() produced spurious large
-        # drift vectors and inflated cumulative_drift_mm to >900 mm.
+        # v3.2.1 DOCK-ANCHOR — CONSOLIDATED (previously a KNOWN
+        # REDUNDANCY, see Dock_Anchor_Korrektur_Plan.md Abschnitt 7
+        # Punkt 1). This block used to independently recompute a drift
+        # vector via _check_dock_drift() and call record_drift() —
+        # exactly what _handle_dock_contact_confirmed() now does, and
+        # (since the ordering fix) already does BEFORE this method runs.
+        # By the time we reach here, self._mission_points[-1] is already
+        # corrected (pulled to ~(0,0)) whenever a dock-anchor correction
+        # applied — recomputing drift on that already-corrected point
+        # would almost always find nothing (redundant at best). Detection
+        # + correction + Repair-Issue-triggering is now solely
+        # _handle_dock_contact_confirmed()'s responsibility. What remains
+        # genuinely independent — and is kept — is the periodic
+        # self-healing check below: it reads geometry_store's own
+        # accumulated history, not anything this block itself computes.
         _dock_return = ending_phase in {"charge", "hmPostMsn"}
 
-        # ROOM-SEG Stage 6 — ZoneStore's process_mission()/room detection
-        # removed entirely (gap heuristic, unreliable — see
-        # ROOM_SEGMENTATION_NOTES.md). Dock-drift detection itself is
-        # unrelated to room detection, so it's kept as a standalone
-        # function (_check_dock_drift, below) rather than removed with it.
         if (self._map_capability == MapCapability.EPHEMERAL
                 and _dock_return
                 and len(self._mission_points) >= 20):
-            drift_vector = _check_dock_drift(self._mission_points[-1])
-            if drift_vector != (0.0, 0.0):
-                _LOGGER.info("Map: drift %.0f,%.0f mm", *drift_vector)
-
             data = self._config_entry.runtime_data
             if data.geometry_store:
-                if drift_vector != (0.0, 0.0):
-                    threshold_exceeded = data.geometry_store.record_drift(*drift_vector)
-                    if threshold_exceeded:
-                        asyncio.run_coroutine_threadsafe(
-                            self._trigger_drift_issue_enriched(*drift_vector), loop
-                        )
-                    # v3.1.0 DRIFT-AUTO — self-healing check after every drift
-                    # sample, regardless of whether this sample triggered.
-                    # Recovery uses a lower hysteresis threshold than the
-                    # trigger, so the issue doesn't flap right at the boundary.
-                    elif data.geometry_store.drift_recovered():
-                        asyncio.run_coroutine_threadsafe(
-                            self._clear_drift_issue(), loop
-                        )
+                # v3.1.0 DRIFT-AUTO — self-healing check, independent of
+                # this mission's own drift (already handled elsewhere,
+                # see above). Recovery uses a lower hysteresis threshold
+                # than the trigger, so the issue doesn't flap right at
+                # the boundary.
+                if data.geometry_store.drift_recovered():
+                    asyncio.run_coroutine_threadsafe(
+                        self._clear_drift_issue(), loop
+                    )
                 asyncio.run_coroutine_threadsafe(
                     data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
                     loop,
@@ -705,26 +1162,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if self._renderer and self._renderer.has_data:
             asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
 
-        # F-EPHEMERAL — Extract and accumulate room outline
-        # v2.6.3 B4 — render_for_outline() renders without the FLOOR_BORDER
-        # rectangle that previously dominated contour extraction.
-        if (
-            self._renderer
-            and self._renderer.has_data
-            and self._config_entry is not None
-        ):
-            _outline_store = getattr(
-                self._config_entry.runtime_data, "outline_store", None
-            )
-            if _outline_store is not None:
-                _png = self._renderer.render_for_outline()
-                if _png is not None:
-                    asyncio.run_coroutine_threadsafe(
-                        _outline_store.async_update_from_png(
-                            _png, self.hass, self._config_entry.entry_id
-                        ),
-                        loop,
-                    )
+        # F-EPHEMERAL — Room outline recompute moved AFTER the GridStore
+        # update below (v3.2.1 redesign): it now derives directly from
+        # GridStore.cells, so it must run once that store already
+        # includes this just-finished mission's cells. See the block
+        # after "Update GridStore for coverage heatmap".
 
         # Update GridStore for coverage heatmap (all pose-capable robots)
         if self._config_entry is not None and self._mission_points:
@@ -761,6 +1203,28 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     ),
                     loop,
                 )
+
+                # v3.2.1 FIELD FIX — outline recompute's PURE, synchronous
+                # half runs HERE, right after GridStore has this mission's
+                # cells, unconditionally (matches the prior always-run
+                # behaviour, not gated on room-seg's _recomputed below).
+                # Moved out of the async-only path further down: anything
+                # reading outline_store.contour_points later in THIS same
+                # mission (the freeze-snapshot block below, inside the
+                # room-seg branch) needs the fresh value available
+                # immediately, not after an async_recompute() coroutine
+                # merely gets SCHEDULED via run_coroutine_threadsafe — a
+                # scheduled coroutine is not a completed one. Field-
+                # confirmed gap: the very first FreezeSnapshotStore
+                # snapshot captured outline_points=0 for exactly this
+                # reason. Persistence (async_save) still happens further
+                # down, unchanged in spirit — see recompute_sync()'s
+                # docstring in outline_store.py for the full rationale.
+                if (
+                    self._map_capability == MapCapability.EPHEMERAL
+                    and _gdata.outline_store is not None
+                ):
+                    _gdata.outline_store.recompute_sync(_gdata.grid_store.cells)
 
                 # ROOM-SEG — recompute room/door segmentation from the
                 # just-updated GridStore. EPHEMERAL only (SMART robots get
@@ -809,6 +1273,85 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                                 ),
                                 loop,
                             )
+
+                        # v3.2.1 — FreezeSnapshotStore: count this
+                        # successful recompute, and if the interval is due,
+                        # capture the current RoomSeg + Outline state into
+                        # the immutable backup. Uses whatever
+                        # outline_store.contour_points currently holds —
+                        # doesn't need to be perfectly in sync with the
+                        # async outline recompute below, "good enough" is
+                        # the point of a periodic insurance snapshot, not
+                        # a live mirror. See freeze_snapshot_store.py
+                        # docstring for the firmware-cutoff rationale.
+                        if _gdata.freeze_snapshot_store is not None:
+                            _gdata.freeze_snapshot_store.note_recompute()
+                            if _gdata.freeze_snapshot_store.due():
+                                _outline_pts = (
+                                    _gdata.outline_store.contour_points
+                                    if _gdata.outline_store is not None
+                                    else []
+                                )
+                                _gdata.freeze_snapshot_store.snapshot(
+                                    [r.to_dict() for r in _gdata.room_seg_store.rooms.values()],
+                                    [d.to_dict() for d in _gdata.room_seg_store.doors],
+                                    _outline_pts,
+                                    dt_util.now().isoformat(),
+                                )
+                                asyncio.run_coroutine_threadsafe(
+                                    _gdata.freeze_snapshot_store.async_save(
+                                        self.hass, self._config_entry.entry_id
+                                    ),
+                                    loop,
+                                )
+
+                # F-EPHEMERAL — Room outline (v3.2.1 redesign): recompute
+                # from the same just-updated GridStore.cells room-seg reads
+                # above, unconditionally (not gated on _recomputed — the
+                # outline is a cheap pure dict pass, unlike room-seg's
+                # watershed pipeline, so there's no cost reason to skip it
+                # on missions where segmentation itself didn't change).
+                # v3.2.1 — persistence only: the actual recompute (contour
+                # points + mission_count) already happened synchronously
+                # right after the GridStore update above, unconditionally,
+                # so this just needs to save that already-current state —
+                # NOT call async_recompute() again, which would recompute
+                # (harmless) but ALSO increment mission_count a second
+                # time for the same mission (not harmless: would silently
+                # double-count mission_count against MIN_MISSIONS_TO_SHOW).
+                if (
+                    self._map_capability == MapCapability.EPHEMERAL
+                    and _gdata.outline_store is not None
+                ):
+                    asyncio.run_coroutine_threadsafe(
+                        _gdata.outline_store.async_save(
+                            self.hass, self._config_entry.entry_id
+                        ),
+                        loop,
+                    )
+
+                # v3.2.1 — MissionTrajectoryStore: record this mission's raw
+                # pose points (same self._mission_points GridStore just
+                # consumed above) into the bounded last-N-missions window,
+                # BEFORE they're cleared below. Same EPHEMERAL gate as
+                # OutlineStore — see mission_trajectory_store.py docstring.
+                if (
+                    self._map_capability == MapCapability.EPHEMERAL
+                    and _gdata.trajectory_store is not None
+                ):
+                    _mission_key = str(
+                        getattr(self, "_mission_start_ts", "") or ""
+                    )
+                    _gdata.trajectory_store.record_mission(
+                        _mission_key, self._mission_points,
+                        thetas_deg=self._mission_thetas,
+                    )
+                    asyncio.run_coroutine_threadsafe(
+                        _gdata.trajectory_store.async_save(
+                            self.hass, self._config_entry.entry_id
+                        ),
+                        loop,
+                    )
                 _LOGGER.debug(
                     "GridStore: updated from mission — %d pose pts, %d stuck pts",
                     len(self._mission_points), len(self._stuck_mission_points),
@@ -822,7 +1365,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 )
 
         self._mission_points = []
+        self._mission_thetas = []
         self._stuck_mission_points = []
+        # v3.2.1 DOCK-ANCHOR — mission has now genuinely ended; any
+        # still-buffered segment (stuck_and_abandoned, no dock contact
+        # ever confirmed) is discarded here, same as the mission-start
+        # reset does for the next mission. Harmless to reset both places
+        # — whichever fires first for a given mission wins, the other is
+        # a no-op on already-empty state.
+        self._dock_anchor_buffering = False
+        self._pending_segment_points = []
+        self._pending_segment_thetas = []
+        self._last_dock_anchor_index = 0
+        self._dock_contact_streak = 0
+        self._dock_contact_first_ts = 0.0
         self._mission_start_ts = None
 
     async def _async_save_map_state(self) -> None:
@@ -964,6 +1520,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         if same_mission_still_active:
             self._mission_points = list(checkpoint.get("mission_points", []))
+            self._mission_thetas = list(checkpoint.get("mission_thetas", []))
             self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
             self._mission_start_ts = checkpoint.get("mission_start_ts")
             self._mission_checkpoint_mssn_strt_tm = live_mssn_strt_tm
@@ -972,6 +1529,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             # docstring for why this must be restored, not left at the
             # post-__init__ default of 0.
             self._last_stuck_count = checkpoint.get("last_stuck_count", 0)
+            # v3.2.1 DOCK-ANCHOR — restore the full buffering state, not
+            # just a boolean: a stuck event before the HA restart must
+            # resume with its buffered segment intact, not silently lose
+            # it (which discarding it here would do — worse than the old
+            # flag-only version, which at least didn't have data to lose).
+            self._dock_anchor_buffering = checkpoint.get("dock_anchor_buffering", False)
+            self._pending_segment_points = list(checkpoint.get("pending_segment_points", []))
+            self._pending_segment_thetas = list(checkpoint.get("pending_segment_thetas", []))
+            self._last_dock_anchor_index = checkpoint.get("last_dock_anchor_index", 0)
             renderer_state = checkpoint.get("renderer_state")
             if self._renderer is not None and renderer_state:
                 self._renderer.restore_state(renderer_state)
@@ -1006,6 +1572,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         {"charge", "hmPostMsn"}, so drift detection is correctly skipped.
         """
         self._mission_points = list(checkpoint.get("mission_points", []))
+        self._mission_thetas = list(checkpoint.get("mission_thetas", []))
         self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
         self._mission_start_ts = checkpoint.get("mission_start_ts")
         renderer_state = checkpoint.get("renderer_state")
@@ -1033,6 +1600,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         await store.async_save({
             "mssn_strt_tm": self._mission_checkpoint_mssn_strt_tm,
             "mission_points": list(self._mission_points),
+            "mission_thetas": list(self._mission_thetas),
             "stuck_mission_points": list(self._stuck_mission_points),
             "mission_start_ts": self._mission_start_ts,
             "renderer_state": self._renderer.dump_state() if self._renderer else None,
@@ -1043,6 +1611,18 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             # would look like a brand-new stuck event (n > 0) and append a
             # spurious duplicate marker to _stuck_mission_points.
             "last_stuck_count": self._last_stuck_count,
+            # v3.2.1 DOCK-ANCHOR — without this, a resumed mission after
+            # an HA restart would lose an in-progress buffered segment
+            # entirely (worse than the old flag-only version, which at
+            # least had no data to lose) — a stuck event followed
+            # immediately by an HA restart would silently discard
+            # everything recorded since, instead of resuming buffering
+            # and still being able to correct it at the next dock
+            # contact.
+            "dock_anchor_buffering": self._dock_anchor_buffering,
+            "pending_segment_points": list(self._pending_segment_points),
+            "pending_segment_thetas": list(self._pending_segment_thetas),
+            "last_dock_anchor_index": self._last_dock_anchor_index,
         })
         _LOGGER.debug(
             "Map: saved mission checkpoint — %d pose pt(s), %d stuck pt(s)",
