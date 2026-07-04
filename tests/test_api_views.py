@@ -316,6 +316,8 @@ class TestRecordsFormat:
             "recharges", "evacuations", "dirt_events", "wifi_signal", "source",
             # v2.3.0 additions
             "room_coverage", "alignment_confidence",
+            # v3.2.1 — card F4 path replay key
+            "n_mssn",
         }
         assert required == set(u.keys())
 
@@ -328,8 +330,41 @@ class TestRecordsFormat:
             "recharges", "evacuations", "dirt_events", "wifi_signal", "source",
             # v2.3.0 additions
             "room_coverage", "alignment_confidence",
+            # v3.2.1 — card F4 path replay key
+            "n_mssn",
         }
         assert required == set(u.keys())
+
+    def test_cloud_record_n_mssn_passed_through(self):
+        """v3.2.1 — card F4: nMssn from the raw cloud record surfaces as
+        n_mssn so the card can build /mission/{n_mssn}/path requests."""
+        from custom_components.roomba_plus.api_views import _cloud_record_to_unified
+        u = _cloud_record_to_unified({**_cloud_rec(), "nMssn": 1234})
+        assert u["n_mssn"] == 1234
+
+    def test_cloud_record_n_mssn_null_when_absent(self):
+        from custom_components.roomba_plus.api_views import _cloud_record_to_unified
+        u = _cloud_record_to_unified(_cloud_rec())
+        assert u["n_mssn"] is None
+
+    def test_local_record_n_mssn_from_backfill(self):
+        """v3.2.1 — local records carry nMssn only after
+        backfill_from_cloud() merged it (_CLOUD_MERGE_SCALAR)."""
+        from custom_components.roomba_plus.api_views import _local_record_to_unified
+        u = _local_record_to_unified({**_local_rec(), "nMssn": 987})
+        assert u["n_mssn"] == 987
+
+    def test_local_record_n_mssn_null_before_enrichment(self):
+        from custom_components.roomba_plus.api_views import _local_record_to_unified
+        u = _local_record_to_unified(_local_rec())
+        assert u["n_mssn"] is None
+
+    def test_n_mssn_string_coerced_import_garbage_null(self):
+        """v3.2.1 — _safe_int: import endpoint may deliver nMssn as a
+        string; coerce numerics, null out garbage instead of raising."""
+        from custom_components.roomba_plus.api_views import _local_record_to_unified
+        assert _local_record_to_unified({**_local_rec(), "nMssn": "42"})["n_mssn"] == 42
+        assert _local_record_to_unified({**_local_rec(), "nMssn": "abc"})["n_mssn"] is None
 
     def test_cloud_and_local_shapes_identical(self):
         """Card can handle both sources with a single renderer."""

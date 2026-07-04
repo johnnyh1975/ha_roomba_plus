@@ -515,3 +515,133 @@ class TestR2SmartZonesEntryId:
         assert issue_id.startswith(_PREFIX)
         entry_id = issue_id[len(_PREFIX):]
         assert entry_id == "MYENTRYID"
+
+
+class TestZoneSelectNotCreatedForEphemeral:
+    """v3.2.1 REMOVED — ZoneSelect (and the matching ZoneCleanButton in
+    button.py) used to be created for EPHEMERAL (900-series) robots too.
+    Confirmed dead weight: its only consumer anywhere in this codebase
+    was ZoneCleanButton, which read the selection purely to log it, then
+    sent the exact same plain "start" command regardless — the 900-series
+    MQTT API has no coordinate/region targeting at all. A selector with
+    zero functional consumers, feeding a button that ignores it, actively
+    misleads: it suggests targeted-room cleaning on hardware that
+    architecturally cannot do it.
+
+    This is a genuine gap the removal itself exposed: the EPHEMERAL
+    creation gate was never covered by a setup-level test before, only
+    ZoneSelect's internal .options logic was unit-tested directly.
+    """
+
+    def _run_setup(self, map_capability, room_seg_store=None):
+        import asyncio
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.select import async_setup_entry
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.runtime_data.roomba = MagicMock()
+        config_entry.runtime_data.blid = "TESTBLID"
+        config_entry.runtime_data.map_capability = map_capability
+        config_entry.runtime_data.room_seg_store = room_seg_store
+        config_entry.runtime_data.has_cloud = False
+
+        added: list = []
+        def fake_add_entities(entities, *a, **kw):
+            added.extend(entities)
+
+        with patch(
+            "custom_components.roomba_plus.select.roomba_reported_state",
+            return_value={},
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                async_setup_entry(hass, config_entry, fake_add_entities)
+            )
+        return added
+
+    def test_ephemeral_does_not_create_zone_select(self):
+        from custom_components.roomba_plus.models import MapCapability
+        from custom_components.roomba_plus.select import ZoneSelect
+        entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=MagicMock())
+        assert not any(isinstance(e, ZoneSelect) for e in entities)
+
+    def test_ephemeral_without_room_seg_store_also_does_not_create_it(self):
+        from custom_components.roomba_plus.models import MapCapability
+        from custom_components.roomba_plus.select import ZoneSelect
+        entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=None)
+        assert not any(isinstance(e, ZoneSelect) for e in entities)
+
+    def test_harness_sanity_check_smart_map_still_creates_a_zone_select(self):
+        """Positive control: proves this test harness actually exercises
+        async_setup_entry's real entity list (not vacuously passing on an
+        always-empty list) — a SMART robot with pmaps must still get a
+        zone-select entity, since that tier genuinely has region
+        targeting (unaffected by this removal)."""
+        import asyncio
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.models import MapCapability
+        from custom_components.roomba_plus.select import (
+            async_setup_entry, SmartZoneSelect,
+        )
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.runtime_data.roomba = MagicMock()
+        config_entry.runtime_data.blid = "TESTBLID"
+        config_entry.runtime_data.map_capability = MapCapability.SMART
+        config_entry.runtime_data.room_seg_store = None
+        config_entry.runtime_data.has_cloud = False
+
+        added: list = []
+        def fake_add_entities(entities, *a, **kw):
+            added.extend(entities)
+
+        with patch(
+            "custom_components.roomba_plus.select.roomba_reported_state",
+            return_value={"pmaps": {"pmap0": {}}},
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                async_setup_entry(hass, config_entry, fake_add_entities)
+            )
+        assert any(isinstance(e, SmartZoneSelect) for e in added), (
+            "harness must actually see SMART-tier entities — otherwise "
+            "the EPHEMERAL 'not created' assertions above prove nothing"
+        )
+
+
+class TestZoneCleanButtonNotCreatedForEphemeral:
+    """v3.2.1 REMOVED — matching half of the ZoneSelect removal above,
+    in button.py."""
+
+    def _run_setup(self, map_capability, room_seg_store=None):
+        import asyncio
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.button import async_setup_entry
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.runtime_data.roomba = MagicMock()
+        config_entry.runtime_data.blid = "TESTBLID"
+        config_entry.runtime_data.map_capability = map_capability
+        config_entry.runtime_data.room_seg_store = room_seg_store
+        config_entry.runtime_data.has_cloud = False
+
+        added: list = []
+        def fake_add_entities(entities, *a, **kw):
+            added.extend(entities)
+
+        with patch(
+            "custom_components.roomba_plus.button.roomba_reported_state",
+            return_value={},
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                async_setup_entry(hass, config_entry, fake_add_entities)
+            )
+        return added
+
+
+    def test_ephemeral_does_not_create_zone_clean_button(self):
+        from custom_components.roomba_plus.models import MapCapability
+        from custom_components.roomba_plus.button import ZoneCleanButton
+        entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=MagicMock())
+        assert not any(isinstance(e, ZoneCleanButton) for e in entities)

@@ -2913,9 +2913,23 @@ class TestPeriodicStuckMissionRecheck:
         )
 
     def test_recheck_does_not_disturb_mqtt_staleness_watchdog(self):
-        """_synthetic=True must skip the last_mqtt_message_ts stamp — a
-        periodic synthetic re-check must not mask genuine MQTT silence
-        from the RoombaMqttStale binary sensor."""
+        """A synthetic re-check must not mask genuine MQTT silence from the
+        RoombaMqttStale binary sensor.
+
+        v3.2.1 — REWRITTEN for the stamping relocation: the timestamp stamp
+        moved from make_mission_callback (inline, cleanMissionStatus-gated)
+        to make_mqtt_stamp_callback, registered ahead of the platforms in
+        __init__.py.  The invariants this test now asserts:
+
+          1. make_mission_callback NEVER stamps — neither on a real message
+             nor on a synthetic recheck.  (Previously: real=stamp,
+             synthetic=skip via the _synthetic flag.)
+          2. make_mqtt_stamp_callback DOES stamp on a real message.
+          3. The synthetic recheck path calls _on_mission_message directly
+             and structurally never reaches the stamp callback — so the
+             original "synthetic must not mask silence" guarantee holds
+             without any flag.
+        """
         mts = _make_mts_v280_inter_room_recharge()
         mts.planned_rooms = ["A", "B"]
         mts.current_room_idx = 0
@@ -2947,8 +2961,21 @@ class TestPeriodicStuckMissionRecheck:
             clock[0] = 0.0
             _run_callback(cb, _msg_v280_inter_room_recharge("run", cycle="clean"))
 
-            real_ts_after_real_message = entry.runtime_data.last_mqtt_message_ts
-            assert real_ts_after_real_message == 99999.0  # real message DOES stamp it
+            # v3.2.1 invariant 1: the mission callback no longer stamps —
+            # the sentinel must survive even a REAL message through it.
+            assert entry.runtime_data.last_mqtt_message_ts == 12345.0, (
+                "make_mission_callback must not stamp last_mqtt_message_ts "
+                "(moved to make_mqtt_stamp_callback in v3.2.1)"
+            )
+
+            # v3.2.1 invariant 2: the dedicated stamp callback DOES stamp
+            # on a real message arriving through the registered chain.
+            from custom_components.roomba_plus.callbacks import (
+                make_mqtt_stamp_callback,
+            )
+            stamp_cb = make_mqtt_stamp_callback(entry)
+            stamp_cb(_msg_v280_inter_room_recharge("run", cycle="clean"))
+            assert entry.runtime_data.last_mqtt_message_ts == 99999.0
 
             # Reset to a sentinel, then run the synthetic recheck — it must
             # NOT re-stamp this, even though _time_mod.time() would return

@@ -116,7 +116,7 @@ class TestMigrateEntryV1ToV2:
 
     def test_returns_true(self):
         entry = self._run_migration({})
-        assert entry.version == 24  # all migrations now end at v23
+        assert entry.version == 25  # all migrations now end at v25
 
     def test_adds_marker_key(self):
         entry = self._run_migration({})
@@ -142,7 +142,7 @@ class TestMigrateEntryV1ToV2:
     def test_version_bumped_to_13(self):
         """v1 entry migrates through all steps to current version (12)."""
         entry = self._run_migration({})
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_already_at_v12_noop(self):
         """An entry already at the current version (12) is returned as-is."""
@@ -289,7 +289,7 @@ class TestMigrationV11ToV12:
 
     def test_version_bumped_to_13(self):
         entry = self._run_from_v11({"continuous": True})
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_existing_options_preserved(self):
         opts = {"continuous": False, "delay": 60, "presence_scheduling_enabled": True}
@@ -371,7 +371,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 24
+        assert entry.version == 25
         assert any("recent_area_30d" in new for _, new in renamed), \
             f"Expected area slug renamed, got: {renamed}"
 
@@ -389,7 +389,7 @@ class TestMigrationV11ToV12SlugFix:
             },
         ]
         entry, renamed, removed = self._run_from_v11_with_entities(entities)
-        assert entry.version == 24
+        assert entry.version == 25
         assert any("recent_time_30d" in new for _, new in renamed), \
             f"Expected time slug renamed, got: {renamed}"
 
@@ -410,7 +410,7 @@ class TestMigrationV11ToV12SlugFix:
         """Slug fix does not interfere with floor_label being added."""
         entry, _, _ = self._run_from_v11_with_entities([])
         assert entry.options.get("floor_label") == ""
-        assert entry.version == 24
+        assert entry.version == 25
 
 
 class TestMigrationV12ToV13:
@@ -475,7 +475,7 @@ class TestMigrationV12ToV13:
     def test_version_bumped_to_13(self):
         """Entry at v12 is bumped to v13."""
         entry, _, _ = self._run_from_v12_with_entities([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_german_cleaning_map_renamed(self):
         """image.*_reinigungskarte → image.*_cleaning_map (DE install)."""
@@ -633,7 +633,7 @@ class TestMigrationV13ToV14:
         finally:
             loop.close()
 
-        assert entry.version == 24
+        assert entry.version == 25
 
 
 class TestMigrationV14ToV15:
@@ -707,7 +707,7 @@ class TestMigrationV14ToV15:
 
     def test_version_bumped_to_15(self):
         entry, _, _ = self._run_from_v14([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_german_ladezeit_renamed_to_recharge_time(self):
         """sensor.*_ladezeit → sensor.*_recharge_time (DE, mission_recharge_time)."""
@@ -837,7 +837,7 @@ class TestMigrationV15ToV16:
 
     def test_version_bumped_to_16(self):
         entry, _, _ = self._run_from_v15([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_wartung_akkukapazitat_renamed_to_battery_capacity_retention(self):
         """sensor.*_wartung_akkukapazitat → sensor.*_battery_capacity_retention."""
@@ -935,7 +935,7 @@ class TestMigrationV16ToV17:
 
     def test_version_bumped_to_17(self):
         entry, *_ = self._run_from_v16([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_wartung_akkukapazitat_renamed(self):
         """Core case: wartung_akkukapazitat → battery_capacity_retention."""
@@ -1088,7 +1088,7 @@ class TestMigrationV17ToV18:
 
     def test_version_bumped_to_18(self):
         entry, *_ = self._run_from_v17([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     # Step A — German suffix
 
@@ -1207,7 +1207,7 @@ class TestMigrationV22ToV23:
 
     def test_version_bumped_to_23(self):
         entry, *_ = self._run_from_v22([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_favorite_entity_id_renamed_to_canonical(self):
         """button.roomba_test_og_montag_morgen → button.roomba_test_og_fav_abc123."""
@@ -1396,7 +1396,7 @@ class TestMigrationV22ToV23:
 
         # blid missing → no rename, but version still bumps
         assert renamed == []
-        assert entry.version == 24
+        assert entry.version == 25
 
 
 # ── v23 → v24: disable permanently-unavailable sensors ───────────────────────
@@ -1463,7 +1463,7 @@ class TestMigrationV23ToV24:
 
     def test_version_bumped_to_24(self):
         entry, _ = self._run_from_v23([])
-        assert entry.version == 24
+        assert entry.version == 25
 
     def test_all_five_sensors_disabled(self):
         entities = [self._make_entity(s) for s in self.SUFFIXES]
@@ -1484,13 +1484,11 @@ class TestMigrationV23ToV24:
         assert calls == []  # nothing additionally disabled
 
     def test_other_sensors_not_disabled(self):
-        entity = self._make_entity.__func__(
-            self,
-            "wifi_health",  # not in the target list
-        ) if False else type('E', (), {
+        entity = type('E', (), {
             'entity_id': 'sensor.roomba_test_wifi_health',
             'unique_id': f'roomba_plus_{self.BLID}_wifi_health',
             'platform': 'roomba_plus',
+            'domain': 'sensor',
             'config_entry_id': 'test_entry_id',
             'device_id': 'dev_1',
             'disabled_by': None,
@@ -1511,3 +1509,183 @@ class TestMigrationV23ToV24:
         )
         _, calls = self._run_from_v23([other])
         assert calls == []
+
+
+class TestMigrationV24ToV25:
+    """v24 → v25: re-enable the current-room device_tracker entity for
+    EXISTING installations whose entity was auto-disabled by the old
+    (pre-v2.10.3) entity_registry_enabled_default=False behaviour.
+
+    Community-report-driven (see device_tracker.py's root-cause comment,
+    "Thonno's report" / feature request #2 item 1): the code-level fix
+    only affects newly-registered entities, not ones already present in
+    the registry as disabled from before the fix shipped.
+    """
+
+    BLID = "TEST_BLID_000000000000000000000000"
+
+    def _make_tracker_entity(self, disabled_by=None, blid=None):
+        from unittest.mock import MagicMock
+        blid = blid or self.BLID
+        uid = f"roomba_plus_{blid}_position"
+        eid = "device_tracker.roomba_test_position"
+        return MagicMock(
+            entity_id=eid,
+            unique_id=uid,
+            platform="roomba_plus",
+            domain="device_tracker",
+            config_entry_id="test_entry_id",
+            device_id="dev_1",
+            disabled_by=disabled_by,
+        )
+
+    def _run_from_v24(self, fake_entities):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=24, options={})
+        entry.data = {"blid": self.BLID}
+        hass = _FakeHass()
+
+        entities_by_id = {e.entity_id: e for e in fake_entities}
+        update_calls = []
+
+        fake_er = MagicMock()
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: list(entities_by_id.values())
+
+        def _update(eid, *, disabled_by=None, **kw):
+            update_calls.append((eid, disabled_by))
+            if eid in entities_by_id:
+                entities_by_id[eid].disabled_by = disabled_by
+
+        fake_er.async_update_entity = _update
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=MagicMock()):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        return entry, update_calls
+
+    def test_version_bumped_to_25(self):
+        entry, _ = self._run_from_v24([])
+        assert entry.version == 25
+
+    def test_integration_disabled_tracker_is_reenabled(self):
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+        entity = self._make_tracker_entity(disabled_by=RegistryEntryDisabler.INTEGRATION)
+        _, calls = self._run_from_v24([entity])
+        assert calls == [("device_tracker.roomba_test_position", None)]
+
+    def test_user_disabled_tracker_is_left_untouched(self):
+        """A user's own deliberate choice to disable this entity must not
+        be overridden by the migration."""
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+        entity = self._make_tracker_entity(disabled_by=RegistryEntryDisabler.USER)
+        _, calls = self._run_from_v24([entity])
+        assert calls == []
+
+    def test_already_enabled_tracker_untouched(self):
+        entity = self._make_tracker_entity(disabled_by=None)
+        _, calls = self._run_from_v24([entity])
+        assert calls == []
+
+    def test_other_domain_entities_not_touched(self):
+        """A sensor entity with a similar-looking unique_id (different
+        domain) must not be affected."""
+        from unittest.mock import MagicMock
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+        entity = MagicMock(
+            entity_id="sensor.roomba_test_position",
+            unique_id=f"roomba_plus_{self.BLID}_position",
+            platform="roomba_plus",
+            domain="sensor",
+            config_entry_id="test_entry_id",
+            device_id="dev_1",
+            disabled_by=RegistryEntryDisabler.INTEGRATION,
+        )
+        _, calls = self._run_from_v24([entity])
+        assert calls == []
+
+    def test_different_blid_not_touched(self):
+        """Entity from a different robot (different BLID) is skipped."""
+        from homeassistant.helpers.entity_registry import RegistryEntryDisabler
+        entity = self._make_tracker_entity(
+            disabled_by=RegistryEntryDisabler.INTEGRATION, blid="OTHER_BLID",
+        )
+        _, calls = self._run_from_v24([entity])
+        assert calls == []
+
+    def test_missing_blid_in_config_skips_gracefully(self):
+        """No blid in config_entry.data — must not crash, just skip and
+        still bump the version."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus import async_migrate_entry
+
+        entry = _FakeConfigEntry(version=24, options={})
+        entry.data = {}
+        hass = _FakeHass()
+
+        fake_er = MagicMock()
+        fake_er.entities = MagicMock()
+        fake_er.entities.values = lambda: []
+
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+                 patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry", return_value=[]), \
+                 patch("homeassistant.helpers.device_registry.async_get", return_value=MagicMock()):
+                loop.run_until_complete(async_migrate_entry(hass, entry))
+        finally:
+            loop.close()
+
+        assert entry.version == 25
+
+
+class TestMigrationV24ToV25MatchesRealEntity:
+    """v24 → v25 — verifies the migration's hardcoded expected_uid pattern
+    against the REAL RoombaDeviceTracker class (not just a hand-written
+    fake), given this codebase's own history of locale-slug regressions
+    (v2.1.1: 37 entities renamed German→English slugs; v2.5.0: further
+    locale-dependent slug fixes). unique_id itself is never
+    locale-derived (set directly in code, never from a translated
+    string) — but this test proves that directly rather than relying on
+    that reasoning alone.
+    """
+
+    def test_real_class_unique_id_matches_migration_expectation(self):
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
+
+        roomba = MagicMock()
+        config_entry = MagicMock()
+        blid = "REALBLID123"
+        tracker = RoombaDeviceTracker(roomba, blid, config_entry)
+
+        expected_uid = f"roomba_plus_{blid}_position"
+        assert tracker.unique_id == expected_uid, (
+            "Migration's hardcoded expected_uid pattern must match the "
+            "real class's actual unique_id construction, or the "
+            "migration silently matches nothing"
+        )
+
+    def test_real_class_entity_id_has_no_locale_dependent_suffix(self):
+        """suggested_object_id returning None means entity_id is
+        device-name-only — confirms unique_id (which the migration
+        matches on) is NOT what determines the visible entity_id here,
+        so a locale-dependent entity_id has no bearing on whether the
+        migration finds the right entity."""
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
+
+        roomba = MagicMock()
+        config_entry = MagicMock()
+        tracker = RoombaDeviceTracker(roomba, "REALBLID123", config_entry)
+        assert tracker.suggested_object_id is None

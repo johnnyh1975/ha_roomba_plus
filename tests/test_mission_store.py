@@ -683,13 +683,54 @@ class TestQueryByDay:
         assert today_summary.stuck == 1
 
     @pytest.mark.asyncio
-    async def test_dominant_result_error_wins(self):
+    async def test_dominant_result_stuck_over_error(self):
+        """v3.2.1 — ordering flipped: stuck > error.  A stuck robot needs
+        physical intervention; a coded error frequently self-describes."""
         store = MissionStore()
         await store.async_append(_make_record(days_ago=0, result="completed"))
         await store.async_append(_make_record(days_ago=0, result="error"))
         await store.async_append(_make_record(days_ago=0, result="stuck"))
         by_day = store.query_by_day(7)
+        assert list(by_day.values())[0].result == "stuck"
+
+    @pytest.mark.asyncio
+    async def test_dominant_result_error_over_completed(self):
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result="completed"))
+        await store.async_append(_make_record(days_ago=0, result="error"))
+        by_day = store.query_by_day(7)
         assert list(by_day.values())[0].result == "error"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("variant", ["error_17", "error_battery", "error_224"])
+    async def test_dominant_result_error_variants_match(self, variant):
+        """v3.2.1 — error_* strings (import endpoint / rest980 migration)
+        must rank as error; the old exact match let a day whose only
+        mission was e.g. error_battery fall through to 'none'."""
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result=variant))
+        by_day = store.query_by_day(7)
+        assert list(by_day.values())[0].result == "error"
+
+    @pytest.mark.asyncio
+    async def test_dominant_result_cancelled_by_user_matches_cancelled(self):
+        """v3.2.1 — same fall-through class as error_*: cancelled_by_user
+        (cloud vocabulary, reaches the store via import) counts as
+        cancelled instead of dropping to 'none'."""
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result="cancelled_by_user"))
+        by_day = store.query_by_day(7)
+        assert list(by_day.values())[0].result == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_dominant_result_error_string_not_fooled_by_prefix_lookalike(self):
+        """Guard: only 'error' or 'error_*' rank as error — a hypothetical
+        'errorlike' result must not (startswith('error_') requires the
+        underscore; bare equality requires the exact string)."""
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result="errorlike"))
+        by_day = store.query_by_day(7)
+        assert list(by_day.values())[0].result == "none"
 
     @pytest.mark.asyncio
     async def test_dominant_result_stuck_over_completed(self):

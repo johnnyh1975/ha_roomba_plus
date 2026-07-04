@@ -412,3 +412,128 @@ class TestUpdateRobotProfileStoreMissionStats:
         rps, store_mock = await self._run(ms)
         store_mock.async_save.assert_not_called()
 
+
+
+class TestMqttStampCallbackRegisteredBeforePlatforms:
+    """v3.2.1 — source-order guard for the watchdog race fix.
+
+    The entire point of make_mqtt_stamp_callback is that it runs BEFORE
+    any entity's on_message callback; roombapy invokes callbacks in
+    registration order, and entities register theirs during platform
+    setup.  If a future refactor moves the registration below
+    async_forward_entry_setups, the false-"Problem"-blip race silently
+    returns with every test still green — hence this explicit guard on
+    the source order itself (same style as test_locale_slug_guard).
+    """
+
+    def test_stamp_registration_precedes_platform_forwarding(self):
+        from pathlib import Path
+        import custom_components.roomba_plus as pkg
+
+        src = (Path(pkg.__file__).parent / "__init__.py").read_text()
+        stamp_idx = src.find("make_mqtt_stamp_callback(config_entry)")
+        forward_idx = src.find(
+            "await hass.config_entries.async_forward_entry_setups"
+        )
+        assert stamp_idx != -1, "stamp callback registration missing from __init__.py"
+        assert forward_idx != -1
+        assert stamp_idx < forward_idx, (
+            "make_mqtt_stamp_callback must be registered BEFORE "
+            "async_forward_entry_setups — entities register their "
+            "on_message callbacks during platform setup, and roombapy "
+            "calls callbacks in registration order (v3.2.1 watchdog fix)"
+        )
+
+
+class TestOutlineSyncRecomputePrecedesFreezeSnapshot:
+    """v3.2.1 FIELD FIX — source-order guard, same style as
+    TestMqttStampCallbackRegisteredBeforePlatforms above.
+
+    outline_store.recompute_sync() must run BEFORE the room-seg recompute
+    block (which contains the FreezeSnapshotStore trigger) in image.py's
+    mission-end handler — otherwise the freeze snapshot reads a stale
+    (previous-mission, or on the very first-ever snapshot, empty)
+    contour. Field-confirmed: the first FreezeSnapshotStore snapshot
+    captured outline_points=0 for exactly this ordering reason. A future
+    refactor that moves recompute_sync() below the room-seg block would
+    silently reintroduce the bug with every test still green — hence
+    this explicit guard on the source order itself.
+    """
+
+    def test_recompute_sync_call_precedes_room_seg_block(self):
+        from pathlib import Path
+        import custom_components.roomba_plus as pkg
+
+        src = (Path(pkg.__file__).parent / "image.py").read_text()
+        sync_idx = src.find("_gdata.outline_store.recompute_sync(")
+        room_seg_idx = src.find("_gdata.room_seg_store.maybe_recompute(")
+        assert sync_idx != -1, "outline_store.recompute_sync() call missing from image.py"
+        assert room_seg_idx != -1
+        assert sync_idx < room_seg_idx, (
+            "outline_store.recompute_sync() must be called BEFORE the "
+            "room-seg recompute block — the FreezeSnapshotStore trigger "
+            "inside that block reads outline_store.contour_points and "
+            "must see THIS mission's fresh value, not a stale one "
+            "(v3.2.1 field-confirmed: first-ever snapshot had "
+            "outline_points=0 because of this exact ordering bug)"
+        )
+
+    def test_later_outline_call_site_saves_not_recomputes(self):
+        """The second (later) outline call site must call async_save(),
+        NOT async_recompute() — calling the latter there too would
+        silently double-increment OutlineStore.mission_count for the
+        same mission (recompute_sync() already ran once, earlier)."""
+        from pathlib import Path
+        import custom_components.roomba_plus as pkg
+
+        src = (Path(pkg.__file__).parent / "image.py").read_text()
+        sync_idx = src.find("_gdata.outline_store.recompute_sync(")
+        # Search for the LATER outline_store call site, after the sync one.
+        later_section = src[sync_idx + 1:]
+        assert "_gdata.outline_store.async_save(" in later_section, (
+            "expected a later outline_store.async_save() call for "
+            "persistence after the synchronous recompute_sync() above"
+        )
+        assert "_gdata.outline_store.async_recompute(" not in later_section, (
+            "a second async_recompute() call for the same mission would "
+            "double-increment mission_count on top of the recompute_sync() "
+            "call already made earlier in the same mission"
+        )
+
+
+class TestDockContactConfirmedPrecedesMissionEnd:
+    """v3.2.1 DOCK-ANCHOR — source-order guard, same style as
+    TestOutlineSyncRecomputePrecedesFreezeSnapshot above.
+
+    _handle_dock_contact_confirmed() MUST be called before
+    _handle_mission_end() in image.py's message handler — a real bug,
+    caught before shipping: _handle_mission_end() feeds GridStore/
+    RoomSegStore/OutlineStore via grid_store.update_from_mission(
+    self._mission_points, ...) as a SINGLE, one-shot call. If the
+    dock-anchor correction ran after that call (as it did in the first
+    version of this feature), the most important case this mechanism
+    exists for — a stuck-buffered segment resolving exactly at the
+    mission's final dock contact — would have its correction reach only
+    the live map, never the stores, for that mission's contribution. A
+    future refactor that moves the call order back would silently
+    reintroduce this with every other test still green — hence this
+    explicit guard on the source order itself.
+    """
+
+    def test_dock_contact_confirmed_call_precedes_mission_end_call(self):
+        from pathlib import Path
+        import custom_components.roomba_plus as pkg
+
+        src = (Path(pkg.__file__).parent / "image.py").read_text()
+        dock_idx = src.find("self._handle_dock_contact_confirmed()")
+        end_idx = src.find("self._handle_mission_end(current_phase)")
+        assert dock_idx != -1, "_handle_dock_contact_confirmed() call missing from image.py"
+        assert end_idx != -1
+        assert dock_idx < end_idx, (
+            "_handle_dock_contact_confirmed() must be called BEFORE "
+            "_handle_mission_end() — the latter feeds GridStore/RoomSeg/"
+            "Outline via a single one-shot grid_store.update_from_mission() "
+            "call and must see the ALREADY-corrected _mission_points, not "
+            "a stale pre-correction version (v3.2.1 field-confirmed: this "
+            "exact ordering bug was caught before shipping)"
+        )

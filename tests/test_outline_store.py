@@ -2,12 +2,15 @@
 
 Merged by the v2.8.x test reorganisation from multiple version-named
 test files; see git history for provenance.
+
+v3.2.1 — rewritten wholesale for the OutlineStore redesign: contour
+extraction moved from per-mission PNG edge-detection + EMA-blend
+(extract_contour_from_png / _merge_contours, removed) to direct boundary
+derivation from GridStore.cells (compute_boundary_points_mm). See
+outline_store.py module docstring and PAYLOAD_VERSION 4 comment for the
+two field-confirmed bugs (offset, clipping) that drove this.
 """
-
-
 from __future__ import annotations
-
-
 
 import io
 from unittest.mock import AsyncMock
@@ -16,11 +19,10 @@ from unittest.mock import patch
 import pytest
 from custom_components.roomba_plus.outline_store import MIN_CONTOUR_POINTS
 from custom_components.roomba_plus.outline_store import MIN_MISSIONS_TO_SHOW
-from custom_components.roomba_plus.outline_store import EMA_ALPHA
+from custom_components.roomba_plus.outline_store import CELL_MM
 from custom_components.roomba_plus.outline_store import OutlineStore
 from custom_components.roomba_plus.outline_store import PAYLOAD_VERSION
-from custom_components.roomba_plus.outline_store import _merge_contours
-from custom_components.roomba_plus.outline_store import extract_contour_from_png
+from custom_components.roomba_plus.outline_store import compute_boundary_points_mm
 
 
 def _make_white_png(width: int = 100, height: int = 100) -> bytes:
@@ -32,92 +34,56 @@ def _make_white_png(width: int = 100, height: int = 100) -> bytes:
     return buf.getvalue()
 
 
-def _make_cleaning_png(width: int = 200, height: int = 200) -> bytes:
-    """Return a PNG with a blue rectangle simulating a cleaned area."""
-    from PIL import Image, ImageDraw
-    img = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([40, 40, 160, 160], fill=(173, 216, 230))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+class TestComputeBoundaryPointsMm:
+    """compute_boundary_points_mm — pure geometric derivation, no I/O."""
 
+    def test_empty_cells_returns_empty(self):
+        assert compute_boundary_points_mm({}) == []
 
-class TestExtractContourFromPng:
+    def test_single_cell_is_its_own_boundary(self):
+        pts = compute_boundary_points_mm({(0, 0): 1.0})
+        assert pts == [(CELL_MM / 2, CELL_MM / 2)]
 
-    def test_returns_none_for_blank_white_image(self):
-        """extract_contour_from_png must not raise on a white image.
+    def test_interior_cell_of_solid_block_is_not_boundary(self):
+        """A 3x3 solid block: only the centre cell has all 4 orthogonal
+        neighbours present — it must be excluded."""
+        cells = {(x, y): 1.0 for x in range(-1, 2) for y in range(-1, 2)}
+        pts = compute_boundary_points_mm(cells)
+        centre_pt = (0 * CELL_MM + CELL_MM / 2, 0 * CELL_MM + CELL_MM / 2)
+        assert centre_pt not in pts
+        assert len(pts) == 8  # all but the centre
 
-        A very small white image may still produce edge points on its border,
-        so we only assert the function returns None or a list — no crash.
-        """
-        png = _make_white_png(50, 50)
-        result = extract_contour_from_png(png)
-        assert result is None or isinstance(result, list)
+    def test_uses_4_connectivity_not_8(self):
+        """A single diagonal-only gap (orthogonal neighbours present, only
+        the diagonal missing) must NOT be flagged as boundary — verifies
+        the check is 4-connectivity, matching the docstring's stated
+        rationale (narrow corridor walls need orthogonal, not diagonal,
+        gap detection)."""
+        # Cross shape: centre has all 4 orthogonal neighbours, no diagonals
+        cells = {
+            (0, 0): 1.0,
+            (1, 0): 1.0, (-1, 0): 1.0,
+            (0, 1): 1.0, (0, -1): 1.0,
+        }
+        pts = compute_boundary_points_mm(cells)
+        centre_pt = (CELL_MM / 2, CELL_MM / 2)
+        assert centre_pt not in pts  # all 4 orthogonal neighbours present
 
-    def test_returns_points_for_image_with_content(self):
-        """An image with a coloured rectangle should produce edge points."""
-        png = _make_cleaning_png(300, 300)
-        result = extract_contour_from_png(png)
-        # May return None if edge detection thresholds not met on the simple
-        # test image — important is that it doesn't raise
-        if result is not None:
-            assert isinstance(result, list)
-            if result:
-                assert all(isinstance(p, tuple) and len(p) == 2 for p in result)
+    def test_thin_corridor_every_cell_is_boundary(self):
+        """A 1-cell-wide corridor: every cell has at least one missing
+        orthogonal neighbour (above/below), so all cells are boundary —
+        exactly the case a doorway/corridor outline most needs to show."""
+        cells = {(x, 0): 1.0 for x in range(5)}
+        pts = compute_boundary_points_mm(cells)
+        assert len(pts) == 5
 
-    def test_returns_none_for_invalid_bytes(self):
-        """Invalid PNG bytes must return None, not raise."""
-        result = extract_contour_from_png(b"not a png")
-        assert result is None
+    def test_returns_millimetre_cell_centres(self):
+        pts = compute_boundary_points_mm({(2, -3): 1.0})
+        assert pts == [(2 * CELL_MM + CELL_MM / 2, -3 * CELL_MM + CELL_MM / 2)]
 
-    def test_returns_none_for_empty_bytes(self):
-        """Empty bytes must return None, not raise."""
-        result = extract_contour_from_png(b"")
-        assert result is None
-
-    def test_result_points_are_within_image_bounds(self):
-        """All returned points must be within the image dimensions."""
-        png = _make_cleaning_png(200, 200)
-        result = extract_contour_from_png(png)
-        if result:
-            for x, y in result:
-                assert 0 <= x < 200
-                assert 0 <= y < 200
-
-
-class TestMergeContours:
-
-    def _make_line(self, y: int, width: int, count: int = 100) -> list[tuple[int, int]]:
-        """Return a horizontal line of points."""
-        return [(x, y) for x in range(count)]
-
-    def test_returns_fallback_on_empty_existing(self):
-        new_pts = self._make_line(10, 100)
-        result = _merge_contours([], new_pts, (200, 200))
-        # Should return new_pts when existing is empty (Image.blend still works)
-        assert result is not None
-        assert len(result) > 0
-
-    def test_merge_two_identical_contours(self):
-        pts = self._make_line(10, 100)
-        result = _merge_contours(pts, pts, (200, 200))
-        assert result is not None
-
-    def test_returns_list_of_tuples(self):
-        pts1 = self._make_line(10, 100)
-        pts2 = self._make_line(20, 100)
-        result = _merge_contours(pts1, pts2, (200, 200))
-        assert isinstance(result, list)
-        if result:
-            assert all(isinstance(p, tuple) and len(p) == 2 for p in result)
-
-    def test_invalid_points_clamped_not_raised(self):
-        """Out-of-bounds points must be silently skipped, not crash."""
-        pts1 = [(500, 500), (600, 600)]  # out of 100×100 canvas
-        pts2 = [(10, 10)] * 60
-        result = _merge_contours(pts1, pts2, (100, 100))
-        assert result is not None
+    def test_custom_cell_mm(self):
+        pts = compute_boundary_points_mm({(1, 1): 1.0}, cell_mm=100.0)
+        assert pts == [(150.0, 150.0)]
 
 
 class TestOutlineStore:
@@ -132,19 +98,19 @@ class TestOutlineStore:
     def test_ready_false_below_min_missions(self):
         store = OutlineStore()
         store._mission_count = MIN_MISSIONS_TO_SHOW - 1
-        store._contour_points = [(i, i) for i in range(MIN_CONTOUR_POINTS)]
+        store._contour_points = [(float(i), float(i)) for i in range(MIN_CONTOUR_POINTS)]
         assert not store.ready
 
     def test_ready_false_below_min_points(self):
         store = OutlineStore()
         store._mission_count = MIN_MISSIONS_TO_SHOW
-        store._contour_points = [(0, 0)] * (MIN_CONTOUR_POINTS - 1)
+        store._contour_points = [(0.0, 0.0)] * (MIN_CONTOUR_POINTS - 1)
         assert not store.ready
 
     def test_ready_true_when_both_thresholds_met(self):
         store = OutlineStore()
         store._mission_count = MIN_MISSIONS_TO_SHOW
-        store._contour_points = [(i, i) for i in range(MIN_CONTOUR_POINTS)]
+        store._contour_points = [(float(i), float(i)) for i in range(MIN_CONTOUR_POINTS)]
         assert store.ready
 
     def test_min_missions_to_show_is_two(self):
@@ -153,53 +119,87 @@ class TestOutlineStore:
     def test_min_contour_points_is_fifty(self):
         assert MIN_CONTOUR_POINTS == 50
 
-    def test_ema_alpha_is_0_4(self):
-        assert EMA_ALPHA == 0.4
+    def test_cell_mm_matches_grid_store(self):
+        assert CELL_MM == 150.0
 
     @pytest.mark.asyncio
-    async def test_async_update_from_png_increments_mission_count(self):
+    async def test_async_recompute_increments_mission_count(self):
         store = OutlineStore()
         hass = MagicMock()
-        # Return enough points from executor job
-        fake_points = [(i, 0) for i in range(MIN_CONTOUR_POINTS + 10)]
-        hass.async_add_executor_job = AsyncMock(side_effect=[
-            fake_points,   # extract_contour_from_png
-            (200, 200),    # _get_image_size
-        ])
+        cells = {(x, 0): 1.0 for x in range(MIN_CONTOUR_POINTS + 10)}
         with patch.object(store, 'async_save', new_callable=AsyncMock):
-            await store.async_update_from_png(b"fake_png", hass, "entry1")
+            await store.async_recompute(cells, hass, "entry1")
         assert store._mission_count == 1
+        assert len(store._contour_points) == MIN_CONTOUR_POINTS + 10
 
     @pytest.mark.asyncio
-    async def test_async_update_from_png_skips_none_png(self):
+    async def test_async_recompute_skips_empty_cells(self):
         store = OutlineStore()
         hass = MagicMock()
-        hass.async_add_executor_job = AsyncMock()
-        await store.async_update_from_png(None, hass, "entry1")
-        hass.async_add_executor_job.assert_not_called()
+        with patch.object(store, 'async_save', new_callable=AsyncMock) as mock_save:
+            await store.async_recompute({}, hass, "entry1")
+        assert store._mission_count == 0
+        mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_async_update_skips_when_too_few_points(self):
+    async def test_async_recompute_replaces_not_blends(self):
+        """v3.2.1 — deterministic recompute, no EMA: a smaller GridStore
+        subset must fully replace the previous contour, not blend with it."""
         store = OutlineStore()
+        store._contour_points = [(9999.0, 9999.0)]  # stale from a prior recompute
         hass = MagicMock()
-        # Executor returns None (too few points)
-        hass.async_add_executor_job = AsyncMock(return_value=None)
-        await store.async_update_from_png(b"fake_png", hass, "entry1")
+        cells = {(0, 0): 1.0}
+        with patch.object(store, 'async_save', new_callable=AsyncMock):
+            await store.async_recompute(cells, hass, "entry1")
+        assert store._contour_points == [(CELL_MM / 2, CELL_MM / 2)]
+        assert (9999.0, 9999.0) not in store._contour_points
+
+    def test_recompute_sync_updates_contour_and_count_without_io(self):
+        """v3.2.1 FIELD FIX — the pure computation half must work with
+        zero I/O and zero hass/entry_id, so a caller needing fresh
+        contour_points RIGHT NOW (before persistence) can call it
+        directly on the sync callback thread."""
+        store = OutlineStore()
+        store.recompute_sync({(2, 3): 1.0})
+        assert store._mission_count == 1
+        assert store._contour_points == [(2 * CELL_MM + CELL_MM / 2, 3 * CELL_MM + CELL_MM / 2)]
+
+    def test_recompute_sync_skips_empty_cells(self):
+        store = OutlineStore()
+        store.recompute_sync({})
         assert store._mission_count == 0
 
     @pytest.mark.asyncio
+    async def test_async_recompute_increments_mission_count_only_once(self):
+        """v3.2.1 FIELD FIX — async_recompute() must call recompute_sync()
+        internally EXACTLY once per invocation. Field-confirmed risk: if
+        a caller ALSO calls recompute_sync() directly for the same
+        mission (as image.py now does, for freeze-snapshot freshness)
+        and then separately calls the full async_recompute() too,
+        mission_count would silently double-count — this test pins
+        async_recompute()'s OWN contract (one call in, one increment
+        out) so that contract can't quietly regress even though the
+        image.py-level double-call risk is a wiring concern, not this
+        method's own.
+        """
+        store = OutlineStore()
+        hass = MagicMock()
+        cells = {(x, 0): 1.0 for x in range(60)}
+        with patch.object(store, 'async_save', new_callable=AsyncMock):
+            await store.async_recompute(cells, hass, "entry1")
+        assert store._mission_count == 1
+
+    @pytest.mark.asyncio
     async def test_async_load_restores_state(self):
-        """v2.9.0 — PAYLOAD_VERSION bumped 2 -> 3 for the units fix (pose
-        coordinates were 10x too small everywhere); fixture must use the
-        current PAYLOAD_VERSION, not a hardcoded historical value."""
+        """v3.2.1 — PAYLOAD_VERSION bumped 3 -> 4 for the mm-not-px
+        redesign; fixture must use the current PAYLOAD_VERSION."""
         store = OutlineStore()
         hass = MagicMock()
 
         loaded_data = {
             "version": PAYLOAD_VERSION,
             "mission_count": 5,
-            "contour_points": [[10, 20], [30, 40]],
-            "canvas_size": [300, 300],
+            "contour_points": [[10.5, 20.5], [30.0, 40.0]],
         }
 
         with patch(
@@ -211,8 +211,7 @@ class TestOutlineStore:
             await store.async_load(hass, "entry1")
 
         assert store._mission_count == 5
-        assert store._contour_points == [(10, 20), (30, 40)]
-        assert store._canvas_size == (300, 300)
+        assert store._contour_points == [(10.5, 20.5), (30.0, 40.0)]
 
     @pytest.mark.asyncio
     async def test_async_load_ignores_wrong_version(self):
@@ -235,22 +234,20 @@ class TestOutlineStore:
         assert store._mission_count == 0  # not loaded
 
     @pytest.mark.asyncio
-    async def test_async_load_discards_pre_v2_8_2_data(self):
-        """v2.8.2 — payload version bumped 1 -> 2 specifically to discard
-        contour data accumulated from per-mission auto-fit renders (an
-        incompatible coordinate space per mission — see map_renderer.py
-        render_for_outline() docstring). A persisted file still at
-        version 1 must be treated like any other stale version: ignored,
-        not loaded, so the installation starts the outline fresh under
-        the fixed-coordinate-space render."""
+    async def test_async_load_discards_pre_v3_2_1_pixel_data(self):
+        """v3.2.1 — payload version bumped 3 -> 4 specifically because
+        contour_points changed MEANING from fixed-canvas pixels to
+        real-world millimetres. A persisted file still at version 3 must
+        be discarded outright, never reinterpreted — old pixel values
+        would silently masquerade as plausible-looking millimetres."""
         store = OutlineStore()
         hass = MagicMock()
 
         loaded_data = {
-            "version": 1,  # pre-fix format
-            "mission_count": 3,
-            "contour_points": [[0, 0], [599, 599]],  # the corrupted shape
-            "canvas_size": [600, 600],
+            "version": 3,  # pre-redesign pixel-space format
+            "mission_count": 8,
+            "contour_points": [[0, 0], [599, 599]],  # px-space shape
+            "canvas_size": [600, 600],  # field no longer exists
         }
 
         with patch(
@@ -263,7 +260,6 @@ class TestOutlineStore:
 
         assert store._mission_count == 0
         assert store._contour_points == []
-        assert store._canvas_size is None
 
 
 class TestRealStoreVersionRegression:
@@ -306,18 +302,48 @@ class TestRealStoreVersionRegression:
         )
         assert _HA_STORE_VERSION == 1
 
+
+class TestRenderRoomOutlineFitAlignment:
+    """v3.2.1 — render_room_outline now takes real-world millimetre points
+    and converts them via MapRenderer._mm_to_px_fit(), the same transform
+    every other geometry overlay (walls, doors, zones) already uses — so
+    the outline can never drift out of alignment with the auto-fitted
+    live-map render the way the old fixed-px reconstruction risked.
+    """
+
     def _make_renderer_with_png(self):
         from custom_components.roomba_plus.map_renderer import MapRenderer, RendererConfig
         renderer = MapRenderer(RendererConfig())
-        # Inject a fake _last_png
         renderer._last_png = _make_white_png(200, 200)
         return renderer
+
+    def _px_of_grey_dots(self, png_bytes, base_png_bytes=None):
+        from PIL import Image
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        w, h = img.size
+        if base_png_bytes is not None:
+            base = Image.open(io.BytesIO(base_png_bytes)).convert("RGB")
+            return {
+                (x, y)
+                for x in range(w)
+                for y in range(h)
+                if img.getpixel((x, y)) != base.getpixel((x, y))
+            }
+        return {
+            (x, y)
+            for x in range(w)
+            for y in range(h)
+            if img.getpixel((x, y)) not in ((255, 255, 255), (0, 0, 0))
+            and abs(img.getpixel((x, y))[0] - img.getpixel((x, y))[1]) < 12
+            and abs(img.getpixel((x, y))[1] - img.getpixel((x, y))[2]) < 12
+            and img.getpixel((x, y))[0] < 250
+        }
 
     def test_returns_none_when_no_last_png(self):
         from custom_components.roomba_plus.map_renderer import MapRenderer, RendererConfig
         renderer = MapRenderer(RendererConfig())
         assert renderer._last_png is None
-        result = renderer.render_room_outline([(10, 10), (20, 20)])
+        result = renderer.render_room_outline([(1000.0, 1000.0)])
         assert result is None
 
     def test_returns_none_when_no_points(self):
@@ -327,26 +353,65 @@ class TestRealStoreVersionRegression:
 
     def test_returns_bytes_when_points_and_png_present(self):
         renderer = self._make_renderer_with_png()
-        points = [(10, 10), (50, 50), (100, 100)]
+        points = [(1000.0, 1000.0), (5000.0, 5000.0), (10000.0, 10000.0)]
         result = renderer.render_room_outline(points)
         assert isinstance(result, bytes)
         assert len(result) > 0
 
     def test_updates_last_png_after_render(self):
         renderer = self._make_renderer_with_png()
-        original = renderer._last_png
-        points = [(10, 10), (50, 50)]
+        points = [(1000.0, 1000.0), (5000.0, 5000.0)]
         result = renderer.render_room_outline(points)
         assert renderer._last_png == result
-        # _last_png should be updated (may or may not differ from original)
 
     def test_out_of_bounds_points_do_not_crash(self):
         renderer = self._make_renderer_with_png()
-        # Points well outside 200×200 canvas
-        points = [(500, 500), (-10, -10), (1000, 1000)]
+        # Points far outside the render canvas in world mm terms
+        points = [(500_000.0, 500_000.0), (-500_000.0, -500_000.0)]
         result = renderer.render_room_outline(points)
-        # Should return bytes or None but not raise
         assert result is None or isinstance(result, bytes)
+
+    def test_identity_fit_draws_contour_at_mm_to_px_fit_result(self):
+        """Fresh renderer (identity fit state, no render() called yet) —
+        a millimetre point must land exactly where _mm_to_px_fit() itself
+        would place it, proving render_room_outline delegates rather than
+        reimplementing the transform."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer, RendererConfig,
+        )
+        renderer = MapRenderer(RendererConfig())
+        renderer._last_png = _make_white_png(600, 600)
+        fx, fy = renderer._mm_to_px_fit(0.0, 0.0)
+        png = renderer.render_room_outline([(0.0, 0.0)])
+        dots = self._px_of_grey_dots(png)
+        assert (fx, fy) in dots
+        assert dots <= {(fx, fy), (fx + 1, fy), (fx, fy + 1), (fx + 1, fy + 1)}
+
+    def test_fitted_render_maps_dock_mm_to_fit_dock_px(self):
+        """After an auto-fit render, a contour point at the dock (0,0 mm)
+        must land exactly on the FITTED dock position (_fit_cx/_fit_cy) —
+        the same alignment invariant the field bug violated, now
+        guaranteed structurally by delegating to _mm_to_px_fit()."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer, RendererConfig,
+        )
+        renderer = MapRenderer(RendererConfig())
+        # Reproduce the field shape: content far off-centre and larger
+        # than the canvas, so auto-fit produces ratio<1 plus translation.
+        renderer.add_pose(-4400.0, 1700.0, 0.0)
+        for x_mm in range(-4400, 3500, 200):
+            renderer.add_pose(float(x_mm), 1700.0 - (x_mm + 4400) * 1.05, 0.0)
+        renderer.render()
+        fit_cx, fit_cy = renderer._fit_cx, renderer._fit_cy
+        assert (fit_cx, fit_cy) != (300, 300), "test needs a non-identity fit"
+
+        base_png = renderer._last_png
+        png = renderer.render_room_outline([(0.0, 0.0)])
+        dots = self._px_of_grey_dots(png, base_png_bytes=base_png)
+        assert dots, "contour dot missing entirely"
+        assert any(
+            abs(x - fit_cx) <= 1 and abs(y - fit_cy) <= 1 for (x, y) in dots
+        ), f"dock contour dot at {sorted(dots)[:4]} not at fitted dock ({fit_cx},{fit_cy})"
 
 
 class TestRoombaDataOutlineField:
@@ -385,16 +450,11 @@ class TestOutlineStoreCorruptionResilience:
 
     def test_null_mission_count(self):
         os_ = self._load_with({"version": self._PV, "mission_count": None,
-                               "contour_points": [], "canvas_size": None})
+                               "contour_points": []})
         assert os_._mission_count == 0
 
     def test_null_contour_point(self):
         os_ = self._load_with({"version": self._PV, "mission_count": 3,
-                               "contour_points": [None, [1, 2]], "canvas_size": None})
+                               "contour_points": [None, [1, 2]]})
         # Bad point skipped or clean reset — no crash
         assert isinstance(os_._contour_points, list)
-
-    def test_null_canvas_size(self):
-        os_ = self._load_with({"version": self._PV, "mission_count": 1,
-                               "contour_points": [[1, 2]], "canvas_size": None})
-        assert os_._canvas_size is None

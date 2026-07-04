@@ -1806,3 +1806,133 @@ class TestRoomAccessibilityScores:
         )
         assert result["1"]["score"] == 0.0
         assert result["1"]["limiting_factor"] == "coverage_gap"
+
+
+class TestDockThetaBaseline:
+    """v3.2.1 DOCK-ANCHOR — dock_theta_baseline: circular-statistics
+    learned reference heading for clean (non-buffered) dock contacts.
+    Prerequisite for Dock-Anchor-Korrektur v2 (rotation correction) —
+    see Dock_Anchor_Korrektur_Plan.md.
+    """
+
+    def test_baseline_none_initially(self):
+        rps = RobotProfileStore()
+        assert rps.dock_theta_baseline is None
+        assert rps.dock_theta_resultant_length is None
+        assert rps.dock_theta_circular_stdev_deg is None
+        assert rps.dock_theta_baseline_ready is False
+
+    def test_single_observation_becomes_the_mean(self):
+        rps = RobotProfileStore()
+        rps.update_dock_theta_baseline(90.0)
+        assert rps.dock_theta_baseline == pytest.approx(90.0)
+        assert rps.dock_theta_resultant_length == pytest.approx(1.0)
+
+    def test_identical_observations_give_zero_stdev(self):
+        rps = RobotProfileStore()
+        for _ in range(5):
+            rps.update_dock_theta_baseline(180.0)
+        assert rps.dock_theta_baseline == pytest.approx(180.0)
+        assert rps.dock_theta_resultant_length == pytest.approx(1.0)
+        assert rps.dock_theta_circular_stdev_deg == pytest.approx(0.0, abs=1e-6)
+
+    def test_wraparound_mean_is_correct_not_naively_averaged(self):
+        """The core reason circular statistics are needed: naive linear
+        averaging of 359° and 1° gives 180° (wrong — that's the OPPOSITE
+        direction). The correct circular mean is 0°."""
+        rps = RobotProfileStore()
+        rps.update_dock_theta_baseline(359.0)
+        rps.update_dock_theta_baseline(1.0)
+        assert rps.dock_theta_baseline == pytest.approx(0.0, abs=0.01) or \
+            rps.dock_theta_baseline == pytest.approx(360.0, abs=0.01)
+        # tight cluster around 0 -> high resultant length, not scattered
+        assert rps.dock_theta_resultant_length > 0.99
+
+    def test_uniformly_scattered_observations_give_low_resultant_length(self):
+        """Four evenly-spaced headings (90° apart) cancel out entirely —
+        resultant length near 0, stdev undefined (maximally scattered)."""
+        rps = RobotProfileStore()
+        for theta in (0.0, 90.0, 180.0, 270.0):
+            rps.update_dock_theta_baseline(theta)
+        assert rps.dock_theta_resultant_length == pytest.approx(0.0, abs=1e-9)
+        assert rps.dock_theta_circular_stdev_deg is None
+
+    def test_not_ready_below_min_samples_even_if_identical(self):
+        """Count floor applies even when values are already perfectly
+        consistent — guards against a few coincidentally-similar early
+        readings being mistaken for established convergence."""
+        from custom_components.roomba_plus.robot_profile_store import (
+            _DOCK_THETA_MIN_SAMPLES,
+        )
+        rps = RobotProfileStore()
+        for _ in range(_DOCK_THETA_MIN_SAMPLES - 1):
+            rps.update_dock_theta_baseline(45.0)
+        assert rps.dock_theta_baseline_ready is False
+
+    def test_ready_once_min_samples_and_tight_stdev_both_met(self):
+        from custom_components.roomba_plus.robot_profile_store import (
+            _DOCK_THETA_MIN_SAMPLES,
+        )
+        rps = RobotProfileStore()
+        for _ in range(_DOCK_THETA_MIN_SAMPLES):
+            rps.update_dock_theta_baseline(45.0)
+        assert rps.dock_theta_baseline_ready is True
+
+    def test_not_ready_with_enough_samples_but_too_much_spread(self):
+        """Enough observations, but too scattered (large stdev) — count
+        alone must not be sufficient."""
+        from custom_components.roomba_plus.robot_profile_store import (
+            _DOCK_THETA_MIN_SAMPLES,
+        )
+        rps = RobotProfileStore()
+        thetas = [0.0, 40.0, 320.0, 80.0, 280.0, 10.0, 350.0]
+        for t in thetas[:max(_DOCK_THETA_MIN_SAMPLES, len(thetas))]:
+            rps.update_dock_theta_baseline(t)
+        assert rps.dock_theta_count >= _DOCK_THETA_MIN_SAMPLES
+        assert rps.dock_theta_baseline_ready is False
+
+    @pytest.mark.asyncio
+    async def test_persists_across_save_load_roundtrip(self):
+        from unittest.mock import MagicMock, patch
+        rps = RobotProfileStore()
+        rps.update_dock_theta_baseline(90.0)
+        rps.update_dock_theta_baseline(92.0)
+        saved = {}
+        async def fake_save(data):
+            saved.update(data)
+        async def fake_load():
+            return saved
+        store_mock = MagicMock()
+        store_mock.async_save = fake_save
+        store_mock.async_load = fake_load
+        hass = _make_hass()
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await rps.async_save(hass, "e1")
+            rps2 = RobotProfileStore()
+            await rps2.async_load(hass, "e1")
+        assert saved["dock_theta_count"] == 2
+        assert rps2.dock_theta_count == 2
+        assert rps2.dock_theta_baseline == pytest.approx(rps.dock_theta_baseline)
+
+    @pytest.mark.asyncio
+    async def test_old_payload_without_dock_theta_loads_cleanly(self):
+        """v3.2.1 — additive fields, no version bump: a payload saved
+        before this existed simply has no such keys."""
+        from unittest.mock import MagicMock, patch
+        rps = RobotProfileStore()
+        old_payload = {"coverage_baseline": 0.5, "coverage_mission_count": 25}
+        async def fake_load():
+            return old_payload
+        store_mock = MagicMock()
+        store_mock.async_load = fake_load
+        hass = _make_hass()
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await rps.async_load(hass, "e1")
+        assert rps.dock_theta_count == 0
+        assert rps.dock_theta_baseline is None

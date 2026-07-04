@@ -119,12 +119,21 @@ class TestMissionActiveSensor:
         assert recharge.is_on is False
 
 
-def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None, mssn_strt_tm=None):
+def _mqtt_stale_sensor(
+    phase="run",
+    last_mqtt_message_ts=0.0,
+    wifistat=None,
+    mssn_strt_tm=None,
+    last_run_transition_ts=0.0,
+):
     """Build a minimal RoombaMqttStale with stubbed hass/vacuum/entry state.
 
     v2.9.0 — covers the enriched mqtt_watchdog Repair Issue (last known
     phase, actual silence duration, cloud connectivity cross-check).
     Previously this sensor/issue had zero test coverage at all.
+    v3.2.1 — last_run_transition_ts added (RESUME-GRACE); defaults to 0.0
+    ("no transition observed"), which preserves every pre-existing test's
+    semantics: 0.0 falls through to the normal silence check.
     """
     from custom_components.roomba_plus.binary_sensor import RoombaMqttStale
 
@@ -140,6 +149,7 @@ def _mqtt_stale_sensor(phase="run", last_mqtt_message_ts=0.0, wifistat=None, mss
     entry = MagicMock()
     entry.entry_id = "test_entry"
     entry.runtime_data.last_mqtt_message_ts = last_mqtt_message_ts
+    entry.runtime_data.last_run_transition_ts = last_run_transition_ts
 
     s = RoombaMqttStale.__new__(RoombaMqttStale)
     s.vacuum = roomba
@@ -513,6 +523,139 @@ def _make_sensor(not_ready: int = 0) -> RoombaMapSavingStatus:
 
 
 # ── Constant ──────────────────────────────────────────────────────────────────
+
+class TestMqttWatchdogResumeGrace:
+    """v3.2.1 RESUME-GRACE (field report: Jean-Christoph, 2026-07-02):
+    a false "Problem" blip fired at every Zwischenladung resume — phase
+    flips recharge→run while last_mqtt_message_ts is still minutes old,
+    and the mssnStrtTm start-grace can't help because mssnStrtTm keeps
+    the ORIGINAL mission start (2h20 old in the reported case).  The
+    sensor now also suppresses for MQTT_WATCHDOG_START_GRACE_SECONDS
+    after the last observed transition into phase="run", stamped by
+    make_mqtt_stamp_callback into runtime_data.last_run_transition_ts.
+    """
+
+    def test_suppressed_within_resume_grace_despite_stale_ts_and_old_mission(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        # The exact field scenario: mission 2h20 old (start grace long
+        # expired), MQTT silent 10 min (during recharge — benign), robot
+        # resumed into "run" 30 s ago.  Must NOT fire.
+        s = _mqtt_stale_sensor(
+            phase="run",
+            last_mqtt_message_ts=now - 600,
+            mssn_strt_tm=now - 8400,
+            last_run_transition_ts=now - 30,
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock:
+            tmock.time.return_value = now
+            assert s.is_on is False
+
+    def test_fires_once_resume_grace_elapsed(self):
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        # Resume was 16 min ago, silence 10 min — genuine mid-mission
+        # outage well past both graces.  Must fire.
+        s = _mqtt_stale_sensor(
+            phase="run",
+            last_mqtt_message_ts=now - 600,
+            mssn_strt_tm=now - 8400,
+            last_run_transition_ts=now - 960,
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock:
+            tmock.time.return_value = now
+            assert s.is_on is True
+
+    def test_zero_transition_ts_falls_through_to_silence_check(self):
+        """0.0 = no transition observed (HA restarted mid-mission) — must
+        behave exactly like pre-v3.2.1: normal silence check applies."""
+        from custom_components.roomba_plus import binary_sensor as bs_mod
+
+        now = 1_000_000.0
+        s = _mqtt_stale_sensor(
+            phase="run",
+            last_mqtt_message_ts=now - 600,
+            mssn_strt_tm=now - 8400,
+            last_run_transition_ts=0.0,
+        )
+        with patch.object(bs_mod, "_time_mod") as tmock:
+            tmock.time.return_value = now
+            assert s.is_on is True
+
+
+class TestMqttStampCallback:
+    """v3.2.1 — make_mqtt_stamp_callback: registered ahead of the
+    platforms so entities never evaluate a message before its stamp."""
+
+    def _entry(self):
+        entry = MagicMock()
+        entry.runtime_data.last_mqtt_message_ts = 0.0
+        entry.runtime_data.last_run_transition_ts = 0.0
+        return entry
+
+    def _msg(self, phase=None, extra=None):
+        reported = dict(extra or {})
+        if phase is not None:
+            reported["cleanMissionStatus"] = {"phase": phase}
+        return {"state": {"reported": reported}}
+
+    def test_stamps_on_every_message_including_pose_only(self):
+        """Broader than the old inline stamp: a pose-only message proves
+        MQTT connectivity just as well as a cleanMissionStatus one."""
+        from custom_components.roomba_plus import callbacks as cb_mod
+        from custom_components.roomba_plus.callbacks import make_mqtt_stamp_callback
+
+        entry = self._entry()
+        cb = make_mqtt_stamp_callback(entry)
+        with patch.object(cb_mod, "_time_mod") as tmock:
+            tmock.time.return_value = 555.0
+            cb(self._msg(extra={"pose": {"point": {"x": 1, "y": 2}}}))
+        assert entry.runtime_data.last_mqtt_message_ts == 555.0
+
+    def test_run_transition_stamped_only_on_entry_into_run(self):
+        from custom_components.roomba_plus import callbacks as cb_mod
+        from custom_components.roomba_plus.callbacks import make_mqtt_stamp_callback
+
+        entry = self._entry()
+        cb = make_mqtt_stamp_callback(entry)
+        with patch.object(cb_mod, "_time_mod") as tmock:
+            tmock.time.return_value = 100.0
+            cb(self._msg(phase="charge"))
+            assert entry.runtime_data.last_run_transition_ts == 0.0
+
+            tmock.time.return_value = 200.0
+            cb(self._msg(phase="run"))       # charge → run: stamp
+            assert entry.runtime_data.last_run_transition_ts == 200.0
+
+            tmock.time.return_value = 300.0
+            cb(self._msg(phase="run"))       # run → run: no re-stamp
+            assert entry.runtime_data.last_run_transition_ts == 200.0
+
+            tmock.time.return_value = 400.0
+            cb(self._msg(phase="recharge"))  # run → recharge: no stamp
+            tmock.time.return_value = 500.0
+            cb(self._msg(phase="run"))       # recharge → run (resume): stamp
+            assert entry.runtime_data.last_run_transition_ts == 500.0
+
+    def test_message_without_cleanmissionstatus_does_not_break_phase_tracking(self):
+        """A pose-only message between charge and run must not corrupt the
+        transition detection (phase memory only updates on
+        cleanMissionStatus messages)."""
+        from custom_components.roomba_plus import callbacks as cb_mod
+        from custom_components.roomba_plus.callbacks import make_mqtt_stamp_callback
+
+        entry = self._entry()
+        cb = make_mqtt_stamp_callback(entry)
+        with patch.object(cb_mod, "_time_mod") as tmock:
+            tmock.time.return_value = 100.0
+            cb(self._msg(phase="charge"))
+            cb(self._msg(extra={"batPct": 80}))   # no cleanMissionStatus
+            tmock.time.return_value = 200.0
+            cb(self._msg(phase="run"))
+            assert entry.runtime_data.last_run_transition_ts == 200.0
+
 
 class TestNotReadyConstant:
     def test_value_is_64(self):

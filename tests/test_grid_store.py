@@ -1122,6 +1122,107 @@ class TestUpdateFromMissionDiskFill:
             assert weight == VISIT_INCREMENT
 
 
+class TestDualGridStructureCells:
+    """v3.2.1 DUAL-GRID — structure_cells: a second, centre-only cell-weight
+    accumulator, independent of robot_radius_mm disk-fill. Data-collection
+    scaffolding for a future room-segmentation input; not yet consumed
+    anywhere, so these tests only cover the accumulator itself."""
+
+    def _make_gs(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        return GridStore()
+
+    def test_initial_state_empty(self):
+        gs = self._make_gs()
+        assert gs.structure_cells == {}
+
+    def test_centre_only_regardless_of_robot_radius(self):
+        """structure_cells must mark ONLY the exact centre cell, even when
+        robot_radius_mm makes self.cells (disk-filled) mark many more —
+        this is the entire point of the dual accumulator."""
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [], robot_radius_mm=500.0)
+        assert len(gs.structure_cells) == 1
+        assert (6, 6) in gs.structure_cells
+        assert len(gs.cells) > 1, "sanity: disk-fill must actually be wider here"
+
+    def test_populated_even_when_robot_radius_is_none(self):
+        """structure_cells accumulates independent of whether the caller
+        passes robot_radius_mm at all — it never disk-fills, so there's
+        no reason for it to depend on that parameter's presence."""
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [])
+        assert (6, 6) in gs.structure_cells
+
+    def test_decays_independently_of_cells(self):
+        """A cell present in both accumulators must decay on its own
+        weight in EACH dict — the two must not share state."""
+        from custom_components.roomba_plus.grid_store import DECAY
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [], robot_radius_mm=500.0)
+        w_cells_before = gs.cells[(6, 6)]
+        w_struct_before = gs.structure_cells[(6, 6)]
+        # Second mission far away — decays both dicts' existing entries,
+        # doesn't touch (6,6) in either.
+        gs.update_from_mission([(9000.0, 9000.0)], [], robot_radius_mm=500.0)
+        assert gs.cells[(6, 6)] == pytest.approx(w_cells_before * DECAY)
+        assert gs.structure_cells[(6, 6)] == pytest.approx(w_struct_before * DECAY)
+
+    def test_prunes_below_threshold_independently(self):
+        """A cell can be pruned from structure_cells while still present
+        in cells (disk-filled neighbours keep cells populated longer) —
+        the two prune independently, no shared prune list."""
+        from custom_components.roomba_plus.grid_store import PRUNE_THRESHOLD
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [], robot_radius_mm=500.0)
+        gs._structure_cells[(6, 6)] = PRUNE_THRESHOLD / 2  # force below threshold
+        gs.update_from_mission([(9000.0, 9000.0)], [], robot_radius_mm=500.0)
+        assert (6, 6) not in gs.structure_cells
+
+    @pytest.mark.asyncio
+    async def test_persists_across_save_load_roundtrip(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        gs = self._make_gs()
+        gs.update_from_mission([(1000.0, 1000.0)], [], robot_radius_mm=500.0)
+        saved = {}
+        async def fake_save(data):
+            saved.update(data)
+        store_mock = MagicMock()
+        store_mock.async_save = fake_save
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(MagicMock(), "e1")
+        assert "structure_cells" in saved
+        assert saved["structure_cells"] == {"6,6": pytest.approx(0.30)}
+
+        gs2 = self._make_gs()
+        store_mock2 = MagicMock()
+        store_mock2.async_load = AsyncMock(return_value=saved)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock2):
+            await gs2.async_load(MagicMock(), "e1")
+        assert gs2.structure_cells == gs.structure_cells
+
+    @pytest.mark.asyncio
+    async def test_old_payload_without_structure_cells_loads_cleanly(self):
+        """v3.2.1 — additive field, no PAYLOAD_VERSION bump (same
+        precedent as the v3.2.0 FURNITURE fields): a payload saved before
+        this existed has no 'structure_cells' key at all and must load
+        as an empty dict, not raise."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from custom_components.roomba_plus.grid_store import PAYLOAD_VERSION
+        gs = self._make_gs()
+        old_payload = {
+            "version": PAYLOAD_VERSION,
+            "cells": {"1,1": 0.5},
+            "stuck": {},
+        }
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value=old_payload)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_load(MagicMock(), "e1")
+        assert gs.structure_cells == {}
+        assert gs.cells == {(1, 1): 0.5}
+
+
 class TestCoverageAccuracyWithDiskFill:
     """v2.9.0 (DISK-FILL) — confirms the fix actually improves the two
     real, user-visible calculations that depend on GridStore cell density:

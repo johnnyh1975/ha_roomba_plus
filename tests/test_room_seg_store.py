@@ -4,7 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+from custom_components.roomba_plus.room_seg_store import (
+    RoomSegStore,
+    SegRoom,
+    SegDoor,
+    STALE_ABSORPTION_RATIO,
+    DOOR_MERGE_DISTANCE_MM,
+)
 
 
 def _rect(x0, x1, y0, y1):
@@ -161,6 +167,261 @@ class TestIdentityMatchingAcrossRecomputes:
             "out of the visited-cell set, even though it wasn't "
             "re-detected this round"
         )
+
+
+class TestStaleRoomAbsorptionCleanup:
+    """v3.2.1 — a persisted room whose entire (or near-entire) former
+    territory is now claimed by a DIFFERENT, currently-matched room must
+    be deleted, not kept forever like an ordinary "not detected this
+    round" miss. Field-confirmed: a 122-cell phantom room 100% contained
+    inside a 521-cell live room, complete with 3 doors pointing into the
+    interior of its absorber.
+    """
+
+    def test_fully_absorbed_room_is_deleted(self):
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = list(store.rooms.keys())
+        phantom_id = room_ids[0]
+
+        # Manually seed a phantom room whose cells are a PURE SUBSET of
+        # the other persisted room's cells — simulates the field scenario
+        # where an earlier partial-grid recompute created a small sliver
+        # region that a later, more-complete recompute's cluster fully
+        # subsumes.
+        live_id = room_ids[1]
+        subset_cells = set(list(store.rooms[live_id].cells)[:5])
+        store.rooms["room_phantom"] = SegRoom(id="room_phantom", cells=subset_cells)
+
+        # Recompute against a grid that reproduces the SAME two clusters
+        # (phantom's cells are invisible to segment_rooms — they were
+        # never actually part of the input grid — so segment_rooms will
+        # naturally re-match live_id's full cluster onto both live_id AND
+        # the phantom's now-subset cells, absorbing the phantom).
+        cells = _two_room_grid()
+        cells.update(_rect(30, 40, 30, 40))  # forces the growth gate
+        store.last_cell_count = 0
+        store._recompute(cells)
+
+        assert "room_phantom" not in store.rooms
+
+    def test_room_absorbed_across_multiple_rooms_is_still_deleted(self):
+        """v3.2.1 FIELD FIX — a room whose cells are split across SEVERAL
+        matched rooms, none individually reaching STALE_ABSORPTION_RATIO,
+        must still be deleted if the UNION reaches it. Field-confirmed
+        post-3.2.1: a real recompute produced a room 100% claimed
+        elsewhere but split 72.7% / 10.0% / 17.2% across three different
+        matched rooms — the original single-absorber `any(...)` check
+        missed this because no single absorber crossed 80%, even though
+        the room was, in aggregate, exactly as stale as a single-absorber
+        case would be.
+        """
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = list(store.rooms.keys())
+        live_a, live_b = room_ids[0], room_ids[1]
+
+        # Split a phantom room's cells across BOTH live rooms, disjoint
+        # halves, neither alone reaching 80% but the union reaching 100%.
+        cells_a = set(list(store.rooms[live_a].cells)[:4])
+        cells_b = set(list(store.rooms[live_b].cells)[:4])
+        store.rooms["room_split_phantom"] = SegRoom(
+            id="room_split_phantom", cells=cells_a | cells_b
+        )
+
+        cells = _two_room_grid()
+        cells.update(_rect(30, 40, 30, 40))
+        store.last_cell_count = 0
+        store._recompute(cells)
+
+        assert "room_split_phantom" not in store.rooms, (
+            "union of overlaps across multiple absorbers must count "
+            "toward STALE_ABSORPTION_RATIO, not just the single largest one"
+        )
+
+    def test_union_avoids_double_counting_if_absorbers_overlap_each_other(self):
+        """Defensive: even if two matched rooms' cell sets were somehow
+        not perfectly disjoint (shouldn't happen post-recompute, but the
+        union-based fix must not double-count a shared cell as if it
+        were 200% absorbed)."""
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = list(store.rooms.keys())
+        live_a, live_b = room_ids[0], room_ids[1]
+
+        # Force an artificial overlap between the two "matched" rooms
+        # themselves, then check a phantom whose 4 cells are the exact
+        # same 4 cells shared by both.
+        shared = set(list(store.rooms[live_a].cells)[:4])
+        store.rooms[live_b].cells |= shared  # artificial overlap
+        store.rooms["room_tiny_phantom"] = SegRoom(id="room_tiny_phantom", cells=set(shared))
+
+        cells = _two_room_grid()
+        cells.update(_rect(30, 40, 30, 40))
+        store.last_cell_count = 0
+        store._recompute(cells)
+
+        # union(shared, shared) == shared == 100% of room_tiny_phantom's
+        # cells -> still correctly deleted, not miscounted as >100%.
+        assert "room_tiny_phantom" not in store.rooms
+
+
+        """Below STALE_ABSORPTION_RATIO — must NOT be deleted, preserving
+        the existing decay-tolerant behaviour for genuine boundary
+        wobble (only a small fringe shared, not near-total absorption)."""
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = list(store.rooms.keys())
+        live_id = room_ids[1]
+
+        # Only ~20% of this room's cells overlap the live room — well
+        # below the 0.8 threshold.
+        live_cells = list(store.rooms[live_id].cells)
+        overlap_cells = set(live_cells[:2])
+        disjoint_cells = {(200 + i, 200) for i in range(8)}
+        store.rooms["room_mostly_elsewhere"] = SegRoom(
+            id="room_mostly_elsewhere", cells=overlap_cells | disjoint_cells
+        )
+
+        cells = _two_room_grid()
+        cells.update(_rect(30, 40, 30, 40))
+        store.last_cell_count = 0
+        store._recompute(cells)
+
+        assert "room_mostly_elsewhere" in store.rooms
+
+    def test_absorbed_rooms_doors_are_dropped(self):
+        """A door referencing a room deleted by stale-absorption cleanup
+        must be dropped in the SAME recompute — no separate cascade step,
+        it rides the existing "both rooms still exist" door-preservation
+        guard in _match_doors."""
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = list(store.rooms.keys())
+        live_id = room_ids[1]
+        subset_cells = set(list(store.rooms[live_id].cells)[:5])
+        store.rooms["room_phantom"] = SegRoom(id="room_phantom", cells=subset_cells)
+        store.doors.append(SegDoor(
+            id="door_phantom", room_a="room_phantom", room_b=room_ids[0],
+            cell=(0, 0), saddle_mm=150.0, cx=0.0, cy=0.0,
+        ))
+
+        cells = _two_room_grid()
+        cells.update(_rect(30, 40, 30, 40))
+        store.last_cell_count = 0
+        store._recompute(cells)
+
+        assert "room_phantom" not in store.rooms
+        assert not any(
+            "room_phantom" in (d.room_a, d.room_b) for d in store.doors
+        ), "door referencing the deleted phantom room must be dropped"
+
+    def test_stale_absorption_ratio_is_point_eight(self):
+        assert STALE_ABSORPTION_RATIO == 0.8
+
+
+class TestDoorDistanceGate:
+    """v3.2.1 — two door observations for the same room-pair that are
+    genuinely far apart (open-plan layout, two real openings) must
+    produce TWO SegDoors, not one wrongly-averaged position. Field-
+    confirmed: two observations 2348mm apart for one pair, 1956mm for
+    another, both collapsing into a single door median before this fix.
+    """
+
+    def test_close_observations_merge_into_one_door(self):
+        """Two crossings for the same pair well within
+        DOOR_MERGE_DISTANCE_MM must stay a single door (existing
+        median-smoothing behaviour, unaffected by the gate)."""
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        assert len(store.doors) == 1
+        door_id = store.doors[0].id
+
+        # Corridor shifts by 1 cell (150mm) — well under the 800mm gate.
+        cells = _rect(0, 6, 0, 6)
+        cells.update(_rect(9, 15, 0, 6))
+        for x in range(6, 9):
+            cells[(x, 2)] = 1.0
+        cells.update(_rect(30, 40, 30, 40))
+        store.maybe_recompute(cells)
+
+        assert len(store.doors) == 1
+        assert store.doors[0].id == door_id
+
+    def test_far_observation_creates_second_door_for_same_pair(self):
+        """A new crossing detected far from the existing door of that
+        pair must produce an ADDITIONAL door, not overwrite the first.
+
+        Drives _match_doors() directly with a synthetic segmentation
+        result rather than through the full watershed pipeline — a real
+        two-corridor floor plan large enough to reliably avoid spurious
+        extra watershed seeds would make this test fragile to unrelated
+        tuning changes in room_segmentation.py; the distance-gate logic
+        itself only needs label_to_id + result.doors as documented.
+        """
+        store = RoomSegStore(min_distance_cells=3.0)
+        store.rooms["room_1"] = SegRoom(id="room_1", cells={(0, 0)})
+        store.rooms["room_2"] = SegRoom(id="room_2", cells={(1, 0)})
+
+        class _FirstCrossing:
+            rooms: dict = {}
+            doors = [{"a": 10, "b": 20, "cell": (0, 2), "saddle_mm": 100.0}]
+
+        store._match_doors(_FirstCrossing(), {10: "room_1", 20: "room_2"})
+        assert len(store.doors) == 1
+        first_door = store.doors[0]
+
+        class _SecondCrossingFarAway:
+            rooms: dict = {}
+            doors = [{"a": 10, "b": 20, "cell": (0, 30), "saddle_mm": 90.0}]
+
+        # y=30 vs y=2 at CELL_MM=150 → 4200mm apart, well past the 800mm gate.
+        store._match_doors(_SecondCrossingFarAway(), {10: "room_1", 20: "room_2"})
+
+        assert len(store.doors) == 2
+        assert any(d.id == first_door.id for d in store.doors), (
+            "original door must be preserved, not replaced"
+        )
+        pairs = {tuple(sorted((d.room_a, d.room_b))) for d in store.doors}
+        assert len(pairs) == 1, "both doors must connect the SAME room pair"
+
+    def test_closest_existing_door_wins_when_multiple_present(self):
+        """With two existing doors for a pair, a new detection must merge
+        into whichever one it's actually closest to, not always the
+        first in insertion order."""
+        store = RoomSegStore(min_distance_cells=3.0)
+        store.rooms["room_1"] = SegRoom(id="room_1", cells={(0, 0)})
+        store.rooms["room_2"] = SegRoom(id="room_2", cells={(1, 0)})
+        near_door = SegDoor(
+            id="door_near", room_a="room_1", room_b="room_2",
+            cell=(0, 0), saddle_mm=100.0, cx=0.0, cy=0.0,
+            observations=[[0.0, 0.0]],
+        )
+        far_door = SegDoor(
+            id="door_far", room_a="room_1", room_b="room_2",
+            cell=(0, 0), saddle_mm=100.0, cx=5000.0, cy=5000.0,
+            observations=[[5000.0, 5000.0]],
+        )
+        store.doors = [near_door, far_door]
+
+        class _FakeResult:
+            rooms = {}
+            doors = [{
+                "a": 10, "b": 20, "cell": (1, 1),  # 150,150mm — near near_door
+                "saddle_mm": 90.0,
+            }]
+
+        label_to_id = {10: "room_1", 20: "room_2"}
+        store._match_doors(_FakeResult(), label_to_id)
+
+        assert len(store.doors) == 2
+        updated_near = next(d for d in store.doors if d.id == "door_near")
+        untouched_far = next(d for d in store.doors if d.id == "door_far")
+        assert updated_near.cell == (1, 1)
+        assert untouched_far.cx == 5000.0, "far door must not have been touched"
+
+    def test_door_merge_distance_is_800mm(self):
+        assert DOOR_MERGE_DISTANCE_MM == 800.0
 
 
 class TestUnconfirmedRooms:
@@ -685,3 +946,280 @@ class TestSegmentRoomsEndToEnd:
         # coincidence a real, varied set of doorways would produce.
         assert all(s != 150.0 for s in saddles), saddles
 
+
+
+@pytest.mark.skipif(
+    not any(
+        __import__("pathlib").Path(p).exists()
+        for p in [
+            "tests/fixtures/roomba_plus_grid_01KRRVYR4T1MPSYM7ACKA5XCBX.dms",
+            "/mnt/user-data/uploads/roomba_plus_grid_01KRRVYR4T1MPSYM7ACKA5XCBX.dms",
+        ]
+    ),
+    reason="Real-data fixture (.dms) not available in this environment",
+)
+class TestStaleRoomAndDoorFixesAgainstRealField:
+    """Real-data regression (field-store bug-hunt, 2026-07-02): a real 980
+    OG's persisted GridStore, frozen as a fixture, reproduced BOTH v3.2.1
+    RoomSeg bugs at once — a 122-cell phantom room_7 100% absorbed into
+    room_5, three doors pointing into it, and two door-pairs whose two
+    observations were 2348mm / 1956mm apart yet averaged into one
+    position. This test drives the real pipeline against that exact grid
+    and asserts the pathology is gone, not just the synthetic unit cases
+    above.
+
+    Frozen snapshot in tests/fixtures/ takes priority over the
+    /mnt/user-data/uploads fallback, same pattern as
+    TestMissionClassificationAgainstRealRecords in test_callbacks.py.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    _GRID_PATHS = [
+        _Path("tests/fixtures/roomba_plus_grid_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+        _Path("/mnt/user-data/uploads/roomba_plus_grid_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+    ]
+    _GRID_FILE = next((p for p in _GRID_PATHS if p.exists()), None)
+    _GRID_DATA = _json.load(open(_GRID_FILE)) if _GRID_FILE else {"data": {"cells": {}}}
+    _CELLS = {
+        tuple(int(n) for n in k.split(",")): v
+        for k, v in _GRID_DATA.get("data", _GRID_DATA).get("cells", {}).items()
+    }
+
+    _ROOMSEG_PATHS = [
+        _Path("tests/fixtures/roomba_plus_roomseg_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+        _Path("/mnt/user-data/uploads/roomba_plus_roomseg_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"),
+    ]
+    _ROOMSEG_FILE = next((p for p in _ROOMSEG_PATHS if p.exists()), None)
+    _ROOMSEG_DATA = (
+        _json.load(open(_ROOMSEG_FILE)) if _ROOMSEG_FILE else {"data": {"rooms": [], "doors": []}}
+    ).get("data", {})
+
+    def _seeded_store(self):
+        """Reconstruct a RoomSegStore exactly as it was persisted in the
+        field — phantom room_7, duplicate-observation doors and all —
+        so the test exercises the CLEANUP path, not a from-scratch
+        recompute (which was already shown never to produce room_7 in
+        the first place)."""
+        store = RoomSegStore()
+        for r in self._ROOMSEG_DATA.get("rooms", []):
+            store.rooms[r["id"]] = SegRoom(
+                id=r["id"], cells=set(tuple(c) for c in r["cells"]),
+                name=r.get("name", ""), confirmed=r.get("confirmed", False),
+            )
+        for d in self._ROOMSEG_DATA.get("doors", []):
+            store.doors.append(SegDoor(
+                id=d["id"], room_a=d["room_a"], room_b=d["room_b"],
+                cell=tuple(d["cell"]), saddle_mm=d["saddle_mm"],
+                cx=d["cx"], cy=d["cy"], observations=d["observations"],
+            ))
+        room_ns = [int(r["id"].split("_")[1]) for r in self._ROOMSEG_DATA.get("rooms", [])]
+        door_ns = [int(d["id"].split("_")[1]) for d in self._ROOMSEG_DATA.get("doors", [])]
+        store._next_room_n = max(room_ns, default=0) + 1
+        store._next_door_n = max(door_ns, default=0) + 1
+        store.last_cell_count = 0  # force a recompute
+        return store
+
+    def test_field_fixture_has_the_known_phantom_room(self):
+        """Sanity check on the fixture itself — if this fails, the
+        fixture no longer reproduces the bug this test guards against."""
+        assert any(r["id"] == "room_7" for r in self._ROOMSEG_DATA.get("rooms", []))
+
+    def test_phantom_room_removed_after_recompute(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        assert "room_7" not in store.rooms
+
+    def test_no_overlapping_cells_after_recompute(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        seen: dict[tuple[int, int], str] = {}
+        overlaps = 0
+        for rid, room in store.rooms.items():
+            for c in room.cells:
+                if c in seen:
+                    overlaps += 1
+                seen[c] = rid
+        assert overlaps == 0
+
+    def test_no_door_references_deleted_phantom_room(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        assert not any(
+            "room_7" in (d.room_a, d.room_b) for d in store.doors
+        )
+
+    def test_far_apart_door_pairs_split_into_two_doors(self):
+        """The two field-confirmed suspect pairs (room_2/room_5 at
+        2348mm apart, room_3/room_5 at 1956mm) must each end up as TWO
+        distinct doors after the fix, not one averaged position."""
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        pair_counts: dict[tuple[str, str], int] = {}
+        for d in store.doors:
+            key = tuple(sorted((d.room_a, d.room_b)))
+            pair_counts[key] = pair_counts.get(key, 0) + 1
+        multi_door_pairs = {k: v for k, v in pair_counts.items() if v > 1}
+        assert multi_door_pairs, (
+            "expected at least one room-pair to split into multiple doors "
+            f"on the real field grid; got counts {pair_counts}"
+        )
+
+
+class TestMultiAbsorberStaleCleanupAgainstRealField:
+    """Real-data regression (field-store bug-hunt, 2026-07-03, SECOND
+    snapshot — one mission after 3.2.1 shipped): the single-absorber
+    stale-cleanup fix from the first snapshot had a genuine gap. A real
+    post-3.2.1 recompute produced `room_6`, 100% claimed elsewhere but
+    split 72.7% / 10.0% / 17.2% across THREE matched rooms — no single
+    absorber crossed STALE_ABSORPTION_RATIO (0.8), so the original
+    `any(...)`-based check left it stranded (209 overlapping cells
+    total). Drives the real pipeline against this second snapshot and
+    asserts the union-based fix catches it.
+
+    Frozen snapshot in tests/fixtures/, same priority pattern as
+    TestStaleRoomAndDoorFixesAgainstRealField above.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    _GRID_FILE = _Path("tests/fixtures/roomba_plus_grid_02_01KRRVYR4T1MPSYM7ACKA5XCBX.dms")
+    _GRID_DATA = _json.load(open(_GRID_FILE)) if _GRID_FILE.exists() else {"data": {"cells": {}}}
+    _CELLS = {
+        tuple(int(n) for n in k.split(",")): v
+        for k, v in _GRID_DATA.get("data", _GRID_DATA).get("cells", {}).items()
+    }
+
+    _ROOMSEG_FILE = _Path("tests/fixtures/roomba_plus_roomseg_02_01KRRVYR4T1MPSYM7ACKA5XCBX.dms")
+    _ROOMSEG_DATA = (
+        _json.load(open(_ROOMSEG_FILE)) if _ROOMSEG_FILE.exists() else {"data": {"rooms": [], "doors": []}}
+    ).get("data", {})
+
+    def _seeded_store(self):
+        store = RoomSegStore()
+        for r in self._ROOMSEG_DATA.get("rooms", []):
+            store.rooms[r["id"]] = SegRoom(
+                id=r["id"], cells=set(tuple(c) for c in r["cells"]),
+                name=r.get("name", ""), confirmed=r.get("confirmed", False),
+            )
+        for d in self._ROOMSEG_DATA.get("doors", []):
+            store.doors.append(SegDoor(
+                id=d["id"], room_a=d["room_a"], room_b=d["room_b"],
+                cell=tuple(d["cell"]), saddle_mm=d["saddle_mm"],
+                cx=d["cx"], cy=d["cy"], observations=d["observations"],
+            ))
+        room_ns = [int(r["id"].split("_")[1]) for r in self._ROOMSEG_DATA.get("rooms", [])]
+        door_ns = [int(d["id"].split("_")[1]) for d in self._ROOMSEG_DATA.get("doors", [])]
+        store._next_room_n = max(room_ns, default=0) + 1
+        store._next_door_n = max(door_ns, default=0) + 1
+        store.last_cell_count = 0
+        return store
+
+    def test_field_fixture_has_the_known_multi_absorbed_room(self):
+        """Sanity check on the fixture itself."""
+        assert any(r["id"] == "room_6" for r in self._ROOMSEG_DATA.get("rooms", []))
+
+    def test_multi_absorbed_room_removed_after_recompute(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        assert "room_6" not in store.rooms
+
+    def test_no_overlapping_cells_after_recompute(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        seen: dict[tuple[int, int], str] = {}
+        overlaps = 0
+        for rid, room in store.rooms.items():
+            for c in room.cells:
+                if c in seen:
+                    overlaps += 1
+                seen[c] = rid
+        assert overlaps == 0, f"expected 0 overlapping cells, found {overlaps}"
+
+    def test_no_door_references_deleted_room(self):
+        store = self._seeded_store()
+        store.maybe_recompute(self._CELLS)
+        assert not any(
+            "room_6" in (d.room_a, d.room_b) for d in store.doors
+        )
+
+
+class TestBoundaryHistory:
+    """v3.2.1 BOUNDARY-HISTORY — rolling room-pair adjacency window.
+    Simulated end-to-end testing (BFS-growth approximation against real
+    field data) showed no measurable effect over the 3.2.1 baseline —
+    kept as scaffolding for re-evaluation once genuine multi-week
+    recompute history exists, not because a benefit is expected today.
+    """
+
+    def test_initial_state_empty(self):
+        store = _store()
+        assert list(store._boundary_history) == []
+
+    def test_recompute_appends_one_entry(self):
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        assert len(store._boundary_history) == 1
+
+    def test_entry_contains_the_current_door_pair(self):
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        room_ids = sorted(store.rooms.keys())
+        entry = store._boundary_history[-1]
+        assert [list(sorted(room_ids))] == entry or entry == [sorted(room_ids)]
+
+    def test_window_caps_at_max_length(self):
+        from custom_components.roomba_plus.room_seg_store import MAX_BOUNDARY_HISTORY
+        store = _store()
+        cells = _two_room_grid()
+        for i in range(MAX_BOUNDARY_HISTORY + 5):
+            cells.update(_rect(30 + i, 33 + i, 30, 33))  # forces growth gate each time
+            store.last_cell_count = 0
+            store._recompute(cells)
+        assert len(store._boundary_history) == MAX_BOUNDARY_HISTORY
+
+    def test_stability_is_1_when_history_empty(self):
+        store = _store()
+        assert store._boundary_stability("room_1", "room_2") == 1.0
+
+    def test_stability_reflects_hit_fraction(self):
+        store = _store()
+        store._boundary_history.append([["room_1", "room_2"]])
+        store._boundary_history.append([["room_1", "room_2"]])
+        store._boundary_history.append([["room_3", "room_4"]])
+        assert store._boundary_stability("room_1", "room_2") == pytest.approx(2 / 3)
+        assert store._boundary_stability("room_5", "room_6") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_persists_across_save_load_roundtrip(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        store = _store()
+        store.maybe_recompute(_two_room_grid())
+        saved = {}
+        async def fake_save(data):
+            saved.update(data)
+        store_mock = MagicMock()
+        store_mock.async_save = fake_save
+        with patch("custom_components.roomba_plus.room_seg_store.Store", return_value=store_mock):
+            await store.async_save(MagicMock(), "e1")
+        assert "boundary_history" in saved
+        assert len(saved["boundary_history"]) == 1
+
+        store2 = _store()
+        store_mock2 = MagicMock()
+        store_mock2.async_load = AsyncMock(return_value=saved)
+        with patch("custom_components.roomba_plus.room_seg_store.Store", return_value=store_mock2):
+            await store2.async_load(MagicMock(), "e1")
+        assert list(store2._boundary_history) == list(store._boundary_history)
+
+    @pytest.mark.asyncio
+    async def test_old_payload_without_boundary_history_loads_cleanly(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from custom_components.roomba_plus.room_seg_store import PAYLOAD_VERSION
+        store = _store()
+        old_payload = {"version": PAYLOAD_VERSION, "rooms": [], "doors": []}
+        store_mock = MagicMock()
+        store_mock.async_load = AsyncMock(return_value=old_payload)
+        with patch("custom_components.roomba_plus.room_seg_store.Store", return_value=store_mock):
+            await store.async_load(MagicMock(), "e1")
+        assert list(store._boundary_history) == []

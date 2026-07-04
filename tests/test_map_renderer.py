@@ -293,6 +293,211 @@ class TestPoseJumpRejectionCascade:
         assert r.point_count == 21
 
 
+class TestAddPoseReturnValue:
+    """v3.2.1 DOCK-ANCHOR — add_pose() must report whether it accepted a
+    sustained jump, so callers can mark interpolation waypoints (see
+    Dock_Anchor_Korrektur_Plan.md, 4c)."""
+
+    def test_dock_skip_returns_false(self):
+        r = _make_renderer()
+        assert r.add_pose(0, 0, 0) is False
+
+    def test_normal_point_returns_false(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        assert r.add_pose(150, 150, 0) is False
+
+    def test_rejected_jump_returns_false(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        assert r.add_pose(5000, 5000, 0) is False  # single isolated jump — rejected
+
+    def test_accepted_sustained_jump_returns_true(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        results = []
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            results.append(r.add_pose(5100, 100, 0))
+        assert results[-1] is True
+        assert all(res is False for res in results[:-1])
+
+
+class TestReplaceRange:
+    """v3.2.1 DOCK-ANCHOR — retroactive correction of an already-rendered
+    point range, for the buffered-segment dock-anchor correction."""
+
+    def test_replaces_points_from_index_onward(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(200, 200, 0)
+        r.add_pose(250, 250, 0)  # will be "corrected" away
+        assert r.point_count == 3
+
+        r.replace_range(2, [(300.0, 300.0)])
+        assert r.point_count == 3, "2 untouched points + 1 replacement point = 3"
+        # first two points untouched
+        px0, py0 = r._points[0]
+        assert (px0, py0) == r._mm_to_px(100, 100)
+
+    def test_replace_range_clears_png_cache(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r._last_png = b"stale-cached-bytes"
+        r.replace_range(1, [(200.0, 200.0)])
+        assert r._last_png is None
+
+    def test_replace_range_updates_robot_px_to_last_corrected_point(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.replace_range(1, [(500.0, 500.0)])
+        assert r._robot_px == r._mm_to_px(500, 500)
+
+    def test_out_of_range_start_index_is_a_noop(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        before = list(r._points)
+        r.replace_range(99, [(1.0, 1.0)])
+        assert r._points == before
+
+    def test_negative_start_index_is_a_noop(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        before = list(r._points)
+        r.replace_range(-1, [(1.0, 1.0)])
+        assert r._points == before
+
+    def test_empty_correction_truncates_without_updating_robot_px(self):
+        """An empty replacement (whole buffered segment discarded, e.g.
+        stuck_and_abandoned with no dock contact) truncates the point
+        list but must not clobber robot_px with nothing."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(200, 200, 0)
+        prior_robot_px = r._robot_px
+        r.replace_range(1, [])
+        assert r.point_count == 1
+        assert r._robot_px == prior_robot_px
+
+
+    """v3.2.1 LANDMARK-LOG — logs WHERE (not just how many) sustained pose
+    jumps get accepted, as scaffolding for a future landmark-clustering
+    structural signal (per the 980's vSLAM sensor-fusion architecture: an
+    accepted jump corresponds to a genuine move or a camera-landmark
+    relocalisation correction). Deliberately survives reset() — unlike
+    self._points, the whole point is cross-mission accumulation.
+    """
+
+    def test_empty_initially(self):
+        r = _make_renderer()
+        assert r.accepted_jump_log == []
+
+    def test_rejected_jump_does_not_log(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(5000, 5000, 0)  # single isolated jump — rejected
+        assert r.accepted_jump_log == []
+
+    def test_accepted_sustained_jump_is_logged_at_new_position(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(5100, 100, 0)
+        assert len(r.accepted_jump_log) == 1
+        x, y, theta, ts = r.accepted_jump_log[0]
+        assert (x, y) == (5100.0, 100.0)
+        assert theta == 0.0  # add_pose called with theta=0 throughout this test
+        assert ts > 0
+
+    def test_accepted_jump_captures_theta(self):
+        """v3.2.1 — accepted_jump_log's theta_deg must reflect the actual
+        heading at the jump, not just always default to 0 (the previous
+        test used theta=0 throughout, which alone wouldn't distinguish
+        'captures theta' from 'always reports 0')."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 45.0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(5100, 100, 199.5)
+        _, _, theta, _ = r.accepted_jump_log[0]
+        assert theta == 199.5
+
+    def test_normal_moves_never_log(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for i in range(1, 21):
+            r.add_pose(100 + i * 50, 100, 0)
+        assert r.accepted_jump_log == []
+
+    def test_survives_reset(self):
+        """The whole point: unlike _points, this log accumulates ACROSS
+        missions — reset() must not clear it."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(5100, 100, 0)
+        assert len(r.accepted_jump_log) == 1
+
+        r.reset()
+        assert len(r.accepted_jump_log) == 1, "must survive reset()"
+
+    def test_accumulates_across_multiple_missions(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(5100, 100, 0)
+        r.reset()
+        r.add_pose(200, 200, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(8100, 200, 0)
+        assert len(r.accepted_jump_log) == 2
+
+    def test_capped_at_max_length(self):
+        from custom_components.roomba_plus.map_renderer import MAX_ACCEPTED_JUMP_LOG
+        r = _make_renderer()
+        for j in range(MAX_ACCEPTED_JUMP_LOG + 10):
+            r.reset()
+            r.add_pose(100, 100, 0)  # non-(0,0) anchor so the jump check runs
+            for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+                r.add_pose(5000 + j, 100, 0)
+        assert len(r.accepted_jump_log) == MAX_ACCEPTED_JUMP_LOG
+
+    def test_dump_and_restore_state_roundtrip(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
+            r.add_pose(5100, 100, 0)
+        dumped = r.dump_state()
+        assert "accepted_jump_log" in dumped
+
+        r2 = _make_renderer()
+        assert r2.restore_state(dumped) is True
+        assert r2.accepted_jump_log == r.accepted_jump_log
+
+    def test_restore_old_state_without_field_defaults_empty(self):
+        """v3.2.1 — additive field, no _STATE_VERSION bump: a dump saved
+        before this existed simply has no 'accepted_jump_log' key."""
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        old_dump = r.dump_state()
+        del old_dump["accepted_jump_log"]
+
+        r2 = _make_renderer()
+        assert r2.restore_state(old_dump) is True
+        assert r2.accepted_jump_log == []
+
+    def test_restore_pre_theta_3tuple_format_gets_placeholder(self):
+        """v3.2.1 — a dump saved after accepted_jump_log existed but
+        BEFORE theta_deg was added to it has 3-element entries
+        (x, y, timestamp). These must load with a 0.0 placeholder theta,
+        not raise or get silently dropped."""
+        r = _make_renderer()
+        old_dump = r.dump_state()
+        old_dump["accepted_jump_log"] = [[100.0, 200.0, 1234567890.0]]
+
+        r2 = _make_renderer()
+        assert r2.restore_state(old_dump) is True
+        assert r2.accepted_jump_log == [(100.0, 200.0, 0.0, 1234567890.0)]
+
+
 class TestMarkStuck:
     def test_stuck_recorded_at_robot_position(self):
         r = _make_renderer()
@@ -934,77 +1139,11 @@ class TestRenderObservedZones:
         assert result is r._last_png  # _last_png updated in place
 
 
-
-    """v2.8.2 — render_for_outline() must use a FIXED coordinate space (no
-    auto-fit) so contour pixels are comparable across missions with
-    different spatial extents.
-
-    Confirmed via live field data: an OutlineStore that had only ever seen
-    auto-fit renders ended up with 73% of its 3269 accumulated contour
-    points sitting exactly on the canvas border — not a room shape, but an
-    artefact of EMA-blending two PNGs whose pixel (x, y) meant different
-    real-world positions per mission. See map_renderer.py docstring.
-    """
-
-    def test_no_points_returns_none(self):
-        r = _make_renderer()
-        assert r.render_for_outline() is None
-
-    def test_returns_valid_png(self):
-        r = _make_renderer()
-        r.add_pose(0, 0, 0)
-        r.add_pose(500, 500, 0)
-        result = r.render_for_outline()
-        assert isinstance(result, bytes)
-        assert result[:4] == PNG_MAGIC
-
-    def test_pixel_position_independent_of_other_points_extent(self):
-        """A point at a fixed mm position must render at the same pixel
-        position whether the mission was confined to a tiny area or spans
-        a huge one. Before the fix, auto-fit would zoom/centre each
-        render independently, moving this point to a different pixel
-        position depending on what else was in that mission."""
-        shared_mm = (300.0, 300.0)
-
-        r_small = _make_renderer()
-        r_small.add_pose(shared_mm[0], shared_mm[1], 0)
-        r_small.add_pose(310, 310, 0)          # tiny extent, ~14mm away
-
-        r_large = _make_renderer()
-        r_large.add_pose(shared_mm[0], shared_mm[1], 0)
-        r_large.add_pose(2500, 2500, 0)        # huge extent
-
-        # Sanity: the fixed mapping itself is mission-independent.
-        expected_px = r_small._mm_to_px(*shared_mm)
-        assert r_large._mm_to_px(*shared_mm) == expected_px
-
-        png_small = r_small.render_for_outline()
-        png_large = r_large.render_for_outline()
-
-        colour_small = _pixel_at(png_small, *expected_px)
-        colour_large = _pixel_at(png_large, *expected_px)
-        assert colour_small[:3] == CLEANED_COLOUR[:3]
-        assert colour_large[:3] == CLEANED_COLOUR[:3]
-
-    def test_does_not_permanently_mutate_fit_state(self):
-        r = _make_renderer()
-        r.add_pose(0, 0, 0)
-        r.add_pose(2500, 2500, 0)
-        before = (r._fit_scale, r._fit_cx, r._fit_cy)
-        r.render_for_outline()
-        after = (r._fit_scale, r._fit_cx, r._fit_cy)
-        assert before == after
-
-    def test_ignores_auto_fit_config_flag(self):
-        """Even with auto_fit=True (the default), render_for_outline() must
-        never auto-fit — it always uses the fixed coordinate space."""
-        r = _make_renderer(auto_fit=True)
-        r.add_pose(300, 300, 0)
-        r.add_pose(2500, 2500, 0)
-        png = r.render_for_outline()
-        expected_px = r._mm_to_px(300, 300)
-        colour = _pixel_at(png, *expected_px)
-        assert colour[:3] == CLEANED_COLOUR[:3]
+# v3.2.1 REMOVED — render_for_outline() and its whole fixed-window
+# coordinate-space test class are gone along with the method itself. The
+# room outline no longer goes through a per-mission PNG render at all;
+# see tests/test_outline_store.py::TestComputeBoundaryPointsMm and
+# TestRenderRoomOutlineFitAlignment for the replacement coverage.
 
 
 
@@ -1042,3 +1181,27 @@ class TestMapFont:
         assert png is not None
         assert png[:8] == b"\x89PNG\r\n\x1a\n"  # valid PNG signature
         assert len(png) > 100
+
+
+class TestReplaceRangeAutoFitInteraction:
+    """v3.2.1 DOCK-ANCHOR — confirms Abschnitt 4a/8's open question
+    ("does replace_range need special auto-fit handling?") is a
+    non-issue: render() already recomputes _compute_fit() fresh from
+    self._points on every call where the PNG cache was invalidated —
+    replace_range() already clears that cache, so no special handling
+    is needed in replace_range() itself.
+    """
+
+    def test_render_after_replace_range_reflects_new_bounds(self):
+        r = _make_renderer()
+        r.add_pose(100, 100, 0)
+        r.add_pose(200, 200, 0)
+        r.render()  # establish a cached frame with the ORIGINAL small bounds
+
+        # Correct the second point far away — bounds should grow a lot.
+        r.replace_range(1, [(5000.0, 5000.0)])
+        png_after = r.render()
+
+        assert png_after is not None
+        # the corrected point is reflected in the point list used by fit
+        assert r._points[-1] == r._mm_to_px(5000.0, 5000.0)
