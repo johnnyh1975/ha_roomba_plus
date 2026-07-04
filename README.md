@@ -16,7 +16,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, and battery degradation detection all adapt to your robot's own usage history rather than fixed thresholds; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 3,024 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 3,466 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -923,6 +923,12 @@ No config entry migration — all persisted data is additive, existing stored da
 - `sensor.*_health_score_trend`: 44 days of recorded health-score history — watch it count down via the `days_until_ready` attribute
 - `binary_sensor.*_layout_change_detected`: 23 missions of coverage history per grid cell — `cells_tracked` and `missions_until_first_ready` are shown from the start, even before any candidate is found, so "still learning" no longer looks the same as "nothing to report"
 - Room accessibility scores, stuck hotspot clusters, cleaning cadence health: a handful of missions with the relevant signal (stuck events, room-tagged cleans) before a meaningful score/status appears
+
+### Upgrading to v3.2.1
+
+Config entry migration (24 → 25): if your current-room `device_tracker` entity was never visible, it's re-enabled automatically on upgrade — this was a real bug (root-caused in v2.10.3, but the fix only applied to newly-created entities, never to ones already registered as disabled on an existing install).
+
+**Coordinate-system fix, EPHEMERAL-tier (900-series) only — a genuine discontinuity, not silent:** a confirmed axis-convention bug in live-map/room-detection pose handling has been corrected. This changes how X/Y map to real-world directions for all data recorded from this update onward — GridStore, room detection, and outline data accumulated *before* this update will not spatially line up with data recorded *after* it. If your room map looks scrambled right after upgrading, this is why. There is currently no dedicated action to reset just the spatial/room data (removing and re-adding the integration does **not** clear it either — Home Assistant doesn't delete a removed integration's storage files automatically); the practical effect will fade out on its own as new missions' data outweighs the old, though a proper reset option is worth adding — feedback welcome. Also improved in this release: room-recognition data is no longer discarded after a stuck event — it's corrected against the dock position once the robot returns, instead of being thrown away for the rest of the mission.
 
 ---
 
