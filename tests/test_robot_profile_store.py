@@ -1936,3 +1936,187 @@ class TestDockThetaBaseline:
             await rps.async_load(hass, "e1")
         assert rps.dock_theta_count == 0
         assert rps.dock_theta_baseline is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 DIRT-VEL — per-room dirt accumulation velocity
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDirtVelocity:
+    """v3.3.0 DIRT-VEL — velocity = observed density / days since the
+    previous cleaning of that room, EMA-smoothed; same-day guard; additive
+    persistence (old dumps lack the fields)."""
+
+    def test_velocity_computed_and_ema_smoothed(self, monkeypatch):
+        from custom_components.roomba_plus.robot_profile_store import (
+            _ROOM_DIRT_EMA_ALPHA,
+        )
+        rps = RobotProfileStore()
+        t = {"now": 1_000_000.0}
+        monkeypatch.setattr(
+            "custom_components.roomba_plus.robot_profile_store.time.time",
+            lambda: t["now"],
+        )
+        # First cleaning: establishes the timestamp, no velocity yet
+        rps.update_room_dirt_index("7", pass_count=20, area_m2=10.0)
+        assert rps.dirt_accumulation_rate() == {}
+        # Second cleaning 2 days later, density 3.0 → velocity 1.5/day
+        t["now"] += 2 * 86400
+        rps.update_room_dirt_index("7", pass_count=30, area_m2=10.0)
+        assert rps.dirt_accumulation_rate()["7"] == pytest.approx(1.5)
+        # Third cleaning 1 day later, density 4.0 → raw 4.0/day, EMA-smoothed
+        t["now"] += 1 * 86400
+        rps.update_room_dirt_index("7", pass_count=40, area_m2=10.0)
+        expected = _ROOM_DIRT_EMA_ALPHA * 4.0 + (1 - _ROOM_DIRT_EMA_ALPHA) * 1.5
+        assert rps.dirt_accumulation_rate()["7"] == pytest.approx(expected, abs=1e-3)
+
+    def test_same_day_guard_skips_velocity_sample(self, monkeypatch):
+        rps = RobotProfileStore()
+        t = {"now": 1_000_000.0}
+        monkeypatch.setattr(
+            "custom_components.roomba_plus.robot_profile_store.time.time",
+            lambda: t["now"],
+        )
+        rps.update_room_dirt_index("7", pass_count=20, area_m2=10.0)
+        # Demand clean 2 h after the scheduled run — no velocity blow-up
+        t["now"] += 2 * 3600
+        rps.update_room_dirt_index("7", pass_count=5, area_m2=10.0)
+        assert rps.dirt_accumulation_rate() == {}
+        # Timestamp still advanced: next sample measures from the LAST clean
+        t["now"] += 1 * 86400
+        rps.update_room_dirt_index("7", pass_count=10, area_m2=10.0)
+        assert rps.dirt_accumulation_rate()["7"] == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_persistence_roundtrip_and_old_dump_compat(self):
+        rps = RobotProfileStore()
+        rps.room_dirt_velocity = {"7": 1.5}
+        rps.room_dirt_last_ts = {"7": 1_000_000.0}
+        rps.room_dirt_index = {"7": 3.0}
+
+        saved_data: dict = {}
+
+        async def mock_save_fn(data: dict) -> None:
+            saved_data.update(data)
+
+        async def mock_load_fn() -> dict:
+            return saved_data
+
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save_fn
+        store_mock.async_load = mock_load_fn
+        hass = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await rps.async_save(hass, "entry123")
+            fresh = RobotProfileStore()
+            await fresh.async_load(hass, "entry123")
+        assert fresh.room_dirt_velocity == {"7": 1.5}
+        assert fresh.room_dirt_last_ts == {"7": 1_000_000.0}
+
+        # Old dump predating DIRT-VEL: fields absent → empty, no raise
+        for k in ("room_dirt_velocity", "room_dirt_last_ts"):
+            saved_data.pop(k)
+        older = RobotProfileStore()
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store_mock,
+        ):
+            await older.async_load(hass, "entry123")
+        assert older.room_dirt_velocity == {}
+        assert older.room_dirt_last_ts == {}
+        assert older.room_dirt_index == {"7": 3.0}
+
+
+class TestSuggestedCleaningInterval:
+    """v3.3.0 ROOM-SCHED self-calibration — suggested interval =
+    household-median target density / room velocity; clamped 1–14 days;
+    recommendation only (never part of the overdue rule)."""
+
+    def test_suggestion_from_median_and_velocity(self):
+        rps = RobotProfileStore()
+        rps.room_dirt_index = {"7": 3.0, "9": 1.0}   # median = 2.0
+        rps.room_dirt_velocity = {"7": 2.0, "9": 0.25}
+        s = rps.suggested_cleaning_interval_days()
+        assert s["7"] == pytest.approx(1.0)   # 2.0/2.0
+        assert s["9"] == pytest.approx(8.0)   # 2.0/0.25
+        # Clamps: extreme velocity → floor 1d; near-zero → ceiling 14d
+        rps.room_dirt_velocity = {"7": 50.0, "9": 0.01}
+        s = rps.suggested_cleaning_interval_days()
+        assert s["7"] == 1.0 and s["9"] == 14.0
+
+    def test_guards_insufficient_context(self):
+        rps = RobotProfileStore()
+        # Fewer than 2 indexed rooms → no median context → empty
+        rps.room_dirt_index = {"7": 3.0}
+        rps.room_dirt_velocity = {"7": 2.0}
+        assert rps.suggested_cleaning_interval_days() == {}
+        # Zero/negative velocity entries are skipped, not divided by
+        rps.room_dirt_index = {"7": 3.0, "9": 1.0}
+        rps.room_dirt_velocity = {"7": 0.0, "9": 1.0}
+        assert list(rps.suggested_cleaning_interval_days()) == ["9"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 CROSS-CORR — snapshot pairing + Pearson gates
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestCrossCorrelation:
+    """v3.3.0 CROSS-CORR — pending-snapshot pairing (tolerance window,
+    restart persistence) and the n>=30 / zero-variance Pearson gates."""
+
+    def test_snapshot_pairing_with_tolerance_window(self):
+        rps = RobotProfileStore()
+        # Snapshot at t0; record started 10 min later → paired
+        rps.record_correlation_snapshot({"sensor.humidity": 62.0}, 1_000_000.0)
+        from datetime import datetime, timezone
+        started = datetime.fromtimestamp(1_000_600, tz=timezone.utc).isoformat()
+        assert rps.finalize_correlation(started, dirt=7.0) is True
+        assert rps.correlation_samples["sensor.humidity"] == [[62.0, 7.0]]
+        assert rps.correlation_pending is None
+        # Orphaned old snapshot vs a record 5 h later → NOT paired, stays
+        rps.record_correlation_snapshot({"sensor.humidity": 40.0}, 1_000_000.0)
+        late = datetime.fromtimestamp(1_000_000 + 5 * 3600, tz=timezone.utc).isoformat()
+        assert rps.finalize_correlation(late, dirt=3.0) is False
+        assert rps.correlation_pending is not None
+        # No dirt / bad timestamp → no-op
+        assert rps.finalize_correlation(started, dirt=None) is False
+        assert rps.finalize_correlation("garbage", dirt=1.0) is False
+
+    @pytest.mark.asyncio
+    async def test_pending_snapshot_survives_persistence(self):
+        rps = RobotProfileStore()
+        rps.record_correlation_snapshot({"sensor.humidity": 55.0}, 123.0)
+        rps.correlation_samples = {"sensor.humidity": [[50.0, 4.0]]}
+        saved: dict = {}
+        async def save_fn(d): saved.update(d)
+        async def load_fn(): return saved
+        store = MagicMock(); store.async_save = save_fn; store.async_load = load_fn
+        hass = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.robot_profile_store.Store",
+            return_value=store,
+        ):
+            await rps.async_save(hass, "e1")
+            fresh = RobotProfileStore()
+            await fresh.async_load(hass, "e1")
+        assert fresh.correlation_pending == {"ts": 123.0,
+                                             "values": {"sensor.humidity": 55.0}}
+        assert fresh.correlation_samples == {"sensor.humidity": [[50.0, 4.0]]}
+
+    def test_pearson_gates_min_samples_and_zero_variance(self):
+        rps = RobotProfileStore()
+        # 29 perfectly correlated samples → still gated (n < 30)
+        rps.correlation_samples = {
+            "sensor.humidity": [[float(i), float(2 * i)] for i in range(29)],
+        }
+        assert rps.correlation_results()["sensor.humidity"] == {"r": None, "n": 29}
+        # 30th sample → r computed (≈1.0)
+        rps.correlation_samples["sensor.humidity"].append([29.0, 58.0])
+        res = rps.correlation_results()["sensor.humidity"]
+        assert res["n"] == 30 and res["r"] == pytest.approx(1.0)
+        # Constant sensor (zero variance) → None, not StatisticsError
+        rps.correlation_samples["sensor.const"] = [[5.0, float(i)] for i in range(30)]
+        assert rps.correlation_results()["sensor.const"]["r"] is None

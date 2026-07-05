@@ -946,3 +946,51 @@ class TestRoomAreasM2Property:
         a._resolve_room_polygons()
         assert a.room_areas_m2 == {}
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 REVIEW-REMAINDER — thread-safety: snapshot semantics on rebuild
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewRemainderRebindSemantics:
+    """The bootstrap path (GS-SMART-UMF) re-runs align() on the published
+    aligner while the paho-MQTT render thread may iterate coord lookup /
+    room polygons. Both rebuilds must publish via a single rebind so a
+    concurrent reader always holds a complete dict — never one that
+    changes size under iteration (MQTT-thread-death consequence class)."""
+
+    def _aligner(self):
+        points = [
+            {"id": f"p{i}", "coordinates": [float(i), float(i)]}
+            for i in range(4)
+        ]
+        regions = [{
+            "id": "r1",
+            "geometry": {"ids": [["p0", "p1", "p2", "p3"]]},
+        }]
+        return UmfAligner(
+            points2d=points, regions=regions,
+            geometry_store=None, pmap_version_id="v1",
+        )
+
+    def test_coord_lookup_rebuild_is_rebind_not_inplace(self):
+        a = self._aligner()
+        a._build_coord_lookup()
+        old_ref = a._coord_lookup
+        old_snapshot = dict(old_ref)
+        a._build_coord_lookup()
+        # A reader holding old_ref keeps a complete, unchanged dict —
+        # the rebuild must NOT have mutated it in place.
+        assert a._coord_lookup is not old_ref
+        assert old_ref == old_snapshot
+
+    def test_room_polygons_rebuild_is_rebind_not_inplace(self):
+        a = self._aligner()
+        a._build_coord_lookup()
+        a._resolve_room_polygons()
+        old_ref = a._room_polygons
+        old_snapshot = {k: list(v) for k, v in old_ref.items()}
+        a._resolve_room_polygons()
+        assert a._room_polygons is not old_ref
+        assert {k: list(v) for k, v in old_ref.items()} == old_snapshot
+        assert "r1" in a._room_polygons  # rebuild produced the same content

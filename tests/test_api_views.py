@@ -25,6 +25,7 @@ from datetime import datetime as datetime_v250_api_export
 from custom_components.roomba_plus.api_views import MissionHistoryImportView
 from custom_components.roomba_plus.api_views import MissionHistoryView
 from custom_components.roomba_plus.const import DOMAIN
+from custom_components.roomba_plus.mission_store import MissionStore
 
 
 def _cloud_rec(
@@ -133,10 +134,15 @@ def _make_record(id_: str, started_at: str = "2026-05-01T08:00:00+00:00") -> dic
     }
 
 
-def _make_mission_store(records: list[dict]) -> MagicMock:
-    ms = MagicMock()
+def _make_mission_store(records: list[dict]) -> MissionStore:
+    # v3.3.0 STORE-ENCAP — real store instead of MagicMock: the views now
+    # go through .records / .append_validated(), and a MagicMock silently
+    # auto-mocks both (export saw 0 records, import "imported" duplicates).
+    # Exactly the mock-mirrors-misunderstanding class from process
+    # standard 1 — the real store is dependency-free and behaves.
+    ms = MissionStore()
     ms._records = list(records)
-    ms.async_save = AsyncMock()
+    ms.async_save = AsyncMock()  # instance-level patch; views await it
     return ms
 
 
@@ -1636,3 +1642,176 @@ class TestMissionPathView:
         resp = await view.get(req, "abc123", "102")
         body = json.loads(resp.body)
         assert len(body["path"]) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 MISSION-MAP — REST error mapping + json shape
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMissionMapViews:
+    """404 / 409 / 502 mapping of the shared payload helper and the
+    rooms-context enrichment of map.json."""
+
+    def _request(self, entry):
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = entry
+        request = MagicMock()
+        request.app = {"hass": hass}
+        return request
+
+    def _entry(self, records, umf=None, side_effect=None):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        entry = MagicMock()
+        entry.domain = "roomba_plus"
+        data = entry.runtime_data
+        ms = MissionStore(); ms._records = records
+        data.mission_store = ms
+        data.blid = "BLID1"
+        data.mission_map_cache = {}
+        if side_effect is not None:
+            data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+                side_effect=side_effect)
+        else:
+            data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+                return_value=umf or {})
+        return entry
+
+    @staticmethod
+    def _rec(nmssn=90):
+        return {"id": "m_1", "nMssn": nmssn,
+                "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}]}
+
+    @staticmethod
+    def _umf(nmssn=90):
+        return {"maps": [{
+            "map_header": {"nmssn": nmssn, "mission_id": "01HB"},
+            "layers": [{"layer_type": "coverage", "geometry": {
+                "point_area": [0.1, 0.1],
+                "coordinates": [[1.0, 2.0]],
+            }}],
+        }]}
+
+    @pytest.mark.asyncio
+    async def test_record_without_pmaps_info_is_404(self):
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([{"id": "m_old", "ended_at": "2026-01-01T00:00:00"}])
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "m_old")
+        assert payload is None and err[0] == 404
+
+    @pytest.mark.asyncio
+    async def test_mismatch_is_409(self):
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([self._rec(nmssn=90)], umf=self._umf(nmssn=91))
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "m_1")
+        assert payload is None and err[0] == 409
+
+    @pytest.mark.asyncio
+    async def test_cloud_error_is_502(self):
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        from custom_components.roomba_plus.cloud_api import CloudApiError
+        entry = self._entry([self._rec()], side_effect=CloudApiError("boom"))
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "m_1")
+        assert payload is None and err[0] == 502
+
+    @pytest.mark.asyncio
+    async def test_latest_resolves_and_payload_shape(self):
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([self._rec()], umf=self._umf())
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "latest")
+        assert err is None and data is entry.runtime_data
+        assert payload["coverage_mm"] == [[1000.0, 2000.0]]
+        assert payload["nmssn"] == 90
+        assert payload["pmapv_id"] == "V7"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 bug-hunt round 5 — the view get() glue layer above the payload
+# helper (rooms enrichment in JSON view, executor call in PNG view) had
+# no direct test — only _mission_map_payload itself was tested.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMissionMapViewsGlue:
+    def _entry_with_aligner(self, umf, room_polys=None):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        entry = MagicMock()
+        entry.domain = "roomba_plus"
+        data = entry.runtime_data
+        ms = MissionStore()
+        ms._records = [{
+            "id": "m_1", "nMssn": 90,
+            "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}],
+        }]
+        data.mission_store = ms
+        data.blid = "BLID1"
+        data.mission_map_cache = {}
+        data.cloud_coordinator.api.get_pmap_umf = AsyncMock(return_value=umf)
+        data.umf_aligner.aligned = True
+        data.umf_aligner.rid_to_name.return_value = {"7": "Kitchen"}
+        data.umf_aligner.room_polygons_umf = room_polys or {
+            "7": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+        }
+        return entry
+
+    @staticmethod
+    def _umf():
+        return {"maps": [{
+            "map_header": {"nmssn": 90, "mission_id": "01HB"},
+            "layers": [{"layer_type": "coverage", "geometry": {
+                "point_area": [0.1, 0.1], "coordinates": [[1.0, 2.0]],
+            }}],
+        }]}
+
+    def _request(self, entry):
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = entry
+        hass.async_add_executor_job = AsyncMock(
+            side_effect=lambda func, *a: func(*a)
+        )
+        request = MagicMock()
+        request.app = {"hass": hass}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_json_view_enriches_with_resolved_room_names(self):
+        from custom_components.roomba_plus.api_views import MissionMapJsonView
+        entry = self._entry_with_aligner(self._umf())
+        view = MissionMapJsonView()
+        with patch.object(
+            view, "json", side_effect=lambda body: body
+        ):
+            result = await view.get(self._request(entry), "e1", "m_1")
+        assert result["rooms"] == {"Kitchen": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]}
+        assert result["coverage_mm"] == [[1000.0, 2000.0]]
+
+    @pytest.mark.asyncio
+    async def test_json_view_maps_error_status(self):
+        from custom_components.roomba_plus.api_views import MissionMapJsonView
+        entry = MagicMock()
+        entry.domain = "roomba_plus"
+        entry.runtime_data.mission_store = None
+        view = MissionMapJsonView()
+        resp = await view.get(self._request(entry), "e1", "m_1")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_png_view_renders_via_executor_with_room_polygons(self):
+        from custom_components.roomba_plus.api_views import MissionMapPngView
+        entry = self._entry_with_aligner(self._umf())
+        view = MissionMapPngView()
+        resp = await view.get(self._request(entry), "e1", "m_1")
+        assert resp.content_type == "image/png"
+        assert resp.body[:8] == b"\x89PNG\r\n\x1a\n"
+
+    @pytest.mark.asyncio
+    async def test_png_view_maps_error_status(self):
+        from custom_components.roomba_plus.api_views import MissionMapPngView
+        entry = MagicMock()
+        entry.domain = "roomba_plus"
+        entry.runtime_data.mission_store = None
+        view = MissionMapPngView()
+        resp = await view.get(self._request(entry), "e1", "m_1")
+        assert resp.status == 404

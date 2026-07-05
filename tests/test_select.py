@@ -645,3 +645,21 @@ class TestZoneCleanButtonNotCreatedForEphemeral:
         from custom_components.roomba_plus.button import ZoneCleanButton
         entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=MagicMock())
         assert not any(isinstance(e, ZoneCleanButton) for e in entities)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 NULL-REGRESSION — explicit padWetness null (select)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNullRegressionExplicitNulls:
+    """v3.3.0 NULL-REGRESSION — Braava sends `padWetness: null` on some
+    firmware states; both pad selects' production current_option_fn
+    lambdas must return None, not raise."""
+
+    def test_disposable_pad_wetness_explicit_null(self):
+        from custom_components.roomba_plus.select import _DISPOSABLE_PAD_DESC
+        assert _DISPOSABLE_PAD_DESC.current_option_fn({"padWetness": None}) is None
+
+    def test_reusable_pad_wetness_explicit_null(self):
+        from custom_components.roomba_plus.select import _REUSABLE_PAD_DESC
+        assert _REUSABLE_PAD_DESC.current_option_fn({"padWetness": None}) is None

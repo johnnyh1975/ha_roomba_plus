@@ -78,6 +78,10 @@ class TestServicesRegistration:
             (DOMAIN, "advance_room"),
             # v3.2.0 ANOMALY-EXPLAIN
             (DOMAIN, "explain_mission"),
+            # v3.3.0 ROOM-SCHED
+            (DOMAIN, "clean_overdue_rooms"),
+            # v3.3.0 SMART-ORDER
+            (DOMAIN, "auto_clean_dirty_rooms"),
         }
         assert expected == set(registered.keys())
 
@@ -92,7 +96,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 13
+        assert len(registered) == 15
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -103,7 +107,7 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 13
+        assert len(registered) == 15
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -1169,3 +1173,382 @@ class TestExplainMission:
         result = await self._run(store, mission_id="m_last")
         assert result["anomaly_reason"] == "obstacle_or_blockage"
         assert result["error_code"] == 224
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 ROOM-SCHED — clean_overdue_rooms service
+# ─────────────────────────────────────────────────────────────────────────────
+
+from custom_components.roomba_plus.models import MapCapability
+
+
+class TestCleanOverdueRooms:
+    """v3.3.0 ROOM-SCHED — SMART-only guard, no-op semantics, worst-first
+    delegation to clean_room (shared merge rule with the sensor)."""
+
+    def _entry(self, tier, records=None, options=None):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        entry = MagicMock()
+        entry.options = options or {}
+        data = entry.runtime_data
+        data.map_capability = tier
+        ms = MissionStore()
+        ms._records = records or []
+        data.mission_store = ms
+        data.has_cloud = True
+        data.cloud_coordinator.regions = [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+        ]
+        # v3.3.0 SMART-ORDER routing — explicit None: an auto-MagicMock
+        # aligner would engage the route optimizer with mock garbage.
+        data.umf_aligner = None
+        return entry
+
+    def _call(self, hass, entry, **extra):
+        hass.config_entries.async_get_entry.return_value = entry
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.test"], **extra}
+        return call
+
+    @staticmethod
+    def _rec(i, ended, rids):
+        return {"id": f"m_{i}", "ended_at": ended,
+                "timeline": {"finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}}
+                    for r in rids]}}
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_raises_clear_error(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_clean_overdue_rooms,
+        )
+        entry = self._entry(MapCapability.EPHEMERAL)
+        hass = MagicMock()
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            with pytest.raises(Exception) as exc:
+                await async_handle_clean_overdue_rooms(call)
+        assert "not_smart_map" in str(getattr(exc.value, "translation_key", ""))
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nothing_overdue_is_noop_not_error(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_clean_overdue_rooms,
+        )
+        # Single visit per room → insufficient_data → never overdue
+        entry = self._entry(MapCapability.SMART, records=[
+            self._rec(1, "2026-07-03T10:00:00+00:00", ["7", "9"]),
+        ])
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_clean_overdue_rooms(call)  # must not raise
+        hass.services.async_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_overdue_rooms_delegated_worst_first(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_clean_overdue_rooms,
+        )
+        # Kitchen: 4-day cadence, 12d since last → factor 3 (configured daily→12)
+        # Hall: regular 2-day cadence, 5d since last
+        recs = []
+        for i, d in enumerate(["06-10", "06-14", "06-18", "06-22"]):
+            recs.append(self._rec(i, f"2026-{d}T10:00:00+00:00", ["7"]))
+        for i, d in enumerate(["06-23", "06-25", "06-27", "06-29"]):
+            recs.append(self._rec(10 + i, f"2026-{d}T10:00:00+00:00", ["9"]))
+        entry = self._entry(
+            MapCapability.SMART, records=recs,
+            options={"room_schedule": {"Kitchen": "daily", "Hall": "every_2_days"}},
+        )
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m, \
+             patch("custom_components.roomba_plus.services.dt_util") as dt_m:
+            from homeassistant.util import dt as real_dt
+            dt_m.now.return_value = real_dt.parse_datetime(
+                "2026-07-04T10:00:00+00:00"
+            )
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_clean_overdue_rooms(call)
+        hass.services.async_call.assert_awaited_once()
+        args = hass.services.async_call.call_args
+        payload = args[0][2]
+        # Worst-first: Kitchen (factor 12) before Hall (factor 2.5)
+        assert payload["room_name"] == ["Kitchen", "Hall"]
+
+    @pytest.mark.asyncio
+    async def test_max_rooms_caps_worst_first(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_clean_overdue_rooms,
+        )
+        recs = []
+        for i, d in enumerate(["06-10", "06-14", "06-18", "06-22"]):
+            recs.append(self._rec(i, f"2026-{d}T10:00:00+00:00", ["7"]))
+        for i, d in enumerate(["06-23", "06-25", "06-27", "06-29"]):
+            recs.append(self._rec(10 + i, f"2026-{d}T10:00:00+00:00", ["9"]))
+        entry = self._entry(
+            MapCapability.SMART, records=recs,
+            options={"room_schedule": {"Kitchen": "daily", "Hall": "daily"}},
+        )
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        call = self._call(hass, entry, max_rooms=1)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m, \
+             patch("custom_components.roomba_plus.services.dt_util") as dt_m:
+            from homeassistant.util import dt as real_dt
+            dt_m.now.return_value = real_dt.parse_datetime(
+                "2026-07-04T10:00:00+00:00"
+            )
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_clean_overdue_rooms(call)
+        payload = hass.services.async_call.call_args[0][2]
+        assert payload["room_name"] == ["Kitchen"]
+
+
+class TestAutoCleanDirtyRooms:
+    """v3.3.0 SMART-ORDER — trust gate, whole-house fallback, dirtiest-
+    first ordering, below-average exclusion."""
+
+    def _entry(self, records, dirt_index=None, velocity=None):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from custom_components.roomba_plus.robot_profile_store import (
+            RobotProfileStore,
+        )
+        entry = MagicMock()
+        entry.options = {}
+        data = entry.runtime_data
+        data.map_capability = MapCapability.SMART
+        ms = MissionStore(); ms._records = records
+        data.mission_store = ms
+        rps = RobotProfileStore()
+        rps.room_dirt_index = dirt_index or {}
+        data.robot_profile_store = rps
+        data.has_cloud = True
+        data.cloud_coordinator.regions = [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+        ]
+        # v3.3.0 SMART-ORDER routing — explicit None: an auto-MagicMock
+        # aligner would engage the route optimizer with mock garbage.
+        data.umf_aligner = None
+        return entry
+
+    @staticmethod
+    def _recs(rid, n):
+        return [{"id": f"m_{rid}_{i}", "ended_at": f"2026-06-{10+i:02d}T10:00:00+00:00",
+                 "timeline": {"finEvents": [
+                     {"type": "room", "room": {"rid": rid, "status": 0}}]}}
+                for i in range(n)]
+
+    def _call(self, hass, entry, **extra):
+        hass.config_entries.async_get_entry.return_value = entry
+        call = MagicMock(); call.hass = hass
+        call.data = {"entity_id": ["vacuum.test"], **extra}
+        return call
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_raises(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_auto_clean_dirty_rooms,
+        )
+        entry = self._entry([])
+        entry.runtime_data.map_capability = MapCapability.EPHEMERAL
+        hass = MagicMock()
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            with pytest.raises(Exception) as exc:
+                await async_handle_auto_clean_dirty_rooms(call)
+        assert "not_smart_map" in str(getattr(exc.value, "translation_key", ""))
+
+    @pytest.mark.asyncio
+    async def test_thin_data_falls_back_to_whole_house(self):
+        """Kitchen is the dirtiest room but has only 5 recorded cleanings
+        — below the 10-mission trust gate → whole-house start, no
+        room-targeted call."""
+        from custom_components.roomba_plus.services import (
+            async_handle_auto_clean_dirty_rooms,
+        )
+        entry = self._entry(
+            self._recs("7", 5) + self._recs("9", 5),
+            dirt_index={"7": 4.0, "9": 1.0},
+        )
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        async def _run(func, *a): return func(*a)
+        hass.async_add_executor_job = AsyncMock(side_effect=_run)
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_auto_clean_dirty_rooms(call)
+        entry.runtime_data.roomba.start.assert_called_once()
+        hass.services.async_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dirty_rooms_targeted_dirtiest_first(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_auto_clean_dirty_rooms,
+        )
+        # Both rooms above average is impossible with 2 rooms unless equal;
+        # use 3 rooms: two above average, one below.
+        entry = self._entry(
+            self._recs("7", 12) + self._recs("9", 12) + self._recs("4", 12),
+            dirt_index={"7": 4.0, "9": 3.0, "4": 0.5},
+        )
+        entry.runtime_data.cloud_coordinator.regions = [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+            {"id": "4", "name": "Bedroom"},
+        ]
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        call = self._call(hass, entry)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_auto_clean_dirty_rooms(call)
+        payload = hass.services.async_call.call_args[0][2]
+        # avg index = 2.5 → Kitchen (4.0) and Hall (3.0) qualify, desc order;
+        # Bedroom (0.5, below average) excluded despite 12 visits
+        assert payload["room_name"] == ["Kitchen", "Hall"]
+        entry.runtime_data.roomba.start.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_max_rooms_caps_dirtiest_first(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_auto_clean_dirty_rooms,
+        )
+        entry = self._entry(
+            self._recs("7", 12) + self._recs("9", 12) + self._recs("4", 12),
+            dirt_index={"7": 4.0, "9": 3.0, "4": 0.5},
+        )
+        entry.runtime_data.cloud_coordinator.regions = [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+            {"id": "4", "name": "Bedroom"},
+        ]
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        call = self._call(hass, entry, max_rooms=1)
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_auto_clean_dirty_rooms(call)
+        assert hass.services.async_call.call_args[0][2]["room_name"] == ["Kitchen"]
+
+
+class TestRouteOptimizeOrder:
+    """v3.3.0 SMART-ORDER routing — greedy NN from the dock over UMF room
+    centroids; selection stays dirt-/overdue-driven, only the ORDER of
+    the selected set changes; graceful fallback without alignment."""
+
+    def _aligner(self, centroids, dock=(0.0, 0.0)):
+        a = MagicMock()
+        a.aligned = True
+        a.room_centroids_umf.return_value = centroids
+        a.pose_to_umf.return_value = dock
+        return a
+
+    def test_nearest_neighbour_from_dock(self):
+        from custom_components.roomba_plus.services import _route_optimize_order
+        data = MagicMock()
+        # Dock at (0,0); Hall nearest, then Kitchen, then Bedroom —
+        # input order is dirt-sorted the other way around.
+        data.umf_aligner = self._aligner({
+            "7": (9000.0, 0.0),    # Kitchen — far
+            "9": (1000.0, 0.0),    # Hall — nearest to dock
+            "4": (10000.0, 500.0), # Bedroom — next to Kitchen
+        })
+        region_map = {"7": "Kitchen", "9": "Hall", "4": "Bedroom"}
+        out = _route_optimize_order(
+            data, ["Bedroom", "Kitchen", "Hall"], region_map
+        )
+        assert out == ["Hall", "Kitchen", "Bedroom"]
+
+    def test_fallback_keeps_input_order(self):
+        from custom_components.roomba_plus.services import _route_optimize_order
+        region_map = {"7": "Kitchen", "9": "Hall"}
+        # No aligner
+        data = MagicMock(); data.umf_aligner = None
+        assert _route_optimize_order(data, ["Kitchen", "Hall"], region_map) == [
+            "Kitchen", "Hall"]
+        # Aligner present but not aligned
+        data.umf_aligner = MagicMock(); data.umf_aligner.aligned = False
+        assert _route_optimize_order(data, ["Kitchen", "Hall"], region_map) == [
+            "Kitchen", "Hall"]
+        # Aligned but dock unmappable
+        data.umf_aligner = self._aligner({"7": (1.0, 1.0), "9": (2.0, 2.0)},
+                                         dock=None)
+        assert _route_optimize_order(data, ["Kitchen", "Hall"], region_map) == [
+            "Kitchen", "Hall"]
+
+    def test_rooms_without_centroid_appended_in_order(self):
+        from custom_components.roomba_plus.services import _route_optimize_order
+        data = MagicMock()
+        data.umf_aligner = self._aligner({
+            "7": (5000.0, 0.0), "9": (1000.0, 0.0),
+        })
+        region_map = {"7": "Kitchen", "9": "Hall", "4": "Bedroom"}
+        out = _route_optimize_order(
+            data, ["Bedroom", "Kitchen", "Hall"], region_map
+        )
+        # Bedroom has no centroid → keeps its slot at the END; the two
+        # positioned rooms are NN-ordered from the dock.
+        assert out == ["Hall", "Kitchen", "Bedroom"]
+
+
+class TestSeamSensorService:
+    """Bug-hunt round 4 — sensor and service must resolve room names
+    identically, incl. the UMF fallback when cloud regions are empty."""
+
+    @pytest.mark.asyncio
+    async def test_overdue_service_uses_umf_fallback_like_sensor(self):
+        from custom_components.roomba_plus.services import (
+            async_handle_clean_overdue_rooms,
+        )
+        from custom_components.roomba_plus.mission_store import MissionStore
+        entry = MagicMock()
+        entry.options = {"room_schedule": {"Kitchen": "daily"}}
+        data = entry.runtime_data
+        data.map_capability = MapCapability.SMART
+        ms = MissionStore()
+        # Kitchen (rid 7): 4 visits, 5 days since last → overdue at daily
+        ms._records = [
+            {"id": f"m_{i}", "ended_at": f"2026-06-{20+i*2:02d}T10:00:00+00:00",
+             "timeline": {"finEvents": [
+                 {"type": "room", "room": {"rid": "7", "status": 0}}]}}
+            for i in range(4)
+        ]
+        data.mission_store = ms
+        # Cloud regions EMPTY (degraded window) — UMF aligner resolves
+        data.has_cloud = True
+        data.cloud_coordinator.regions = []
+        data.umf_aligner.aligned = True
+        data.umf_aligner.rid_to_name.return_value = {"7": "Kitchen"}
+        hass = MagicMock()
+        hass.services.async_call = AsyncMock()
+        hass.config_entries.async_get_entry.return_value = entry
+        call = MagicMock(); call.hass = hass
+        call.data = {"entity_id": ["vacuum.test"]}
+        ent = MagicMock(); ent.config_entry_id = "ce1"
+        with patch("custom_components.roomba_plus.services.er.async_get") as er_m, \
+             patch("custom_components.roomba_plus.services.dt_util") as dt_m:
+            from homeassistant.util import dt as real_dt
+            dt_m.now.return_value = real_dt.parse_datetime(
+                "2026-07-04T10:00:00+00:00")
+            er_m.return_value.async_get.return_value = ent
+            await async_handle_clean_overdue_rooms(call)
+        # Without the fix: merged rooms keyed by raw rid, config key
+        # "Kitchen" never matches → learned/insufficient → no-op.
+        hass.services.async_call.assert_awaited_once()
+        assert hass.services.async_call.call_args[0][2]["room_name"] == ["Kitchen"]

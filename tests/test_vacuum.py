@@ -1052,3 +1052,56 @@ class TestVacuumActivityMapping:
         from homeassistant.components.vacuum import VacuumActivity
         v = _make_vacuum_entity(state={})
         assert v.activity == VacuumActivity.IDLE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 NULL-REGRESSION — explicit MQTT nulls (vacuum)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNullRegressionExplicitNulls:
+    """v3.3.0 NULL-REGRESSION — explicit nulls for cap / pose / pose.point
+    through the real constructor and extra_state_attributes paths."""
+
+    def test_cap_explicit_null_at_init(self):
+        roomba = _make_roomba({"cap": None, "sku": "R980020"})
+        entry = MagicMock()
+        entry.options = {}
+        entry.runtime_data = _make_smart_data()
+        v = IRobotVacuum(roomba, "TEST_BLID", entry)  # must not raise
+        assert v._cap_position is False
+
+    def test_pose_explicit_null_in_attributes(self):
+        from custom_components.roomba_plus.vacuum import ATTR_POSITION
+        v = _make_vacuum_entity(state={"pose": None})
+        v._cap_position = True
+        attrs = v.extra_state_attributes  # must not raise
+        assert attrs[ATTR_POSITION] is None
+
+    def test_pose_point_explicit_null_in_attributes(self):
+        from custom_components.roomba_plus.vacuum import ATTR_POSITION
+        v = _make_vacuum_entity(state={"pose": {"point": None, "theta": 42}})
+        v._cap_position = True
+        attrs = v.extra_state_attributes  # must not raise
+        # Established contract: attribute present with value None
+        assert attrs[ATTR_POSITION] is None
+
+
+    def test_clean_mission_status_explicit_null_in_attributes(self):
+        """Sibling find of the pose:null crash — same method, three lines
+        below (state.get("cleanMissionStatus", {}) guards only the
+        missing key)."""
+        v = _make_vacuum_entity(state={"cleanMissionStatus": None})
+        v._cap_position = False
+        attrs = v.extra_state_attributes  # must not raise
+        assert attrs.get("mission_elapsed_min") is None
+
+    def test_pad_wetness_explicit_null_in_fan_speed(self):
+        """padWetness is the KNOWN explicit-null field on Braava firmware
+        (select.py was fixed in the v3.2.0 review; vacuum.py's own read
+        of the same field in BraavaJet.fan_speed was not)."""
+        from custom_components.roomba_plus.vacuum import (
+            BraavaJet, OVERLAP_STANDARD,
+        )
+        b = object.__new__(BraavaJet)
+        b.vacuum_state = {"rankOverlap": OVERLAP_STANDARD, "padWetness": None}
+        assert b.fan_speed is None  # must not raise

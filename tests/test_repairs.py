@@ -274,7 +274,7 @@ class TestRoomAccessibility:
     def _make_entry_with_room(self, score: float | None, limiting_factor: str | None = "obstacle_density"):
         entry = _make_entry()
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
         aligner.room_areas_m2 = {"1": 10.0}
         entry.runtime_data.umf_aligner = aligner
 
@@ -362,6 +362,15 @@ class TestFurnitureChange:
         )
         gs.clear_furniture_dismissed = MagicMock(
             side_effect=lambda cell: gs._furniture_dismissed_at.pop(cell, None)
+        )
+        # v3.3.0 STORE-ENCAP — repairs.py now reads through the public
+        # accessors; delegate them to the seeded dict so this mock keeps
+        # mirroring real GridStore behaviour instead of auto-MagicMocks.
+        gs.furniture_dismissed_cells = MagicMock(
+            side_effect=lambda: tuple(gs._furniture_dismissed_at.keys())
+        )
+        gs.is_furniture_dismissed = MagicMock(
+            side_effect=lambda cell: cell in gs._furniture_dismissed_at
         )
         entry.runtime_data.grid_store = gs
         return entry, gs
@@ -3038,3 +3047,46 @@ class TestCoverageFrequency:
             deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
             assert "mqtt_watchdog_test_entry" not in deleted_ids
             assert "coverage_frequency_Kitchen" not in deleted_ids
+
+
+class TestDirtCorrelationIssue:
+    """v3.3.0 CROSS-CORR — Repair Issue at |r| > 0.5, self-deleting below."""
+
+    def _entry(self, results):
+        from custom_components.roomba_plus.robot_profile_store import (
+            RobotProfileStore,
+        )
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        rps = RobotProfileStore()
+        rps.correlation_results = MagicMock(return_value=results)
+        entry.runtime_data.robot_profile_store = rps
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_issue_created_above_threshold(self):
+        from custom_components.roomba_plus.repairs import (
+            async_check_dirt_correlation,
+        )
+        hass = MagicMock()
+        hass.states.get.return_value = None
+        entry = self._entry({"sensor.humidity": {"r": 0.61, "n": 40}})
+        with patch("custom_components.roomba_plus.repairs.ir") as ir_m:
+            await async_check_dirt_correlation(hass, entry)
+        ir_m.async_create_issue.assert_called_once()
+        kwargs = ir_m.async_create_issue.call_args
+        assert kwargs[1]["translation_key"] == "dirt_correlation"
+        assert kwargs[1]["translation_placeholders"]["r"] == "+0.61"
+        assert kwargs[1]["translation_placeholders"]["direction"] == "more"
+
+    @pytest.mark.asyncio
+    async def test_issue_deleted_below_threshold(self):
+        from custom_components.roomba_plus.repairs import (
+            async_check_dirt_correlation,
+        )
+        hass = MagicMock()
+        entry = self._entry({"sensor.humidity": {"r": 0.45, "n": 40}})
+        with patch("custom_components.roomba_plus.repairs.ir") as ir_m:
+            await async_check_dirt_correlation(hass, entry)
+        ir_m.async_create_issue.assert_not_called()
+        ir_m.async_delete_issue.assert_called_once()

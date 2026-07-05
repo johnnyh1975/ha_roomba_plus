@@ -489,10 +489,15 @@ def _make_record_v250_api_export(id_: str, started_at: str = "2026-05-01T08:00:0
     }
 
 
-def _make_mission_store(records: list[dict]) -> MagicMock:
-    ms = MagicMock()
+def _make_mission_store(records: list[dict]) -> MissionStore:
+    # v3.3.0 STORE-ENCAP — real store instead of MagicMock: the views now
+    # go through .records / .append_validated(), and a MagicMock silently
+    # auto-mocks both (export saw 0 records, import "imported" duplicates).
+    # Exactly the mock-mirrors-misunderstanding class from process
+    # standard 1 — the real store is dependency-free and behaves.
+    ms = MissionStore()
     ms._records = list(records)
-    ms.async_save = AsyncMock()
+    ms.async_save = AsyncMock()  # instance-level patch; views await it
     return ms
 
 
@@ -3333,3 +3338,237 @@ class TestConsecutiveAnomalousWithFallback:
         # Add 2 local records — no local stats, no archive baseline
         ms._records.append({"duration_min": 100, "area_sqft": 100.0})
         assert ms.consecutive_anomalous == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 STORE-ENCAP — public API contract tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStoreEncapPublicApi:
+    """v3.3.0 STORE-ENCAP — records property, append_validated,
+    extract_rid public alias. Invariant contracts for the new
+    cross-module read/write API."""
+
+    @staticmethod
+    def _rec(i: int) -> dict:
+        return {"id": f"m_{1000 + i}", "ended_at": f"2026-07-0{(i % 8) + 1}T10:00:00+00:00"}
+
+    @pytest.mark.asyncio
+    async def test_records_property_matches_internal_oldest_first(self):
+        store = MissionStore()
+        for i in range(5):
+            await store.async_append(self._rec(i))
+        assert list(store.records) == store._records
+        assert [r["id"] for r in store.records] == [f"m_{1000 + i}" for i in range(5)]
+
+    def test_append_validated_full_history_dedup(self):
+        """Dedup must catch a duplicate at the very START of the history —
+        the case async_append's 5-record window cannot see."""
+        store = MissionStore()
+        for i in range(20):
+            assert store.append_validated(self._rec(i)) is True
+        # Duplicate of the FIRST record (outside any 5-window)
+        assert store.append_validated(self._rec(0)) is False
+        assert len(store.records) == 20
+        # No id / non-string id → rejected
+        assert store.append_validated({"ended_at": "x"}) is False
+        assert store.append_validated({"id": 123}) is False
+        assert len(store.records) == 20
+
+    def test_append_validated_trims_fifo_at_max_records(self):
+        store = MissionStore()
+        for i in range(MAX_RECORDS + 7):
+            store.append_validated(self._rec(i))
+        assert len(store.records) == MAX_RECORDS
+        # FIFO: oldest 7 trimmed, newest kept, order preserved
+        assert store.records[0]["id"] == f"m_{1000 + 7}"
+        assert store.records[-1]["id"] == f"m_{1000 + MAX_RECORDS + 6}"
+
+    @pytest.mark.asyncio
+    async def test_mixed_append_paths_keep_id_index_consistent(self):
+        """async_append after append_validated: the lazy id set must see
+        MQTT-path additions, including recharge-segment '_r<N>' ids."""
+        store = MissionStore()
+        store.append_validated(self._rec(1))  # materialises the id set
+        # MQTT path: same id, different ended_at → stored as segment m_1001_r1
+        await store.async_append({"id": "m_1001", "ended_at": "2026-07-02T12:00:00+00:00"})
+        seg_ids = [r["id"] for r in store.records]
+        assert seg_ids == ["m_1001", "m_1001_r1"]
+        # append_validated must now reject BOTH ids seen via either path
+        assert store.append_validated({"id": "m_1001_r1", "ended_at": "x"}) is False
+        assert store.append_validated(self._rec(1)) is False
+        assert len(store.records) == 2
+        # Trim invalidates the index; it must rebuild correctly afterwards
+        for i in range(2, MAX_RECORDS + 3):
+            store.append_validated(self._rec(i))
+        assert store._record_ids is None or "m_1001" not in store._record_ids
+        first_kept = store.records[0]["id"]
+        assert store.append_validated({"id": first_kept, "ended_at": "x"}) is False
+
+    def test_extract_rid_public_and_private_alias(self):
+        """extract_rid is public; _extract_rid stays as a deprecated alias
+        (removal earmarked for SENSOR-SPLIT, v3.4.0). Field formats per
+        the original docstring: plain string, lewis rid-dict, region_id
+        fallback, unrecognisable → empty string."""
+        assert MissionStore.extract_rid("23") == "23"
+        assert MissionStore.extract_rid({"type": "rid", "rid": "23"}) == "23"
+        assert MissionStore.extract_rid({"region_id": "7"}) == "7"
+        assert MissionStore.extract_rid(None) == ""
+        assert MissionStore.extract_rid({"foo": "bar"}) == ""
+        assert MissionStore._extract_rid is MissionStore.extract_rid
+        assert MissionStore._extract_rid({"rid": 5}) == "5"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 ROOM-SCHED — merged overdue rule (configured > learned)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRoomsOverdueMerged:
+    """v3.3.0 ROOM-SCHED — one shared rule for sensor and service."""
+
+    @staticmethod
+    def _store_with_visits(visits: dict[str, list[str]]) -> MissionStore:
+        """Build a store whose records produce the given per-room visit
+        timestamps (each visit becomes one record)."""
+        store = MissionStore()
+        i = 0
+        for room, stamps in visits.items():
+            for ts in stamps:
+                store._records.append({
+                    "id": f"m_{i}", "ended_at": ts,
+                    "last_cleaned_rooms": [room],
+                })
+                i += 1
+        store._records.sort(key=lambda r: r["ended_at"])
+        return store
+
+    def _now(self) -> str:
+        return "2026-07-04T12:00:00+00:00"
+
+    def test_configured_overrides_learned_with_x1_threshold(self):
+        """Kitchen's learned cadence is ~4 days -> healthy at 4 days
+        since last under learned mean+2sigma — but a configured
+        'every_2_days' makes the same 4 days overdue at factor x1.0."""
+        visits = {"Kitchen": [
+            "2026-06-14T10:00:00+00:00", "2026-06-18T10:00:00+00:00",
+            "2026-06-22T10:00:00+00:00", "2026-06-26T10:00:00+00:00",
+            "2026-06-30T12:00:00+00:00",
+        ]}
+        store = self._store_with_visits(visits)
+        # Learned view first: healthy (6d since last < mean~3.5 x2)
+        learned = store.rooms_overdue_merged({}, self._now())
+        assert learned["Kitchen"]["source"] == "learned"
+        assert learned["Kitchen"]["status"] == "healthy"
+        # Configured every_2_days: same data, now overdue
+        merged = store.rooms_overdue_merged(
+            {"Kitchen": "every_2_days"}, self._now()
+        )
+        k = merged["Kitchen"]
+        assert k["source"] == "configured"
+        assert k["status"] == "overdue"
+        assert k["expected_interval_days"] == 2.0
+        assert k["overdue_factor"] == pytest.approx(2.0, abs=0.1)
+
+    def test_insufficient_data_is_never_overdue(self):
+        """One single visit long ago: no intervals -> listed, but never
+        flagged, regardless of how many days have passed."""
+        store = self._store_with_visits(
+            {"Attic": ["2026-06-01T10:00:00+00:00"]}
+        )
+        merged = store.rooms_overdue_merged({}, self._now())
+        a = merged["Attic"]
+        assert a["source"] == "insufficient_data"
+        assert a["status"] == "insufficient_data"
+        assert a["expected_interval_days"] is None
+        assert a["overdue_factor"] is None
+
+    def test_unknown_config_key_falls_back_to_learned(self):
+        """A stale/unknown frequency key in options must not crash or
+        create a bogus interval — it falls through to learned."""
+        visits = {"Hall": [
+            "2026-06-20T10:00:00+00:00", "2026-06-22T10:00:00+00:00",
+            "2026-06-24T10:00:00+00:00", "2026-06-26T10:00:00+00:00",
+        ]}
+        store = self._store_with_visits(visits)
+        merged = store.rooms_overdue_merged({"Hall": "fortnightly"}, self._now())
+        assert merged["Hall"]["source"] == "learned"
+
+
+class TestRoomHistoryLivePathRegression:
+    """v3.3.0 ROOM-SCHED foundation fix — live records carry `timeline`
+    (cloud-merged), NEVER a stored `last_cleaned_rooms` field (that only
+    exists on imported records). room_cleaning_history() and
+    room_coverage_health() previously read only the stored field ->
+    {} on every non-import installation. Same bug class as the v3.1.1
+    last_mission_summary fix, one level deeper."""
+
+    @staticmethod
+    def _live_record(i: int, ended: str, rids: list[str]) -> dict:
+        return {
+            "id": f"m_{i}", "ended_at": ended,
+            "timeline": {"finEvents": [
+                {"type": "room", "room": {"rid": rid, "status": 0}}
+                for rid in rids
+            ]},
+        }
+
+    def test_live_records_yield_history_with_resolved_names(self):
+        store = MissionStore()
+        store._records = [
+            self._live_record(1, "2026-06-28T10:00:00+00:00", ["7"]),
+            self._live_record(2, "2026-07-01T10:00:00+00:00", ["7", "9"]),
+        ]
+        hist = store.room_cleaning_history({"7": "Kitchen", "9": "Hall"})
+        assert hist == {
+            "Kitchen": "2026-07-01T10:00:00+00:00",
+            "Hall": "2026-07-01T10:00:00+00:00",
+        }
+        # Without maps: raw rids, still functional for interval math
+        assert set(store.room_cleaning_history()) == {"7", "9"}
+
+    def test_live_records_feed_coverage_health(self):
+        store = MissionStore()
+        stamps = ["2026-06-20", "2026-06-24", "2026-06-28", "2026-07-02"]
+        store._records = [
+            self._live_record(i, f"{d}T10:00:00+00:00", ["7"])
+            for i, d in enumerate(stamps)
+        ]
+        health = store.room_coverage_health(
+            "2026-07-04T10:00:00+00:00", region_map={"7": "Kitchen"}
+        )
+        assert "Kitchen" in health
+        assert health["Kitchen"]["expected_interval_days"] is not None
+
+    def test_imported_records_keep_working(self):
+        """The stored-field path (import endpoint) remains a valid source."""
+        store = MissionStore()
+        store._records = [{
+            "id": "m_1", "ended_at": "2026-07-01T10:00:00+00:00",
+            "last_cleaned_rooms": ["Kitchen"],
+        }]
+        assert store.room_cleaning_history() == {
+            "Kitchen": "2026-07-01T10:00:00+00:00"
+        }
+
+
+class TestPmapsInfoMerge:
+    """v3.3.0 MISSION-MAP — pmaps_info (mission-specific pmap version)
+    merges from cloud records into local ones."""
+
+    def test_pmaps_info_merged_from_cloud(self):
+        """Same fixture shape as the shipped area_sqft merge tests —
+        merge_latest_from_cloud is the path that runs after every
+        mission end."""
+        store = MissionStore()
+        ts = 1700001000
+        store._records = [
+            {"id": "m_new", "ended_at": _ts(ts), "result": "completed"},
+        ]
+        cloud = [{
+            "timestamp": ts,
+            "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}],
+        }]
+        assert store.merge_latest_from_cloud(cloud) is True
+        assert store._records[-1]["pmaps_info"] == [
+            {"pmap_id": "P1", "pmapv_id": "V7"}
+        ]

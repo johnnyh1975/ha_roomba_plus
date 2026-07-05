@@ -4049,7 +4049,7 @@ class TestRoomAccessibilityScoresSensor:
 
     def test_no_polygons_returns_zero(self):
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {}
+        aligner.room_polygons_umf = {}
         sensor = _make_room_accessibility_sensor(umf_aligner=aligner)
         assert sensor.native_value == 0
 
@@ -4058,7 +4058,7 @@ class TestRoomAccessibilityScoresSensor:
         whatever's available (coverage requires grid_store though, so this
         specifically checks the "gs is None" branch degrades to {})."""
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
         aligner.room_areas_m2 = {"1": 10.0}
         sensor = _make_room_accessibility_sensor(
             umf_aligner=aligner, grid_store=None, mission_archive=None,
@@ -4070,7 +4070,7 @@ class TestRoomAccessibilityScoresSensor:
 
     def test_full_pipeline_with_display_name_translation(self):
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
         aligner.room_areas_m2 = {"1": 10.0}
 
         gs = MagicMock()
@@ -4093,9 +4093,31 @@ class TestRoomAccessibilityScoresSensor:
         assert attrs["Kitchen"]["score"] is not None
         assert "limiting_factor" in attrs["Kitchen"]
 
+    def test_room_polygons_umf_accessed_as_property_not_method(self):
+        """Regression guard, real bug (field-caught via BouIIIx's debug
+        log, 2026-07-04): sensor.py called aligner.room_polygons_umf()
+        with parentheses, but UmfAligner declares it as a @property (a
+        dict, not callable) — crashed with 'dict' object is not callable
+        on every entity setup. A bare MagicMock() masks this entirely
+        (any attribute access "succeeds"); spec=UmfAligner restricts the
+        mock to the real class's actual interface, so calling a real
+        property as a method raises the same TypeError production code
+        would raise.
+        """
+        from custom_components.roomba_plus.umf_aligner import UmfAligner
+
+        aligner = MagicMock(spec=UmfAligner)
+        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_areas_m2 = {"1": 10.0}
+        sensor = _make_room_accessibility_sensor(
+            umf_aligner=aligner, grid_store=None, mission_archive=None,
+        )
+        # Must not raise TypeError: 'dict' object is not callable.
+        sensor.native_value
+
     def test_unknown_rid_falls_back_to_rid(self):
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {"99": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_polygons_umf = {"99": [(0, 0), (100, 0), (100, 100)]}
         aligner.room_areas_m2 = {"99": 5.0}
         gs = MagicMock()
         gs.coverage_by_polygon.return_value = {"99": 1.0}
@@ -4109,7 +4131,7 @@ class TestRoomAccessibilityScoresSensor:
         """time_per_area signal absent (no mission_archive) shouldn't
         block coverage/stuck-based scoring."""
         aligner = MagicMock()
-        aligner.room_polygons_umf.return_value = {"1": [(0, 0), (100, 0), (100, 100)]}
+        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
         aligner.room_areas_m2 = {"1": 10.0}
         gs = MagicMock()
         gs.coverage_by_polygon.return_value = {"1": 1.0}
@@ -4413,3 +4435,111 @@ class TestMopSensorSlugConsistency:
                 assert options == translation_keys, (
                     f"{lang}/{sensor_key}: options={options} vs keys={translation_keys}"
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 ROOM-SCHED — rooms_overdue sensor
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRoomsOverdueSensor:
+    """v3.3.0 ROOM-SCHED — state/attributes wiring of the merged rule
+    plus the DIRT-VEL self-calibration attributes."""
+
+    def _sensor(self, records, options=None, rps=None):
+        from custom_components.roomba_plus.sensor import RoombaRoomsOverdueSensor
+        from custom_components.roomba_plus.mission_store import MissionStore
+        entity = object.__new__(RoombaRoomsOverdueSensor)
+        entry = MagicMock()
+        entry.options = options or {}
+        ms = MissionStore()
+        ms._records = records
+        data = entry.runtime_data
+        data.mission_store = ms
+        data.has_cloud = True
+        data.cloud_coordinator.regions = [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+        ]
+        data.robot_profile_store = rps
+        entity._config_entry = entry
+        return entity
+
+    @staticmethod
+    def _rec(i, ended, rids):
+        return {"id": f"m_{i}", "ended_at": ended,
+                "timeline": {"finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}}
+                    for r in rids]}}
+
+    def test_state_counts_overdue_and_attrs_expose_merge(self):
+        recs = [self._rec(i, f"2026-06-{d}T10:00:00+00:00", ["7"])
+                for i, d in enumerate(["20", "22", "24", "26"])]
+        sensor = self._sensor(
+            recs, options={"room_schedule": {"Kitchen": "daily"}}
+        )
+        with patch("custom_components.roomba_plus.sensor.dt_util") as dt_m:
+            from homeassistant.util import dt as real_dt
+            dt_m.now.return_value = real_dt.parse_datetime(
+                "2026-07-04T10:00:00+00:00"
+            )
+            assert sensor.native_value == 1
+            attrs = sensor.extra_state_attributes
+        k = attrs["rooms"]["Kitchen"]
+        assert k["source"] == "configured" and k["status"] == "overdue"
+        assert attrs["overdue_rooms"] == ["Kitchen"]
+
+    def test_self_calibration_attributes_with_name_resolution(self):
+        from custom_components.roomba_plus.robot_profile_store import (
+            RobotProfileStore,
+        )
+        rps = RobotProfileStore()
+        rps.room_dirt_index = {"7": 3.0, "9": 1.0}    # median 2.0
+        rps.room_dirt_velocity = {"7": 2.0, "9": 0.25}
+        sensor = self._sensor([], rps=rps)
+        attrs = sensor.extra_state_attributes
+        # rid → display name resolved; Kitchen suggested daily (1.0 < 1.5)
+        assert attrs["suggested_interval_days"] == {"Kitchen": 1.0, "Hall": 8.0}
+        assert attrs["daily_suggested"] == ["Kitchen"]
+        # Already configured daily → drops out of the suggestion
+        sensor._config_entry.options = {"room_schedule": {"Kitchen": "daily"}}
+        assert sensor.extra_state_attributes["daily_suggested"] == []
+
+
+class TestDirtCorrelationSensor:
+    """v3.3.0 CROSS-CORR — |r| > 0.3 sensor gate and strongest-entity
+    selection."""
+
+    def _sensor(self, results):
+        from custom_components.roomba_plus.sensor import (
+            RoombaDirtCorrelationSensor,
+        )
+        from custom_components.roomba_plus.robot_profile_store import (
+            RobotProfileStore,
+        )
+        entity = object.__new__(RoombaDirtCorrelationSensor)
+        entry = MagicMock()
+        rps = RobotProfileStore()
+        rps.correlation_results = MagicMock(return_value=results)
+        entry.runtime_data.robot_profile_store = rps
+        entity._config_entry = entry
+        return entity
+
+    def test_gate_and_strongest_selection(self):
+        s = self._sensor({
+            "sensor.humidity": {"r": 0.61, "n": 42},
+            "sensor.pollen": {"r": -0.72, "n": 35},
+            "sensor.temp": {"r": 0.10, "n": 50},      # below |0.3| gate
+            "sensor.new": {"r": None, "n": 12},       # below n gate
+        })
+        # Strongest |r| wins — the negative pollen correlation
+        assert s.native_value == -0.72
+        attrs = s.extra_state_attributes
+        assert attrs["strongest_entity"] == "sensor.pollen"
+        assert attrs["by_entity"]["sensor.new"] == {"r": None, "n": 12}
+
+    def test_none_when_nothing_passes(self):
+        s = self._sensor({
+            "sensor.temp": {"r": 0.25, "n": 60},
+            "sensor.new": {"r": None, "n": 5},
+        })
+        assert s.native_value is None
+        assert s.extra_state_attributes["strongest_entity"] is None

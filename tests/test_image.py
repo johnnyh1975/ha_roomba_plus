@@ -1774,3 +1774,44 @@ class TestAxisSwapFix:
         assert entity._mission_points == [(0.0, 0.0)]
         assert rps.dock_theta_count == 1
         assert rps.dock_theta_baseline == pytest.approx(42.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 NULL-REGRESSION — explicit MQTT nulls through on_message()
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNullRegressionExplicitNulls:
+    """v3.3.0 NULL-REGRESSION — lewis firmware sends explicit `null` for
+    entire state objects (v3.2.0 review class: `.get(key, {})` guards the
+    MISSING key, not the null VALUE). These tests push explicit nulls
+    through the real on_message() path so a refactor reverting the
+    `(x or {})` idiom fails loudly instead of crashing the MQTT thread."""
+
+    def _null_msg(self, key: str) -> dict:
+        return {"state": {"reported": {key: None}}}
+
+    def test_clean_mission_status_explicit_null(self):
+        entity = _make_map_entity()
+        entity.vacuum.master_state = {
+            "state": {"reported": {"cleanMissionStatus": None}}
+        }
+        entity.on_message(self._null_msg("cleanMissionStatus"))  # must not raise
+        assert entity._last_phase == ""
+
+    def test_bbrun_explicit_null(self):
+        entity = _make_map_entity()
+        entity._last_stuck_count = 0
+        entity.vacuum.master_state = {"state": {"reported": {"bbrun": None}}}
+        entity.on_message(self._null_msg("bbrun"))  # must not raise
+        entity._renderer.mark_stuck.assert_not_called()
+
+    def test_mssn_strt_tm_explicit_null_inside_status(self):
+        entity = _make_map_entity()
+        status = {"phase": "run", "cycle": "quick", "mssnStrtTm": None}
+        entity.vacuum.master_state = {
+            "state": {"reported": {"cleanMissionStatus": status}}
+        }
+        entity.on_message(
+            {"state": {"reported": {"cleanMissionStatus": status}}}
+        )  # `or 0` fallback path — must not raise
+        assert entity._last_phase == "run"

@@ -2502,3 +2502,147 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         assert "roomba_plus_furniture_change_check" not in dispatched
         assert "roomba_plus_stuck_hotspot_check" not in dispatched
         assert "roomba_plus_room_accessibility_check" not in dispatched
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 bug-hunt round 5 — glue paths with no direct test coverage yet
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestCrossCorrCaptureGlue:
+    """v3.3.0 CROSS-CORR — the mission-start capture closure itself
+    (hass.states read, robot_profile_store.record_correlation_snapshot
+    call, async_save scheduling) was only ever exercised accidentally
+    (as the source of the isinstance-guard fix); this exercises it on
+    purpose, end to end through make_mission_callback."""
+
+    def _msg(self, phase: str, mssn_strt_tm: int = 1700000000) -> dict:
+        return {"state": {"reported": {"cleanMissionStatus": {
+            "phase": phase, "sqft": 100, "mssnStrtTm": mssn_strt_tm,
+            "initiator": "schedule", "error": 0,
+        }}}}
+
+    def test_snapshot_captured_and_saved_on_mission_start(self):
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        hass, entry, _recorded, _store = _make_callback_env()
+        entry.options = {"correlation_entities": ["sensor.humidity"]}
+        rps = MagicMock()
+        entry.runtime_data.robot_profile_store = rps
+        rps.async_save = AsyncMock()
+
+        humid_state = MagicMock()
+        humid_state.state = "63.5"
+        hass.states.get.return_value = humid_state
+
+        # _make_callback_env's hass.async_create_task CLOSES the coroutine
+        # (avoids "never awaited" warnings) instead of running it — so we
+        # capture+run it ourselves to observe the actual async_save call,
+        # same technique the fixture itself uses for _capture_append.
+        created: list[Any] = []
+
+        def _capture_task(coro, name=None):
+            created.append(coro)
+
+        hass.async_create_task = _capture_task
+
+        cb = make_mission_callback(hass, entry)
+        cb(self._msg("run"))
+        # The capture runs via call_soon_threadsafe on hass.loop — drain it.
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        rps.record_correlation_snapshot.assert_called_once()
+        args = rps.record_correlation_snapshot.call_args[0]
+        assert args[0] == {"sensor.humidity": 63.5}
+        assert len(created) == 1
+        hass.loop.run_until_complete(created[0])
+        rps.async_save.assert_awaited_once_with(hass, entry.entry_id)
+
+    def test_no_snapshot_when_not_configured(self):
+        """Opt-in contract: no configured entities → hass.states never
+        touched, robot_profile_store never called."""
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        hass, entry, _recorded, _store = _make_callback_env()
+        entry.options = {}
+        rps = MagicMock()
+        entry.runtime_data.robot_profile_store = rps
+
+        cb = make_mission_callback(hass, entry)
+        cb(self._msg("run"))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        rps.record_correlation_snapshot.assert_not_called()
+        hass.states.get.assert_not_called()
+
+    def test_unreadable_sensor_state_skipped_not_raised(self):
+        """A configured entity in an unavailable/unknown state must not
+        crash the mission-start path — it's just excluded from the
+        snapshot."""
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+        hass, entry, _recorded, _store = _make_callback_env()
+        entry.options = {"correlation_entities": ["sensor.broken"]}
+        rps = MagicMock()
+        entry.runtime_data.robot_profile_store = rps
+        rps.async_save = AsyncMock()
+
+        broken_state = MagicMock()
+        broken_state.state = "unavailable"
+        hass.states.get.return_value = broken_state
+
+        cb = make_mission_callback(hass, entry)
+        cb(self._msg("run"))  # must not raise
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        # float("unavailable") fails → no values → nothing recorded/saved
+        rps.record_correlation_snapshot.assert_not_called()
+        rps.async_save.assert_not_awaited()
+
+
+class TestL5CorrelationFinalizeGlue:
+    """v3.3.0 CROSS-CORR — the L5-enrichment callback wiring around
+    finalize_correlation() (reading latest.get('dirt')/'started_at' from
+    the real enriched-record shape via mission_store.query(days=1)) had
+    no test above the store level."""
+
+    def test_finalize_called_with_record_dirt_and_started_at(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_robot_profile_store,
+        )
+        hass, entry, _recorded, mission_store = _make_callback_env()
+        rps = MagicMock()
+        rps.update_mission_stats.return_value = False
+        rps.finalize_correlation.return_value = True
+        rps.async_save = AsyncMock()
+        record = {
+            "id": "m_1", "started_at": "2026-07-04T10:00:00+00:00",
+            "dirt": 7, "timeline": {"finEvents": []},
+        }
+        mission_store.query.return_value = [record]
+
+        hass.loop.run_until_complete(
+            _async_update_robot_profile_store(
+                hass, entry, mission_store, rps,
+            )
+        )
+        rps.finalize_correlation.assert_called_once_with(
+            "2026-07-04T10:00:00+00:00", 7.0
+        )
+
+    def test_missing_dirt_field_does_not_call_finalize(self):
+        """Pre-enrichment records (dirt not yet merged) must not call
+        finalize_correlation with garbage — the isinstance guard on
+        latest.get('dirt') is the thing under test."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_robot_profile_store,
+        )
+        hass, entry, _recorded, mission_store = _make_callback_env()
+        rps = MagicMock()
+        rps.update_mission_stats.return_value = False
+        record = {"id": "m_1", "started_at": "2026-07-04T10:00:00+00:00",
+                  "timeline": {"finEvents": []}}
+        mission_store.query.return_value = [record]
+
+        hass.loop.run_until_complete(
+            _async_update_robot_profile_store(
+                hass, entry, mission_store, rps,
+            )
+        )
+        rps.finalize_correlation.assert_not_called()

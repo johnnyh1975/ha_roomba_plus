@@ -1531,3 +1531,100 @@ class TestActivePmapIdSeedFallback:
         ]}
         cc._seeded_pmap_id = "map_A_from_seed"
         assert cc.active_pmap_id == "map_A_from_seed"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 REVIEW-REMAINDER — error-path fixes (cloud_api / grace period)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewRemainderErrorPaths:
+    """v3.3.0 REVIEW-REMAINDER findings, verified before/after:
+
+    A) aiohttp.ClientError and the 30 s TimeoutError previously bypassed
+       the F-RB-4 grace-period handler (only CloudApiError was caught) —
+       the transient class the grace period was built for flapped
+       entities to unavailable instead.
+    B) _login_irobot accepted a credentials dict missing the four keys
+       _signed_get depends on → bare KeyError later instead of a clean
+       AuthenticationError at the gate.
+    """
+
+    def _grace_coordinator(self):
+        from datetime import UTC, datetime
+        coord = _make_coordinator_v240_coordinator()
+        coord.data = {"pmaps": [], "sentinel": "last_good"}
+        coord._last_success_time = datetime.now(UTC)  # inside grace window
+        return coord
+
+    @pytest.mark.asyncio
+    async def test_client_error_uses_grace_period(self):
+        """Before fix A: aiohttp.ClientError escaped _async_update_data
+        untyped; now it returns the last good data within the window."""
+        import aiohttp
+        coord = self._grace_coordinator()
+        coord.api.get_mission_history = AsyncMock(
+            side_effect=aiohttp.ClientError("connection reset")
+        )
+        result = await coord._async_update_data()
+        assert result.get("sentinel") == "last_good"
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_uses_grace_period(self):
+        """The coordinator's own asyncio.timeout(30) raises TimeoutError —
+        must be treated as transient exactly like CloudApiError."""
+        coord = self._grace_coordinator()
+        coord.api.get_mission_history = AsyncMock(side_effect=TimeoutError())
+        result = await coord._async_update_data()
+        assert result.get("sentinel") == "last_good"
+
+    @pytest.mark.asyncio
+    async def test_content_type_error_becomes_cloud_api_error(self):
+        """Fix A, API side: a 200 response with a non-JSON body raises the
+        typed CloudApiError from _aws_get, not aiohttp.ContentTypeError."""
+        import aiohttp
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from custom_components.roomba_plus.cloud_api import (
+            CloudApiError, IrobotCloudApi,
+        )
+        api = IrobotCloudApi.__new__(IrobotCloudApi)
+        api._credentials = {
+            "CognitoId": "eu-west-1:abc", "AccessKeyId": "AK",
+            "SecretKey": "SK", "SessionToken": "ST",
+        }
+        resp = MagicMock()
+        resp.status = 200
+        resp.json = AsyncMock(
+            side_effect=aiohttp.ContentTypeError(MagicMock(), ())
+        )
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        api._session = MagicMock()
+        api._session.get = MagicMock(return_value=ctx)
+        with pytest.raises(CloudApiError, match="Non-JSON"):
+            await api._aws_get("https://api.example/x")
+
+    @pytest.mark.asyncio
+    async def test_login_rejects_incomplete_credentials(self):
+        """Fix B: missing CognitoId (or any of the four signing keys) must
+        raise AuthenticationError at login, not KeyError at first request."""
+        from unittest.mock import MagicMock, AsyncMock
+        from custom_components.roomba_plus.cloud_api import (
+            AuthenticationError, IrobotCloudApi,
+        )
+        api = IrobotCloudApi.__new__(IrobotCloudApi)
+        api._deployment = {"httpBase": "https://api.example"}
+        api._app_id = "app"
+        api._device_id = "dev"
+        resp = MagicMock()
+        resp.text = AsyncMock(return_value=(
+            '{"credentials": {"AccessKeyId": "AK", "SecretKey": "SK", '
+            '"SessionToken": "ST"}, "robots": {}}'
+        ))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        api._session = MagicMock()
+        api._session.post = MagicMock(return_value=ctx)
+        with pytest.raises(AuthenticationError, match="CognitoId"):
+            await api._login_irobot("uid", "sig", "ts")

@@ -1318,3 +1318,37 @@ class TestGridStoreCorruptionResilience:
             "stuck": {"1,1": {"count": 2, "times": None}},
         })
         assert isinstance(gs._stuck, dict)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.3.0 STORE-ENCAP — GridStore accessor contracts
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStoreEncapGridAccessors:
+    """v3.3.0 STORE-ENCAP — furniture_dismissed_cells /
+    is_furniture_dismissed / stuck_count close the gaps in the existing
+    public furniture/stuck API so repairs.py needs no private access."""
+
+    def test_furniture_dismiss_accessors(self):
+        gs = GridStore()
+        assert gs.furniture_dismissed_cells() == ()
+        assert gs.is_furniture_dismissed((3, 4)) is False
+        gs.record_furniture_dismissed((3, 4), "2026-07-01T10:00:00+00:00")
+        gs.record_furniture_dismissed((-2, 7), "2026-07-02T10:00:00+00:00")
+        assert set(gs.furniture_dismissed_cells()) == {(3, 4), (-2, 7)}
+        assert gs.is_furniture_dismissed((3, 4)) is True
+        # Snapshot semantics: safe to clear while iterating the result
+        for cell in gs.furniture_dismissed_cells():
+            gs.clear_furniture_dismissed(cell)
+        assert gs.furniture_dismissed_cells() == ()
+
+    def test_stuck_count_structured_legacy_and_unknown(self):
+        gs = GridStore()
+        assert gs.stuck_count((0, 0)) == 0
+        gs._stuck[(1, 1)] = {"count": 4, "times": []}   # v2.7.0+ structured
+        gs._stuck[(2, 2)] = 7                            # legacy plain count
+        gs._stuck[(3, 3)] = {"times": []}                # degraded: no count key
+        assert gs.stuck_count((1, 1)) == 4
+        assert gs.stuck_count((2, 2)) == 7
+        assert gs.stuck_count((3, 3)) == 0
+        assert gs.stuck_count((9, 9)) == 0
