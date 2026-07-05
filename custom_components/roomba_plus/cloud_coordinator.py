@@ -15,6 +15,8 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import asyncio
+
+import aiohttp
 import logging
 import statistics
 from collections import defaultdict
@@ -393,7 +395,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise ConfigEntryAuthFailed(
                 f"iRobot cloud credentials are invalid: {exc}"
             ) from exc
-        except CloudApiError as exc:
+        except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
+            # v3.3.0 REVIEW-REMAINDER — transient network errors
+            # (aiohttp.ClientError incl. ContentTypeError) and the 30 s
+            # asyncio.timeout guard previously bypassed this handler —
+            # exactly the transient class the F-RB-4 grace period below
+            # was built for.
             # Transient — let HA retry via ConfigEntryNotReady pathway
             raise UpdateFailed(f"iRobot cloud setup failed: {exc}") from exc
 
@@ -429,7 +436,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise ConfigEntryAuthFailed(
                 f"iRobot cloud authentication failed: {exc}"
             ) from exc
-        except CloudApiError as exc:
+        except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
+            # v3.3.0 REVIEW-REMAINDER — transient network errors
+            # (aiohttp.ClientError incl. ContentTypeError) and the 30 s
+            # asyncio.timeout guard previously bypassed this handler —
+            # exactly the transient class the F-RB-4 grace period below
+            # was built for.
             # F-RB-4 — suppress transient failures within the grace period.
             # Return the last known good data so entities stay available.
             if (
@@ -630,7 +642,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # raw_records fallback so CloudRawSensor entities remain available.
         if not result["mission_history_raw"] and self._mission_store is not None:
             fallback = [
-                r for r in self._mission_store._records
+                r for r in self._mission_store.records
                 if any(r.get(f) is not None for f in ("dirt", "chrgM", "wlBars"))
             ]
             if fallback:
@@ -1093,6 +1105,31 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 len(geo["regions"]),
                 self.blid,
             )
+
+            # RESEARCH-ROOMTYPE (v3.3.0 ROOM-TYPE-VERIFY, temporary) —
+            # one-time field capture of iRobot's ML room-type classifier
+            # output. Same pattern as RESEARCH-MISSIONMAP: INFO-level,
+            # fires only when the debug flag file exists, no extra cloud
+            # call (data is already in this response). Region names are
+            # NOT logged — only ids, suggested types, and scores.
+            # Remove after field verification (Thonno / veronoicc).
+            if geo["region_suggestions"] or maps:
+                import os as _os  # noqa: PLC0415 — temporary research block
+                if _os.path.exists(self.hass.config.path("roomba_plus_research_roomtype")):
+                    _LOGGER.info(
+                        "RESEARCH-ROOMTYPE %s: pmap=%s maps=%d "
+                        "suggestions=%s",
+                        self.blid,
+                        active_id,
+                        len(maps),
+                        [
+                            {
+                                "region_id": s.get("region_id"),
+                                "suggested_types": s.get("suggested_types"),
+                            }
+                            for s in geo["region_suggestions"]
+                        ] or "EMPTY",
+                    )
 
             return {
                 "keepoutzones": [

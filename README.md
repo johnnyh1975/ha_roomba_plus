@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-3.2.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-3.3.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -15,8 +15,8 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
 - **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds. Native `vacuum.clean_area` support for area-based room cleaning (HA 2026.3+, SMART robots).
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
-- **Self-calibrating** — maintenance thresholds, navigation health, and battery degradation detection all adapt to your robot's own usage history rather than fixed thresholds; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration.
-- **Gold quality scale** — 3,466 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Self-calibrating** — maintenance thresholds, navigation health, and battery degradation detection all adapt to your robot's own usage history rather than fixed thresholds; the demand cleaning baseline is weekday-specific; anomaly detection requires no configuration; per-room cleaning rhythms are learned from your own history, with optional per-room frequency overrides (v3.3.0).
+- **Gold quality scale** — 3,510 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -177,6 +177,9 @@ Each robot is a separate integration entry with its own device, entities, and st
 | `roomba_plus.reset_robot_profile` | All | Wipe learned calibration data (v2.7+) |
 | `roomba_plus.clean_sequence` | All | Start robot B when robot A finishes |
 | `roomba_plus.advance_room` | SMART + cloud | Manually advance mission progress to the next room when it gets stuck on a completed one (v2.8.0) |
+| `roomba_plus.clean_overdue_rooms` | SMART + cloud | Clean every room currently overdue (configured or learned rhythm), travel-optimized route from the dock (v3.3.0) |
+| `roomba_plus.auto_clean_dirty_rooms` | SMART + cloud | Clean the rooms that are dirtier than your household average, travel-optimized (v3.3.0) |
+| `roomba_plus.explain_mission` | All | Plain-language reason for a flagged mission anomaly (v3.2.0) |
 
 **Device triggers** for automations:
 
@@ -448,6 +451,13 @@ Learns each room's own typical interval between cleans from its cleaning history
 ---
 
 ### 🟢 Mission history & intelligence
+
+#### Room rhythms & mission maps (v3.3.0)
+
+- **`sensor.*_rooms_overdue`** (SMART + cloud) — which rooms are due for a clean. Each room's rhythm is learned from its own history; set an explicit frequency per room in the options flow (Daily / Every 2 days / 3× per week / Weekly) to override the learned interval. Attributes include a fully self-calibrated suggested interval per room and a `daily_suggested` list for rooms that re-dirty fast.
+- **`roomba_plus.clean_overdue_rooms`** — one service call cleans everything that's due, worst first, with the route between rooms travel-optimized from the dock. Does nothing when nothing is due — safe to fire daily from an automation.
+- **Mission cleaning maps** — every finished mission's real coverage, as an image URL (`…/missions/latest/map.png`) for picture cards and notifications, or as raw coordinates (`map.json`). See [the API docs](docs/API.md#get-missionsrecord_idmapjson----mappng).
+- **Dirt ↔ sensor correlation** (opt-in) — pick any HA sensors (humidity, pollen, …) in the settings; after 30 missions the integration reports whether your robot verifiably collects more dirt when they're high, entirely locally.
 
 #### Mission log
 

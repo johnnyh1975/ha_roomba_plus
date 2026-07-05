@@ -56,6 +56,7 @@ def _safe_float(val: Any) -> float | None:
 
 
 STORAGE_VERSION = 1
+_DELAY_SAVE_SEC = 15.0  # v3.3.0 DELAY-SAVE — debounce window
 _STORAGE_KEY_PREFIX = "roomba_plus_mission_timer"
 _STALE_THRESHOLD_SEC = 7200  # 2 hours — if snapshot is older, timer is stale
 
@@ -76,6 +77,9 @@ class MissionTimerStore:
     def __init__(self) -> None:
         self.mission_id: str | None = None
         self.run_sec: float = 0.0
+        # v3.3.0 DELAY-SAVE — cached Store handle; async_delay_save
+        # debounces per Store instance (see _get_ha_store).
+        self._ha_store: Store | None = None
         self.total_estimated_sec: float | None = None
         self.planned_rooms: list[str] = []
         self.current_room_idx: int = 0
@@ -149,10 +153,10 @@ class MissionTimerStore:
         except (TypeError, ValueError) as exc:
             _LOGGER.warning("MissionTimerStore: load failed — %s", exc)
 
-    async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
-        """Persist current timer state."""
-        store = Store(hass, STORAGE_VERSION, f"{_STORAGE_KEY_PREFIX}_{entry_id}")
-        await store.async_save({
+    def _payload(self) -> dict:
+        """Serialise current timer state (single home for the shape —
+        used by both the immediate and the delayed save path)."""
+        return {
             "mission_id":          self.mission_id,
             "run_sec":             self.run_sec,
             "total_estimated_sec": self.total_estimated_sec,
@@ -164,16 +168,61 @@ class MissionTimerStore:
             "mission_started_wall_ts": self.mission_started_wall_ts,
             "recharge_min":        self.recharge_min,
             "snapshot_ts":         time.time(),
-        })
+        }
 
-    def _schedule_save(self, hass: HomeAssistant, entry_id: str) -> None:
-        """Thread-safe async save (safe to call from paho-MQTT thread)."""
-        asyncio.run_coroutine_threadsafe(
-            self.async_save(hass, entry_id),
-            hass.loop,
+    async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
+        """Persist current timer state immediately (load/migration paths)."""
+        store = self._get_ha_store(hass, entry_id)
+        await store.async_save(self._payload())
+
+    def _get_ha_store(self, hass: HomeAssistant, entry_id: str) -> Store:
+        """Cached Store handle. v3.3.0 DELAY-SAVE — async_delay_save
+        debounces PER Store instance; the previous new-Store-per-save
+        pattern would have defeated the debounce entirely."""
+        if self._ha_store is None:
+            self._ha_store = Store(
+                hass, STORAGE_VERSION, f"{_STORAGE_KEY_PREFIX}_{entry_id}"
+            )
+        return self._ha_store
+
+    def schedule_save(self, hass: HomeAssistant, entry_id: str) -> None:
+        """Thread-safe DEBOUNCED save (safe to call from paho-MQTT thread).
+
+        v3.3.0 DELAY-SAVE — this is the write-amplification fix from the
+        v3.2.0 tech-debt review: on_phase_run fires on every phase=run
+        MQTT message (every few seconds for the whole mission) and
+        previously wrote to disk each time. Now batched via HA's
+        Store.async_delay_save(15 s); HA flushes pending writes on stop
+        automatically. Deliberate trade-off (documented in the version
+        plan): up to 15 s of run_sec lost on a hard crash — the previous
+        MP1 decision, now resolved.
+
+        v3.3.0 STORE-ENCAP — public: callbacks.py needs it for the
+        recharge-position persist and previously called the private name."""
+        hass.loop.call_soon_threadsafe(
+            self._delay_save_on_loop, hass, entry_id
         )
 
+    def _delay_save_on_loop(self, hass: HomeAssistant, entry_id: str) -> None:
+        """Loop-side half of schedule_save — Store.async_delay_save must
+        run on the event loop."""
+        self._get_ha_store(hass, entry_id).async_delay_save(
+            self._payload, _DELAY_SAVE_SEC
+        )
+
+    # v3.3.0 STORE-ENCAP — deprecated private alias for the 12 internal
+    # call sites in this module and existing tests; production consumers
+    # must use schedule_save (enforced by the encapsulation guard test).
+    _schedule_save = schedule_save
+
     # ── Public API ────────────────────────────────────────────────────────────
+
+    @property
+    def last_phase_ts(self) -> float:
+        """Monotonic timestamp of the last phase=run message, 0.0 when
+        none seen. v3.3.0 STORE-ENCAP — read-only for sensor.py's
+        live-delta computation."""
+        return self._last_phase_ts
 
     def set_mission_plan(
         self,

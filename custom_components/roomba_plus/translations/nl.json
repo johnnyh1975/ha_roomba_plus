@@ -101,7 +101,8 @@
           "map_enabled": "Live kaart inschakelen",
           "map_size_px": "Kaartgrootte (pixels)",
           "map_scale_mm_per_px": "Schaal (mm/pixel)",
-          "floor_label": "Verdieping (bijv. Begane grond)"
+          "floor_label": "Verdieping (bijv. Begane grond)",
+          "correlation_entities": "Vuil correleren met sensoren (optioneel)"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Deze kamers importeren"
         }
+      },
+      "room_schedule": {
+        "title": "Schoonmaakfrequentie per kamer",
+        "description": "Stel in hoe vaak elke kamer moet worden schoongemaakt. 'Geleerd' behoudt het zelfgekalibreerde interval uit de schoonmaakhistorie van de kamer."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
       "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens.",
       "no_rest980_rooms_found": "Geen kamers gevonden in je roomba_rest980-installatie.",
-      "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+."
+      "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+.",
+      "room_schedule_not_supported": "Frequenties per kamer vereisen een Smart Map-robot met cloudgegevens.",
+      "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden."
     }
   },
   "entity": {
@@ -633,6 +640,12 @@
       },
       "room_accessibility_scores": {
         "name": "Toegankelijkheidsscores per kamer"
+      },
+      "rooms_overdue": {
+        "name": "Achterstallige kamers"
+      },
+      "dirt_weather_correlation": {
+        "name": "Vuilcorrelatie"
       }
     },
     "binary_sensor": {
@@ -983,6 +996,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} is mogelijk te lang niet gereinigd",
       "description": "{room} is voor het laatst {days_since_last} dagen geleden gereinigd — merkbaar langer dan het ritme van ongeveer {expected_interval_days} dagen dat deze robot voor die kamer heeft vastgesteld op basis van zijn eigen reinigingsgeschiedenis. Controleer of het schema de kamer nog dekt, of de kamer onlangs ontoegankelijk was."
+    },
+    "dirt_correlation": {
+      "title": "Sterke vuilcorrelatie gedetecteerd",
+      "description": "De robot verzamelt aanzienlijk {direction} vuil wanneer {entity} hoog is (r={r}, 30+ missies). Het kan lonen het schoonmaakschema op dit patroon af te stemmen."
     }
   },
   "device_automation": {
@@ -1098,6 +1115,17 @@
     },
     "no_rooms_resolved": {
       "message": "Geen kamers om te reinigen — geef minstens één kamernaam op."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Geleerd (zelfgekalibreerd)",
+        "daily": "Dagelijks",
+        "every_2_days": "Om de 2 dagen",
+        "three_per_week": "3 keer per week",
+        "weekly": "Wekelijks"
+      }
     }
   }
 }

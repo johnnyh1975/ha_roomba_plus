@@ -447,4 +447,44 @@ curl -H "Authorization: Bearer <token>" \
 
 ---
 
+## GET /missions/{record_id}/map.json  ·  /map.png
+
+**v3.3.0 MISSION-MAP** — coordinate-level coverage of one finished mission: the
+official app's "Mission Cleaning Map", for every mission in your history.
+SMART robots with cloud credentials only; requires the mission record to carry
+`pmaps_info` (recorded on v3.3.0+, cloud-merged).
+
+```
+GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.json
+GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png
+```
+
+`{record_id}` is the local mission record id; `latest` resolves to the most
+recent mission. The PNG is directly usable as a picture-card or notification
+image — room outlines (current map) plus this mission's real coverage points.
+
+```json
+{
+  "record_id": "m_1751623200",
+  "mission_id": "01HB240BER0YBZEERTM7D3QHT8",
+  "nmssn": 90,
+  "pmap_id": "…", "pmapv_id": "…",
+  "point_area_m": [0.1049, 0.1049],
+  "coverage_mm": [[1049.0, 2098.0], …],
+  "coverage_poly": [...],
+  "rooms": {"Kitchen": [[x_mm, y_mm], …], …}
+}
+```
+
+| Status | Meaning |
+|---|---|
+| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer (currently an open question on i-series/lewis firmware — confirmed working on j-series/sapphire) |
+| 409 | Verification-gate mismatch — the cloud map's `map_header.nmssn` does not match the requested record; the wrong map is never served silently |
+| 502 | Cloud transport failure |
+
+Results are cached in memory for 24 h (max 10 missions) — repeated card or
+browser hits cost no additional cloud call.
+
+---
+
 *[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

@@ -57,6 +57,8 @@ from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    CONF_CORRELATION_ENTITIES,
+    CONF_ROOM_SCHEDULE,
     CARPET_BOOST_LABELS,
     CLEAN_BASE_LABELS,
     CLEAN_MODE_LABELS,
@@ -2150,7 +2152,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
         available_fn=lambda e: bool(
             e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store._records
+            and e._config_entry.runtime_data.mission_store.records
         ),
     ),
     RoombaSensorDescription(
@@ -2165,7 +2167,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
         available_fn=lambda e: bool(
             e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store._records
+            and e._config_entry.runtime_data.mission_store.records
         ),
     ),
 
@@ -2598,6 +2600,19 @@ async def async_setup_entry(
     # IA74-ZONE (v2.6.0) — zone summary (SMART + cloud only)
     if data.map_capability.value == "smart" and data.cloud_coordinator is not None:
         entities.append(RoombaZoneSummarySensor(roomba, blid, config_entry))
+
+    # v3.3.0 ROOM-SCHED — rooms_overdue (SMART + cloud only: room data
+    # source is timeline.finEvents from cloud-enriched records)
+    if data.map_capability.value == "smart" and data.cloud_coordinator is not None:
+        entities.append(RoombaRoomsOverdueSensor(roomba, blid, config_entry))
+
+    # v3.3.0 CROSS-CORR — opt-in: only when correlation entities are
+    # configured; cloud required (dirt field is cloud-enriched)
+    if (
+        config_entry.options.get(CONF_CORRELATION_ENTITIES)
+        and data.cloud_coordinator is not None
+    ):
+        entities.append(RoombaDirtCorrelationSensor(roomba, blid, config_entry))
 
     # F12a — optimal_clean_window sensor (presence scheduling active)
     if data.presence_manager is not None:
@@ -3415,6 +3430,12 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
                 rel = rps.room_dirt_relative()
                 if rel:
                     attrs["by_room"] = {rid: round(v, 3) for rid, v in rel.items()}
+                # v3.3.0 DIRT-VEL — per-room accumulation velocity
+                # ((passCount/m²)/day, EMA-smoothed). Present only once a
+                # room has two sufficiently spaced cleanings.
+                vel = rps.dirt_accumulation_rate()
+                if vel:
+                    attrs["by_room_velocity"] = vel
         return attrs
 
     @property
@@ -3739,7 +3760,7 @@ def _get_planned_room_order(data: Any) -> list[str]:
     immediately at mission start without waiting for a cloud refresh.
     Returns an empty list when no room-select command was issued (whole-home).
 
-    v2.6.3 — uses MissionStore._extract_rid() to handle all confirmed region
+    v2.6.3 — uses MissionStore.extract_rid() to handle all confirmed region
     key formats: {"region_id": ...} (Roomba+ app), {"rid": ...} (iRobot app /
     lewis 22.52.10+), and plain string (some firmware variants).
 
@@ -3760,9 +3781,9 @@ def _get_planned_room_order(data: Any) -> list[str]:
 
     from .mission_store import MissionStore as _MS
     region_ids = [
-        _MS._extract_rid(r)
+        _MS.extract_rid(r)
         for r in (last_cmd.get("regions") or [])
-        if _MS._extract_rid(r)
+        if _MS.extract_rid(r)
     ]
     mts = getattr(data, "mission_timer_store", None)
     if not region_ids:
@@ -4030,8 +4051,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         """
         import time as _time_mod
         elapsed = mts.run_sec
-        if phase == "run" and mts._last_phase_ts > 0:
-            live_delta = int(_time_mod.monotonic() - mts._last_phase_ts)
+        if phase == "run" and mts.last_phase_ts > 0:
+            live_delta = int(_time_mod.monotonic() - mts.last_phase_ts)
             if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
                 elapsed += live_delta
         return elapsed
@@ -4256,6 +4277,178 @@ class RoombaZoneSummarySensor(IRobotEntity, SensorEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return False  # updated by cloud coordinator only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(cc.async_add_listener(_on_coordinator_update))
+
+
+class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
+    """v3.3.0 ROOM-SCHED — which rooms are overdue for cleaning.
+
+    State = number of overdue rooms (0 = everything in rhythm).
+    One dict sensor, no per-room entities (PRIMARY-SLIM).
+
+    Merge semantics live in MissionStore.rooms_overdue_merged() — the
+    single shared rule with the clean_overdue_rooms service:
+    configured frequency (options flow) beats the self-calibrated
+    learned interval (COVERAGE-FREQ); insufficient_data never flags.
+
+    Self-calibration extras (DIRT-VEL):
+    - suggested_interval_days: target_density / velocity per room —
+      a recommendation only, never part of the overdue rule.
+    - daily_suggested: rooms whose suggested interval is < 1.5 days
+      and that are not already configured as daily.
+
+    SMART + cloud only: the room data source (timeline.finEvents room
+    events) only exists on cloud-enriched SMART records.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="rooms_overdue",
+        name="Rooms overdue",
+        translation_key="rooms_overdue",
+    )
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_rooms_overdue"
+
+    def _merged(self) -> dict[str, dict[str, Any]]:
+        data = self._config_entry.runtime_data
+        ms = data.mission_store
+        if ms is None:
+            return {}
+        config = self._config_entry.options.get(CONF_ROOM_SCHEDULE) or {}
+        region_map, umf_regions = _region_maps_for(data)
+        return ms.rooms_overdue_merged(
+            config, dt_util.now().isoformat(),
+            region_map=region_map, umf_regions=umf_regions,
+        )
+
+    @property
+    def native_value(self) -> StateType:
+        return sum(
+            1 for info in self._merged().values()
+            if info["status"] == "overdue"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        merged = self._merged()
+        data = self._config_entry.runtime_data
+        config = self._config_entry.options.get(CONF_ROOM_SCHEDULE) or {}
+        attrs: dict[str, Any] = {
+            "rooms": merged,
+            "overdue_rooms": sorted(
+                (n for n, i in merged.items() if i["status"] == "overdue"),
+                key=lambda n: merged[n]["overdue_factor"] or 0,
+                reverse=True,
+            ),
+        }
+        rps = getattr(data, "robot_profile_store", None)
+        if rps is not None:
+            suggested_by_rid = rps.suggested_cleaning_interval_days()
+            if suggested_by_rid:
+                region_map, umf_regions = _region_maps_for(data)
+                name_of = region_map or (umf_regions or {})
+                suggested = {
+                    name_of.get(rid, rid): days
+                    for rid, days in suggested_by_rid.items()
+                }
+                attrs["suggested_interval_days"] = suggested
+                attrs["daily_suggested"] = sorted(
+                    room for room, days in suggested.items()
+                    if days < 1.5 and config.get(room) != "daily"
+                )
+        return attrs
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # room data changes via cloud enrichment only
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        cc = self._config_entry.runtime_data.cloud_coordinator
+        if cc is None:
+            return
+
+        @callback
+        def _on_coordinator_update() -> None:
+            self.async_write_ha_state()
+
+        self.async_on_remove(cc.async_add_listener(_on_coordinator_update))
+
+
+class RoombaDirtCorrelationSensor(IRobotEntity, SensorEntity):
+    """v3.3.0 CROSS-CORR — Pearson correlation between mission dirt and
+    the configured external HA sensors (opt-in, fully local).
+
+    State: r of the strongest passing correlation — only when |r| > 0.3
+    AND n >= 30 (spec gates); None otherwise. Attributes expose every
+    configured entity with its r and sample count so users see progress
+    toward the 30-sample threshold.
+    Registered only when correlation entities are configured (opt-in)
+    and cloud is available (the dirt field is cloud-enriched).
+    """
+
+    entity_description = SensorEntityDescription(
+        key="dirt_weather_correlation",
+        name="Dirt correlation",
+        translation_key="dirt_weather_correlation",
+    )
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_dirt_weather_correlation"
+
+    def _results(self) -> dict[str, dict[str, Any]]:
+        rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
+        if rps is None:
+            return {}
+        return rps.correlation_results()
+
+    @staticmethod
+    def _passing(results: dict[str, dict[str, Any]]) -> list[tuple[str, float]]:
+        return sorted(
+            (
+                (eid, info["r"]) for eid, info in results.items()
+                if info["r"] is not None and abs(info["r"]) > 0.3
+            ),
+            key=lambda p: abs(p[1]),
+            reverse=True,
+        )
+
+    @property
+    def native_value(self) -> StateType:
+        passing = self._passing(self._results())
+        return passing[0][1] if passing else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        results = self._results()
+        passing = self._passing(results)
+        return {
+            "by_entity": results,
+            "strongest_entity": passing[0][0] if passing else None,
+        }
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # samples only change via cloud enrichment
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -5262,7 +5455,10 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         store = self._entry.runtime_data.mission_store
         if store is None:
             return {}
-        return store.room_cleaning_history()
+        # v3.3.0 ROOM-SCHED foundation fix — pass the name-resolution
+        # maps: live records derive rooms from timeline.finEvents now.
+        region_map, umf_regions = _region_maps_for(self._entry.runtime_data)
+        return store.room_cleaning_history(region_map, umf_regions)
 
     @property
     def native_value(self) -> int:
@@ -5273,6 +5469,23 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, str]:
         """Dict mapping room display name → ISO timestamp of last clean."""
         return self._history
+
+
+def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] | None]:
+    """v3.3.0 ROOM-SCHED foundation fix — module-level twin of
+    RoombaLastMissionSummarySensor._region_map_and_umf so the
+    room-history/overdue sensors resolve names the same way."""
+    region_map: dict[str, str] = {}
+    if runtime_data.has_cloud and runtime_data.cloud_coordinator is not None:
+        region_map = {
+            r["id"]: r["name"]
+            for r in runtime_data.cloud_coordinator.regions
+            if r.get("id")
+        }
+    umf_regions: dict[str, str] | None = None
+    if not region_map and runtime_data.umf_aligner and runtime_data.umf_aligner.aligned:
+        umf_regions = runtime_data.umf_aligner.rid_to_name()
+    return region_map, umf_regions
 
 
 def _id_to_display_name(cc: Any) -> dict[str, str]:
@@ -5422,7 +5635,7 @@ class RoombaRoomAccessibilityScoresSensor(IRobotEntity, SensorEntity):
         aligner = data.umf_aligner
         if aligner is None:
             return {}
-        polygons = aligner.room_polygons_umf()
+        polygons = aligner.room_polygons_umf
         areas_m2 = aligner.room_areas_m2
         if not polygons:
             return {}

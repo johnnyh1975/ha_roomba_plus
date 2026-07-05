@@ -65,7 +65,7 @@ from .const import (
     has_pose,
     has_smart_map,
 )
-from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView, ExplainMissionView, MissionPathView
+from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView, ExplainMissionView, MissionPathView, MissionMapJsonView, MissionMapPngView
 from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
@@ -2597,7 +2597,7 @@ async def _phase_data(ctx: _SetupContext) -> None:
     _ERROR_RESULTS = frozenset({
         "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
     })
-    for _rec in reversed(mission_store._records):
+    for _rec in reversed(mission_store.records):
         if _rec.get("result") in _ERROR_RESULTS and _rec.get("error_code"):
             last_error_code = _rec["error_code"]
             last_error_at   = _rec.get("ended_at")
@@ -2934,6 +2934,9 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
         hass.http.register_view(DailyDigestView())
         hass.http.register_view(ExplainMissionView())
         hass.http.register_view(MissionPathView())
+        # v3.3.0 MISSION-MAP
+        hass.http.register_view(MissionMapJsonView())
+        hass.http.register_view(MissionMapPngView())
         hass.data["_roomba_plus_view_registered"] = True
 
     async_register_services(hass)
@@ -3040,6 +3043,18 @@ async def async_unload_entry(
         pm = config_entry.runtime_data.presence_manager
         if pm is not None:
             pm.cancel()
+
+        # v3.3.0 DELAY-SAVE (bug-hunt round 2) — flush the debounced
+        # MissionTimerStore write on unload: Store.async_save also
+        # cancels a pending async_delay_save timer, so a reload can no
+        # longer have the OLD instance's stale delayed write land after
+        # the NEW instance already loaded.
+        mts = config_entry.runtime_data.mission_timer_store
+        if mts is not None:
+            try:
+                await mts.async_save(hass, config_entry.entry_id)
+            except Exception:  # noqa: BLE001 — unload must never fail on this
+                _LOGGER.debug("MTS unload flush failed", exc_info=True)
 
         await async_disconnect_or_timeout(
             hass, roomba=config_entry.runtime_data.roomba

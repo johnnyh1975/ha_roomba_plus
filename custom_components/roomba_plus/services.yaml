@@ -247,3 +247,59 @@ explain_mission:
       required: false
       selector:
         text:
+
+clean_overdue_rooms:
+  name: Clean overdue rooms
+  description: >-
+    Start a targeted clean of all rooms currently overdue according to the
+    rooms_overdue sensor (configured frequency, or the room's own learned
+    interval). The route between the selected rooms is travel-optimized
+    starting from the dock. Does nothing when no room is
+    overdue — safe to call daily from an automation. Requires a Smart Map
+    robot (i/s/j-series, Braava m6).
+  fields:
+    entity_id:
+      name: Entity
+      description: The Roomba vacuum entity.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    max_rooms:
+      name: Maximum rooms
+      description: Optional cap — keep only the worst-overdue rooms.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+
+auto_clean_dirty_rooms:
+  name: Auto-clean dirty rooms
+  description: >-
+    Start a targeted clean of the rooms that are currently dirtier than the
+    household average (learned per-room dirt index); the route between the
+    selected rooms is travel-optimized starting from the dock. Rooms
+    with fewer than 10 recorded cleanings are not trusted yet; when no room
+    qualifies, a normal whole-house clean starts instead. Requires a Smart
+    Map robot.
+  fields:
+    entity_id:
+      name: Entity
+      description: The Roomba vacuum entity.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    max_rooms:
+      name: Maximum rooms
+      description: Optional cap — keep only the dirtiest rooms.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box

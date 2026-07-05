@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
+from homeassistant.util import dt as dt_util
 
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
@@ -37,6 +38,9 @@ from .const import (
     EVENT_MAINTENANCE_RESET,
     MAP_UPDATING_NOT_READY_BIT,
     SERVICE_CLEAN_ROOM,
+    SERVICE_CLEAN_OVERDUE_ROOMS,
+    SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
+    CONF_ROOM_SCHEDULE,
     SERVICE_CLEAN_SEQUENCE,
     SERVICE_EXPLAIN_MISSION,
     SERVICE_RESET_BATTERY,
@@ -539,6 +543,259 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             await hass.async_add_executor_job(data.roomba.start)
 
 
+async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
+    """v3.3.0 ROOM-SCHED — roomba_plus.clean_overdue_rooms.
+
+    Determines overdue rooms via the SAME merge rule as the
+    rooms_overdue sensor (MissionStore.rooms_overdue_merged — one shared
+    rule set), sorts worst-first by overdue_factor, and delegates the
+    actual start to roomba_plus.clean_room (reusing its full pmap/
+    resolution/notReady logic instead of duplicating it — the same
+    delegation pattern smart_start uses).
+
+    - SMART only: EPHEMERAL raises — the hardware cannot room-target
+      (`pmap_id=None` on every EPHEMERAL mission, v3.2.1 ZoneSelect
+      lesson).
+    - Nothing overdue: deliberate NO-OP with an INFO log, not an error —
+      automations may fire this daily without guards.
+    - max_rooms (optional): cap, worst-first.
+    """
+    hass = call.hass
+    entity_ids: list[str] = call.data.get("entity_id", [])
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+    max_rooms: int | None = call.data.get("max_rooms")
+
+    ent_reg = er.async_get(hass)
+    for eid in entity_ids:
+        entry_reg = ent_reg.async_get(eid)
+        if entry_reg is None:
+            raise ServiceValidationError(
+                f"Entity {eid} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+            )
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        if config_entry is None:
+            raise ServiceValidationError(
+                f"No config entry for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
+        data: RoombaData = config_entry.runtime_data
+        if data.map_capability != MapCapability.SMART:
+            raise ServiceValidationError(
+                f"{eid} does not support room targeting — this requires a "
+                "robot with a finalized Smart Map. EPHEMERAL-tier robots "
+                "(900-series) cannot clean individual rooms.",
+                translation_domain=DOMAIN,
+                translation_key="not_smart_map",
+            )
+        ms = data.mission_store
+        if ms is None:
+            continue
+
+        # Bug-hunt round 4 (seam check) — SAME name resolution as the
+        # rooms_overdue sensor, incl. the UMF fallback: otherwise a
+        # degraded cloud-regions window makes the sensor report overdue
+        # rooms the service cannot resolve. Lazy import — no cycle
+        # (sensor never imports services).
+        from .sensor import _region_maps_for
+        region_map, umf_regions = _region_maps_for(data)
+        config = config_entry.options.get(CONF_ROOM_SCHEDULE) or {}
+        merged = ms.rooms_overdue_merged(
+            config, dt_util.now().isoformat(),
+            region_map=region_map, umf_regions=umf_regions,
+        )
+        overdue = sorted(
+            (n for n, i in merged.items() if i["status"] == "overdue"),
+            key=lambda n: merged[n]["overdue_factor"] or 0,
+            reverse=True,
+        )
+        if max_rooms:
+            overdue = overdue[: int(max_rooms)]
+        if not overdue:
+            _LOGGER.info(
+                "clean_overdue_rooms: nothing overdue for %s — no-op", eid
+            )
+            continue
+        overdue = _route_optimize_order(data, overdue, region_map)
+        _LOGGER.info(
+            "clean_overdue_rooms: starting %s for %s "
+            "(overdue-selected, route-ordered)",
+            overdue, eid,
+        )
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CLEAN_ROOM,
+            {"entity_id": eid, ATTR_ROOM_NAME: overdue},
+            blocking=True,
+        )
+
+
+def _route_optimize_order(
+    data: "RoombaData",
+    room_names: list[str],
+    region_map: dict[str, str],
+) -> list[str]:
+    """v3.3.0 SMART-ORDER routing — reorder the SELECTED rooms by travel
+    path: greedy nearest-neighbour over the UMF room centroids, starting
+    at the dock (pose origin (0,0) mapped via pose_to_umf). iRobot works
+    the submitted region list IN ORDER, so a dirt-/overdue-sorted list
+    can mean criss-crossing the home.
+
+    Deliberate split of concerns: dirt/overdue decide WHICH rooms (and
+    the max_rooms cap — the dirtiest room must never lose to the cap
+    just for being far away); geometry only decides the ORDER of the
+    already-selected set. Greedy NN is practically optimal at the
+    typical 2–6 rooms; a real TSP would be overengineering.
+
+    Fallbacks (input order returned unchanged): aligner missing or not
+    aligned, dock not mappable, fewer than 3 rooms with centroids.
+    Rooms without a centroid keep their relative order at the end.
+    """
+    if len(room_names) < 2:
+        return room_names
+    aligner = getattr(data, "umf_aligner", None)
+    if aligner is None or not getattr(aligner, "aligned", False):
+        return room_names
+    try:
+        centroids_by_rid = aligner.room_centroids_umf()
+        dock = aligner.pose_to_umf(0.0, 0.0)
+    except Exception:  # noqa: BLE001 — routing is a bonus, never a blocker
+        return room_names
+    if not centroids_by_rid or dock is None:
+        return room_names
+
+    name_to_rid = {name: rid for rid, name in region_map.items()}
+    positioned = [
+        (n, centroids_by_rid[name_to_rid[n]])
+        for n in room_names
+        if name_to_rid.get(n) in centroids_by_rid
+    ]
+    unpositioned = [n for n in room_names if n not in {p[0] for p in positioned}]
+    if len(positioned) < 2:
+        return room_names
+
+    ordered: list[str] = []
+    cx, cy = dock
+    remaining = positioned[:]
+    while remaining:
+        i = min(
+            range(len(remaining)),
+            key=lambda k: (remaining[k][1][0] - cx) ** 2
+            + (remaining[k][1][1] - cy) ** 2,
+        )
+        name, (cx, cy) = remaining.pop(i)
+        ordered.append(name)
+    return ordered + unpositioned
+
+
+_SMART_ORDER_MIN_MISSIONS = 10  # v3.3.0 SMART-ORDER — index trust gate
+
+
+async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
+    """v3.3.0 SMART-ORDER — roomba_plus.auto_clean_dirty_rooms.
+
+    Targeted clean of the household's dirty rooms, sorted DESCENDING by
+    the L5 per-room dirt index (EMA of passCount/m²). A room qualifies
+    when:
+    - it has >= _SMART_ORDER_MIN_MISSIONS recorded cleanings (the EMA is
+      not trustworthy on thin data), AND
+    - its relative dirt (room_dirt_relative) is >= 1.0 — at or above
+      the household average. Below-average rooms are not "dirty rooms".
+
+    No qualifying room -> WHOLE-HOUSE clean as the fallback (per spec):
+    thin data means "clean normally", not "refuse".
+    SMART-only like clean_overdue_rooms: on EPHEMERAL the dirt index has
+    no per-room data source and targeting is impossible — raising is
+    more honest than silently degrading to a plain start.
+    Delegates targeted starts to clean_room (shared pmap/resolution
+    logic, same pattern as smart_start/clean_overdue_rooms).
+    """
+    hass = call.hass
+    entity_ids: list[str] = call.data.get("entity_id", [])
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+    max_rooms: int | None = call.data.get("max_rooms")
+
+    ent_reg = er.async_get(hass)
+    for eid in entity_ids:
+        entry_reg = ent_reg.async_get(eid)
+        if entry_reg is None:
+            raise ServiceValidationError(
+                f"Entity {eid} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+            )
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        if config_entry is None:
+            raise ServiceValidationError(
+                f"No config entry for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
+        data: RoombaData = config_entry.runtime_data
+        if data.map_capability != MapCapability.SMART:
+            raise ServiceValidationError(
+                f"{eid} does not support room targeting — this requires a "
+                "robot with a finalized Smart Map. EPHEMERAL-tier robots "
+                "(900-series) cannot clean individual rooms.",
+                translation_domain=DOMAIN,
+                translation_key="not_smart_map",
+            )
+        ms = data.mission_store
+        rps = getattr(data, "robot_profile_store", None)
+
+        # Bug-hunt round 4 (seam check) — same resolution incl. UMF
+        # fallback as the sensor/overdue paths.
+        from .sensor import _region_maps_for
+        _rm, _umf = _region_maps_for(data)
+        region_map: dict[str, str] = _rm or (_umf or {})
+
+        candidates: list[str] = []
+        if ms is not None and rps is not None:
+            visit_counts = ms.room_visit_counts(region_map)
+            relative = rps.room_dirt_relative()          # rid-keyed
+            index = dict(rps.room_dirt_index)            # rid-keyed
+            qualifying = []
+            for rid, rel in relative.items():
+                name = region_map.get(rid, rid)
+                if rel < 1.0:
+                    continue
+                if visit_counts.get(name, 0) < _SMART_ORDER_MIN_MISSIONS:
+                    continue
+                qualifying.append((index.get(rid, 0.0), name))
+            qualifying.sort(reverse=True)                # dirtiest first
+            candidates = [name for _, name in qualifying]
+
+        if max_rooms:
+            candidates = candidates[: int(max_rooms)]
+
+        if not candidates:
+            _LOGGER.info(
+                "auto_clean_dirty_rooms: no room passes the dirt-index "
+                "trust gate for %s — whole-house fallback", eid,
+            )
+            await hass.async_add_executor_job(data.roomba.start)
+            continue
+
+        candidates = _route_optimize_order(data, candidates, region_map)
+        _LOGGER.info(
+            "auto_clean_dirty_rooms: starting %s for %s "
+            "(dirt-selected, route-ordered)",
+            candidates, eid,
+        )
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CLEAN_ROOM,
+            {"entity_id": eid, ATTR_ROOM_NAME: candidates},
+            blocking=True,
+        )
+
+
 async def _handle_reset_service(
     hass: HomeAssistant, call: ServiceCall, part: str
 ) -> None:
@@ -866,6 +1123,38 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_SMART_START)
 
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_OVERDUE_ROOMS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAN_OVERDUE_ROOMS,
+            async_handle_clean_overdue_rooms,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Optional("max_rooms"): vol.All(
+                    vol.Coerce(int), vol.Range(min=1)
+                ),
+            }),
+        )
+        _LOGGER.debug(
+            "Registered %s.%s action", DOMAIN, SERVICE_CLEAN_OVERDUE_ROOMS
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_AUTO_CLEAN_DIRTY_ROOMS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
+            async_handle_auto_clean_dirty_rooms,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Optional("max_rooms"): vol.All(
+                    vol.Coerce(int), vol.Range(min=1)
+                ),
+            }),
+        )
+        _LOGGER.debug(
+            "Registered %s.%s action", DOMAIN, SERVICE_AUTO_CLEAN_DIRTY_ROOMS
+        )
+
     for _part in ("filter", "brush", "battery", "pad"):
         svc = f"reset_{_part}"
         if not hass.services.has_service(DOMAIN, svc):
@@ -1033,6 +1322,8 @@ def async_remove_services(hass: HomeAssistant) -> None:
     for svc in (
         SERVICE_CLEAN_ROOM,
         SERVICE_SMART_START,
+        SERVICE_CLEAN_OVERDUE_ROOMS,
+        SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
         SERVICE_CLEAN_SEQUENCE,
         SERVICE_RESET_FILTER,
         SERVICE_RESET_BRUSH,

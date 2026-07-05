@@ -166,6 +166,8 @@ MAX_DOOR_WIDTH_MM: Final = 1200.0 # Wider -> likely open archway
 
 # ── v2.2.0 — new service ──────────────────────────────────────────────────────
 SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when robot A finishes
+SERVICE_CLEAN_OVERDUE_ROOMS: Final = "clean_overdue_rooms"  # v3.3.0 ROOM-SCHED
+SERVICE_AUTO_CLEAN_DIRTY_ROOMS: Final = "auto_clean_dirty_rooms"  # v3.3.0 SMART-ORDER
 SERVICE_EXPLAIN_MISSION: Final = "explain_mission"  # v3.2.0 ANOMALY-EXPLAIN
 
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
@@ -885,3 +887,18 @@ def extract_region_id(item: object) -> str:
     if isinstance(item, dict):
         return str(item.get("rid") or item.get("region_id") or "")
     return str(item) if item is not None else ""
+
+
+# v3.3.0 ROOM-SCHED — per-room cleaning frequency configuration.
+# Options-flow keys (ASCII, locale-independent) → uniform interval in days.
+# "three_per_week" is deliberately a uniform 7/3 interval, NOT weekday
+# logic — real weekday schedules exist natively in iRobot cleanSchedule2.
+CONF_ROOM_SCHEDULE = "room_schedule"
+CONF_CORRELATION_ENTITIES = "correlation_entities"  # v3.3.0 CROSS-CORR (opt-in)
+ROOM_SCHEDULE_LEARNED = "learned"
+ROOM_SCHEDULE_INTERVALS: dict[str, float] = {
+    "daily": 1.0,
+    "every_2_days": 2.0,
+    "three_per_week": 7.0 / 3.0,
+    "weekly": 7.0,
+}

@@ -101,7 +101,8 @@
           "map_enabled": "Enable live map",
           "map_size_px": "Map size (pixels)",
           "map_scale_mm_per_px": "Scale (mm/pixel)",
-          "floor_label": "Floor label (e.g. Ground Floor)"
+          "floor_label": "Floor label (e.g. Ground Floor)",
+          "correlation_entities": "Correlate dirt with sensors (optional)"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Import these rooms"
         }
+      },
+      "room_schedule": {
+        "title": "Per-room cleaning frequency",
+        "description": "Set how often each room should be cleaned. 'Learned' keeps the room's own self-calibrated interval from its cleaning history."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
       "demand_cleaning_not_supported": "Demand cleaning requires a SMART robot with cloud credentials configured.",
       "no_rest980_rooms_found": "No rooms found in your roomba_rest980 installation.",
-      "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+."
+      "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+.",
+      "room_schedule_not_supported": "Per-room frequencies require a Smart Map robot with cloud credentials.",
+      "room_schedule_no_rooms": "No named rooms found on the Smart Map yet."
     }
   },
   "entity": {
@@ -635,6 +642,12 @@
       },
       "room_accessibility_scores": {
         "name": "Room accessibility scores"
+      },
+      "rooms_overdue": {
+        "name": "Rooms overdue"
+      },
+      "dirt_weather_correlation": {
+        "name": "Dirt correlation"
       }
     },
     "device_tracker": {
@@ -985,6 +998,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} may be overdue for cleaning",
       "description": "{room} was last cleaned {days_since_last} days ago — noticeably longer than the roughly {expected_interval_days}-day rhythm this robot has established for that room based on its own cleaning history. Check whether the schedule still covers it, or whether the room has been inaccessible recently."
+    },
+    "dirt_correlation": {
+      "title": "Strong dirt correlation detected",
+      "description": "The robot collects significantly {direction} dirt when {entity} is high (r={r}, 30+ missions). Consider adjusting cleaning schedules around this pattern."
     }
   },
   "device_automation": {
@@ -1100,6 +1117,17 @@
     },
     "no_rooms_resolved": {
       "message": "No rooms to clean — provide at least one room name."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Learned (self-calibrated)",
+        "daily": "Daily",
+        "every_2_days": "Every 2 days",
+        "three_per_week": "3 times per week",
+        "weekly": "Weekly"
+      }
     }
   }
 }

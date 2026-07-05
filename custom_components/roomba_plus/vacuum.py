@@ -194,7 +194,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     @property
     def activity(self) -> VacuumActivity:
         """Map the current cleanMissionStatus phase to a VacuumActivity."""
-        status = self.vacuum_state.get("cleanMissionStatus", {})
+        status = self.vacuum_state.get("cleanMissionStatus") or {}
         # Default to "none" so a missing/sparse cleanMissionStatus (cycle absent
         # → None) is treated as "no active cycle". Without this, `None != "none"`
         # is True and the override below would flip a freshly-connected idle or
@@ -245,7 +245,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         # Position (models with cap.pose == 1)
         if self._cap_position:
-            pos_state = state.get("pose", {})
+            pos_state = state.get("pose") or {}
             pos_x_raw = (pos_state.get("point") or {}).get("x")
             pos_y_raw = (pos_state.get("point") or {}).get("y")
             theta = pos_state.get("theta")
@@ -260,7 +260,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         # v1.7.0 — mid-mission attributes consumed by Lovelace card (v1.8).
         # Available on all robots; None for 600-series (no sqft) and when docked.
-        mission = state.get("cleanMissionStatus", {})
+        mission = state.get("cleanMissionStatus") or {}
         # mission_elapsed_min: use mssnM when available; fall back to wall-clock
         # elapsed same as cleaning_time (lewis firmware reports mssnM=0 mid-mission).
         _mssn_m = mission.get("mssnM")
@@ -312,18 +312,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             }
             # Try cleanMissionStatus.cmd.regions first, fall back to lastCommand.regions
             _cmd_regions = (
-                self.vacuum_state
-                .get("cleanMissionStatus", {})
-                .get("cmd", {})
-                .get("regions", [])
+                (
+                    (self.vacuum_state.get("cleanMissionStatus") or {})
+                    .get("cmd") or {}
+                ).get("regions", [])
             ) or (
-                self.vacuum_state
-                .get("lastCommand", {})
+                (self.vacuum_state.get("lastCommand") or {})
                 .get("regions", [])
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS
-                _rids = [_MS._extract_rid(r) for r in _cmd_regions]
+                _rids = [_MS.extract_rid(r) for r in _cmd_regions]
                 _rids = [r for r in _rids if r]
                 if _rids:
                     _names = [_live_region_map.get(rid, rid) for rid in _rids]
@@ -375,7 +374,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         self, state: dict[str, Any]
     ) -> tuple[int, int]:
         """Return (cleaning_time_minutes, cleaned_area) for the current mission."""
-        mission = state.get("cleanMissionStatus", {})
+        mission = state.get("cleanMissionStatus") or {}
         if not mission:
             return 0, 0
 
@@ -786,7 +785,7 @@ class RoombaVacuum(IRobotVacuum):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return attributes including bin state."""
         attrs = super().extra_state_attributes
-        bin_raw = self.vacuum_state.get("bin", {})
+        bin_raw = self.vacuum_state.get("bin") or {}
         if bin_raw.get("present") is not None:
             attrs[ATTR_BIN_PRESENT] = bin_raw["present"]
         if bin_raw.get("full") is not None:
@@ -887,7 +886,7 @@ class BraavaJet(IRobotVacuum):
             OVERLAP_EXTENDED: MOP_EXTENDED,
         }
         behaviour = behaviour_map.get(rank_overlap)
-        pad_wetness = self.vacuum_state.get("padWetness", {})
+        pad_wetness = self.vacuum_state.get("padWetness") or {}
         spray_value = pad_wetness.get("disposable")
         if behaviour is None or spray_value is None:
             return None
@@ -936,14 +935,14 @@ class BraavaJet(IRobotVacuum):
         state = self.vacuum_state
 
         attrs[ATTR_DETECTED_PAD] = state.get("detectedPad")
-        mop_ready = state.get("mopReady", {})
+        mop_ready = state.get("mopReady") or {}
         attrs[ATTR_LID_CLOSED] = mop_ready.get("lidClosed")
         attrs[ATTR_TANK_PRESENT] = mop_ready.get("tankPresent") or state.get(
             "tankPresent"
         )
         attrs[ATTR_TANK_LEVEL] = state.get("tankLvl")
 
-        bin_raw = state.get("bin", {})
+        bin_raw = state.get("bin") or {}
         if bin_raw.get("present") is not None:
             attrs[ATTR_BIN_PRESENT] = bin_raw["present"]
         if bin_raw.get("full") is not None:

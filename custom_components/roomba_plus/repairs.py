@@ -481,7 +481,7 @@ async def async_check_furniture_change(
     # (dismiss-tracking for those cells is stale once resolved — clear it
     # too, so a FUTURE recurrence at the same cell isn't pre-suppressed
     # by an old dismissal of an unrelated, already-resolved event).
-    for cell in list(gs._furniture_dismissed_at.keys()):
+    for cell in gs.furniture_dismissed_cells():
         if cell not in candidate_cells:
             gs.clear_furniture_dismissed(cell)
 
@@ -493,7 +493,7 @@ async def async_check_furniture_change(
 
         existing = reg.async_get_issue(DOMAIN, issue_id)
         if existing is not None and existing.dismissed_version is not None:
-            if cell not in gs._furniture_dismissed_at:
+            if not gs.is_furniture_dismissed(cell):
                 gs.record_furniture_dismissed(cell, now_iso)
 
         if gs.furniture_dismiss_suppressed(cell, now_iso):
@@ -516,7 +516,7 @@ async def async_check_furniture_change(
         # to un-suppress it. Deleting first forces HA's async_get_or_create
         # down its "issue is None" branch, which does set
         # dismissed_version=None on the fresh entry.
-        if cell in gs._furniture_dismissed_at:
+        if gs.is_furniture_dismissed(cell):
             gs.clear_furniture_dismissed(cell)
             ir.async_delete_issue(hass, DOMAIN, issue_id)
 
@@ -722,7 +722,7 @@ async def async_check_room_accessibility(
     if gs is None:
         return
 
-    polygons = aligner.room_polygons_umf()
+    polygons = aligner.room_polygons_umf
     if not polygons:
         return
 
@@ -1435,7 +1435,7 @@ async def async_check_stuck_pattern(
         return
 
     # Find the cell with the most stuck events that has a pattern
-    worst_cell = max(patterns.keys(), key=lambda c: gs._stuck[c]["count"])
+    worst_cell = max(patterns.keys(), key=gs.stuck_count)
     weekday, hour = patterns[worst_cell]
 
     # Resolve room name from UmfAligner when aligned
@@ -1945,5 +1945,47 @@ def async_check_reloc_alert(hass: "HomeAssistant", config_entry: Any) -> None:
         translation_key="reloc_rate_elevated",
         translation_placeholders={
             "baseline": f"{rps.reloc_baseline:.1f}" if rps.reloc_baseline is not None else "?",
+        },
+    )
+
+
+async def async_check_dirt_correlation(
+    hass: "HomeAssistant", config_entry: "RoombaConfigEntry"
+) -> None:
+    """v3.3.0 CROSS-CORR — Repair Issue when a strong correlation
+    (|r| > 0.5, n >= 30) between mission dirt and a configured external
+    sensor exists; self-deleting when it weakens (same self-healing
+    pattern as DRIFT-AUTO)."""
+    data = config_entry.runtime_data
+    rps = getattr(data, "robot_profile_store", None)
+    issue_id = f"dirt_correlation_{config_entry.entry_id}"
+    if rps is None:
+        return
+    strongest: tuple[str, float] | None = None
+    for eid, info in rps.correlation_results().items():
+        r = info.get("r")
+        if r is not None and abs(r) > 0.5:
+            if strongest is None or abs(r) > abs(strongest[1]):
+                strongest = (eid, r)
+    if strongest is None:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    eid, r = strongest
+    state = hass.states.get(eid)
+    friendly = (
+        state.attributes.get("friendly_name") if state is not None else None
+    ) or eid
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="dirt_correlation",
+        translation_placeholders={
+            "entity": str(friendly),
+            "r": f"{r:+.2f}",
+            "direction": "more" if r > 0 else "less",
         },
     )

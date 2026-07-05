@@ -101,7 +101,8 @@
           "map_enabled": "Activer la carte en direct",
           "map_size_px": "Taille de la carte (pixels)",
           "map_scale_mm_per_px": "Échelle (mm/pixel)",
-          "floor_label": "Étage (ex. : Rez-de-chaussée)"
+          "floor_label": "Étage (ex. : Rez-de-chaussée)",
+          "correlation_entities": "Corréler la saleté avec des capteurs (optionnel)"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Importer ces pièces"
         }
+      },
+      "room_schedule": {
+        "title": "Fréquence de nettoyage par pièce",
+        "description": "Définissez la fréquence de nettoyage de chaque pièce. « Apprise » conserve l'intervalle auto-calibré issu de l'historique de la pièce."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
       "demand_cleaning_not_supported": "Le nettoyage à la demande nécessite un robot SMART avec des identifiants cloud configurés.",
       "no_rest980_rooms_found": "Aucune pièce trouvée dans votre installation roomba_rest980.",
-      "rest980_rooms_already_imported": "Toutes les pièces de roomba_rest980 sont déjà nommées dans Roomba+."
+      "rest980_rooms_already_imported": "Toutes les pièces de roomba_rest980 sont déjà nommées dans Roomba+.",
+      "room_schedule_not_supported": "Les fréquences par pièce nécessitent un robot Smart Map avec identifiants cloud.",
+      "room_schedule_no_rooms": "Aucune pièce nommée trouvée sur la Smart Map."
     }
   },
   "entity": {
@@ -633,6 +640,12 @@
       },
       "room_accessibility_scores": {
         "name": "Scores d'accessibilité par pièce"
+      },
+      "rooms_overdue": {
+        "name": "Pièces en retard"
+      },
+      "dirt_weather_correlation": {
+        "name": "Corrélation de saleté"
       }
     },
     "binary_sensor": {
@@ -983,6 +996,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} pourrait être en retard de nettoyage",
       "description": "{room} a été nettoyée pour la dernière fois il y a {days_since_last} jours — nettement plus long que le rythme d'environ {expected_interval_days} jours que ce robot a établi pour cette pièce d'après son propre historique. Vérifiez si le planning la couvre toujours, ou si la pièce a été inaccessible récemment."
+    },
+    "dirt_correlation": {
+      "title": "Forte corrélation de saleté détectée",
+      "description": "Le robot collecte nettement {direction} de saleté lorsque {entity} est élevé (r={r}, 30+ missions). Il peut être utile d'adapter le planning de nettoyage à ce schéma."
     }
   },
   "device_automation": {
@@ -1098,6 +1115,17 @@
     },
     "no_rooms_resolved": {
       "message": "Aucune pièce à nettoyer — indiquez au moins un nom de pièce."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Apprise (auto-calibrée)",
+        "daily": "Quotidien",
+        "every_2_days": "Tous les 2 jours",
+        "three_per_week": "3 fois par semaine",
+        "weekly": "Hebdomadaire"
+      }
     }
   }
 }

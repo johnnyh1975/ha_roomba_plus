@@ -101,7 +101,8 @@
           "map_enabled": "Ativar mapa em tempo real",
           "map_size_px": "Tamanho do mapa (píxeis)",
           "map_scale_mm_per_px": "Escala (mm/píxel)",
-          "floor_label": "Andar (ex.: Rés do chão)"
+          "floor_label": "Andar (ex.: Rés do chão)",
+          "correlation_entities": "Correlacionar sujidade com sensores (opcional)"
         },
         "data_description": {
           "continuous": "Manter uma ligação MQTT persistente com o robô. Recomendado.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Importar estes cómodos"
         }
+      },
+      "room_schedule": {
+        "title": "Frequência de limpeza por divisão",
+        "description": "Defina a frequência de limpeza de cada divisão. 'Aprendida' mantém o intervalo autocalibrado do histórico da divisão."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
       "demand_cleaning_not_supported": "A limpeza por demanda requer um robô SMART com credenciais de nuvem configuradas.",
       "no_rest980_rooms_found": "Nenhum cómodo encontrado na sua instalação roomba_rest980.",
-      "rest980_rooms_already_imported": "Todos os cómodos do roomba_rest980 já estão nomeados no Roomba+."
+      "rest980_rooms_already_imported": "Todos os cómodos do roomba_rest980 já estão nomeados no Roomba+.",
+      "room_schedule_not_supported": "As frequências por divisão exigem um robô Smart Map com credenciais de nuvem.",
+      "room_schedule_no_rooms": "Ainda não foram encontradas divisões com nome no Smart Map."
     }
   },
   "entity": {
@@ -633,6 +640,12 @@
       },
       "room_accessibility_scores": {
         "name": "Pontuações de acessibilidade por divisão"
+      },
+      "rooms_overdue": {
+        "name": "Divisões em atraso"
+      },
+      "dirt_weather_correlation": {
+        "name": "Correlação de sujidade"
       }
     },
     "binary_sensor": {
@@ -983,6 +996,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} pode estar atrasada para limpeza",
       "description": "{room} foi limpa pela última vez há {days_since_last} dias — visivelmente mais do que o ritmo de aproximadamente {expected_interval_days} dias que este robô estabeleceu para essa divisão com base no seu próprio histórico de limpeza. Verifica se o horário ainda a cobre, ou se a divisão esteve inacessível recentemente."
+    },
+    "dirt_correlation": {
+      "title": "Forte correlação de sujidade detetada",
+      "description": "O robô recolhe notavelmente {direction} sujidade quando {entity} está alto (r={r}, 30+ missões). Pode valer a pena ajustar o plano de limpeza a este padrão."
     }
   },
   "device_automation": {
@@ -1098,6 +1115,17 @@
     },
     "no_rooms_resolved": {
       "message": "Nenhuma divisão para limpar — indique pelo menos um nome de divisão."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Aprendida (autocalibrada)",
+        "daily": "Diária",
+        "every_2_days": "A cada 2 dias",
+        "three_per_week": "3 vezes por semana",
+        "weekly": "Semanal"
+      }
     }
   }
 }

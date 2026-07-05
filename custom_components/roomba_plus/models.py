@@ -60,6 +60,13 @@ class RoombaData:
     maintenance_store: MaintenanceStore | None = None
     # Optional cloud coordinator — None when no credentials or non-SMART robot
     cloud_coordinator: IrobotCloudCoordinator | None = None
+    # v3.3.0 MISSION-MAP — in-memory TTL cache for per-mission coverage
+    # payloads: {record_id: (fetched_epoch, payload)}. Deliberately NOT a
+    # persistent store: cloud coverage data is retrievable without
+    # degradation (boutXIII field data); persistence would duplicate a
+    # reliable source. See MISSION-MAP-ARCHIVE backlog candidate for the
+    # opt-in freeze path.
+    mission_map_cache: dict = field(default_factory=dict)
     # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
     blocking_manager: BlockingManager | None = None  # v1.7.0 L5
     # v1.8.0 — Mission log, presence scheduling, and error state

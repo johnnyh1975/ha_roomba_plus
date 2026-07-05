@@ -286,7 +286,18 @@ class IrobotCloudApi:
         if "credentials" not in result:
             raise AuthenticationError(f"No credentials in iRobot login response: {result}")
 
-        self._credentials = result["credentials"]
+        # v3.3.0 REVIEW-REMAINDER — validate the four keys _signed_get
+        # depends on AT the gate, so a degraded response raises a clean
+        # AuthenticationError here instead of a bare KeyError later
+        # (same validate-at-the-gate lesson as the import endpoint).
+        creds = result["credentials"]
+        for key in ("CognitoId", "AccessKeyId", "SecretKey", "SessionToken"):
+            if key not in creds:
+                raise AuthenticationError(
+                    f"Missing '{key}' in iRobot credentials response"
+                )
+
+        self._credentials = creds
         self.robots = result.get("robots", {})
 
     # ── Authenticated requests ─────────────────────────────────────────────────
@@ -324,7 +335,14 @@ class IrobotCloudApi:
                 return await self._aws_get(url, params, _retry=False)
             if resp.status != 200:
                 raise CloudApiError(f"Cloud request failed ({resp.status}): {url}")
-            return await resp.json()
+            try:
+                return await resp.json()
+            except aiohttp.ContentTypeError as exc:
+                # v3.3.0 REVIEW-REMAINDER — a 200 with a non-JSON body
+                # (proxy/CDN error page) must surface as the typed
+                # CloudApiError so the coordinator's F-RB-4 grace period
+                # applies, not as an untyped ClientError.
+                raise CloudApiError(f"Non-JSON cloud response: {url}") from exc
 
     # ── Public data endpoints ─────────────────────────────────────────────────
 

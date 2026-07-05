@@ -225,6 +225,21 @@ class UmfAligner:
             sin_r * dx + cos_r * dy,
         )
 
+    def room_centroids_umf(self) -> dict[str, tuple[float, float]]:
+        """v3.3.0 SMART-ORDER routing — centroid (vertex mean) per room
+        polygon in UMF mm. Good enough for nearest-neighbour room
+        ordering; not an area-weighted centroid on purpose (ordering
+        only needs relative positions)."""
+        out: dict[str, tuple[float, float]] = {}
+        for rid, poly in self._room_polygons.items():
+            if len(poly) < 3:
+                continue
+            out[rid] = (
+                sum(p[0] for p in poly) / len(poly),
+                sum(p[1] for p in poly) / len(poly),
+            )
+        return out
+
     def room_name_at(self, x_umf: float, y_umf: float) -> str | None:
         """Return room name for a UMF-space point, or None if outside all rooms."""
         rid_map = self.rid_to_name()
@@ -314,18 +329,27 @@ class UmfAligner:
         UMF coordinates are in metres — multiply by UMF_TO_MM so all internal
         calculations and thresholds operate in mm throughout.
         """
-        self._coord_lookup = {}
+        # v3.3.0 REVIEW-REMAINDER (thread-safety) — build into a local
+        # dict, publish via single rebind: the bootstrap path
+        # (GS-SMART-UMF) re-runs align() on the ALREADY-PUBLISHED aligner
+        # while the paho-MQTT render thread may be iterating these dicts.
+        # In-place fills risked "dictionary changed size during iteration"
+        # on the MQTT thread — the thread-death consequence class of the
+        # EVENT_ROOM_COMPLETED lesson. A reader now always holds either
+        # the complete old dict or the complete new one.
+        lookup: dict[str, tuple[float, float]] = {}
         for p in self._points2d:
             pid    = p.get("id")
             coords = p.get("coordinates", [])
             if pid and len(coords) >= 2:
                 try:
-                    self._coord_lookup[pid] = (
+                    lookup[pid] = (
                         float(coords[0]) * UMF_TO_MM,
                         float(coords[1]) * UMF_TO_MM,
                     )
                 except (TypeError, ValueError):
                     continue
+        self._coord_lookup = lookup
 
     def _detect_door_gaps(self) -> None:
         """Detect door-width gaps in the ordered points2d sequence.
@@ -363,7 +387,11 @@ class UmfAligner:
         geometry.ids is a list of lists of string IDs referencing points2d.
         First sublist = exterior boundary. Rooms with < 3 vertices are skipped.
         """
-        self._room_polygons = {}
+        # v3.3.0 REVIEW-REMAINDER (thread-safety) — local build + single
+        # rebind, same rationale as _build_coord_lookup above: readers on
+        # the MQTT render thread iterate room_polygons_umf concurrently
+        # with a bootstrap re-align.
+        polygons: dict = {}
         for region in self._regions:
             rid       = region.get("id")
             geometry  = region.get("geometry", {})
@@ -377,7 +405,8 @@ class UmfAligner:
                 if pid in self._coord_lookup
             ]
             if len(vertices) >= 3:
-                self._room_polygons[rid] = vertices
+                polygons[rid] = vertices
+        self._room_polygons = polygons
 
     # ── Private: matching and transform ──────────────────────────────────────
 

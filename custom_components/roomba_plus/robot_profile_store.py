@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import time
+from datetime import timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,6 +33,16 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_robot_profile"
 STORAGE_VERSION = 1
+
+# v3.3.0 CROSS-CORR — external-sensor correlation.
+_CORR_MIN_SAMPLES = 30          # Pearson only meaningful from here (spec)
+_CORR_MAX_SAMPLES = 120         # bounded history per entity
+_CORR_PAIR_TOLERANCE_SEC = 3 * 3600  # snapshot ↔ record pairing window
+
+# v3.3.0 DIRT-VEL — minimum gap between two cleanings of the same room
+# before a velocity sample is taken. Guards against division blow-up when
+# a room is cleaned twice within hours (demand clean after scheduled run).
+_DIRT_VEL_MIN_GAP_DAYS = 0.25
 
 # EMA decay factor for per-room dirtiness index (L5).
 # α = 0.2 gives a slow-decay signal: new missions have 20 % weight,
@@ -201,6 +213,21 @@ class RobotProfileStore:
 
     # Per-room dirtiness index: rid → EMA(passCount / area_m2)
     room_dirt_index: dict[str, float] = field(default_factory=dict)
+    # v3.3.0 DIRT-VEL — per-room dirt ACCUMULATION VELOCITY:
+    # observed density of a cleaning divided by days since the previous
+    # cleaning of that room, EMA-smoothed. Units: (passCount/m²) per day.
+    # High velocity → room re-dirties fast → ROOM-SCHED daily suggestion.
+    room_dirt_velocity: dict[str, float] = field(default_factory=dict)
+    # v3.3.0 DIRT-VEL — wall-clock ts of the last index update per room.
+    room_dirt_last_ts: dict[str, float] = field(default_factory=dict)
+    # v3.3.0 CROSS-CORR — one pending mission-start snapshot
+    # ({"ts": epoch, "values": {entity_id: float}}); persisted so an HA
+    # restart mid-mission does not lose the pair. Only one mission runs
+    # at a time, so a single slot suffices.
+    correlation_pending: dict[str, Any] | None = None
+    # v3.3.0 CROSS-CORR — paired samples per external entity:
+    # {entity_id: [[sensor_value_at_start, mission_dirt], ...]}
+    correlation_samples: dict[str, list[list[float]]] = field(default_factory=dict)
 
     # Mission statistics (for L3 anomaly baseline, consolidated here for L8)
     mission_duration_mean: float | None = None
@@ -299,6 +326,21 @@ class RobotProfileStore:
             if not isinstance(raw_rdi, dict):
                 raw_rdi = {}
             self.room_dirt_index = {str(k): float(v) for k, v in raw_rdi.items()}
+            # v3.3.0 DIRT-VEL — both fields optional: dumps predating the
+            # feature simply lack them (additive, no PAYLOAD bump needed).
+            raw_vel = data.get("room_dirt_velocity") or {}
+            self.room_dirt_velocity = {str(k): float(v) for k, v in raw_vel.items()}
+            raw_ts = data.get("room_dirt_last_ts") or {}
+            self.room_dirt_last_ts = {str(k): float(v) for k, v in raw_ts.items()}
+            # v3.3.0 CROSS-CORR — additive fields, old dumps lack them
+            pend = data.get("correlation_pending")
+            self.correlation_pending = pend if isinstance(pend, dict) else None
+            raw_corr = data.get("correlation_samples") or {}
+            self.correlation_samples = {
+                str(k): [[float(a), float(b)] for a, b in v]
+                for k, v in raw_corr.items()
+                if isinstance(v, list)
+            }
 
             # Mission statistics
             dm = data.get("mission_duration_mean")
@@ -363,6 +405,10 @@ class RobotProfileStore:
             "learned_brush_hours": self.learned_brush_hours,
             "baseline_by_weekday": {str(k): v for k, v in self.baseline_by_weekday.items()},
             "room_dirt_index": self.room_dirt_index,
+            "room_dirt_velocity": self.room_dirt_velocity,
+            "room_dirt_last_ts": self.room_dirt_last_ts,
+            "correlation_pending": self.correlation_pending,
+            "correlation_samples": self.correlation_samples,
             "mission_duration_mean": self.mission_duration_mean,
             "mission_duration_std": self.mission_duration_std,
             "mission_area_mean": self.mission_area_mean,
@@ -394,6 +440,10 @@ class RobotProfileStore:
         self.learned_brush_hours = None
         self.baseline_by_weekday = {}
         self.room_dirt_index = {}
+        self.room_dirt_velocity = {}
+        self.room_dirt_last_ts = {}
+        self.correlation_pending = None
+        self.correlation_samples = {}
         self.mission_duration_mean = None
         self.mission_duration_std = None
         self.mission_area_mean = None
@@ -449,6 +499,28 @@ class RobotProfileStore:
         if area_m2 <= 0:
             return
         current_density = pass_count / area_m2
+
+        # v3.3.0 DIRT-VEL — accumulation velocity BEFORE the EMA update:
+        # the density observed at this cleaning is the dirt that built up
+        # since the PREVIOUS cleaning of this room; divided by the days
+        # in between it becomes a per-day accumulation rate. EMA-smoothed
+        # with the same alpha as the index for consistent responsiveness.
+        now_ts = time.time()
+        prev_ts = self.room_dirt_last_ts.get(rid)
+        if prev_ts is not None:
+            days = (now_ts - prev_ts) / 86400.0
+            if days >= _DIRT_VEL_MIN_GAP_DAYS:
+                velocity = current_density / days
+                old_vel = self.room_dirt_velocity.get(rid)
+                if old_vel is None:
+                    self.room_dirt_velocity[rid] = velocity
+                else:
+                    self.room_dirt_velocity[rid] = (
+                        _ROOM_DIRT_EMA_ALPHA * velocity
+                        + (1 - _ROOM_DIRT_EMA_ALPHA) * old_vel
+                    )
+        self.room_dirt_last_ts[rid] = now_ts
+
         if rid in self.room_dirt_index:
             # EMA update: new = α × current + (1-α) × old
             old = self.room_dirt_index[rid]
@@ -1019,6 +1091,114 @@ class RobotProfileStore:
             self.mission_area_mean = statistics.mean(areas)
             wrote = True
         return wrote
+
+    def dirt_accumulation_rate(self) -> dict[str, float]:
+        """Per-room dirt accumulation velocity in (passCount/m²)/day.
+
+        v3.3.0 DIRT-VEL — consumer helper for the by_room_velocity
+        sensor attribute and the ROOM-SCHED daily-cleaning suggestion.
+        Returns only rooms with at least one velocity sample (i.e. two
+        cleanings spaced >= the minimum gap apart).
+        """
+        return {rid: round(v, 4) for rid, v in self.room_dirt_velocity.items()}
+
+    def record_correlation_snapshot(
+        self, values: dict[str, float], ts: float
+    ) -> None:
+        """v3.3.0 CROSS-CORR — store the mission-start snapshot of the
+        configured external sensors. Overwrites any stale pending
+        snapshot (a mission that never produced an enriched record)."""
+        clean = {
+            str(k): float(v) for k, v in values.items()
+            if isinstance(v, (int, float))
+        }
+        self.correlation_pending = {"ts": float(ts), "values": clean} if clean else None
+
+    def finalize_correlation(
+        self, record_started_iso: str | None, dirt: float | None
+    ) -> bool:
+        """Pair the pending snapshot with the mission's (cloud-enriched)
+        dirt count. Returns True when samples were appended.
+
+        Tolerance window: the record's started_at must lie within
+        _CORR_PAIR_TOLERANCE_SEC of the snapshot — protects against
+        pairing an old orphaned snapshot with an unrelated mission.
+        The pending slot clears on ANY finalize attempt with a valid
+        record timestamp inside the window (paired) — and stays put
+        otherwise, awaiting its own record."""
+        if self.correlation_pending is None or dirt is None:
+            return False
+        if not record_started_iso or not isinstance(record_started_iso, str):
+            return False
+        started = dt_util.parse_datetime(record_started_iso)
+        if started is None:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        delta = abs(started.timestamp() - float(self.correlation_pending["ts"]))
+        if delta > _CORR_PAIR_TOLERANCE_SEC:
+            return False
+        changed = False
+        for eid, value in (self.correlation_pending.get("values") or {}).items():
+            samples = self.correlation_samples.setdefault(eid, [])
+            samples.append([float(value), float(dirt)])
+            if len(samples) > _CORR_MAX_SAMPLES:
+                del samples[: len(samples) - _CORR_MAX_SAMPLES]
+            changed = True
+        self.correlation_pending = None
+        return changed
+
+    def correlation_results(self) -> dict[str, dict[str, Any]]:
+        """Pearson r per configured entity, only from
+        _CORR_MIN_SAMPLES (30) onwards — below that the estimate is
+        noise, per spec. Zero-variance series (constant sensor) are
+        skipped instead of raising. Fully local computation."""
+        out: dict[str, dict[str, Any]] = {}
+        for eid, samples in self.correlation_samples.items():
+            n = len(samples)
+            if n < _CORR_MIN_SAMPLES:
+                out[eid] = {"r": None, "n": n}
+                continue
+            xs = [s[0] for s in samples]
+            ys = [s[1] for s in samples]
+            try:
+                r = statistics.correlation(xs, ys)
+            except statistics.StatisticsError:
+                out[eid] = {"r": None, "n": n}
+                continue
+            out[eid] = {"r": round(r, 3), "n": n}
+        return out
+
+    def suggested_cleaning_interval_days(self) -> dict[str, float]:
+        """v3.3.0 ROOM-SCHED (self-calibration) — recommended cleaning
+        interval per room, fully self-calibrated:
+
+            suggested = target_density / velocity
+
+        target_density is the HOUSEHOLD MEDIAN of the per-room dirt
+        indices — "the dirt level at which this household typically
+        cleans" — so both inputs come from the household's own data
+        (L9/L10/ROOM-ACCESS philosophy, no arbitrary absolutes).
+
+        Deliberately a RECOMMENDATION only: it never overrides the
+        configured or learned interval in the overdue rule. A
+        self-adjusting threshold would silently follow a worsening
+        habit — the DRIFT-AUTO lifetime-sum lesson in green.
+
+        Clamped to 1–14 days against outliers; requires >= 2 indexed
+        rooms (median needs context) and a velocity sample.
+        """
+        if len(self.room_dirt_index) < 2 or not self.room_dirt_velocity:
+            return {}
+        target = statistics.median(self.room_dirt_index.values())
+        if target <= 0:
+            return {}
+        out: dict[str, float] = {}
+        for rid, vel in self.room_dirt_velocity.items():
+            if vel <= 0:
+                continue
+            out[rid] = round(min(14.0, max(1.0, target / vel)), 1)
+        return out
 
     def room_dirt_relative(self) -> dict[str, float]:
         """Return per-room dirtiness relative to the household average.

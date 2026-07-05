@@ -310,7 +310,20 @@ class MissionHistoryView(HomeAssistantView):
         if fmt == "zone_coverage_health":
             if data.mission_store is None:
                 return self.json({}, status_code=200)
-            result = data.mission_store.room_coverage_health(dt_util.now().isoformat())
+            _region_map = {
+                r["id"]: r["name"]
+                for r in (getattr(data.cloud_coordinator, "regions", None) or [])
+                if r.get("id")
+            } if data.cloud_coordinator is not None else {}
+            _umf = (
+                data.umf_aligner.rid_to_name()
+                if not _region_map and data.umf_aligner and data.umf_aligner.aligned
+                else None
+            )
+            # v3.3.0 ROOM-SCHED foundation fix — derive rooms per record
+            result = data.mission_store.room_coverage_health(
+                dt_util.now().isoformat(), region_map=_region_map, umf_regions=_umf
+            )
             return self.json(result)
 
         # -- format=hazards ---------------------------------------------------
@@ -378,7 +391,7 @@ class MissionHistoryView(HomeAssistantView):
         if fmt == "export":
             records_out: list[dict] = []
             if data.mission_store is not None:
-                records_out = list(data.mission_store._records)
+                records_out = list(data.mission_store.records)
             blid = entry.data.get("blid", "")
             return self.json({
                 "export_version": 1,
@@ -396,7 +409,7 @@ class MissionHistoryView(HomeAssistantView):
         # Build local zone index for F4a injection into cloud records
         local_zones_index: dict[int, list[str]] = {}
         if data.mission_store is not None:
-            local_zones_index = _build_local_zones_index(data.mission_store._records)
+            local_zones_index = _build_local_zones_index(data.mission_store.records)
 
         if data.has_cloud and data.cloud_coordinator.raw_records:
             unified = [
@@ -628,11 +641,10 @@ class MissionHistoryImportView(HomeAssistantView):
                 status_code=400,
             )
 
-        # Build a full set of existing record IDs for O(1) dedup lookup
-        existing_ids: set[str] = {
-            r["id"] for r in data.mission_store._records if r.get("id")
-        }
-
+        # v3.3.0 STORE-ENCAP — full-history dedup and MAX_RECORDS trimming
+        # now live inside MissionStore.append_validated(); this endpoint
+        # previously rebuilt both invariants ad hoc (the documented
+        # tech-debt bug source).
         imported = 0
         skipped = 0
         errors: list[str] = []
@@ -677,21 +689,12 @@ class MissionHistoryImportView(HomeAssistantView):
                 errors.append(f"Record {rec_id!r}: {type_error} — skipped")
                 skipped += 1
                 continue
-            if rec_id in existing_ids:
-                skipped += 1
+            if not data.mission_store.append_validated(rec):
+                skipped += 1  # duplicate id anywhere in the full history
                 continue
-            # Append directly — bypasses MQTT dedup guard which only checks
-            # the last 5 records; import needs full-set dedup (done above).
-            data.mission_store._records.append(rec)
-            existing_ids.add(rec_id)
             imported += 1
 
         if imported > 0:
-            # Trim to MAX_RECORDS FIFO to maintain store invariant
-            if len(data.mission_store._records) > MAX_RECORDS:
-                data.mission_store._records = (
-                    data.mission_store._records[-MAX_RECORDS:]
-                )
             await data.mission_store.async_save(hass, entry_id)
             _LOGGER.info(
                 "MissionHistoryImport: imported %d new record(s) for %s",
@@ -933,3 +936,119 @@ class DailyDigestView(HomeAssistantView):
             # overstate it). Honest "unknown" rather than assuming 0.
             return None
         return max(0.0, on_day - before_day)
+
+
+class MissionMapJsonView(HomeAssistantView):
+    """GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.json
+
+    v3.3.0 MISSION-MAP — coordinate-level coverage of ONE finished
+    mission (the official app's "Mission Cleaning Map", but for every
+    mission in the history). Raw data endpoint: the card renders
+    client-side from this; map.png below is the server-rendered bonus.
+
+    record_id path segment "latest" resolves to the most recent mission.
+    Error mapping: 404 record unknown / no pmaps_info / empty coverage
+    layer (untested lewis firmware), 409 verification-gate mismatch
+    (never serve the wrong map), 502 cloud transport failure.
+    """
+
+    url = "/api/roomba_plus/{entry_id}/missions/{record_id}/map.json"
+    name = "api:roomba_plus:mission_map_json"
+    requires_auth = True
+
+    async def get(
+        self, request: web.Request, entry_id: str, record_id: str
+    ) -> web.Response:
+        payload, data, err = await _mission_map_payload(request, entry_id, record_id)
+        if err is not None:
+            return self.json_message(err[1], status_code=err[0])
+        # Current room polygons as rendering context (names resolved) —
+        # deliberately the CURRENT map version: room shapes are the
+        # backdrop, the mission's own data is the coverage layer.
+        rooms: dict[str, list] = {}
+        aligner = data.umf_aligner
+        if aligner is not None and aligner.aligned:
+            name_of = aligner.rid_to_name()
+            for rid, poly in aligner.room_polygons_umf.items():
+                rooms[name_of.get(rid, rid)] = [list(p) for p in poly]
+        return self.json({**payload, "rooms": rooms})
+
+
+class MissionMapPngView(HomeAssistantView):
+    """GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png
+
+    v3.3.0 MISSION-MAP — server-rendered coverage image: room outlines
+    (current map) + this mission's coverage points. Directly usable as
+    a picture-card/notification image without any card installed —
+    this endpoint IS the v3.3.0 user-visible output; map.json is the
+    card-v2.3.0 investment. Same error mapping as map.json.
+    """
+
+    url = "/api/roomba_plus/{entry_id}/missions/{record_id}/map.png"
+    name = "api:roomba_plus:mission_map_png"
+    requires_auth = True
+
+    async def get(
+        self, request: web.Request, entry_id: str, record_id: str
+    ) -> web.Response:
+        payload, data, err = await _mission_map_payload(request, entry_id, record_id)
+        if err is not None:
+            return self.json_message(err[1], status_code=err[0])
+        hass: HomeAssistant = request.app["hass"]
+        rooms: list[list] = []
+        aligner = data.umf_aligner
+        if aligner is not None and aligner.aligned:
+            rooms = list(aligner.room_polygons_umf.values())
+        from .mission_map import render_mission_map_png
+        png = await hass.async_add_executor_job(
+            render_mission_map_png, payload["coverage_mm"],
+            payload.get("point_area_m") or [], rooms,
+        )
+        return web.Response(body=png, content_type="image/png")
+
+
+async def _mission_map_payload(
+    request: web.Request, entry_id: str, record_id: str
+):
+    """Shared record-resolution + fetch + error mapping for both
+    MISSION-MAP views (one rule set, two output formats).
+
+    Returns (payload, data, error): exactly one of payload/error is set;
+    error is a (status_code, message) tuple the view renders via its own
+    self.json_message (bug-hunt round 1: the first draft called the
+    instance method json_message with the CLASS as self — worked only by
+    accident because it delegates to the static json())."""
+    from .cloud_api import CloudApiError
+    from .mission_map import (
+        MissionMapMismatch,
+        MissionMapUnavailable,
+        async_fetch_mission_map,
+    )
+
+    hass: HomeAssistant = request.app["hass"]
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None or entry.domain != DOMAIN:
+        return None, None, (404, "Entry not found")
+    if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+        return None, None, (503, "Integration initialising")
+    data: RoombaData = entry.runtime_data
+    ms = data.mission_store
+    if ms is None:
+        return None, None, (404, "No mission history available")
+    if record_id == "latest":
+        record = ms.latest()
+    else:
+        record = next(
+            (r for r in ms.records if str(r.get("id")) == record_id), None
+        )
+    if record is None:
+        return None, None, (404, "Mission not found")
+    try:
+        payload = await async_fetch_mission_map(data, record)
+    except MissionMapUnavailable as exc:
+        return None, None, (404, str(exc))
+    except MissionMapMismatch as exc:
+        return None, None, (409, str(exc))
+    except CloudApiError as exc:
+        return None, None, (502, f"Cloud error: {exc}")
+    return payload, data, None

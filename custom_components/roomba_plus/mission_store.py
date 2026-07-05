@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, NamedTuple
@@ -65,6 +66,10 @@ _CLOUD_MERGE_ARRAY: tuple[str, ...] = (
     "wlBars",    # per-mission WiFi signal histogram (5-element) — F1 source
                  # startEndWlBars (scalar bar-strength at start/end) is a
                  # separate top-level field; not merged (redundant with wlBars).
+    "pmaps_info",  # v3.3.0 MISSION-MAP — [{pmap_id, pmapv_id, ...}] of THIS
+                   # mission; the key to the mission-specific UMF version
+                   # whose layers carry the coverage coordinates. Field
+                   # confirmed in PyRoomba sample + boutXIII field data.
 )
 
 
@@ -108,6 +113,25 @@ class MissionStore:
         # records are insufficient (< 20 missions).  Not persisted — computed
         # fresh from MissionArchive each time async_setup_entry runs.
         self.archive_baseline: dict | None = None
+        # v3.3.0 STORE-ENCAP — lazy full-history id index for
+        # append_validated(). None until first use; kept in sync by all
+        # append paths afterwards. Not persisted (rebuilt on demand).
+        self._record_ids: set[str] | None = None
+
+    # ── Public read API (v3.3.0 STORE-ENCAP) ────────────────────────────────
+
+    @property
+    def records(self) -> Sequence[dict[str, Any]]:
+        """Read-only view of all mission records, oldest first.
+
+        v3.3.0 STORE-ENCAP — the canonical cross-module read access.
+        Do NOT mutate the returned sequence or its dicts; use
+        async_append (MQTT path) or append_validated (import path)
+        so the MAX_RECORDS/dedup invariants stay in one place.
+        Zero-copy by design (hot path in sensor filter_fns); the
+        encapsulation guard test enforces the read-only contract.
+        """
+        return self._records
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -170,8 +194,47 @@ class MissionStore:
                     )
                     break
         self._records.append(record)
+        if self._record_ids is not None and record.get("id"):
+            self._record_ids.add(record["id"])
+        self._trim()
+
+    def append_validated(self, record: dict[str, Any]) -> bool:
+        """Append with FULL-history id dedup + MAX_RECORDS trim.
+
+        v3.3.0 STORE-ENCAP — the import path (REST mission-history
+        import). Differs from async_append (the MQTT path) on purpose:
+        - dedup checks the ENTIRE history, not a 5-record window
+          (imports may contain records older than the window)
+        - no recharge-segment "_r<N>" id splitting (imported records
+          are final, not live MQTT segments)
+
+        Returns False (and stores nothing) when the record has no
+        string id or the id already exists. Does NOT save — callers
+        batch a single async_save after the import loop.
+        """
+        record_id = record.get("id")
+        if not record_id or not isinstance(record_id, str):
+            return False
+        if self._record_ids is None:
+            self._record_ids = {
+                r["id"] for r in self._records
+                if isinstance(r.get("id"), str)
+            }
+        if record_id in self._record_ids:
+            return False
+        self._records.append(record)
+        self._record_ids.add(record_id)
+        self._trim()
+        return True
+
+    def _trim(self) -> None:
+        """Enforce the MAX_RECORDS FIFO invariant — single home for it
+        (v3.3.0 STORE-ENCAP; previously rebuilt ad hoc by the import
+        endpoint, the documented bug source)."""
         if len(self._records) > MAX_RECORDS:
             self._records = self._records[-MAX_RECORDS:]
+            # Ids may have been trimmed away — invalidate, rebuilt lazily.
+            self._record_ids = None
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
@@ -396,7 +459,7 @@ class MissionStore:
         return [region_map.get(rid, rid) for rid in rid_list]
 
     @staticmethod
-    def _extract_rid(item: Any) -> str:
+    def extract_rid(item: Any) -> str:
         """Extract a region ID from a plan.upcoming entry.
 
         Handles two confirmed formats:
@@ -410,6 +473,12 @@ class MissionStore:
         if isinstance(item, dict):
             return str(item.get("rid") or item.get("region_id") or "")
         return str(item) if item is not None else ""
+
+    # v3.3.0 STORE-ENCAP — deprecated private alias. 18 test call sites
+    # still use the old name; removal earmarked for SENSOR-SPLIT (v3.4.0)
+    # when those test files are touched anyway. Production code must use
+    # extract_rid (enforced by the encapsulation guard test).
+    _extract_rid = extract_rid
 
     def latest_cleaned_rooms(
         self,
@@ -435,27 +504,51 @@ class MissionStore:
         latest = self.latest()
         if latest is None:
             return None
-        timeline = latest.get("timeline")
-        if not isinstance(timeline, dict):
-            return None
-        fin_events = timeline.get("finEvents") or []
-        seen: dict[str, int] = {}   # rid → index in ordered list
-        ordered: list[str] = []
-        for ev in fin_events:
-            if ev.get("type") != "room":
-                continue
-            room = ev.get("room", {})
-            if room.get("status") not in (0, 6):   # 0=complete, 6=complete-after-recovery
-                continue
-            rid = str(room.get("rid", ""))
-            if not rid:
-                continue
-            if rid not in seen:
-                seen[rid] = len(ordered)
-                ordered.append(rid)
-        if not ordered:
-            return None
-        return self._resolve_region_ids(ordered, effective_map)
+        return self._record_room_names(latest, effective_map)
+
+    def _record_room_names(
+        self,
+        rec: dict[str, Any],
+        effective_map: dict[str, str],
+    ) -> list[str] | None:
+        """Room names cleaned in ONE record, completion order.
+
+        v3.3.0 ROOM-SCHED foundation fix — the derivation half of
+        latest_cleaned_rooms(), applicable to ANY record: live records
+        never carry a stored `last_cleaned_rooms` field (they carry the
+        cloud-merged `timeline`), so every reader of that field only
+        ever worked for IMPORTED histories. Same bug class as the
+        v3.1.1 last_mission_summary fix, one level deeper — this helper
+        is the single shared derivation both room_cleaning_history()
+        and room_coverage_health() now use.
+
+        Order of sources:
+        1. timeline.finEvents room events, status in (0, 6) — live path
+        2. rec["last_cleaned_rooms"] — imported records keep working
+        """
+        timeline = rec.get("timeline")
+        if isinstance(timeline, dict):
+            fin_events = timeline.get("finEvents") or []
+            seen: dict[str, int] = {}   # rid → index in ordered list
+            ordered: list[str] = []
+            for ev in fin_events:
+                if not isinstance(ev, dict) or ev.get("type") != "room":
+                    continue
+                room = ev.get("room") or {}
+                if room.get("status") not in (0, 6):   # 0=complete, 6=after-recovery
+                    continue
+                rid = str(room.get("rid", ""))
+                if not rid:
+                    continue
+                if rid not in seen:
+                    seen[rid] = len(ordered)
+                    ordered.append(rid)
+            if ordered:
+                return self._resolve_region_ids(ordered, effective_map)
+        imported = rec.get("last_cleaned_rooms")
+        if isinstance(imported, list) and imported:
+            return [str(r) for r in imported if isinstance(r, str)]
+        return None
 
     def latest_planned_order(
         self,
@@ -548,33 +641,120 @@ class MissionStore:
             return None
         return {effective_map.get(rid, rid): frac for rid, frac in coverage.items()}
 
-    def room_cleaning_history(self) -> dict[str, str]:
+    def room_cleaning_history(
+        self,
+        region_map: dict[str, str] | None = None,
+        umf_regions: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """Return the most recent clean timestamp per room across all records.
 
         Scans records newest-first; the first hit per room name wins.
-        Uses ``last_cleaned_rooms`` (list of room display names) and
-        ``ended_at`` (ISO timestamp string) from each record.
+        v3.3.0 ROOM-SCHED foundation fix — room names are now DERIVED per
+        record via _record_room_names() (timeline.finEvents on the live
+        path, stored last_cleaned_rooms for imported records). Previously
+        this read only the stored field, which no live pipeline ever
+        writes — the method returned {} on every non-import installation
+        (same bug class as the v3.1.1 last_mission_summary fix).
 
-        Returns an empty dict when no records contain room data.
-        Only completed/enriched records carry ``last_cleaned_rooms`` — records
-        without it are skipped silently.
+        region_map/umf_regions: same name-resolution pair as
+        latest_cleaned_rooms(); without them, live-path rooms resolve to
+        raw region IDs (still functional for interval math, just unnamed).
 
         Result: ``{"Kitchen": "2026-06-29T08:45:00", "Living Room": "2026-06-27T09:10:00"}``
         """
+        effective_map = region_map if region_map else (umf_regions or {})
         result: dict[str, str] = {}
         for rec in reversed(self._records):
             ended_at = rec.get("ended_at")
-            rooms: list[str] = rec.get("last_cleaned_rooms") or []
             # v3.2.0 full-review fix — same defence-in-depth guard as
             # room_coverage_health: a non-string ended_at (poisoned
             # import from before the api_views.py type gate) must be
             # skipped here at the SOURCE, since this method's output
             # flows into room_coverage_health's parse_datetime calls.
-            if not ended_at or not isinstance(ended_at, str) or not rooms:
+            if not ended_at or not isinstance(ended_at, str):
                 continue
+            rooms = self._record_room_names(rec, effective_map) or []
             for room in rooms:
                 if room not in result:
                     result[room] = ended_at
+        return result
+
+    def room_visit_counts(
+        self,
+        region_map: dict[str, str] | None = None,
+        umf_regions: dict[str, str] | None = None,
+    ) -> dict[str, int]:
+        """v3.3.0 SMART-ORDER — number of recorded cleanings per room
+        across the whole local window. Public accessor (STORE-ENCAP):
+        the auto_clean_dirty_rooms service uses this for its
+        min-missions trust gate on the L5 dirt index."""
+        effective_map = region_map if region_map else (umf_regions or {})
+        counts: dict[str, int] = {}
+        for rec in self._records:
+            for room in self._record_room_names(rec, effective_map) or []:
+                counts[room] = counts.get(room, 0) + 1
+        return counts
+
+    def rooms_overdue_merged(
+        self,
+        config: dict[str, str] | None,
+        now_iso: str,
+        region_map: dict[str, str] | None = None,
+        umf_regions: dict[str, str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """v3.3.0 ROOM-SCHED — the ONE home for the overdue rule, shared
+        by sensor.*_rooms_overdue and the clean_overdue_rooms service
+        (no duplicated rule set).
+
+        Merge semantics (COVERAGE-FREQ -> ROOM-SCHED):
+        - "configured": user set a frequency in the options flow ->
+          expected interval from ROOM_SCHEDULE_INTERVALS, overdue at
+          factor x1.0 (an explicit user expectation is a hard one).
+        - "learned": no config -> self-calibrated interval and status
+          from room_coverage_health() (its own x2.0 significance
+          multiplier stands: the learned mean is noisy statistics, at
+          x1.0 half of all rooms would permanently flag).
+        - "insufficient_data": neither -> listed, never overdue.
+
+        overdue_factor (days_since_last / expected) is included for the
+        service's worst-first ordering; None without an interval.
+        Rooms configured but never seen in the history are absent —
+        days_since_last cannot be computed before the first clean.
+        """
+        from .const import ROOM_SCHEDULE_INTERVALS
+
+        health = self.room_coverage_health(
+            now_iso, region_map=region_map, umf_regions=umf_regions
+        )
+        config = config or {}
+        result: dict[str, dict[str, Any]] = {}
+        for room, info in health.items():
+            days_since = info["days_since_last"]
+            freq_key = config.get(room)
+            if freq_key in ROOM_SCHEDULE_INTERVALS:
+                expected: float | None = ROOM_SCHEDULE_INTERVALS[freq_key]
+                source = "configured"
+                status = "overdue" if days_since > expected else "healthy"
+            elif info["expected_interval_days"] is not None:
+                expected = info["expected_interval_days"]
+                source = "learned"
+                status = info["status"]
+            else:
+                expected = None
+                source = "insufficient_data"
+                status = "insufficient_data"
+            result[room] = {
+                "days_since_last": days_since,
+                "expected_interval_days": (
+                    round(expected, 2) if expected is not None else None
+                ),
+                "source": source,
+                "status": status,
+                "overdue_factor": (
+                    round(days_since / expected, 2)
+                    if expected and expected > 0 else None
+                ),
+            }
         return result
 
     def room_coverage_health(
@@ -583,6 +763,8 @@ class MissionStore:
         days: int = 90,
         significance_multiplier: float = 2.0,
         min_intervals: int = 3,
+        region_map: dict[str, str] | None = None,
+        umf_regions: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """v3.2.0 COVERAGE-FREQ — is each room being cleaned in its OWN
         normal rhythm, self-calibrated per room rather than against a
@@ -618,10 +800,13 @@ class MissionStore:
         data at all — 600-series or a robot with no cloud enrichment yet).
         """
         cutoff = dt_util.now() - timedelta(days=days)
+        effective_map = region_map if region_map else (umf_regions or {})
         visits_by_room: dict[str, list[str]] = {}
         for rec in self._records:
             ended_at = rec.get("ended_at")
-            rooms: list[str] = rec.get("last_cleaned_rooms") or []
+            # v3.3.0 ROOM-SCHED foundation fix — derive, don't read the
+            # never-written stored field (see room_cleaning_history).
+            rooms: list[str] = self._record_room_names(rec, effective_map) or []
             # v3.2.0 full-review fix — defence in depth alongside the
             # import-gate type validation in api_views.py: a store that
             # was ALREADY poisoned with a non-string timestamp (imported
@@ -642,7 +827,7 @@ class MissionStore:
         now_dt = dt_util.parse_datetime(now_iso)
         result: dict[str, dict[str, Any]] = {}
 
-        for room, last_clean_iso in self.room_cleaning_history().items():
+        for room, last_clean_iso in self.room_cleaning_history(region_map, umf_regions).items():
             last_dt = dt_util.parse_datetime(last_clean_iso)
             if now_dt is None or last_dt is None:
                 continue

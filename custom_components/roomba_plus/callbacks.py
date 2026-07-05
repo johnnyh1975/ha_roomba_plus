@@ -22,7 +22,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_BLID, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
+from .const import CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -677,6 +677,45 @@ def make_mission_callback(
                 except Exception:  # noqa: BLE001
                     pass
 
+            # v3.3.0 CROSS-CORR — mission-start snapshot of the configured
+            # external sensors (opt-in). We are on the paho-MQTT thread;
+            # hass.states is read loop-side via call_soon_threadsafe, and
+            # the pending snapshot is persisted immediately so an HA
+            # restart mid-mission keeps the pair. Never raises (same
+            # contract as the PresenceManager block above).
+            _corr_entities = entry.options.get(CONF_CORRELATION_ENTITIES) or []
+            _rps_corr = getattr(entry.runtime_data, "robot_profile_store", None)
+            # isinstance guard: also keeps a malformed option (or a test's
+            # auto-MagicMock options) from engaging the opt-in feature.
+            if (
+                isinstance(_corr_entities, (list, tuple))
+                and _corr_entities
+                and _rps_corr is not None
+            ):
+                def _capture_corr_snapshot() -> None:
+                    try:
+                        values: dict[str, float] = {}
+                        for _eid in _corr_entities:
+                            _st = hass.states.get(_eid)
+                            if _st is None:
+                                continue
+                            try:
+                                values[_eid] = float(_st.state)
+                            except (TypeError, ValueError):
+                                continue
+                        if values:
+                            import time as _t_corr
+                            _rps_corr.record_correlation_snapshot(
+                                values, _t_corr.time()
+                            )
+                            hass.async_create_task(
+                                _rps_corr.async_save(hass, entry.entry_id),
+                                name="roomba_plus_corr_snapshot_save",
+                            )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug("CROSS-CORR snapshot failed", exc_info=True)
+                hass.loop.call_soon_threadsafe(_capture_corr_snapshot)
+
             # MS1 (v2.6.0): override initiator to "demand" when DirtThresholdManager
             # fired a start command within the last 30 seconds.
             _demand_ts = getattr(entry.runtime_data, "demand_triggered_ts", None)
@@ -726,7 +765,7 @@ def make_mission_callback(
             _mts_for_recharge = getattr(entry.runtime_data, "mission_timer_store", None)
             if _mts_for_recharge is not None and _mts_for_recharge.mission_id is not None:
                 _mts_for_recharge.recharge_min = float(_live_recharge_min)
-                _mts_for_recharge._schedule_save(hass, entry.entry_id)
+                _mts_for_recharge.schedule_save(hass, entry.entry_id)
             _last_mirrored_recharge_min = _live_recharge_min
 
         # F6h — detect stuck event: nStuck increased during this mission.
@@ -904,7 +943,7 @@ def make_mission_callback(
                     continue
                 room = ev.get("room") or {}
                 if room.get("status") in (0, 6):
-                    rid = _MS._extract_rid(room)
+                    rid = _MS.extract_rid(room)
                     if rid:
                         done_rids.add(rid)
             confirmed = all(rid in done_rids for rid in planned_rids)
@@ -949,7 +988,7 @@ def make_mission_callback(
             _planned_regions = (_reported.get("lastCommand") or {}).get("regions") or []
             from .mission_store import MissionStore as _MS2
             _planned_rids = [
-                rid for rid in (_MS2._extract_rid(r) for r in _planned_regions) if rid
+                rid for rid in (_MS2.extract_rid(r) for r in _planned_regions) if rid
             ]
             if _cloud_confirms_all_rooms_done(_planned_rids):
                 return False
@@ -1120,7 +1159,7 @@ def make_mission_callback(
                     _rep = (_master.get("state") or {}).get("reported") or {}
                     _regions = (_rep.get("lastCommand") or {}).get("regions") or []
                     _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
-                    # v2.9.0 (D) — use MissionStore._extract_rid() instead of
+                    # v2.9.0 (D) — use MissionStore.extract_rid() instead of
                     # only checking region_id/region_name. The iRobot app
                     # (direct start, not via roomba_plus.clean_room) reports
                     # regions as {"rid": ...} on lewis 22.52.10+ — the same
@@ -1157,12 +1196,12 @@ def make_mission_callback(
                             if r.get("id") and r.get("name")
                         }
                     _names = [
-                        _cloud_id_to_name.get(_MS._extract_rid(r))
+                        _cloud_id_to_name.get(_MS.extract_rid(r))
                         or r.get("region_name")
-                        or (_zone.get(_MS._extract_rid(r)) or {}).get("name")
-                        or _MS._extract_rid(r)
+                        or (_zone.get(_MS.extract_rid(r)) or {}).get("name")
+                        or _MS.extract_rid(r)
                         for r in _regions
-                        if isinstance(r, dict) and _MS._extract_rid(r)
+                        if isinstance(r, dict) and _MS.extract_rid(r)
                     ]
                     if _names:
                         # v2.8.0 AUTO-ADVANCE-ROOM (live wiring): use the real
@@ -1798,6 +1837,15 @@ async def _async_update_robot_profile_store(
                 robot_profile_store.update_room_dirt_index(rid, pass_count, area_m2)
                 changed = True
 
+        # v3.3.0 CROSS-CORR — pair the pending mission-start snapshot with
+        # this record's cloud-enriched dirt count (the dirt field only
+        # exists post-enrichment, never at local MQTT mission end).
+        _dirt = latest.get("dirt")
+        if isinstance(_dirt, (int, float)) and robot_profile_store.finalize_correlation(
+            latest.get("started_at"), float(_dirt)
+        ):
+            changed = True
+
     # L6: navigation efficiency baseline from GridStore
     gs = getattr(entry.runtime_data, "grid_store", None)
     if gs is not None:
@@ -1984,6 +2032,12 @@ def make_cloud_refresh_callback(
             hass.async_create_task(
                 async_check_coverage_frequency(hass, config_entry),
                 name="roomba_plus_coverage_frequency_check",
+            )
+            # v3.3.0 CROSS-CORR — correlation Repair Issue (self-healing)
+            from .repairs import async_check_dirt_correlation
+            hass.async_create_task(
+                async_check_dirt_correlation(hass, config_entry),
+                name="roomba_plus_dirt_correlation_check",
             )
         from .repairs import async_check_smberr
         hass.async_create_task(

@@ -101,7 +101,8 @@
           "map_enabled": "Live-Karte aktivieren",
           "map_size_px": "Kartengröße (Pixel)",
           "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
-          "floor_label": "Etage (z. B. Erdgeschoss)"
+          "floor_label": "Etage (z. B. Erdgeschoss)",
+          "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Diese Räume importieren"
         }
+      },
+      "room_schedule": {
+        "title": "Reinigungsfrequenz pro Raum",
+        "description": "Lege fest, wie oft jeder Raum gereinigt werden soll. 'Gelernt' behält das selbstkalibrierte Intervall aus der Reinigungshistorie des Raums."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "Die Integration konnte nicht geladen werden. Prüfe die Protokolle und lade neu, bevor du die Einstellungen öffnest.",
       "demand_cleaning_not_supported": "Bedarfsgesteuerte Reinigung erfordert einen SMART-Roboter mit konfigurierten Cloud-Zugangsdaten.",
       "no_rest980_rooms_found": "Keine Räume in deiner roomba_rest980-Installation gefunden.",
-      "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt."
+      "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt.",
+      "room_schedule_not_supported": "Raum-Frequenzen erfordern einen Smart-Map-Roboter mit Cloud-Zugangsdaten.",
+      "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden."
     }
   },
   "entity": {
@@ -633,6 +640,12 @@
       },
       "room_accessibility_scores": {
         "name": "Raum-Zugänglichkeits-Scores"
+      },
+      "rooms_overdue": {
+        "name": "Überfällige Räume"
+      },
+      "dirt_weather_correlation": {
+        "name": "Schmutz-Korrelation"
       }
     },
     "binary_sensor": {
@@ -983,6 +996,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} könnte überfällig für eine Reinigung sein",
       "description": "{room} wurde zuletzt vor {days_since_last} Tagen gereinigt — deutlich länger als der rund {expected_interval_days}-Tage-Rhythmus, den dieser Roboter für diesen Raum aus seiner eigenen Reinigungshistorie etabliert hat. Prüfe, ob der Zeitplan den Raum noch abdeckt, oder ob er zuletzt unzugänglich war."
+    },
+    "dirt_correlation": {
+      "title": "Starke Schmutz-Korrelation erkannt",
+      "description": "Der Roboter sammelt deutlich {direction} Schmutz, wenn {entity} hoch ist (r={r}, 30+ Missionen). Es kann sich lohnen, den Reinigungsplan an dieses Muster anzupassen."
     }
   },
   "device_automation": {
@@ -1098,6 +1115,17 @@
     },
     "no_rooms_resolved": {
       "message": "Keine Räume zum Reinigen — gib mindestens einen Raumnamen an."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Gelernt (selbstkalibriert)",
+        "daily": "Täglich",
+        "every_2_days": "Alle 2 Tage",
+        "three_per_week": "3× pro Woche",
+        "weekly": "Wöchentlich"
+      }
     }
   }
 }

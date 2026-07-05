@@ -924,6 +924,38 @@ class GridStore:
         """Record that this cell's issue was just observed as dismissed."""
         self._furniture_dismissed_at[cell] = now_iso
 
+    def furniture_dismissed_cells(self) -> tuple[tuple[int, int], ...]:
+        """Snapshot of all cells with an active dismiss record.
+
+        v3.3.0 STORE-ENCAP — returned as a tuple so callers can safely
+        iterate while calling clear_furniture_dismissed() (repairs.py
+        auto-resolve loop previously copied the private dict's keys)."""
+        return tuple(self._furniture_dismissed_at.keys())
+
+    def is_furniture_dismissed(self, cell: tuple[int, int]) -> bool:
+        """True when a dismiss record exists for the cell, regardless of
+        the 30-day window (window logic lives in
+        furniture_dismiss_suppressed). v3.3.0 STORE-ENCAP."""
+        return cell in self._furniture_dismissed_at
+
+    def stuck_count(self, cell: tuple[int, int]) -> int:
+        """Stuck-event count for a cell, 0 when unknown.
+
+        v3.3.0 STORE-ENCAP — tolerant of the pre-v2.7.0 legacy plain-count
+        format that async_load may still hold for hand-edited stores."""
+        entry = self._stuck.get(cell)
+        if entry is None:
+            return 0
+        if isinstance(entry, dict):
+            try:
+                return int(entry.get("count", 0))
+            except (TypeError, ValueError):
+                return 0
+        try:
+            return int(entry)
+        except (TypeError, ValueError):
+            return 0
+
     def clear_furniture_dismissed(self, cell: tuple[int, int]) -> None:
         """Clear a cell's dismiss record — called once the 30-day window
         has elapsed, allowing the issue to fire again if still a

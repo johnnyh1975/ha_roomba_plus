@@ -101,7 +101,8 @@
           "map_enabled": "Activar mapa en tiempo real",
           "map_size_px": "Tamaño del mapa (píxeles)",
           "map_scale_mm_per_px": "Escala (mm/píxel)",
-          "floor_label": "Planta (p. ej. Planta baja)"
+          "floor_label": "Planta (p. ej. Planta baja)",
+          "correlation_entities": "Correlacionar suciedad con sensores (opcional)"
         },
         "data_description": {
           "continuous": "Mantener una conexión MQTT persistente con el robot. Recomendado.",
@@ -193,6 +194,10 @@
         "data": {
           "confirm_import": "Importar estas habitaciones"
         }
+      },
+      "room_schedule": {
+        "title": "Frecuencia de limpieza por habitación",
+        "description": "Define con qué frecuencia debe limpiarse cada habitación. 'Aprendida' mantiene el intervalo autocalibrado del historial de la habitación."
       }
     },
     "error": {
@@ -207,7 +212,9 @@
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
       "demand_cleaning_not_supported": "La limpieza bajo demanda requiere un robot SMART con credenciales de nube configuradas.",
       "no_rest980_rooms_found": "No se encontraron habitaciones en tu instalación de roomba_rest980.",
-      "rest980_rooms_already_imported": "Todas las habitaciones de roomba_rest980 ya están nombradas en Roomba+."
+      "rest980_rooms_already_imported": "Todas las habitaciones de roomba_rest980 ya están nombradas en Roomba+.",
+      "room_schedule_not_supported": "Las frecuencias por habitación requieren un robot con Smart Map y credenciales de nube.",
+      "room_schedule_no_rooms": "Aún no se han encontrado habitaciones con nombre en el Smart Map."
     }
   },
   "entity": {
@@ -633,6 +640,12 @@
       },
       "room_accessibility_scores": {
         "name": "Puntuaciones de accesibilidad por habitación"
+      },
+      "rooms_overdue": {
+        "name": "Habitaciones atrasadas"
+      },
+      "dirt_weather_correlation": {
+        "name": "Correlación de suciedad"
       }
     },
     "binary_sensor": {
@@ -983,6 +996,10 @@
     "coverage_frequency_overdue": {
       "title": "{room} podría llevar demasiado tiempo sin limpiarse",
       "description": "{room} se limpió por última vez hace {days_since_last} días — notablemente más que el ritmo de aproximadamente {expected_interval_days} días que este robot ha establecido para esa habitación según su propio historial de limpieza. Revisa si el horario todavía la cubre, o si la habitación ha estado inaccesible."
+    },
+    "dirt_correlation": {
+      "title": "Fuerte correlación de suciedad detectada",
+      "description": "El robot recoge notablemente {direction} suciedad cuando {entity} está alto (r={r}, 30+ misiones). Puede ser útil ajustar el plan de limpieza a este patrón."
     }
   },
   "device_automation": {
@@ -1098,6 +1115,17 @@
     },
     "no_rooms_resolved": {
       "message": "No hay habitaciones para limpiar — indica al menos un nombre de habitación."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Aprendida (autocalibrada)",
+        "daily": "Diaria",
+        "every_2_days": "Cada 2 días",
+        "three_per_week": "3 veces por semana",
+        "weekly": "Semanal"
+      }
     }
   }
 }

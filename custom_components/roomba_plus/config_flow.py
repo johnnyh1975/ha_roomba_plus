@@ -10,6 +10,13 @@ from roombapy import RoombaFactory, RoombaInfo
 from roombapy.discovery import RoombaDiscovery
 from roombapy.getpassword import RoombaPassword
 import voluptuous as vol
+from homeassistant.helpers.selector import (
+    EntitySelector as SelectorEntitySelector,
+    EntitySelectorConfig as SelectorEntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_DELAY, CONF_HOST, CONF_NAME, CONF_PASSWORD
@@ -21,6 +28,10 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
 from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
 from .const import (
+    CONF_CORRELATION_ENTITIES,
+    CONF_ROOM_SCHEDULE,
+    ROOM_SCHEDULE_INTERVALS,
+    ROOM_SCHEDULE_LEARNED,
     CONF_AWAY_DELAY_MIN,
     CONF_BLID,
     CONF_BLOCKING_BEHAVIOR,
@@ -528,6 +539,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             menu.append("presence_scheduling")
         if data.map_capability == MapCapability.SMART and data.has_cloud:
             menu.append("demand_cleaning")
+        # v3.3.0 ROOM-SCHED — per-room cleaning frequency (SMART + cloud:
+        # named cloud regions are the only stable config keys)
+        if data.map_capability == MapCapability.SMART and data.has_cloud:
+            menu.append("room_schedule")
 
         # ── 🗺  Map ────────────────────────────────────────────────────────
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
@@ -655,6 +670,17 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         CONF_FLOOR,
                         default=options.get(CONF_FLOOR, ""),
                     ): str,
+                    # v3.3.0 CROSS-CORR — opt-in: external sensors whose
+                    # mission-start values get correlated with dirt counts
+                    vol.Optional(
+                        CONF_CORRELATION_ENTITIES,
+                        default=options.get(CONF_CORRELATION_ENTITIES, []),
+                    ): SelectorEntitySelector(
+                        SelectorEntitySelectorConfig(
+                            domain="sensor",
+                            multiple=True,
+                        )
+                    ),
                 }
             ),
         )
@@ -1396,6 +1422,62 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         return self.async_create_entry(title="", data=self.config_entry.options)
 
     # ── F13 / F11 — Demand cleaning configuration ─────────────────────────────
+
+    async def async_step_room_schedule(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """v3.3.0 ROOM-SCHED — per-room cleaning frequency.
+
+        Gate: SMART + cloud (same as demand_cleaning) — named cloud
+        regions are the only stable config keys. One SelectSelector per
+        room; "learned" (default) keeps the self-calibrated interval
+        from COVERAGE-FREQ. Rooms that vanished from the cloud map are
+        silently filtered on save (no orphan config).
+        """
+        data = self.config_entry.runtime_data
+        if (
+            not hasattr(data, "map_capability")
+            or data.map_capability.value != "smart"
+            or not data.has_cloud
+            or data.cloud_coordinator is None
+        ):
+            return self.async_abort(reason="room_schedule_not_supported")
+
+        room_names = sorted(
+            r["name"]
+            for r in (data.cloud_coordinator.regions or [])
+            if r.get("name")
+        )
+        if not room_names:
+            return self.async_abort(reason="room_schedule_no_rooms")
+
+        if user_input is not None:
+            updated = dict(self.config_entry.options)
+            schedule = {
+                room: freq
+                for room, freq in user_input.items()
+                if room in room_names                      # orphan filter
+                and freq in ROOM_SCHEDULE_INTERVALS        # "learned" drops out
+            }
+            updated[CONF_ROOM_SCHEDULE] = schedule
+            return self.async_create_entry(title="", data=updated)
+
+        current = self.config_entry.options.get(CONF_ROOM_SCHEDULE) or {}
+        freq_options = [ROOM_SCHEDULE_LEARNED, *ROOM_SCHEDULE_INTERVALS]
+        schema = vol.Schema({
+            vol.Optional(
+                room,
+                default=current.get(room, ROOM_SCHEDULE_LEARNED),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=freq_options,
+                    translation_key="room_schedule_frequency",
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
+            for room in room_names
+        })
+        return self.async_show_form(step_id="room_schedule", data_schema=schema)
 
     async def async_step_demand_cleaning(
         self, user_input: dict[str, Any] | None = None
