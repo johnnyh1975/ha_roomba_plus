@@ -60,7 +60,7 @@ The active pmap ID may not yet be available — typically happens on fresh insta
 
 **"Map vacuum segments to areas" repair fires — what do I do?**
 
-This is a one-time HA setup step for `vacuum.clean_area` (HA 2026.3+). Open the vacuum entity → ⚙ Entity settings → "Map vacuum segments to areas", match each robot room to a Home Assistant area, and save. See [Room cleaning setup](../README.md#room-cleaning-setup-ha-20263) in the README for full instructions.
+This is a one-time HA setup step for `vacuum.clean_area` (HA 2026.3+). Open the vacuum entity → ⚙ Entity settings → "Map vacuum segments to areas", match each robot room to a Home Assistant area, and save. See [Room cleaning setup](FEATURES.md#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) in the Feature reference for full instructions.
 
 If you don't use `vacuum.clean_area`, dismiss the repair — `roomba_plus.clean_room` works without it.
 
@@ -255,4 +255,4 @@ Import deduplicates by `id` — safe to run multiple times.
 
 ---
 
-*[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

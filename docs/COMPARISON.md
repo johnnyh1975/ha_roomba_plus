@@ -2,8 +2,8 @@
 
 # Roomba Integrations — Feature Comparison
 
-> Based on source code analysis · last verified June 2026 against
-> Roomba+ **v3.1.0** and roomba_rest980 **v1.19.1**
+> Based on source code analysis · last verified July 2026 against
+> Roomba+ **v3.3.0** and roomba_rest980 **v1.19.1**
 > (manifest version; quality_scale.yaml documents Bronze→Platinum rules, all met).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
@@ -18,9 +18,9 @@
 | 🔌 [Setup & prerequisites](#-setup-prerequisites) | Local MQTT push, auto-discovery, no extras | Local MQTT push, built-in | HTTP poll to Docker container, cloud required |
 | 🗺️ [Map & rooms](#-map-rooms) | Live path + UMF polygons + zone overlays, automatic room detection (900-series) | None | Static UMF floor plan + zone overlays, no live path |
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
-| 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, mission log | None | None |
+| 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3024 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3,526 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -33,6 +33,7 @@
 - You want maintenance reminders for filter, brush, and battery
 - You want the integration to keep working regardless of cloud availability or API changes
 - You have an older 900-series robot and want automatic room detection without cloud
+- You want the robot to catch up on overdue or extra-dirty rooms with one command, routed efficiently
 
 **Choose HA Core if:**
 - You want the simplest possible setup — installed in two minutes, no extras
@@ -58,7 +59,7 @@
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6 ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ 2750 tests ★ | ✅ | ❌ |
+| Unit tests | ✅ 3,526 tests ★ | ✅ | ❌ |
 | Quality Scale | **Gold ★** | Silver | **Bronze** |
 | Translations | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only | ⚠️ EN only |
 
@@ -160,6 +161,10 @@
 | Mission log REST API | ✅ ★ | ❌ | ❌ |
 | Per-mission records (cloud + local) | ✅ unified schema ★ | ❌ | ❌ |
 | Mission history export / import | ✅ v2.5+ ★ | ❌ | ❌ |
+| Self-calibrated per-room cleaning rhythm | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
+| One-call overdue/dirty-room cleaning, route-optimized | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
+| Mission cleaning maps (per-mission coordinate replay) | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
+| Dirt ↔ external-sensor correlation (opt-in, local) | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
 
 ---
 
@@ -177,7 +182,7 @@
 | Repair Issues | ✅ 10 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
-| Integration tests | ✅ 2712 pytest tests ★ | ✅ | ❌ |
+| Integration tests | ✅ 3,526 pytest tests ★ | ✅ | ❌ |
 | GitHub Actions CI | ✅ ★ | ❌ | ✅ push + PR + nightly hassfest + HACS validation |
 
 ---
@@ -198,4 +203,4 @@
 
 ---
 
-*[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

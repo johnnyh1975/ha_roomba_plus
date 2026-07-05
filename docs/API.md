@@ -35,6 +35,8 @@ Unauthorized requests receive a `401` from the HA framework (`{"message": "Unaut
 | `GET` | `/api/roomba_plus/household` | Household aggregate across all robots |
 | `GET` | `/api/roomba_plus/{entry_id}/mission/{mission_id}/explain` | Anomaly explanation for a specific mission (v3.2.0) |
 | `GET` | `/api/roomba_plus/{entry_id}/mission/{n_mssn}/path` | Room-granular path reconstruction for a mission (v3.2.0) |
+| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.json` | Coordinate-level coverage for one finished mission (v3.3.0) |
+| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.png` | Rendered coverage image for one finished mission (v3.3.0) |
 
 ### HTTP status codes
 
@@ -487,4 +489,4 @@ browser hits cost no additional cloud call.
 
 ---
 
-*[Roomba+](../README.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

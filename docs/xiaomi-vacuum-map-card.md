@@ -301,3 +301,7 @@ The native `roomba_plus` platform template (merged in XVMC **v2.4.1**) is what
 from this integration's `rooms` attribute at runtime, which is why the
 "Generate Room Configs" button works only once Roomba+ is selected as the
 platform.
+
+---
+
+*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
