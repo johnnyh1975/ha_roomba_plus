@@ -621,3 +621,77 @@ class TestExplainMissionMethod:
         result = store.explain_mission()
         assert result["anomaly_reason"] is None
         assert result["recommended_action"] is None
+
+
+class TestFindByIdMissionIdUlid:
+    """v3.3.1 fix — find_by_id() must also match the cloud missionId ULID,
+    not just the local `id` field, per the documented contract
+    ("the record's id field ... or the cloud missionId ULID — both
+    resolve") which previously only half-held."""
+
+    def test_matches_by_local_id(self):
+        rec = _mission_rec()
+        store = _make_store_with_records([rec])
+        assert store.find_by_id(rec["id"]) is rec
+
+    def test_matches_by_cloud_mission_id_ulid(self):
+        rec = dict(_mission_rec())
+        rec["missionId"] = "01HB240BER0YBZEERTM7D3QHT8"
+        store = _make_store_with_records([rec])
+        found = store.find_by_id("01HB240BER0YBZEERTM7D3QHT8")
+        assert found is rec
+
+    def test_no_match_returns_none(self):
+        rec = dict(_mission_rec())
+        rec["missionId"] = "01HB240BER0YBZEERTM7D3QHT8"
+        store = _make_store_with_records([rec])
+        assert store.find_by_id("nonexistent") is None
+
+    def test_records_without_missionid_field_dont_false_match_none(self):
+        """A record with no missionId key must not spuriously match a
+        lookup for mission_id=None-ish values (defensive: .get() default
+        must not coincide with a falsy lookup key in practice)."""
+        rec = _mission_rec()
+        assert "missionId" not in rec
+        store = _make_store_with_records([rec])
+        assert store.find_by_id("") is None
+
+
+class TestExplainMissionRecordOverride:
+    """v3.3.1 EXPLAIN-CLOUD — explain_mission()'s record_override param,
+    the mechanism api_views.py uses to hand over a cloud-resolved record
+    without MissionStore needing any cloud_coordinator knowledge."""
+
+    def test_record_override_used_directly(self):
+        store = _make_store_with_records([])  # empty local store
+        override = {
+            "id": "c_1700000000", "duration_min": 42, "area_sqft": 300.0,
+            "dirt": 5, "error_code": None,
+        }
+        result = store.explain_mission(record_override=override)
+        assert result is not None
+        assert result["mission_id"] == "c_1700000000"
+
+    def test_record_override_takes_priority_over_mission_id(self):
+        """mission_id is ignored when record_override is given — caller
+        has already done the resolution."""
+        rec = _mission_rec()
+        store = _make_store_with_records([rec])
+        override = {"id": "c_999", "duration_min": 10, "area_sqft": 50.0,
+                     "dirt": None, "error_code": None}
+        result = store.explain_mission(mission_id=rec["id"], record_override=override)
+        assert result["mission_id"] == "c_999"
+
+    def test_record_override_missing_recharge_min_no_crash(self):
+        """Cloud-only records never carry recharge_min/npicks_delta —
+        explain_mission() must not crash and must treat robot_lifted as
+        False (honest 'unknown', not a fabricated value)."""
+        override = {"id": "c_123", "duration_min": 60, "area_sqft": 200.0,
+                     "dirt": 3, "error_code": None}
+        store = _make_store_with_records([])
+        result = store.explain_mission(record_override=override)
+        assert result["robot_lifted"] is False
+
+    def test_none_when_override_is_none_and_no_match(self):
+        store = _make_store_with_records([])
+        assert store.explain_mission(mission_id="c_nonexistent") is None

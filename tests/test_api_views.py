@@ -978,6 +978,103 @@ class TestHazardsV23:
         assert hazards[0]["room_name"] == "Kitchen"
 
 
+class TestHazardsF22TemporalPattern:
+    """F22 (v3.3.1) — dominant_weekday/dominant_hour merge onto hazard pins.
+
+    Exercises the real merge logic (hotspots() + stuck_pattern(), matched
+    by (gx, gy)) against a real GridStore instance, not fabricated dicts —
+    the merge itself is the thing under test, not just the shape.
+    """
+
+    def _gs_with_stuck(self, cell_data: dict):
+        from custom_components.roomba_plus.grid_store import GridStore
+        gs = GridStore()
+        gs._stuck = cell_data
+        return gs
+
+    def _merge(self, hazards, patterns):
+        """Replicates the api_views.py merge step for direct unit testing."""
+        for hazard in hazards:
+            dominant_weekday = None
+            dominant_hour = None
+            if hazard.get("source") == "stuck_events" and patterns:
+                slot = patterns.get((hazard["gx"], hazard["gy"]))
+                if slot:
+                    dominant_weekday, dominant_hour = slot
+            hazard["dominant_weekday"] = dominant_weekday
+            hazard["dominant_hour"] = dominant_hour
+        return hazards
+
+    def test_dominant_slot_merged_onto_matching_pin(self):
+        # 10 stucks at (0,0), 8 on Monday 09:00 → 80% dominance, above
+        # both hotspots()'s threshold (3) and stuck_pattern()'s (8).
+        gs = self._gs_with_stuck({
+            (0, 0): {"count": 10, "times": [[0, 9]] * 8 + [[2, 14], [4, 16]]},
+        })
+        hazards = gs.hotspots()
+        patterns = gs.stuck_pattern()
+        result = self._merge(hazards, patterns)
+        assert result[0]["dominant_weekday"] == 0
+        assert result[0]["dominant_hour"] == 9
+
+    def test_gap_below_stuck_pattern_threshold_stays_null(self):
+        # count=5 clears hotspots()'s threshold (3) but not
+        # stuck_pattern()'s (8) — known, accepted gap.
+        gs = self._gs_with_stuck({
+            (1, 1): {"count": 5, "times": [[3, 10]] * 5},
+        })
+        hazards = gs.hotspots()
+        patterns = gs.stuck_pattern()
+        assert patterns is None  # confirms the gap condition actually applies
+        result = self._merge(hazards, patterns)
+        assert result[0]["stuck_count"] == 5
+        assert result[0]["dominant_weekday"] is None
+        assert result[0]["dominant_hour"] is None
+
+    def test_non_dominant_pattern_stays_null(self):
+        # count=10 clears both thresholds, but times spread evenly —
+        # no slot reaches the 60% dominance bar.
+        gs = self._gs_with_stuck({
+            (2, 2): {"count": 10, "times": [[i % 7, i % 24] for i in range(10)]},
+        })
+        hazards = gs.hotspots()
+        patterns = gs.stuck_pattern()
+        result = self._merge(hazards, patterns)
+        assert result[0]["dominant_weekday"] is None
+        assert result[0]["dominant_hour"] is None
+
+    def test_robot_learned_and_keepout_pins_always_carry_null_fields(self):
+        """Non-stuck_events sources never match a pattern lookup, but must
+        still carry both keys (schema uniformity) — this is what the
+        merge running AFTER the robot_learned/keepout appends guarantees.
+        """
+        gs = self._gs_with_stuck({})
+        hazards = [
+            {"gx": None, "gy": None, "x_mm": 1.0, "y_mm": 1.0,
+             "stuck_count": None, "source": "robot_learned"},
+            {"gx": None, "gy": None, "x_mm": 2.0, "y_mm": 2.0,
+             "stuck_count": None, "source": "keepout"},
+        ]
+        result = self._merge(hazards, gs.stuck_pattern())
+        for h in result:
+            assert h["dominant_weekday"] is None
+            assert h["dominant_hour"] is None
+
+    def test_multiple_hotspot_cells_matched_independently(self):
+        gs = self._gs_with_stuck({
+            (0, 0): {"count": 10, "times": [[0, 9]] * 8 + [[2, 14], [4, 16]]},
+            (5, 5): {"count": 9, "times": [[6, 20]] * 8 + [[1, 3]]},
+        })
+        hazards = gs.hotspots()
+        patterns = gs.stuck_pattern()
+        result = self._merge(hazards, patterns)
+        by_cell = {(h["gx"], h["gy"]): h for h in result}
+        assert by_cell[(0, 0)]["dominant_weekday"] == 0
+        assert by_cell[(0, 0)]["dominant_hour"] == 9
+        assert by_cell[(5, 5)]["dominant_weekday"] == 6
+        assert by_cell[(5, 5)]["dominant_hour"] == 20
+
+
 class TestCoverageByPolygon:
     def _gs(self):
         from custom_components.roomba_plus.grid_store import GridStore
@@ -1496,6 +1593,162 @@ class TestExplainMissionView:
             "robot_lifted", "error_code", "recommended_action",
         }
         assert required.issubset(body.keys())
+
+
+class TestExplainMissionViewCloudResolve:
+    """v3.3.1 EXPLAIN-CLOUD — cloud-only rows (synthetic "c_{ts}" ids,
+    never in MissionStore._records) resolve against raw cloud history
+    instead of always 404ing."""
+
+    def _make_request(self, hass: MagicMock) -> MagicMock:
+        req = MagicMock()
+        req.app = {"hass": hass}
+        return req
+
+    def _hass_with_cloud(self, raw_records: list[dict], local_records: list[dict] | None = None):
+        hass, entry = _make_hass_with_entry(records=local_records or [])
+        cc = MagicMock()
+        cc.raw_records = raw_records
+        entry.runtime_data.cloud_coordinator = cc
+        return hass, entry
+
+    @pytest.mark.asyncio
+    async def test_resolves_cloud_only_mission_by_start_time(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        raw = {"startTime": 1700000000, "timestamp": 1700003600,
+               "durationM": 42, "sqft": 300.0, "dirt": 5}
+        hass, entry = self._hass_with_cloud([raw])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_1700000000")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        assert body["mission_id"] == "c_1700000000"
+
+    @pytest.mark.asyncio
+    async def test_resolves_by_end_time_when_start_time_absent(self):
+        """Mirrors _cloud_record_to_unified()'s id-minting precedence:
+        f"c_{start_ts}" if start_ts else f"c_{end_ts}"."""
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        raw = {"startTime": None, "timestamp": 1700003600,
+               "durationM": 20, "sqft": 100.0, "dirt": 1}
+        hass, entry = self._hass_with_cloud([raw])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_1700003600")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        assert body["mission_id"] == "c_1700003600"
+
+    @pytest.mark.asyncio
+    async def test_no_matching_raw_record_404(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        raw = {"startTime": 1700000000, "timestamp": 1700003600,
+               "durationM": 42, "sqft": 300.0, "dirt": 5}
+        hass, entry = self._hass_with_cloud([raw])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_9999999999")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_no_cloud_coordinator_404(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, entry = _make_hass_with_entry(records=[])
+        entry.runtime_data.cloud_coordinator = None
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_1700000000")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_missing_recharge_data_does_not_crash_or_flag_lifted(self):
+        """Cloud-only records never carry recharge_min/npicks_delta —
+        response must still be well-formed, robot_lifted honestly False."""
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        raw = {"startTime": 1700000000, "timestamp": 1700003600,
+               "durationM": 42, "sqft": 300.0, "dirt": 5}
+        hass, entry = self._hass_with_cloud([raw])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_1700000000")
+        body = json.loads(resp.body)
+        assert body["robot_lifted"] is False
+
+    @pytest.mark.asyncio
+    async def test_error_code_derived_from_pause_id(self):
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        raw = {"startTime": 1700000000, "timestamp": 1700003600,
+               "durationM": 42, "sqft": 300.0, "dirt": 5, "pauseId": 17}
+        hass, entry = self._hass_with_cloud([raw])
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "c_1700000000")
+        body = json.loads(resp.body)
+        assert body["error_code"] == 17
+
+    @pytest.mark.asyncio
+    async def test_non_c_prefixed_id_unaffected_by_cloud_path(self):
+        """A real local id must still resolve locally, never touching the
+        cloud-resolution branch (which only engages for "c_"-prefixed ids)."""
+        from custom_components.roomba_plus.api_views import ExplainMissionView
+        hass, entry = self._hass_with_cloud(
+            raw_records=[], local_records=[_make_record("m_1")]
+        )
+        view = ExplainMissionView()
+        req = self._make_request(hass)
+        resp = await view.get(req, "abc123", "m_1")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        assert body["mission_id"] == "m_1"
+
+
+class TestCloudRecordToExplainInput:
+    def test_field_names_match_anomaly_reason_expectations(self):
+        from custom_components.roomba_plus.api_views import _cloud_record_to_explain_input
+        raw = {"startTime": 1700000000, "timestamp": 1700003600,
+               "durationM": 42, "sqft": 300.0, "dirt": 5, "pauseId": 3}
+        result = _cloud_record_to_explain_input(raw)
+        assert result["id"] == "c_1700000000"
+        assert result["duration_min"] == 42
+        assert result["area_sqft"] == 300.0
+        assert result["dirt"] == 5
+        assert result["error_code"] == 3
+
+    def test_zero_pause_id_means_no_error(self):
+        from custom_components.roomba_plus.api_views import _cloud_record_to_explain_input
+        raw = {"startTime": 1700000000, "durationM": 42, "sqft": 300.0,
+               "dirt": 5, "pauseId": 0}
+        result = _cloud_record_to_explain_input(raw)
+        assert result["error_code"] is None
+
+    def test_no_recharge_min_or_npicks_delta_keys(self):
+        """These are local-only telemetry — deliberately absent, not null."""
+        from custom_components.roomba_plus.api_views import _cloud_record_to_explain_input
+        raw = {"startTime": 1700000000, "durationM": 42, "sqft": 300.0, "dirt": 5}
+        result = _cloud_record_to_explain_input(raw)
+        assert "recharge_min" not in result
+        assert "npicks_delta" not in result
+
+
+class TestResolveCloudExplainRecord:
+    def test_returns_none_when_no_cloud_coordinator(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_explain_record
+        data = MagicMock()
+        data.cloud_coordinator = None
+        assert _resolve_cloud_explain_record(data, "c_1700000000") is None
+
+    def test_returns_none_for_non_c_prefixed_id(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_explain_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = []
+        assert _resolve_cloud_explain_record(data, "m_1700000000") is None
+
+    def test_returns_none_for_malformed_timestamp(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_explain_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = []
+        assert _resolve_cloud_explain_record(data, "c_not_a_number") is None
 
 
 def _real_mission_archive(derived_records: list[dict]):

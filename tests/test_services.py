@@ -1105,6 +1105,50 @@ class TestExplainMission:
         assert result["mission_id"] == "m_1"
 
     @pytest.mark.asyncio
+    async def test_cloud_only_id_resolves_via_raw_records(self):
+        """v3.3.1 bug-hunt fix — the service must resolve "c_{ts}" ids the
+        same way the REST view (ExplainMissionView) does; previously only
+        the REST view got this capability, contradicting the contract's
+        "both delegate to the same logic" claim."""
+        from custom_components.roomba_plus.services import async_handle_explain_mission
+        store = _make_mission_store([])  # no local records
+        entry = _make_config_entry(entry_id="e1")
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.cloud_coordinator.raw_records = [
+            {"startTime": 1700000000, "timestamp": 1700003600,
+             "durationM": 42, "sqft": 300.0, "dirt": 5},
+        ]
+        call = self._make_call(mission_id="c_1700000000")
+        call.hass.config_entries.async_get_entry.return_value = entry
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry("e1")
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        ):
+            result = await async_handle_explain_mission(call)
+        assert result["mission_id"] == "c_1700000000"
+
+    @pytest.mark.asyncio
+    async def test_cloud_only_id_no_match_raises(self):
+        from custom_components.roomba_plus.services import async_handle_explain_mission
+        from homeassistant.exceptions import ServiceValidationError
+        store = _make_mission_store([])
+        entry = _make_config_entry(entry_id="e1")
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.cloud_coordinator.raw_records = []
+        call = self._make_call(mission_id="c_9999999999")
+        call.hass.config_entries.async_get_entry.return_value = entry
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry("e1")
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        ):
+            with pytest.raises(ServiceValidationError):
+                await async_handle_explain_mission(call)
+
+    @pytest.mark.asyncio
     async def test_not_anomalous_when_stats_unavailable(self):
         """Fewer than 20 missions and no archive baseline → stats is None
         → anomaly_reason gracefully skipped, not an error."""

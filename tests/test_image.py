@@ -399,6 +399,206 @@ class TestRoombaRoomsImage:
         assert isinstance(py, int)
 
 
+def _gs_with_furniture_candidate():
+    """Real GridStore with one genuine furniture candidate — established
+    coverage for 20 missions, then 3 consecutive absences (the FURNITURE
+    signature), same recipe as test_grid_store.py's TestFurnitureCandidates.
+    """
+    from custom_components.roomba_plus.grid_store import GridStore
+    gs = GridStore()
+    cell_point = (75, 75)
+    other_point = (10000, 10000)
+    for _ in range(20):
+        gs.update_from_mission([cell_point], [])
+    for _ in range(3):
+        gs.update_from_mission([other_point], [])
+    return gs
+
+
+def _geometry_store_with_door_marker():
+    from custom_components.roomba_plus.geometry_store import GeometryStore, DoorMarker
+    gstore = GeometryStore()
+    marker = DoorMarker(id="dm_1", cx=500.0, cy=700.0, label="Hallway door")
+    marker.update(500.0, 700.0)
+    gstore.door_markers = [marker]
+    return gstore
+
+
+class TestZoneOverlayAndFurnitureRoombaMapImage:
+    """ZONE-OVERLAY (v3.3.1) + F24 on RoombaMapImage.extra_state_attributes."""
+
+    def _entity(self, aligner=None, renderer=None):
+        from custom_components.roomba_plus.image import RoombaMapImage
+        entity = object.__new__(RoombaMapImage)
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._config_entry.runtime_data.cloud_coordinator.regions = []
+        entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
+        entity._config_entry.runtime_data.cloud_coordinator.keepout_zones = []
+        entity._config_entry.runtime_data.geometry_store = None
+        entity._config_entry.runtime_data.grid_store = None
+        entity._renderer = renderer
+        return entity
+
+    def _aligned_entity(self):
+        aligner = _make_aligner()
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        renderer = MagicMock()
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        return self._entity(aligner=aligner, renderer=renderer)
+
+    def test_zones_absent_when_no_cloud_data(self):
+        entity = self._aligned_entity()
+        attrs = entity.extra_state_attributes
+        assert "zones" not in attrs
+
+    def test_observed_zone_transformed_to_pose_space(self):
+        entity = self._aligned_entity()
+        entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = [
+            {"x": 500.0, "y": 300.0}
+        ]
+        attrs = entity.extra_state_attributes
+        assert "zones" in attrs
+        observed = [z for z in attrs["zones"] if z["type"] == "observed"]
+        assert len(observed) == 1
+        # identity transform (rot=0, tx=0, ty=0) → pose == umf input
+        assert observed[0]["x"] == pytest.approx(500.0)
+        assert observed[0]["y"] == pytest.approx(300.0)
+
+    def test_keepout_zone_polygon_transformed(self):
+        entity = self._aligned_entity()
+        entity._config_entry.runtime_data.cloud_coordinator.keepout_zones = [
+            {"geometry": {"ids": [["p1", "p2", "p3"]]}}
+        ]
+        entity._config_entry.runtime_data.umf_aligner._coord_lookup = {
+            "p1": (0.0, 0.0), "p2": (100.0, 0.0), "p3": (100.0, 100.0),
+        }
+        attrs = entity.extra_state_attributes
+        keepout = [z for z in attrs["zones"] if z["type"] == "keepout"]
+        assert len(keepout) == 1
+        assert len(keepout[0]["polygon"]) == 3
+
+    def test_door_markers_exposed_as_is_no_transform(self):
+        entity = self._aligned_entity()
+        entity._config_entry.runtime_data.geometry_store = _geometry_store_with_door_marker()
+        attrs = entity.extra_state_attributes
+        assert "door_markers" in attrs
+        marker = attrs["door_markers"][0]
+        # Exposed raw — cx/cy must match the store exactly, no aligner transform
+        assert marker["cx"] == pytest.approx(500.0)
+        assert marker["cy"] == pytest.approx(700.0)
+        assert marker["label"] == "Hallway door"
+        assert marker["mission_count"] == 1
+
+    def test_door_markers_absent_when_no_geometry_store(self):
+        entity = self._aligned_entity()
+        attrs = entity.extra_state_attributes
+        assert "door_markers" not in attrs
+
+    def test_door_markers_absent_when_store_empty(self):
+        entity = self._aligned_entity()
+        from custom_components.roomba_plus.geometry_store import GeometryStore
+        entity._config_entry.runtime_data.geometry_store = GeometryStore()
+        attrs = entity.extra_state_attributes
+        assert "door_markers" not in attrs
+
+    def test_furniture_candidates_exposed_as_pose_space_mm(self):
+        entity = self._aligned_entity()
+        entity._config_entry.runtime_data.grid_store = _gs_with_furniture_candidate()
+        attrs = entity.extra_state_attributes
+        assert "furniture_candidates" in attrs
+        assert len(attrs["furniture_candidates"]) >= 1
+        cand = attrs["furniture_candidates"][0]
+        assert "x_mm" in cand and "y_mm" in cand
+        # Only x_mm/y_mm surfaced — not the internal "cell" tuple
+        assert "cell" not in cand
+
+    def test_furniture_candidates_absent_when_no_grid_store(self):
+        entity = self._aligned_entity()
+        attrs = entity.extra_state_attributes
+        assert "furniture_candidates" not in attrs
+
+    def test_furniture_candidates_absent_when_none_qualify(self):
+        entity = self._aligned_entity()
+        from custom_components.roomba_plus.grid_store import GridStore
+        entity._config_entry.runtime_data.grid_store = GridStore()
+        attrs = entity.extra_state_attributes
+        assert "furniture_candidates" not in attrs
+
+
+class TestZoneOverlayAndFurnitureRoombaRoomsImage:
+    """ZONE-OVERLAY (v3.3.1) + F24 on RoombaRoomsImage.extra_state_attributes —
+    parity with RoombaMapImage, but gated to aligned mode only (fallback mode
+    renders in UMF-space, so pose-space overlays would be spatially wrong).
+    """
+
+    def _entity(self, aligner=None, aligned_render=True):
+        from custom_components.roomba_plus.image import RoombaRoomsImage
+        entity = object.__new__(RoombaRoomsImage)
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._config_entry.runtime_data.cloud_coordinator.regions = []
+        entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
+        entity._config_entry.runtime_data.cloud_coordinator.keepout_zones = []
+        entity._config_entry.runtime_data.geometry_store = None
+        entity._config_entry.runtime_data.grid_store = None
+        entity._last_x_min = 0.0
+        entity._last_x_max = 5000.0
+        entity._last_y_min = 0.0
+        entity._last_y_max = 5000.0
+        entity._last_size  = 600
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
+        if aligned_render:
+            entity._rendered_once = True
+        else:
+            entity._rendered_fallback = True
+        return entity
+
+    def _aligned_entity(self):
+        aligner = _make_aligner(aligned=True)
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        return self._entity(aligner=aligner, aligned_render=True)
+
+    def test_zones_door_markers_furniture_present_when_aligned(self):
+        entity = self._aligned_entity()
+        entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = [
+            {"x": 200.0, "y": 400.0}
+        ]
+        entity._config_entry.runtime_data.geometry_store = _geometry_store_with_door_marker()
+        entity._config_entry.runtime_data.grid_store = _gs_with_furniture_candidate()
+        attrs = entity.extra_state_attributes
+        assert "zones" in attrs
+        assert "door_markers" in attrs
+        assert "furniture_candidates" in attrs
+
+    def test_zones_door_markers_furniture_withheld_in_fallback_mode(self):
+        """Not-yet-aligned mode: image is UMF-space, pose-space overlays
+        would be spatially wrong, so all three must be absent entirely —
+        even though the underlying data exists."""
+        aligner = _make_aligner(aligned=False)
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        entity = self._entity(aligner=aligner, aligned_render=False)
+        entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = [
+            {"x": 200.0, "y": 400.0}
+        ]
+        entity._config_entry.runtime_data.geometry_store = _geometry_store_with_door_marker()
+        entity._config_entry.runtime_data.grid_store = _gs_with_furniture_candidate()
+        attrs = entity.extra_state_attributes
+        assert "zones" not in attrs
+        assert "door_markers" not in attrs
+        assert "furniture_candidates" not in attrs
+
+
 class TestCoverageMapSignal:
     """Bug E — coverage signal constant must exist and be unique per entry."""
 
