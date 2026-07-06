@@ -181,7 +181,9 @@ Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centr
     "room_name": "Kitchen",
     "bearing_deg": 47,
     "distance_mm": 2160,
-    "source": "stuck_events"
+    "source": "stuck_events",
+    "dominant_weekday": 0,
+    "dominant_hour": 9
   }
 ]
 ```
@@ -195,6 +197,8 @@ Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centr
 | `bearing_deg` | int | Never | Compass bearing from dock |
 | `distance_mm` | int | Never | Euclidean distance from dock |
 | `source` | string | Never | `stuck_events` / `robot_learned` / `keepout` |
+| `dominant_weekday` | int | Yes | (v3.3.1) 0=Monday..6=Sunday. Only set for `stuck_events` pins with ≥8 stuck events and a ≥60% dominant time slot — pins with fewer (down to the 3-event display threshold) always show `null` here, that's expected |
+| `dominant_hour` | int | Yes | (v3.3.1) 0-23, paired with `dominant_weekday` — always both-null or both-set |
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
@@ -378,7 +382,7 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /mission/{mission_id}/explain
 
-Rule-based explanation for why a mission was (or wasn't) flagged anomalous — same logic as the `roomba_plus.explain_mission` service, exposed as REST for external tooling. `{mission_id}` accepts `latest` to explain the most recent mission regardless of whether it was anomalous.
+Rule-based explanation for why a mission was (or wasn't) flagged anomalous — same logic as the `roomba_plus.explain_mission` service, exposed as REST for external tooling. `{mission_id}` accepts `latest` to explain the most recent mission regardless of whether it was anomalous. It also accepts the cloud-only `"c_{ts}"` id format that `format=records` uses for cloud-source-only rows (v3.3.1) — these previously always returned 404, since such missions were never written to local storage.
 
 ```
 GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
@@ -480,7 +484,7 @@ image — room outlines (current map) plus this mission's real coverage points.
 
 | Status | Meaning |
 |---|---|
-| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer (currently an open question on i-series/lewis firmware — confirmed working on j-series/sapphire) |
+| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer (currently an open question on i-series/lewis firmware — confirmed working on Braava jet m6, sapphire firmware family) |
 | 409 | Verification-gate mismatch — the cloud map's `map_header.nmssn` does not match the requested record; the wrong map is never served silently |
 | 502 | Cloud transport failure |
 

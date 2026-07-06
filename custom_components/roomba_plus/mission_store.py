@@ -245,11 +245,16 @@ class MissionStore:
     def find_by_id(self, mission_id: str) -> dict[str, Any] | None:
         """v3.2.0 ANOMALY-EXPLAIN — look up a specific record by its
         `id` field (the "m_{unix_start_ts}" format used throughout this
-        store), or None if no record matches. Linear scan — record counts
+        store) OR its `missionId` field (the cloud ULID, present on
+        records enriched via backfill_from_cloud() — see
+        _CLOUD_MERGE_SCALAR). v3.3.1 fix: previously only checked `id`,
+        contradicting the documented contract ("the record's id field
+        ... or the cloud missionId ULID — both resolve") — missionId
+        never actually matched anything. Linear scan — record counts
         are bounded (MAX_RECORDS), so this is not a hot path worth
         indexing."""
         for record in self._records:
-            if record.get("id") == mission_id:
+            if record.get("id") == mission_id or record.get("missionId") == mission_id:
                 return record
         return None
 
@@ -273,7 +278,11 @@ class MissionStore:
         ),
     }
 
-    def explain_mission(self, mission_id: str | None = None) -> dict[str, Any] | None:
+    def explain_mission(
+        self,
+        mission_id: str | None = None,
+        record_override: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """v3.2.0 ANOMALY-EXPLAIN — shared explanation-assembly logic used
         by both the explain_mission service (services.py) and its REST
         counterpart (api_views.py), so the two never drift out of sync.
@@ -283,12 +292,32 @@ class MissionStore:
         which case it is, so this doubles as a general "explain the last
         mission" call).
 
+        record_override (v3.3.1, cloud-source Explain): when given, used
+        directly as the record instead of looking one up via find_by_id()/
+        latest() — mission_id is ignored in that case except as the
+        result's echoed "mission_id" (read from record_override itself).
+        This is how callers resolve a cloud-only synthetic id (e.g.
+        "c_{ts}", which never exists in this store's _records) without
+        MissionStore needing any knowledge of cloud_coordinator — the
+        caller (api_views.py) does that resolution and hands over a
+        plain record dict shaped for this method's field expectations
+        (duration_min, area_sqft, dirt, error_code — see
+        _cloud_record_to_explain_input() in api_views.py). recharge_min
+        and npicks_delta are local-only telemetry and are legitimately
+        absent on such records — anomaly_reason()/robot_lifted below
+        already treat both as optional, so this isn't a special case.
+
         Returns None only when no matching mission exists at all (bad
         mission_id, or empty history) — callers translate that into
         whatever's appropriate for their transport (ServiceValidationError
         for the service, 404 for the REST view).
         """
-        record = self.find_by_id(mission_id) if mission_id is not None else self.latest()
+        if record_override is not None:
+            record = record_override
+        elif mission_id is not None:
+            record = self.find_by_id(mission_id)
+        else:
+            record = self.latest()
         if record is None:
             return None
 

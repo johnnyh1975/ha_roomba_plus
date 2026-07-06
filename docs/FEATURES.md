@@ -242,6 +242,13 @@ show_state: false
 
 Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[xiaomi-vacuum-map-card.md](xiaomi-vacuum-map-card.md)** for the full setup guide.
 
+**ZONE-OVERLAY + furniture shadows (v3.3.1):** both map entities additionally expose, when aligned:
+- `zones` — keep-out zones and robot-observed obstacle zones as raw vector data (`{"type": "keepout", "polygon": [[x,y],...]}` or `{"type": "observed", "x": ..., "y": ...}`, pose-space mm), letting a dashboard draw its own overlay instead of relying on the baked-in PNG rendering described below.
+- `door_markers` — inferred door-crossing positions accumulated across missions (`{"id", "cx", "cy", "label", "mission_count"}`, pose-space mm). Known caveat: not re-corrected by drift detection, so a marker can lag slightly behind a large inter-mission drift correction.
+- `furniture_candidates` — cells flagged by the FURNITURE detector (reliably covered for a long stretch, now absent) as `{"x_mm", "y_mm"}` pairs, pose-space mm — the same signal that drives `binary_sensor.*_layout_change_detected`, exposed here as a full list rather than first-candidate-only.
+
+All three are withheld in fallback (not-yet-aligned) mode, since the underlying data is pose-space and would be spatially wrong overlaid on a UMF-space fallback render.
+
 The cleaning map overlays keep-out zones (red, semi-transparent) when the UMF aligner is active. **Observed obstacle zones** (v3.0.0) are also overlaid as orange circles — these represent positions where the robot has repeatedly detected obstacles over time, sourced from the UMF `observed_zones` data.
 
 The native **Roomba+ platform was merged into xiaomi-vacuum-map-card in v2.4.1** (June 2026). On that version or newer, pick **Roomba+** as the `vacuum_platform` in the card editor and use the **"Generate Room Configs"** button — it reads the `rooms` attribute and builds the room overlay for you, no manual coordinates:

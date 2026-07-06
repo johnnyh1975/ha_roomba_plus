@@ -163,6 +163,76 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cloud_record_to_explain_input(record: dict[str, Any]) -> dict[str, Any]:
+    """v3.3.1 EXPLAIN-CLOUD — convert a raw cloud /missionhistory record
+    to the minimal internal shape MissionStore.anomaly_reason()/
+    explain_mission() expect (duration_min, area_sqft, dirt, error_code).
+
+    NOT the same as _cloud_record_to_unified() (the REST-facing
+    format=records shape) — that one uses dirt_events (not dirt) and
+    carries no recharge_min/npicks_delta at all. This converter targets
+    explain_mission()'s field names directly instead of adding a second
+    translation hop through the REST shape.
+
+    recharge_min and npicks_delta are deliberately absent: both are
+    local-only telemetry (mid-mission recharge tracking, bin-lift pick
+    count) that a pure cloud-only record never carries. anomaly_reason()
+    already treats recharge_min as optional (skips the excessive_recharge
+    check when absent) and explain_mission() defaults npicks_delta to 0
+    (robot_lifted reads as False) — an honest "unknown" rather than a
+    fabricated "no", same documented-gap class as F22's stuck_count 3-7
+    null window.
+    """
+    start_ts = record.get("startTime")
+    end_ts   = record.get("timestamp")
+    pause_id = record.get("pauseId")
+    try:
+        pause_id_int = int(pause_id) if pause_id is not None else 0
+    except (TypeError, ValueError):
+        pause_id_int = 0
+    return {
+        "id":           f"c_{start_ts}" if start_ts else f"c_{end_ts}",
+        "duration_min": int(record.get("durationM") or record.get("doneM") or 0),
+        "area_sqft":    record.get("sqft"),
+        "dirt":         record.get("dirt"),
+        "error_code":   pause_id_int if pause_id_int > 0 else None,
+    }
+
+
+def _resolve_cloud_explain_record(
+    data: "RoombaData", mission_id: str
+) -> dict[str, Any] | None:
+    """v3.3.1 EXPLAIN-CLOUD — resolve a synthetic "c_{ts}" id (minted by
+    _cloud_record_to_unified() for cloud-only mission rows that never
+    made it into MissionStore._records) against the cloud coordinator's
+    raw /missionhistory cache, so cloud-source rows get Explain support
+    too. Mirrors the same startTime-then-timestamp precedence
+    _cloud_record_to_unified() uses when minting the id, so the reverse
+    lookup matches the same record it was minted from.
+
+    Returns None when unresolvable (no cloud coordinator, malformed id,
+    or no matching raw record — e.g. the cloud history window has since
+    rolled past that mission) — caller translates that into a 404, same
+    as any other unresolvable mission_id.
+    """
+    if not mission_id.startswith("c_") or data.cloud_coordinator is None:
+        return None
+    try:
+        target_ts = int(mission_id[len("c_"):])
+    except ValueError:
+        return None
+    for raw in data.cloud_coordinator.raw_records:
+        start_ts = raw.get("startTime")
+        end_ts   = raw.get("timestamp")
+        candidate_ts = start_ts if start_ts else end_ts
+        try:
+            if candidate_ts is not None and int(candidate_ts) == target_ts:
+                return _cloud_record_to_explain_input(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     """Convert a local MissionStore record to the unified per-mission shape.
 
@@ -328,6 +398,11 @@ class MissionHistoryView(HomeAssistantView):
 
         # -- format=hazards ---------------------------------------------------
         # F9 — returns GridStore stuck hotspots and UMF-seeded obstacle zones.
+        # F22 (v3.3.1) — see dominant_weekday/dominant_hour merge below.
+        # Known, accepted gap: stuck_pattern() uses a higher confidence
+        # threshold (8) than hotspots() (3), so pins with stuck_count 3-7
+        # always carry null dominant_weekday/dominant_hour — not a bug,
+        # just below the pattern-detection confidence bar.
         if fmt == "hazards":
             from .models import MapCapability
             if data.map_capability == MapCapability.NONE or data.grid_store is None:
@@ -367,6 +442,22 @@ class MissionHistoryView(HomeAssistantView):
                             "distance_mm": int(math.sqrt(cx ** 2 + cy ** 2)),
                             "source":      "keepout",
                         })
+
+            # F22 (v3.3.1) — merge GridStore.stuck_pattern()'s dominant
+            # weekday/hour onto matching stuck_events pins. Runs after the
+            # robot_learned/keepout appends above so every hazard dict gets
+            # both keys (defaulting null), keeping the response schema
+            # uniform across sources.
+            patterns = data.grid_store.stuck_pattern()
+            for hazard in hazards:
+                dominant_weekday = None
+                dominant_hour = None
+                if hazard.get("source") == "stuck_events" and patterns:
+                    slot = patterns.get((hazard["gx"], hazard["gy"]))
+                    if slot:
+                        dominant_weekday, dominant_hour = slot
+                hazard["dominant_weekday"] = dominant_weekday
+                hazard["dominant_hour"] = dominant_hour
 
             # v2.3.0 Step 8 — populate room_name via UmfAligner
             aligner = getattr(data, "umf_aligner", None)
@@ -501,7 +592,24 @@ class ExplainMissionView(HomeAssistantView):
             return self.json_message("No mission history available", status_code=404)
 
         resolved_id = None if mission_id == "latest" else mission_id
-        result = data.mission_store.explain_mission(resolved_id)
+
+        # EXPLAIN-CLOUD (v3.3.1) — a cloud-only synthetic id ("c_{ts}")
+        # never exists in MissionStore._records, so find_by_id() alone
+        # would always 404 it. Only engage the cloud-resolution fallback
+        # for ids that actually look like one ("c_" prefix) — a real
+        # local id ("m_...") or a cloud missionId ULID (now also matched
+        # directly by find_by_id(), see Fund 2 fix there) never takes
+        # this path.
+        record_override = None
+        if resolved_id is not None and resolved_id.startswith("c_"):
+            record_override = _resolve_cloud_explain_record(data, resolved_id)
+            if record_override is None:
+                return self.json_message("Mission not found", status_code=404)
+
+        result = data.mission_store.explain_mission(
+            None if record_override is not None else resolved_id,
+            record_override=record_override,
+        )
         if result is None:
             return self.json_message("Mission not found", status_code=404)
 

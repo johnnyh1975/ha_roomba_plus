@@ -957,7 +957,26 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     if mission_store is None:
         raise ServiceValidationError(f"explain_mission: no mission history for {entity_id}")
 
-    result = mission_store.explain_mission(mission_id)
+    # v3.3.1 EXPLAIN-CLOUD bug-hunt fix — the REST view (api_views.py's
+    # ExplainMissionView) gained cloud-only "c_{ts}" id resolution, but this
+    # service didn't, despite the contract ("both delegate to
+    # MissionStore.explain_mission() ... so the two never drift out of
+    # sync"). A mission_id copied from format=records for a cloud-only row
+    # would 404 here while resolving fine via REST. Local import matches
+    # this module's existing cross-import style (_resolve_pmapv_id etc.).
+    record_override = None
+    if mission_id is not None and mission_id.startswith("c_"):
+        from .api_views import _resolve_cloud_explain_record
+        record_override = _resolve_cloud_explain_record(data, mission_id)
+        if record_override is None:
+            raise ServiceValidationError(
+                f"explain_mission: mission not found for {entity_id} (id={mission_id})"
+            )
+
+    result = mission_store.explain_mission(
+        None if record_override is not None else mission_id,
+        record_override=record_override,
+    )
     if result is None:
         raise ServiceValidationError(
             f"explain_mission: mission not found for {entity_id}"

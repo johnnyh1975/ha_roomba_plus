@@ -29,6 +29,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - [Getting started](#getting-started)
 - [Migration](#migration)
 - [Documentation](#documentation)
+- [Data privacy & data flow](#data-privacy--data-flow)
 - [Replacing or selling your robot](#replacing-or-selling-your-robot)
 - [Translations](#translations)
 - [Credits](#credits)
@@ -42,9 +43,9 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 | **600** (Bump & run) | Roomba 694, 692 | ⚠️ untested |
 | **900** (VSLAM) | Roomba 980, 985 | ✅ **Roomba 980** |
 | **i-series** | i3, i7, i7+ | ✅ **i7+** |
-| **s-series** | s9+ | ⚠️ untested |
+| **s-series** | s9+ | ✅ **S9+** |
 | **j-series** | j7, j7+ | ✅ **j-series** |
-| **Braava** | m6 | ⚠️ untested |
+| **Braava** | m6 | ✅ **Braava jet m6** |
 
 **What works on your robot** — the fast answer to the most common setup question:
 
@@ -59,7 +60,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 | Maintenance reminders (filter/brush/battery) | ✅ | ✅ | ✅ | ✅ |
 | Mop control (pad wetness, tank status) | — | — | — | ✅ |
 
-*Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them. i-series mission maps are field-confirmed on j-series firmware; i-series confirmation is pending (see [Upgrade notes](docs/UPGRADING.md)).*
+*Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them. Mission maps are field-confirmed on Braava jet m6 (sapphire firmware family); i-series (lewis firmware) confirmation is pending (see [Upgrade notes](docs/UPGRADING.md)).*
 
 **Capability tiers, in plain terms:** 600-series = bump-and-run (no map, no room targeting). 900-series = VSLAM ephemeral map with automatic zone detection and cloud history. i/s/j-series and Braava = persistent Smart Map with named rooms, favourites, and the full room-intelligence feature set.
 
@@ -160,6 +161,24 @@ Questions or issues? → [GitHub Issues](https://github.com/johnnyh1975/ha_roomb
 
 ---
 
+## Data privacy & data flow
+
+Roomba+ is a local-first integration. Here's exactly what talks to what.
+
+**Local MQTT (always on).** Base functionality — live status, cleaning map, room targeting, blocking sensors, maintenance tracking — runs entirely over a local MQTT connection between Home Assistant and the robot (BLID + local password). No internet connection or cloud account is required.
+
+**iRobot cloud (optional).** If you enter your iRobot app email and password (Settings → Devices → Roomba+ → Configure → iRobot cloud credentials), Roomba+ additionally talks to iRobot's own cloud API — the same servers and the same account the official iRobot app itself uses. Nothing is proxied through a third party or a Roomba+-specific server. This unlocks Smart Map room names, favorites, mission history enrichment, and the room-intelligence features marked "requires cloud" in the capability matrix above. It's entirely optional — everything else works without it, and you can add or remove cloud credentials at any time (see [Adding or updating cloud credentials](#adding-or-updating-cloud-credentials)).
+
+**What's stored, and where.** Mission history, coverage/stuck-hotspot data, door markers, robot profile, and maintenance timers are all stored in Home Assistant's own `.storage/` directory, on your instance. This data never leaves your Home Assistant instance on its own.
+
+**No phone-home.** Roomba+ has no analytics, telemetry, or crash-reporting server of any kind — nothing is sent to the developer or anyone else automatically. The REST API (see [REST API →](docs/API.md)) is served by your own Home Assistant instance and requires your own long-lived access token; it's not a hosted service.
+
+**Diagnostics downloads.** Settings → Devices → Roomba+ → Download diagnostics redacts your BLID, local password, and iRobot credentials automatically before the file is generated — and is only ever created when you click the button, never automatically or on a schedule.
+
+**Filing a bug report?** GitHub issues and the diagnostics download above are the only ways any data leaves your instance for troubleshooting purposes — both are things you explicitly initiate.
+
+---
+
 ## Replacing or selling your robot
 
 Roomba+ stores learned data (mission history, coverage baselines, maintenance timers, health trends) inside HA — not on the robot. Before removing a robot, export your history so you can restore it later:
@@ -201,6 +220,8 @@ To contribute or report an incorrect phrase: open an issue or PR with the correc
 ---
 
 ## Credits
+
+**Field testing** — real-device reports from these community members have directly driven bug fixes, cancelled features that didn't hold up, and shaped the version plan: **Thonno** (i7+), **veronoicc** (i7+, i8+), **boutXIII** (Braava jet m6), **ronluna** (S9+), **KingAntDesigns** (Braava jet m6, j7+). Thank you all.
 
 **[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots.
 

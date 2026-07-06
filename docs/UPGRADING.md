@@ -37,8 +37,8 @@ rather than `Unknown`/`insufficient_data` — expected, not a bug:
 **Mission maps (`.../missions/{id}/map.json` / `.../map.png`)** require a
 mission recorded on v3.3.0 or later (the `pmaps_info` field is cloud-merged
 going forward, not backfilled into older records) — older missions return
-404 until enough new ones accumulate. i-series (lewis firmware) coverage
-layer support is unconfirmed as of this release — see the note in
+404 until enough new ones accumulate. Mission maps are field-confirmed on Braava jet m6 (sapphire firmware
+family); i-series (lewis firmware) coverage layer support is unconfirmed as of this release — see the note in
 [Feature reference](FEATURES.md#mission-history--room-intelligence) if you
 get a 404 mentioning "no coverage layer".
 

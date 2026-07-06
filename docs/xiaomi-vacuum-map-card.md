@@ -17,6 +17,16 @@ Roomba+ exposes two attributes on its map image entities that XVMC reads directl
 | `calibration_points` | `calibration_source: { camera: true }` | 3 anchor pairs mapping vacuum mm ↔ image pixels |
 | `rooms` | `predefined_selections` (see below) | Dict of room polygons, names, MDI icons, and centroids |
 
+**Additional vector-data attributes (v3.3.1), for dashboards drawing their own overlays** — not consumed by the native XVMC platform template above, but available for custom cards/templates:
+
+| Attribute | Description |
+|---|---|
+| `zones` | Keep-out and robot-observed obstacle zones as raw polygons/points, pose-space mm |
+| `door_markers` | Inferred door-crossing positions, pose-space mm |
+| `furniture_candidates` | Cells flagged by the FURNITURE detector as likely-moved furniture, pose-space mm |
+
+All three require the map entity to be in aligned mode (same gate as `rooms`/`calibration_points`) and are absent otherwise.
+
 There are two ways to set up the room overlay, depending on your XVMC version:
 
 - **XVMC v2.4.1 or newer (recommended):** the native Roomba+ platform is built

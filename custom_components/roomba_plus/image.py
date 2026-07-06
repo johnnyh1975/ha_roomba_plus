@@ -583,6 +583,73 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if rooms:
             attrs["rooms"] = rooms
 
+        # ZONE-OVERLAY (v3.3.1) + F24 — mirrors RoombaRoomsImage's identical
+        # block for parity ("Both map entities expose calibration_points and
+        # rooms attributes", docs/FEATURES.md). This class is always in
+        # aligned mode by this point (early-returned above if not
+        # aligner.aligned), so no extra gate is needed here.
+        # zones — UMF-space source (observed_zone_centroids, keepout_zones),
+        # genuinely needs the aligner transform, unlike door_markers/
+        # furniture_candidates below.
+        if cc is not None:
+            zones: list[dict[str, Any]] = []
+            for centroid in cc.observed_zone_centroids:
+                pose_xy = aligner.umf_to_pose(centroid["x"], centroid["y"])
+                if pose_xy is None:
+                    continue
+                zones.append({
+                    "type": "observed",
+                    "x":    pose_xy[0],
+                    "y":    pose_xy[1],
+                })
+            for zone in cc.keepout_zones:
+                poly_umf = aligner.keepout_polygon_umf(zone)
+                if not poly_umf:
+                    continue
+                poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                if not poly_pose or not all(p is not None for p in poly_pose):
+                    continue
+                zones.append({
+                    "type":    "keepout",
+                    "polygon": [[x, y] for x, y in poly_pose],
+                })
+            if zones:
+                attrs["zones"] = zones
+
+        # door_markers — already pose-space mm (collected directly from
+        # self._mission_points / RoomSegStore.doors, never through UMF) —
+        # exposed as-is, NOT through umf_to_pose(). Known caveat: markers
+        # accumulate across missions and are not re-corrected by
+        # GeometryStore.record_drift()/drift_recovered() (those only track
+        # drift magnitude for the Repair Issue), so a marker's median
+        # position can lag behind a large drift correction between
+        # missions — same open-ended caveat class as observed_zone
+        # centroids' Q6 note, not treated as a blocker.
+        geometry_store = getattr(data, "geometry_store", None)
+        if geometry_store is not None and geometry_store.door_markers:
+            attrs["door_markers"] = [
+                {
+                    "id":            m.id,
+                    "cx":            m.cx,
+                    "cy":            m.cy,
+                    "label":         m.label,
+                    "mission_count": m.mission_count,
+                }
+                for m in geometry_store.door_markers
+            ]
+
+        # F24 — furniture shadow candidates. GridStore.furniture_
+        # candidates()'s x_mm/y_mm come from _cell_to_mm(), the same
+        # pose-space family hotspots()/format=hazards already documents —
+        # no transform needed, exposed as-is.
+        grid_store = getattr(data, "grid_store", None)
+        if grid_store is not None:
+            candidates = grid_store.furniture_candidates()
+            if candidates:
+                attrs["furniture_candidates"] = [
+                    {"x_mm": c["x_mm"], "y_mm": c["y_mm"]} for c in candidates
+                ]
+
         return attrs
 
     # ── Push-update wiring ────────────────────────────────────────────────────
@@ -2141,6 +2208,75 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             }
         if rooms:
             attrs["rooms"] = rooms
+
+        # ZONE-OVERLAY (v3.3.1) + F24 — only meaningful in aligned mode:
+        # zones/door_markers/furniture_candidates are all pose-space (or
+        # transformed to pose-space), which only matches the rendered image
+        # when aligned=True. In fallback mode the image is UMF-space and
+        # these would be spatially wrong if shown, so they're withheld
+        # entirely (same reasoning as `rooms`'s aligned/fallback split above).
+        if aligned:
+            # zones — UMF-space source (observed_zone_centroids, keepout_zones),
+            # genuinely needs the aligner transform, unlike door_markers/
+            # furniture_candidates below.
+            if cc is not None:
+                zones: list[dict[str, Any]] = []
+                for centroid in cc.observed_zone_centroids:
+                    pose_xy = aligner.umf_to_pose(centroid["x"], centroid["y"])
+                    if pose_xy is None:
+                        continue
+                    zones.append({
+                        "type": "observed",
+                        "x":    pose_xy[0],
+                        "y":    pose_xy[1],
+                    })
+                for zone in cc.keepout_zones:
+                    poly_umf = aligner.keepout_polygon_umf(zone)
+                    if not poly_umf:
+                        continue
+                    poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                    if not poly_pose or not all(p is not None for p in poly_pose):
+                        continue
+                    zones.append({
+                        "type":    "keepout",
+                        "polygon": [[x, y] for x, y in poly_pose],
+                    })
+                if zones:
+                    attrs["zones"] = zones
+
+            # door_markers — already pose-space mm (collected directly from
+            # self._mission_points / RoomSegStore.doors, never through UMF)
+            # — exposed as-is, NOT through umf_to_pose(). Known caveat:
+            # markers accumulate across missions and are not re-corrected by
+            # GeometryStore.record_drift()/drift_recovered() (those only
+            # track drift magnitude for the Repair Issue), so a marker's
+            # median position can lag behind a large drift correction
+            # between missions — same open-ended caveat class as
+            # observed_zone centroids' Q6 note, not treated as a blocker.
+            geometry_store = getattr(data, "geometry_store", None)
+            if geometry_store is not None and geometry_store.door_markers:
+                attrs["door_markers"] = [
+                    {
+                        "id":            m.id,
+                        "cx":            m.cx,
+                        "cy":            m.cy,
+                        "label":         m.label,
+                        "mission_count": m.mission_count,
+                    }
+                    for m in geometry_store.door_markers
+                ]
+
+            # F24 — furniture shadow candidates. GridStore.furniture_
+            # candidates()'s x_mm/y_mm come from _cell_to_mm(), the same
+            # pose-space family hotspots()/format=hazards already
+            # documents — no transform needed, exposed as-is.
+            grid_store = getattr(data, "grid_store", None)
+            if grid_store is not None:
+                candidates = grid_store.furniture_candidates()
+                if candidates:
+                    attrs["furniture_candidates"] = [
+                        {"x_mm": c["x_mm"], "y_mm": c["y_mm"]} for c in candidates
+                    ]
 
         return attrs
 
