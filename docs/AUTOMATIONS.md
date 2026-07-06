@@ -31,6 +31,9 @@ automation:
 
 ### Clean specific rooms on a schedule
 
+Wrap this in your own `trigger: time` (or `time_pattern`) — this recipe
+is the *action*, not the schedule itself:
+
 ```yaml
 action: roomba_plus.clean_room
 target:
@@ -41,6 +44,12 @@ data:
     - Hallway
   ordered: true
 ```
+
+*(Looking for your robot's existing iRobot-app schedule instead of building
+a new HA-side one? That's `calendar.{name}_schedule` — read-only, appears
+automatically, no automation needed. This recipe is for building something
+new, e.g. a schedule the app itself can't express, like room-specific
+timing.)*
 
 ### Presence-aware cleaning with full timing control
 
@@ -108,7 +117,6 @@ automation:
 
 ---
 
-
 ### Daily catch-up clean for overdue rooms (v3.3.0)
 
 Fires safely every day — does nothing when no room is actually due.
@@ -165,12 +173,12 @@ automation:
         max_rooms: 2
 ```
 
-
 ---
 
 ## Dashboard example
 
-A minimal dashboard combining the map, vacuum card, and key sensors:
+A minimal dashboard combining the map, vacuum card, key sensors, and the
+maintenance to-do list:
 
 ```yaml
 type: vertical-stack
@@ -197,10 +205,10 @@ cards:
       - entity: sensor.roomba_mission_progress
         name: Progress
     columns: 4
+
+  - type: todo-list
+    entity: todo.roomba_maintenance
 ```
-
----
-
 
 ---
 

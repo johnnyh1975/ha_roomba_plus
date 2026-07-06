@@ -233,7 +233,7 @@ The `entry_id` is in Settings → Devices → your Roomba → ⋮ → System inf
 
 **Step 2 — Remove the integration**
 
-Go to Settings → Devices & Services → Roomba+ → Delete. This removes the config entry and all associated entities cleanly.
+Go to Settings → Devices & Services → Roomba+ → Delete. This removes the config entry, all associated entities, and every file this integration stored on disk for this robot *(v3.4.0+)* — mission history, coverage baselines, maintenance timers, robot profile, and the rest. Nothing lingers after deletion; this is why Step 1's export matters if you want to keep the history.
 
 **Step 3 — Factory reset (if selling)**
 

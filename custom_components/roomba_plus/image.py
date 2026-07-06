@@ -1264,6 +1264,18 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # tier-detection logic itself.
                     robot_radius_mm=self._renderer._cfg.robot_diameter_mm / 2,
                 )
+                # v3.4.0 GS-SMART-COVERAGE — stamp this mission's nMssn as
+                # "already fed into GridStore via the live path". Shared
+                # watermark with the cloud-backfill path (callbacks.py):
+                # whichever path processes a mission first claims it here,
+                # so the other path's candidate filter skips it — this is
+                # the actual real-pose robots' path, so it runs (and
+                # therefore claims the mission) BEFORE any cloud refresh
+                # would otherwise re-process the same mission from UMF
+                # data. mission_stats comes from IRobotEntity (entity.py).
+                _gdata.grid_store.record_processed_nmssn(
+                    self.mission_stats.get("nMssn")
+                )
                 asyncio.run_coroutine_threadsafe(
                     _gdata.grid_store.async_save(
                         self.hass, self._config_entry.entry_id

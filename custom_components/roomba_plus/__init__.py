@@ -15,7 +15,7 @@ import dataclasses
 from datetime import timedelta
 from functools import partial
 import logging
-from typing import Any
+from typing import Any, Final
 
 from roombapy import Roomba, RoombaConnectionError, RoombaFactory
 
@@ -3165,3 +3165,74 @@ async def async_remove_config_entry_devices(
     is safe to remove.
     """
     return True
+
+
+# v3.4.0 bug-hunt finding (README/docs review) — Roomba+ persists 15 distinct
+# hass.storage files across its stores (mission history, coverage grid,
+# maintenance timers, robot profile, room segmentation, map render state,
+# etc. — see each module's own STORAGE_KEY_PREFIX). Before this addition,
+# only async_unload_entry existed: it tears down runtime state but a config
+# entry's unload happens on every reload too, so it was never the right place
+# to touch persisted files anyway. There was no async_remove_entry at all —
+# HA's ONLY hook that fires specifically on permanent deletion (never on a
+# reload) — meaning every one of these 15 files silently outlived the config
+# entry that created them, contradicting the README/TROUBLESHOOTING claim
+# that deletion "removes the config entry and all associated entities
+# cleanly." This makes that claim actually true.
+#
+# (label, key_template) — key_template gets .format(entry_id=...). Version is
+# always 1 for every store in this integration (confirmed against source);
+# Store.async_remove() doesn't use the version for removal anyway, and
+# already suppresses FileNotFoundError internally for a file that was never
+# created (e.g. a 600-series robot has no GridStore data to begin with).
+_STORAGE_KEYS_TO_REMOVE: Final[list[tuple[str, str]]] = [
+    ("dirt_threshold_manager", "roomba_plus_dirt_threshold_{entry_id}"),
+    ("freeze_snapshot_store", "roomba_plus_freeze_{entry_id}"),
+    ("geometry_store", "roomba_plus_geometry_{entry_id}"),
+    ("grid_store", "roomba_plus_grid_{entry_id}"),
+    # legacy pre-migration zone data (LEGACY-ZONE-MIGRATION) — may not exist
+    # on any install that was never on the old ZoneStore in the first place.
+    ("legacy_zone_migration", "roomba_plus_zones_{entry_id}"),
+    ("maintenance_store", "roomba_plus_maintenance_{entry_id}"),
+    ("mission_archive", "roomba_plus_mission_archive_{entry_id}"),
+    ("mission_store", "roomba_plus_missions_{entry_id}"),
+    ("mission_timer_store", "roomba_plus_mission_timer_{entry_id}"),
+    ("mission_trajectory_store", "roomba_plus_trajectories_{entry_id}"),
+    ("outline_store", "roomba_plus_outline_{entry_id}"),
+    ("robot_profile_store", "roomba_plus_robot_profile_{entry_id}"),
+    ("room_seg_store", "roomba_plus_roomseg_{entry_id}"),
+    ("image (map render state)", "roomba_plus_map_{entry_id}"),
+    ("image (mission checkpoint)", "roomba_plus_map_checkpoint_{entry_id}"),
+]
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry
+) -> None:
+    """Delete every persisted hass.storage file for this config entry.
+
+    Runs after async_unload_entry, only on permanent deletion (HA never
+    calls this on a reload). Each removal is independently guarded — one
+    file failing to delete (permissions, unexpected I/O error; a missing
+    file is already a safe no-op inside Store.async_remove() itself) must
+    never prevent the remaining ones from being attempted.
+    """
+    from homeassistant.helpers.storage import Store
+
+    entry_id = config_entry.entry_id
+    removed = 0
+    for label, key_template in _STORAGE_KEYS_TO_REMOVE:
+        key = key_template.format(entry_id=entry_id)
+        try:
+            await Store(hass, 1, key).async_remove()
+            removed += 1
+        except Exception:  # noqa: BLE001 — one failure must not block the rest
+            _LOGGER.warning(
+                "Roomba+ removal: failed to delete storage for %s (key=%s)",
+                label, key, exc_info=True,
+            )
+
+    _LOGGER.info(
+        "Roomba+ removal: cleaned up %d/%d storage file(s) for entry %s",
+        removed, len(_STORAGE_KEYS_TO_REMOVE), entry_id,
+    )

@@ -19,6 +19,15 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.SWITCH,
     Platform.SELECT,
     Platform.DEVICE_TRACKER,
+    # v3.4.0 CAL — always present regardless of robot tier: scheduling
+    # is a software feature virtually every iRobot model supports,
+    # unlike map-dependent Platform.IMAGE (added conditionally further
+    # down) which needs real pose/pmap hardware capability.
+    Platform.CALENDAR,
+    # v3.4.0 TODO — always present: filter/brush maintenance applies to
+    # every robot tier. "Reconfigure rooms" (SMART-tier only, see
+    # todo.py) simply never appears in the list on EPHEMERAL robots.
+    Platform.TODO,
 ]
 
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)

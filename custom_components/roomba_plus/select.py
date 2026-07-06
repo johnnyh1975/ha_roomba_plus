@@ -25,12 +25,12 @@ from .const import (
     FAN_SPEED_ECO,
     FAN_SPEED_PERFORMANCE,
     FAN_SPEEDS,
-    extract_region_id,
     has_carpet_boost,
     has_smart_map,
 )
 from .entity import IRobotEntity
 from .models import MapCapability, RoombaConfigEntry
+from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
 def resolve_zone_name(
     region_id: str,
@@ -482,53 +482,14 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     # ── Region ID collection ──────────────────────────────────────────────────
 
     def _collect_region_ids(self) -> list[str]:
-        """Collect all known region_ids from local state and persisted options.
-
-        Reads live vacuum_state first (cleanSchedule2, lastCommand), then
-        merges with discovered_zone_ids from config entry options so that
-        previously seen IDs remain visible even after MQTT connection is lost
-        (e.g. when the iRobot app takes over the local connection).
-        """
-        region_ids: set[str] = set()
-
-        # From cleanSchedule2
-        for entry in self.vacuum_state.get("cleanSchedule2", []):
-            cmd = entry.get("cmd", {})
-            for region in cmd.get("regions", []):
-                rid = extract_region_id(region)
-                if rid:
-                    region_ids.add(rid)
-
-        # From lastCommand
-        last = self.vacuum_state.get("lastCommand", {})
-        for region in (last.get("regions") or []):
-            rid = extract_region_id(region)
-            if rid:
-                region_ids.add(rid)
-
-        # From persisted discovered_zone_ids — survives MQTT disconnection.
-        persisted = self._config_entry.options.get("discovered_zone_ids", [])
-        region_ids.update(persisted)
-
-        return sorted(region_ids, key=lambda x: x.zfill(4))
+        """Back-compat wrapper (v3.4.0 TODO extraction) — see
+        zone_naming.py::collect_region_ids() for the actual logic,
+        shared with the new todo.py platform."""
+        return collect_region_ids(self.vacuum_state, self._config_entry.options)
 
     def _unlabelled_region_ids(self) -> list[str]:
-        """Return region_ids that have no user-assigned label yet.
-
-        Excludes hidden zone IDs — no repair issue should fire for hidden zones.
-        Checks smart_zone_data first (new storage), then falls back to
-        smart_zone_labels (legacy) so existing installs aren't re-prompted.
-        """
-        from .const import CONF_SMART_ZONE_HIDDEN
-        options = self._config_entry.options
-        zone_data: dict = options.get("smart_zone_data", {})
-        labels: dict = options.get("smart_zone_labels", {})
-        hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
-        named = set(zone_data) | set(labels)
-        return [
-            rid for rid in self._collect_region_ids()
-            if rid not in named and rid not in hidden_ids
-        ]
+        """Back-compat wrapper — see zone_naming.py::unlabelled_zone_ids()."""
+        return unlabelled_zone_ids(self.vacuum_state, self._config_entry.options)
 
     def _region_label(self, region_id: str) -> str:
         """Return display name using 5-level priority chain (v1.7.0 L7).

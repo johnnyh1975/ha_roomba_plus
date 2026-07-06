@@ -186,6 +186,14 @@ class GridStore:
         # so far, from a single mission).
         self._furniture_dismissed_at: dict[tuple[int, int], str] = {}
         self._structure_cells: dict[tuple[int, int], float] = {}
+        # v3.4.0 GS-SMART-COVERAGE — monotonic per-robot high-water mark of
+        # the highest nMssn (robot lifetime mission counter) already fed
+        # into this GridStore, from EITHER the live path (image.py, real
+        # pose) or the cloud-backfill path (callbacks.py, UMF-derived
+        # pose for pose-less lewis-firmware robots). Shared between both
+        # paths specifically to prevent double-counting a mission that
+        # the live path already processed — see record_processed_nmssn().
+        self._last_processed_nmssn: int = 0
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -264,6 +272,13 @@ class GridStore:
                 (int(k.split(",")[0]), int(k.split(",")[1])): float(v)
                 for k, v in raw_structure.items()
             }
+            # v3.4.0 GS-SMART-COVERAGE — additive field, same no-version-bump
+            # rationale as FURNITURE/DUAL-GRID above: absent on any payload
+            # saved before this existed, indistinguishable from a fresh
+            # cold start (watermark 0 — every historical mission is then a
+            # legitimate backfill candidate, which is the correct behaviour
+            # for a robot upgrading onto this feature for the first time).
+            self._last_processed_nmssn = int(data.get("last_processed_nmssn", 0) or 0)
         except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
@@ -272,6 +287,7 @@ class GridStore:
             self._coverage_history_age = {}
             self._furniture_dismissed_at = {}
             self._structure_cells = {}
+            self._last_processed_nmssn = 0
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
@@ -296,6 +312,7 @@ class GridStore:
             "structure_cells": {
                 f"{gx},{gy}": w for (gx, gy), w in self._structure_cells.items()
             },
+            "last_processed_nmssn": self._last_processed_nmssn,
         })
 
     # ── Write ──────────────────────────────────────────────────────────────────
@@ -413,6 +430,38 @@ class GridStore:
             "GridStore: update complete — %d cell(s), %d stuck cell(s)",
             len(self._cells), len(self._stuck),
         )
+
+    @property
+    def last_processed_nmssn(self) -> int:
+        """Highest robot-lifetime mission counter (nMssn) already fed into
+        this GridStore, from either the live or cloud-backfill path."""
+        return self._last_processed_nmssn
+
+    def record_processed_nmssn(self, nmssn: Any) -> None:
+        """v3.4.0 GS-SMART-COVERAGE — advance the shared watermark.
+
+        Called by BOTH the live path (image.py, after a real-pose
+        update_from_mission() call) and the cloud-backfill path
+        (callbacks.py, after a UMF-derived one) so that whichever path
+        processes a given mission first "claims" it — the other path's
+        candidate filter (nMssn > last_processed_nmssn) then skips it,
+        preventing the same mission from being fed into the EMA/stuck
+        pipeline twice.
+
+        Monotonic: never moves backwards, even if called with an older
+        value (e.g. cloud records arriving slightly out of order).
+        Silently ignores None/non-numeric input — the caller may not
+        always have a valid nMssn (e.g. very old firmware, or a mission
+        record that failed cloud merge), and this must never raise.
+        """
+        if nmssn is None:
+            return
+        try:
+            n = int(nmssn)
+        except (TypeError, ValueError):
+            return
+        if n > self._last_processed_nmssn:
+            self._last_processed_nmssn = n
 
     def seed_from_observed_zones(
         self, centroids: list[dict[str, Any]]

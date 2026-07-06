@@ -20,11 +20,14 @@ record.pmaps_info -> (pmap_id, pmapv_id of THIS mission)
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .models import RoombaData
+
+_LOGGER = logging.getLogger(__name__)
 
 # UMF coordinates come in metres (point_area [0.1049, 0.1049] = one robot
 # footprint); the project's canonical spatial unit is mm.
@@ -46,25 +49,64 @@ class MissionMapMismatch(Exception):
 
 def _extract_layers(
     umf: dict[str, Any],
-) -> tuple[dict[str, Any], list[Any], list[Any], list[Any]]:
-    """Return (map_header, coverage_coords, point_area, coverage_poly)
-    from a UMF response; every part defaults to empty on absence."""
+) -> tuple[dict[str, Any], list[Any], list[Any], list[Any], list[Any]]:
+    """Return (map_header, coverage_coords, point_area, coverage_poly,
+    escape_events) from a UMF response; every part defaults to empty on
+    absence.
+
+    v3.4.0 GS-SMART-COVERAGE: escape_events entries are returned as raw
+    {"pose": [x, y, theta], "event": str} dicts, UMF-space, unconverted
+    — the caller (callbacks.py's GS-SMART-COVERAGE dispatch) is
+    responsible for both unit/space conversion (umf_to_pose(), same as
+    the coverage layer) and event-type classification, since neither is
+    this fetch-and-verify function's concern.
+
+    Shape verified against a real UMF payload (PyRoomba's committed
+    mission_map.txt sample — same reference data source already used
+    to confirm the coverage/coverage_poly/map_header chain elsewhere in
+    this project): {"layer_type": "escape_events", "geometry": {"type":
+    "pose2dconcise_event", "list": [{"pose": [...], "event": "..."},
+    ...]}} — i.e. the events live under geometry.list, distinct from
+    the coverage/coverage_poly layers' geometry.coordinates. Structural
+    shape is confirmed; whether lewis-firmware robots actually populate
+    it for a real stuck incident (vs. only structurally, always empty)
+    is the separate, still-open Feldverifikations-Gate item (plan §4.3).
+    """
     maps = umf.get("maps") or []
     map0 = maps[0] if maps and isinstance(maps[0], dict) else {}
     header = map0.get("map_header") or {}
     coverage: list[Any] = []
     point_area: list[Any] = []
     coverage_poly: list[Any] = []
+    escape_events: list[Any] = []
     for layer in map0.get("layers") or []:
         if not isinstance(layer, dict):
             continue
-        geom = layer.get("geometry") or {}
-        if layer.get("layer_type") == "coverage":
+        layer_type = layer.get("layer_type")
+        if layer_type == "coverage":
+            geom = layer.get("geometry") or {}
             coverage = geom.get("coordinates") or []
             point_area = geom.get("point_area") or []
-        elif layer.get("layer_type") == "coverage_poly":
+        elif layer_type == "coverage_poly":
+            geom = layer.get("geometry") or {}
             coverage_poly = geom.get("coordinates") or []
-    return header, coverage, point_area, coverage_poly
+        elif layer_type == "escape_events":
+            candidate = (layer.get("geometry") or {}).get("list")
+            if isinstance(candidate, list) and candidate:
+                escape_events = candidate
+            elif candidate is None:
+                # Genuinely empty/absent layer (the common case — most
+                # missions have no stuck events) — not an error.
+                other_keys = set(layer.keys()) - {"layer_type", "geometry"}
+                if other_keys:
+                    _LOGGER.warning(
+                        "mission_map: escape_events layer present with "
+                        "unexpected top-level keys (keys=%s) — verify "
+                        "this against a real payload, shape may have "
+                        "changed",
+                        sorted(layer.keys()),
+                    )
+    return header, coverage, point_area, coverage_poly, escape_events
 
 
 def _points_to_mm(coverage: list[Any]) -> list[list[float]]:
@@ -113,7 +155,7 @@ async def async_fetch_mission_map(
         raise MissionMapUnavailable("cloud not configured")
 
     umf = await cc.api.get_pmap_umf(data.blid, pmap_id, pmapv_id)
-    header, coverage, point_area, coverage_poly = _extract_layers(umf)
+    header, coverage, point_area, coverage_poly, escape_events = _extract_layers(umf)
 
     # Plan D4 — verification gate: the boutXIII confirmation logic as a
     # runtime guard. nMssn is cloud-merged into records since v2.x.
@@ -149,6 +191,13 @@ async def async_fetch_mission_map(
         "point_area_m": point_area,
         "coverage_mm": _points_to_mm(coverage),
         "coverage_poly": coverage_poly,
+        # v3.4.0 GS-SMART-COVERAGE — additive key. Raw, unconverted
+        # (UMF-space) {"pose": [x, y, theta], "event": str} dicts;
+        # conversion/classification is the caller's job (see
+        # _extract_layers()'s docstring). Existing consumers of this
+        # payload (Card MISSION-MAP-Replay) read dict-based, so this
+        # addition doesn't affect them.
+        "escape_events": escape_events,
     }
 
     cache[record_id] = (now, payload)

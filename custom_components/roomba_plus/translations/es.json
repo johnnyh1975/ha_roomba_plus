@@ -838,6 +838,16 @@
       "position": {
         "name": "Posición"
       }
+    },
+    "calendar": {
+      "schedule": {
+        "name": "Horario"
+      }
+    },
+    "todo": {
+      "maintenance": {
+        "name": "Mantenimiento"
+      }
     }
   },
   "issues": {

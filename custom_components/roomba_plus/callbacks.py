@@ -23,6 +23,12 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
 from .const import CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
+from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
+from .mission_map import (
+    MissionMapMismatch,
+    MissionMapUnavailable,
+    async_fetch_mission_map,
+)
 import time as _time_mod
 
 if TYPE_CHECKING:
@@ -1934,6 +1940,205 @@ async def _async_bootstrap_umf_aligner(
     )
 
 
+_GS_SMART_COVERAGE_MAX_PER_REFRESH = 5
+
+# v3.4.0 GS-SMART-COVERAGE plan §4.1 — which escape_events event types
+# count as a genuine "stuck" signal for GridStore.stuck_points.
+# start_evade is deliberately excluded: it marks the start of a normal
+# obstacle-avoidance manoeuvre (the robot successfully navigating around
+# something), not a failure to progress — counting it would mark every
+# routine furniture-avoidance as a stuck hotspot.
+_GS_SMART_COVERAGE_STUCK_EVENT_TYPES = frozenset({
+    "start_stuck", "brush_stall_detected", "wheel_dropped", "stasis_detected",
+})
+
+
+def _gs_coverage_safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _gs_coverage_mission_start_weekday_hour(started_at: Any) -> tuple[int, int] | None:
+    """Mirror image.py's live-path stuck_wh derivation exactly: ONE
+    (weekday, hour) per mission, from the mission's own start
+    timestamp — not per stuck event. escape_events entries carry no
+    individual timestamps, so this is not just convenient but the only
+    option; it also matches the existing live-path semantics rather
+    than inventing a different one for the cloud path."""
+    if not started_at:
+        return None
+    try:
+        parsed = dt_util.parse_datetime(started_at)
+        if parsed is None:
+            return None
+        local = dt_util.as_local(parsed)
+        return (local.weekday(), local.hour)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gs_coverage_umf_points_to_pose(
+    coverage_mm: list[Any], aligner: Any
+) -> list[tuple[float, float]]:
+    """Convert UMF-space mm points (already unit-converted by
+    mission_map.py's _points_to_mm()) to pose-space via the aligner.
+    Points umf_to_pose() can't resolve are skipped, not fatal — the
+    same per-point defensive posture as _points_to_mm() itself.
+
+    v3.4.0 bug-hunt fix: a non-numeric coordinate used to reach
+    aligner.umf_to_pose() unfiltered and crash there (real
+    UmfAligner.umf_to_pose() does cos_r * x_umf arithmetic — a str
+    raises TypeError, not caught anywhere in this loop or its caller).
+    float() conversion here catches it per-point, same as
+    _points_to_mm()'s own guard.
+    """
+    out: list[tuple[float, float]] = []
+    for p in coverage_mm:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            continue
+        try:
+            x, y = float(p[0]), float(p[1])
+        except (TypeError, ValueError):
+            continue
+        converted = aligner.umf_to_pose(x, y)
+        if converted is not None:
+            out.append(converted)
+    return out
+
+
+def _gs_coverage_classify_stuck_events(
+    escape_events: list[Any], aligner: Any
+) -> list[tuple[float, float]]:
+    """Filter escape_events to the "stuck" subset (see
+    _GS_SMART_COVERAGE_STUCK_EVENT_TYPES above) and convert their UMF
+    poses to pose-space. An event type outside the known 5 is logged
+    (not silently dropped) so a real future occurrence is diagnosable
+    instead of invisible — same posture as mission_map.py's shape
+    warning for this same layer.
+
+    v3.4.0 bug-hunt fix: same non-numeric-coordinate crash risk as
+    _gs_coverage_umf_points_to_pose() above — escape_events poses get
+    NO type validation anywhere upstream (unlike the coverage layer,
+    which goes through _points_to_mm()'s guard), so this is the first
+    and only place that can catch it.
+    """
+    out: list[tuple[float, float]] = []
+    for ev in escape_events:
+        if not isinstance(ev, dict):
+            continue
+        event_type = ev.get("event")
+        if event_type not in _GS_SMART_COVERAGE_STUCK_EVENT_TYPES:
+            if event_type not in (None, "start_evade"):
+                _LOGGER.info(
+                    "GS-SMART-COVERAGE: unclassified escape_event type "
+                    "%r — not counted as stuck; add it to "
+                    "_GS_SMART_COVERAGE_STUCK_EVENT_TYPES if it should be",
+                    event_type,
+                )
+            continue
+        pose = ev.get("pose")
+        if not isinstance(pose, (list, tuple)) or len(pose) < 2:
+            continue
+        try:
+            x, y = float(pose[0]), float(pose[1])
+        except (TypeError, ValueError):
+            continue
+        converted = aligner.umf_to_pose(x, y)
+        if converted is not None:
+            out.append(converted)
+    return out
+
+
+async def _async_update_gs_smart_coverage(
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    cloud_coordinator: Any,
+) -> None:
+    """v3.4.0 GS-SMART-COVERAGE — cloud-derived GridStore backfill for
+    pose-less SMART robots (lewis firmware, which reports the pose
+    capability flag but doesn't stream live pose during missions —
+    see the plan's §2 for the full analysis). Structural precedent:
+    _async_bootstrap_umf_aligner() above.
+
+    Reuses async_fetch_mission_map() (built in v3.3.0 exactly for this
+    reuse — see mission_map.py's docstring). Shares a single watermark
+    (GridStore.last_processed_nmssn) with the live path (image.py) so
+    a mission already fed via real local pose is never double-counted
+    here — whichever path processes a mission first claims it.
+
+    cloud_coordinator is accepted (matching every other check on this
+    hook's signature) but unused directly — data.cloud_coordinator via
+    async_fetch_mission_map() is the actual cloud access path.
+    """
+    data = entry.runtime_data
+    gs = data.grid_store
+    aligner = data.umf_aligner
+    ms = data.mission_store
+    if gs is None or ms is None or aligner is None or not aligner.aligned:
+        return
+
+    watermark = gs.last_processed_nmssn
+    candidates = [
+        r for r in ms.records()
+        if r.get("pmaps_info")
+        and (_gs_coverage_safe_int(r.get("nMssn")) or 0) > watermark
+    ]
+    candidates.sort(key=lambda r: _gs_coverage_safe_int(r.get("nMssn")) or 0)
+    # Rate-cap (plan §4.2): a robot with a large backlog (first
+    # activation, or HA offline for a while) catches up gradually over
+    # several refresh cycles rather than bursting one cloud call per
+    # backlog mission in a single cycle.
+    candidates = candidates[:_GS_SMART_COVERAGE_MAX_PER_REFRESH]
+
+    changed = False
+    for record in candidates:
+        record_nmssn = _gs_coverage_safe_int(record.get("nMssn"))
+        try:
+            payload = await async_fetch_mission_map(data, record)
+        except (MissionMapUnavailable, MissionMapMismatch) as exc:
+            _LOGGER.debug(
+                "GS-SMART-COVERAGE: skipping nMssn=%s — %s",
+                record_nmssn, exc,
+            )
+            # A structurally-known-bad record (no coverage layer, or a
+            # verify-gate mismatch) will never succeed on retry —
+            # advance the watermark so it isn't retried every refresh.
+            gs.record_processed_nmssn(record_nmssn)
+            changed = True
+            continue
+        except Exception as exc:  # noqa: BLE001 — one bad mission must not abort the batch
+            _LOGGER.warning(
+                "GS-SMART-COVERAGE: fetch failed for nMssn=%s — %s",
+                record_nmssn, exc,
+            )
+            continue  # watermark NOT advanced — retried on the next refresh
+
+        pose_points = _gs_coverage_umf_points_to_pose(
+            payload["coverage_mm"], aligner,
+        )
+        stuck_points = _gs_coverage_classify_stuck_events(
+            payload.get("escape_events", []), aligner,
+        )
+        stuck_wh = _gs_coverage_mission_start_weekday_hour(
+            record.get("started_at")
+        )
+
+        gs.update_from_mission(
+            pose_points, stuck_points,
+            stuck_wh=stuck_wh,
+            robot_radius_mm=ROBOT_DIAMETER_MM_ISJ_SERIES / 2,
+        )
+        gs.record_processed_nmssn(record_nmssn)
+        changed = True
+
+    if changed:
+        await gs.async_save(hass, entry.entry_id)
+
+
 def make_cloud_refresh_callback(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",
@@ -1993,6 +2198,26 @@ def make_cloud_refresh_callback(
             hass.async_create_task(
                 async_check_stuck_pattern(hass, config_entry),
                 name="roomba_plus_l7_stuck_pattern_check",
+            )
+        # v3.4.0 GS-SMART-COVERAGE — must run BEFORE the GridStore-reading
+        # checks below (ROOM-ACCESS, FURNITURE, STUCK-HOTSPOT) so a mission
+        # backfilled from the cloud in THIS refresh cycle is already
+        # reflected when those checks run, not only from the next cycle
+        # onward. Gate mirrors GS-SMART-UMF's bootstrap gate further below
+        # (map_capability == SMART + umf_aligner present) plus grid_store;
+        # the function itself no-ops cleanly if the aligner isn't aligned
+        # yet or there's nothing new to backfill.
+        from .models import MapCapability
+        if (
+            config_entry.runtime_data.map_capability == MapCapability.SMART
+            and config_entry.runtime_data.grid_store is not None
+            and config_entry.runtime_data.umf_aligner is not None
+        ):
+            hass.async_create_task(
+                _async_update_gs_smart_coverage(
+                    hass, config_entry, cloud_coordinator
+                ),
+                name="roomba_plus_gs_smart_coverage",
             )
         # v3.2.0 bug-hunt fix — the following four checks (ROOM-ACCESS,
         # FURNITURE, STUCK-HOTSPOT, COVERAGE-FREQ) were built and tested

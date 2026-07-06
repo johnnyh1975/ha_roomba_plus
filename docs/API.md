@@ -478,9 +478,12 @@ image — room outlines (current map) plus this mission's real coverage points.
   "point_area_m": [0.1049, 0.1049],
   "coverage_mm": [[1049.0, 2098.0], …],
   "coverage_poly": [...],
+  "escape_events": [{"pose": [4.4767, 0.1159, -1.5911], "event": "brush_stall_detected"}, …],
   "rooms": {"Kitchen": [[x_mm, y_mm], …], …}
 }
 ```
+
+`escape_events` *(v3.4.0)* — stuck/obstacle events recorded during this mission, if any (usually an empty list). Unlike `coverage_mm`, poses here are **not** converted to mm — they stay in the cloud's original coordinate space.
 
 | Status | Meaning |
 |---|---|

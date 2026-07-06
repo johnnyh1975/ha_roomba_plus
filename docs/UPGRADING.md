@@ -9,6 +9,40 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+### Upgrading to v3.4.0
+
+No config entry migration — all persisted data is additive, existing stored
+data loads unchanged.
+
+**New entities appear automatically:** `calendar.{name}_schedule` and
+`todo.{name}_maintenance` are created on every robot tier with no
+configuration step. If your robot's cleaning schedule is currently empty,
+the calendar will simply show no events until you set one — expected,
+not a bug.
+
+**`todo.*` due dates need history before they show a real date, not
+`Unknown`** — expected, not a bug: the due date comes from the same
+self-calibrated wear-rate estimate `sensor.*_filter_days_until_due`/
+`*_brush_days_until_due` already use, which needs an established wear
+rate (a handful of missions since the last reset, or since first setup)
+before it can project a date. The to-do item itself still appears
+immediately; only the due date is initially absent.
+
+**If you're on i/s/j-series lewis firmware (22.52.10+) and the coverage
+heatmap, stuck-hotspot markers, furniture-change, or layout-change alerts
+have always stayed empty:** this release adds a cloud-data path that
+should populate all of them going forward. Give it a few cloud refresh
+cycles after updating — it depends on the (already-shipped, silent) map
+alignment bootstrap having completed first, which itself typically needs
+a handful of missions. Stuck-hotspot detection specifically also depends
+on iRobot's cloud data containing real stuck-event records for your
+robot, which — unlike the other three — hasn't been field-confirmed to
+populate on lewis firmware yet; if it stays empty while the heatmap and
+layout-change detection do populate, that's the known open question, not
+something to troubleshoot on your end.
+
+---
+
 ### Upgrading to v3.3.0
 
 No config entry migration — all persisted data is additive, existing stored
@@ -75,9 +109,6 @@ No config entry migration — all persisted data is additive, existing stored da
 Config entry migration (24 → 25): if your current-room `device_tracker` entity was never visible, it's re-enabled automatically on upgrade — this was a real bug (root-caused in v2.10.3, but the fix only applied to newly-created entities, never to ones already registered as disabled on an existing install).
 
 **Coordinate-system fix, EPHEMERAL-tier (900-series) only — a genuine discontinuity, not silent:** a confirmed axis-convention bug in live-map/room-detection pose handling has been corrected. This changes how X/Y map to real-world directions for all data recorded from this update onward — GridStore, room detection, and outline data accumulated *before* this update will not spatially line up with data recorded *after* it. If your room map looks scrambled right after upgrading, this is why. There is currently no dedicated action to reset just the spatial/room data (removing and re-adding the integration does **not** clear it either — Home Assistant doesn't delete a removed integration's storage files automatically); the practical effect will fade out on its own as new missions' data outweighs the old, though a proper reset option is worth adding — feedback welcome. Also improved in this release: room-recognition data is no longer discarded after a stuck event — it's corrected against the dock position once the robot returns, instead of being thrown away for the rest of the mission.
-
----
-
 
 ---
 

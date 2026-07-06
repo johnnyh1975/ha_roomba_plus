@@ -7,6 +7,17 @@ quick "does this work on my robot" overview, see the capability matrix in
 the [README](../README.md#supported-hardware--capability-matrix). For
 copy-paste automation examples, see **[Automations & dashboards →](AUTOMATIONS.md)**.
 
+## Contents
+
+- [Tier legend](#tier-legend)
+- [Status, control & error intelligence](#status-control--error-intelligence)
+- [Room cleaning, zones & maps](#room-cleaning-zones--maps)
+- [Maintenance & health](#maintenance--health)
+- [Mission history & room intelligence](#mission-history--room-intelligence)
+- [Presence & scheduling](#presence--scheduling)
+- [Connectivity, mop & configuration reference](#connectivity-mop--configuration-reference)
+- [Events & device triggers](#events--device-triggers)
+
 ## Tier legend
 
 Every feature below is tagged with which robots support it:
@@ -92,8 +103,6 @@ Every feature below is tagged with which robots support it:
 #### Child lock & eco charge switches (v3.2.0)
 
 Two config-category switches, created only on models that report the underlying preference: **Child lock** (`childLock`) disables the robot's physical onboard buttons — useful for households with kids or pets that might otherwise trigger a clean by accident. **Eco charge** (`ecoCharge`) toggles the robot's reduced-power charging mode. `sensor.*_dock_firmware_version` (diagnostic, disabled by default) exposes the dock's own firmware version separately from the robot's.
-
----
 
 ---
 
@@ -221,6 +230,8 @@ A Repair Issue (`map_drift_detected`) fires when the robot's recent missions sho
 
 Needs 23 missions of per-cell coverage history before it can judge anything — `cells_tracked` and `missions_until_first_ready` attributes are shown from the very first mission, so you can see it's building history rather than wondering whether it's just quietly broken.
 
+*(v3.4.0: on i/s/j-series robots running lewis firmware (22.52.10+) — which never send local pose data over MQTT — this coverage history is now built from cloud data instead, so this feature populates for those robots too. No setup needed; it activates automatically once map alignment has bootstrapped, typically after a handful of missions.)*
+
 #### Battery / dock contact monitoring (v2.10.0)
 
 A Repair Issue (`battery_contact_suspect`) fires on two independent signals that usually mean a loose or corroded battery/dock contact rather than a failing battery: an implausible jump in reported battery level (more than ~25 percentage points within under 10 minutes — no real battery changes that fast), or the highest battery level reached declining over three consecutive charge cycles. Clean the contacts on the robot and dock before assuming the battery itself needs replacing.
@@ -304,9 +315,6 @@ data:
 
 ---
 
-
----
-
 ## Maintenance & health
 
 #### Remaining life sensors
@@ -349,6 +357,12 @@ Every reset above (button or service) writes a searchable Logbook entry and fire
 
 `binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). Also available as the `maintenance_due` device trigger. If left unaddressed for 3+ days, also raises a Repair Issue — a backstop for anyone without an automation wired to the trigger.
 
+#### Maintenance to-do list (v3.4.0)
+
+`todo.{name}_maintenance` — filter replacement and brush/pad cleaning as real Home Assistant to-do items, always present. Due date comes from the same self-calibrated wear-rate estimate as the `*_days_until_due` sensors (absent until a wear rate is established — early in a robot's life, or right after a reset). Marking an item done fires the same reset as the corresponding button (`reset_filter` / `reset_brush` or `reset_pad` on Braava) — same Logbook entry and `roomba_plus_maintenance_reset` event either way.
+
+SMART-tier robots (i/s/j-series, Braava) also get a **Reconfigure rooms** item whenever a Smart Map zone has no assigned name yet — same condition as the zone-naming Repair Issue. This item isn't manually completable: it disappears on its own once every zone is named via the existing naming wizard; marking it done by hand has no effect and it simply reappears on the next update if unnamed zones remain.
+
 #### Dock contact health (v2.8.0)
 
 > i/s-series (lewis/soho firmware); some 9-series variants
@@ -380,8 +394,6 @@ Battery capacity (mAh) · Navigation panic events · Cliff events front / rear �
 #### Cleaning cadence health (v3.2.0)
 
 Learns each room's own typical interval between cleans from its cleaning history, then flags rooms that have gone noticeably longer than their own normal rhythm without being cleaned — self-calibrated per room, not a fixed schedule. Exposed via `format=zone_coverage_health` on the [REST history API](API.md#format=zone_coverage_health) and a per-room Repair Issue when overdue.
-
----
 
 ---
 
@@ -482,6 +494,8 @@ Tracks the weekday and hour of every stuck event per grid cell. When a cell accu
 
 Groups adjacent stuck-event grid cells (two or more neighbouring cells independently qualifying is itself a strong signal — physically near-impossible to be coincidence at the 150mm cell size involved) into a Repair Issue with compass bearing, room name (Smart Map robots), and cell count. Since a robot's lifetime stuck count never decreases, resolution is judged by whether the cluster's coverage has recovered relative to its surroundings, not by the stuck count itself — a permanent stuck-history doesn't keep the issue open forever once the actual obstacle is gone.
 
+*(v3.4.0: on lewis-firmware robots (see the note under Layout change detection above), this also sources from cloud data — structurally wired up and tested, but whether it populates for a real stuck incident on lewis firmware specifically hasn't been field-confirmed yet. Everything else this release brings to lewis-firmware robots — the coverage heatmap and layout-change detection above — doesn't depend on this and works regardless.)*
+
 #### Performance sensors
 
 > ☁️ Requires cloud credentials
@@ -531,9 +545,11 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 ---
 
----
-
 ## Presence & scheduling
+
+#### Cleaning schedule calendar (v3.4.0)
+
+`calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Read-only, always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
 #### Presence-aware scheduling — i/s/j/Braava
 
@@ -582,8 +598,6 @@ After each mission, dirt density is compared against the weekday-aware baseline 
 
 ---
 
----
-
 ## Connectivity, mop & configuration reference
 
 #### Braava / mop sensors
@@ -622,8 +636,6 @@ Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zo
 
 ---
 
----
-
 ## Events & device triggers
 
 Roomba+ fires events on the HA event bus that automations can react to
@@ -656,9 +668,6 @@ Available in the Automation editor's Device trigger picker for every Roomba+ rob
 `cleaning_started` · `cleaning_finished` · `stuck` · `bin_full` · `docked` · `error` · `room_completed` · `maintenance_due` · `health_score_drop` · `map_retrain_started` · `map_retrain_completed` · `firmware_updated`
 
 `health_score_drop` only fires when the health band genuinely *worsens* (e.g. healthy → degraded) — not on every score fluctuation, and not when it improves.
-
----
-
 
 ---
 

@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-3.3.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-3.4.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -13,10 +13,10 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 **Why Roomba+?**
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
-- **Full automation support** — `smart_start` with blocking sensor gate, presence-aware scheduling, demand cleaning, and room sequencing integrate the robot into your existing HA automations without workarounds.
+- **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale** — 3,526 tests, 7 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 3,803 tests, 7 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -24,7 +24,10 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 ## Contents
 
+- [What you get](#what-you-get)
+- [Feature status](#feature-status)
 - [Supported hardware & capability matrix](#supported-hardware--capability-matrix)
+- [Known limitations](#known-limitations)
 - [Installation](#installation)
 - [Getting started](#getting-started)
 - [Migration](#migration)
@@ -32,7 +35,44 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - [Data privacy & data flow](#data-privacy--data-flow)
 - [Replacing or selling your robot](#replacing-or-selling-your-robot)
 - [Translations](#translations)
+- [Contributing](#contributing)
 - [Credits](#credits)
+
+---
+
+## What you get
+
+- **Status & control** — phase/error detail beyond the standard HA vacuum states, blocking-sensor gate, room-targeted cleaning
+- **Maintenance & health** — self-calibrating filter/brush/battery countdowns, a composite 0–100 health score, wear-rate anomaly detection
+- **Mission intelligence** — 365-entry history, per-mission coordinate replay maps, anomaly explanations in plain language
+- **Room intelligence** *(SMART + cloud)* — per-room cleaning rhythms, overdue-room catch-up cleaning, dirt ↔ sensor correlation
+- **Scheduling & presence** — presence-aware auto-scheduling, demand cleaning, your cleaning schedule as a native HA calendar
+- **Automation-ready** — 8+ copy-paste recipes in [Automations & dashboards →](docs/AUTOMATIONS.md), a REST API, device triggers, HA Long-Term Statistics
+
+Full reference, tagged by which robots support what: **[Feature reference →](docs/FEATURES.md)**
+
+---
+
+## Feature status
+
+At a glance — what's shipped, what's next, and what was evaluated and
+deliberately not built:
+
+| Feature | Status |
+|---|---|
+| Live map, room targeting, blocking sensors, maintenance tracking | ✅ Shipped |
+| Presence-aware scheduling, demand cleaning, self-calibrating thresholds | ✅ Shipped |
+| Mission history, health scoring, anomaly detection | ✅ Shipped |
+| Room rhythms, overdue-room cleaning, mission cleaning maps *(SMART + cloud)* | ✅ Shipped |
+| Cleaning schedule as HA calendar, maintenance as HA to-do list | ✅ Shipped *(v3.4.0)* |
+| Coverage analytics for pose-less lewis-firmware robots | ✅ Shipped *(v3.4.0)* |
+| Curated notification blueprints, multi-robot fleet health rollup | 🔜 Planned, next version |
+| Braava mop-pad wear & water-consumption sensors | 🔜 Planned, next version |
+| Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
+| Room shape / door-position export | 🔲 Backlog, not yet scheduled |
+| Voice commands ("clean the kitchen", etc.) | ❌ Evaluated, not pursued — see [Known limitations](#known-limitations) |
+
+Full version-by-version history: **[GitHub Releases →](https://github.com/johnnyh1975/ha_roomba_plus/releases)**
 
 ---
 
@@ -59,10 +99,23 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 | Dirt ↔ sensor correlation *(v3.3.0)* | ❌ | ❌ | ✅ requires cloud | ✅ requires cloud |
 | Maintenance reminders (filter/brush/battery) | ✅ | ✅ | ✅ | ✅ |
 | Mop control (pad wetness, tank status) | — | — | — | ✅ |
+| Cleaning schedule as HA calendar *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ |
+| Maintenance tasks as HA to-do list *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ |
+| — incl. "unnamed zones" reminder *(v3.4.0, SMART only)* | ❌ | ❌ | ✅ | ✅ |
 
-*Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them. Mission maps are field-confirmed on Braava jet m6 (sapphire firmware family); i-series (lewis firmware) confirmation is pending (see [Upgrade notes](docs/UPGRADING.md)).*
+*Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them.*
 
 **Capability tiers, in plain terms:** 600-series = bump-and-run (no map, no room targeting). 900-series = VSLAM ephemeral map with automatic zone detection and cloud history. i/s/j-series and Braava = persistent Smart Map with named rooms, favourites, and the full room-intelligence feature set.
+
+---
+
+## Known limitations
+
+- **600-series is untested** — should work (same local MQTT protocol), but no field confirmation yet. See the capability matrix above for what it does and doesn't support by design.
+- **i-series (lewis firmware) mission cleaning maps are unconfirmed** — field-confirmed on Braava jet m6 only so far. See [Upgrade notes →](docs/UPGRADING.md).
+- **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](RELEASE_NOTES_v3.4.0.md).
+- **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](RELEASE_NOTES_v3.4.0.md).
+- **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](RELEASE_NOTES_v3.4.0.md).
 
 ---
 
@@ -101,21 +154,17 @@ Settings → Devices → Roomba+ → ⋮ → **Reconfigure** — no need to remo
 
 ---
 
-
----
-
 ## Getting started
 
 After installation, five steps to get the most out of Roomba+:
 
 1. **Check the map** — open the device page. `image.{name}_cleaning_map` renders automatically for 900-series and Smart Map robots. No configuration required.
 2. **Smart Map robots: add cloud credentials** — Settings → Devices → Roomba+ → Configure → iRobot cloud credentials. Room names, favorites, and history appear immediately.
-3. **Replace `vacuum.start` with `roomba_plus.smart_start`** in all automations — it respects blocking sensors and optionally targets specific rooms.
+3. **Replace `vacuum.start` with `roomba_plus.smart_start`** in all automations — it respects blocking sensors and optionally targets specific rooms. See [Automations & dashboards →](docs/AUTOMATIONS.md) for copy-paste examples.
 4. **Set a blocking sensor** (optional) — Settings → Configure → Blocking sensors. Pick any binary sensor (door contact, occupancy, person home). The robot will queue or abort rather than starting when it fires.
-5. **Reset consumables after replacing them** — Settings → device → press the Filter / Brush / Battery reset button. The remaining-life countdown restarts.
+5. **Reset consumables after replacing them** — Settings → device → press the Filter / Brush / Battery reset button, or mark the matching to-do item done. The remaining-life countdown restarts either way.
 
----
-
+Two things also appear automatically, no setup needed: your cleaning schedule as `calendar.{name}_schedule`, and filter/brush maintenance as `todo.{name}_maintenance`.
 
 ---
 
@@ -138,9 +187,6 @@ After installation, five steps to get the most out of Roomba+:
 ### Multiple robots
 
 Each robot is a separate integration entry with its own device, entities, and storage. Repeat the Add Integration flow for each robot. Cloud credentials are stored per robot.
-
----
-
 
 ---
 
@@ -169,7 +215,9 @@ Roomba+ is a local-first integration. Here's exactly what talks to what.
 
 **iRobot cloud (optional).** If you enter your iRobot app email and password (Settings → Devices → Roomba+ → Configure → iRobot cloud credentials), Roomba+ additionally talks to iRobot's own cloud API — the same servers and the same account the official iRobot app itself uses. Nothing is proxied through a third party or a Roomba+-specific server. This unlocks Smart Map room names, favorites, mission history enrichment, and the room-intelligence features marked "requires cloud" in the capability matrix above. It's entirely optional — everything else works without it, and you can add or remove cloud credentials at any time (see [Adding or updating cloud credentials](#adding-or-updating-cloud-credentials)).
 
-**What's stored, and where.** Mission history, coverage/stuck-hotspot data, door markers, robot profile, and maintenance timers are all stored in Home Assistant's own `.storage/` directory, on your instance. This data never leaves your Home Assistant instance on its own.
+**How often cloud data refreshes.** Right after a mission ends, Roomba+ tries to pull the fresh cloud data almost immediately (within ~90 seconds, retrying once 10 minutes later if iRobot's own cloud hasn't caught up yet). Outside of that, cloud data refreshes on its own about once every 24 hours — so a change made only in the iRobot app (a renamed room, a new favorite) can take up to a day to appear here, not instantly.
+
+**What's stored, and where.** Mission history, coverage/stuck-hotspot data, door markers, robot profile, and maintenance timers are all stored in Home Assistant's own `.storage/` directory, on your instance. This data never leaves your Home Assistant instance on its own, and is deleted along with everything else when you remove the integration *(v3.4.0+)* — see [Replacing or selling your robot](#replacing-or-selling-your-robot) if you want to export it first.
 
 **No phone-home.** Roomba+ has no analytics, telemetry, or crash-reporting server of any kind — nothing is sent to the developer or anyone else automatically. The REST API (see [REST API →](docs/API.md)) is served by your own Home Assistant instance and requires your own long-lived access token; it's not a hosted service.
 
@@ -189,14 +237,11 @@ curl -H "Authorization: Bearer <token>" \
      -o roomba_backup.json
 ```
 
-Then remove the integration via Settings → Devices & Services → Roomba+ → Delete.
+Then remove the integration via Settings → Devices & Services → Roomba+ → Delete — this permanently deletes the exported data above from your HA instance too *(v3.4.0+)*, so export first if you want to keep it.
 
 **Factory reset** (if selling) is done through the **iRobot app**, not this integration: app → robot → Settings → Factory Reset.
 
 For a replacement robot, add a new config entry and optionally restore history via the import endpoint. Full steps: [Troubleshooting → Replacing or selling your robot](docs/TROUBLESHOOTING.md)
-
----
-
 
 ---
 
@@ -216,6 +261,14 @@ To contribute or report an incorrect phrase: open an issue or PR with the correc
 
 ---
 
+## Contributing
+
+Roomba+ is maintained by one person — field-tester reports and pull requests are genuinely how this project moves faster:
+
+- **Found a bug, or a robot/firmware combination that doesn't work as documented?** → [GitHub Issues](https://github.com/johnnyh1975/ha_roomba_plus/issues) — a `diagnostics` download (Settings → Devices → Roomba+ → Download diagnostics, auto-redacted) attached to the report saves a lot of back-and-forth.
+- **Own hardware nobody's field-tested yet** (600-series, s9+, newer firmware)? A short raw-state capture is often more useful than a bug report — see the [Credits](#credits) section below for the kind of field testing that has directly shaped past releases.
+- **Translations** — see just above; a native-speaker pass on any non-English language is always welcome, even a one-line correction.
+- **Code contributions** — welcome via PR, though given the single-maintainer reality, please open an issue to discuss scope first for anything beyond a small, self-contained fix. The version plan (linked from [GitHub Releases →](https://github.com/johnnyh1975/ha_roomba_plus/releases)) shows what's already planned, to avoid duplicate effort.
 
 ---
 
