@@ -1099,6 +1099,79 @@ class TestMissionCheckpointV282:
         for c in scheduled_coros:
             c.close()  # avoid "coroutine was never awaited" warnings
 
+    def test_gs_smart_coverage_live_path_stamps_watermark(self):
+        """v3.4.0 GS-SMART-COVERAGE — after a real (non-empty
+        mission_points) GridStore update, the live path must stamp
+        this mission's nMssn onto the shared watermark, using the
+        real _handle_mission_end (not the mocked one from
+        _make_map_entity()) since the stamp call site lives right
+        after the real update_from_mission() call it's paired with."""
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        gs = GridStore()
+        assert gs.last_processed_nmssn == 0
+
+        entity = RoombaMapImage.__new__(RoombaMapImage)
+        entity.hass = MagicMock()
+        entity.hass.loop = MagicMock()
+        entity._config_entry = MagicMock()
+        entity._config_entry.entry_id = "test_entry"
+        entity._config_entry.runtime_data.grid_store = gs
+        entity._renderer = MagicMock()
+        entity._renderer._cfg.robot_diameter_mm = 300
+        entity._zone_store = None
+        entity._map_capability = None  # skips the EPHEMERAL/SMART branches
+        entity._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        entity._mission_thetas = [0.0, 0.0]
+        entity._stuck_mission_points = []
+        entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
+        entity.vacuum_state = {"bbmssn": {"nMssn": 77}}
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
+        ) as mock_run:
+            entity._handle_mission_end(ending_phase="")
+
+        for c in mock_run.call_args_list:
+            c.args[0].close()  # avoid "coroutine was never awaited" warnings
+
+        assert gs.last_processed_nmssn == 77
+
+    def test_gs_smart_coverage_missing_nmssn_does_not_crash(self):
+        """No bbmssn.nMssn on this firmware/state — record_processed_nmssn()
+        must silently no-op (per its own contract), not raise."""
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        gs = GridStore()
+
+        entity = RoombaMapImage.__new__(RoombaMapImage)
+        entity.hass = MagicMock()
+        entity.hass.loop = MagicMock()
+        entity._config_entry = MagicMock()
+        entity._config_entry.entry_id = "test_entry"
+        entity._config_entry.runtime_data.grid_store = gs
+        entity._renderer = MagicMock()
+        entity._renderer._cfg.robot_diameter_mm = 300
+        entity._zone_store = None
+        entity._map_capability = None
+        entity._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        entity._mission_thetas = [0.0, 0.0]
+        entity._stuck_mission_points = []
+        entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
+        entity.vacuum_state = {}  # no bbmssn at all
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
+        ) as mock_run:
+            entity._handle_mission_end(ending_phase="")  # must not raise
+
+        for c in mock_run.call_args_list:
+            c.args[0].close()
+
+        assert gs.last_processed_nmssn == 0
+
     # ── _async_save_mission_checkpoint() ─────────────────────────────────
 
     @pytest.mark.asyncio

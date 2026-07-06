@@ -711,6 +711,119 @@ class TestPersistence:
         # Should have caught the error and started empty
         assert isinstance(gs._cells, dict)
 
+    @pytest.mark.asyncio
+    async def test_last_processed_nmssn_roundtrip(self):
+        """v3.4.0 GS-SMART-COVERAGE — watermark survives save/load."""
+        gs = GridStore()
+        gs.record_processed_nmssn(42)
+
+        saved_data: dict = {}
+        hass = MagicMock()
+        store_mock = AsyncMock()
+
+        async def _capture_save(data):
+            saved_data.update(data)
+
+        store_mock.async_save = _capture_save
+        store_mock.async_load = AsyncMock(return_value=None)
+
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(hass, "test_entry")
+
+        gs2 = GridStore()
+        store_mock.async_load = AsyncMock(return_value=saved_data)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs2.async_load(hass, "test_entry")
+
+        assert gs2.last_processed_nmssn == 42
+
+    @pytest.mark.asyncio
+    async def test_last_processed_nmssn_missing_from_old_payload_defaults_zero(self):
+        """A payload saved before GS-SMART-COVERAGE existed has no
+        last_processed_nmssn key at all — must load as 0, not error."""
+        gs = GridStore()
+        hass = MagicMock()
+        store_mock = AsyncMock()
+        store_mock.async_load = AsyncMock(return_value={
+            "version": PAYLOAD_VERSION, "cells": {}, "stuck": {},
+        })
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_load(hass, "test_entry")
+        assert gs.last_processed_nmssn == 0
+
+    @pytest.mark.asyncio
+    async def test_last_processed_nmssn_reset_on_corrupted_load(self):
+        gs = GridStore()
+        gs.record_processed_nmssn(99)
+        hass = MagicMock()
+        store_mock = AsyncMock()
+        # Passes the version check, then fails while parsing "cells"
+        # (no comma to split on) — exercises the actual exception-handler
+        # reset path, not the earlier version-mismatch bail-out.
+        store_mock.async_load = AsyncMock(return_value={
+            "version": PAYLOAD_VERSION, "cells": {"bad_key_no_comma": 0.5},
+        })
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_load(hass, "test_entry")
+        assert gs.last_processed_nmssn == 0
+
+
+class TestRecordProcessedNmssn:
+    """v3.4.0 GS-SMART-COVERAGE — shared watermark, written by both the
+    live path (image.py) and the cloud-backfill path (callbacks.py) so
+    neither re-processes a mission the other already handled."""
+
+    def test_starts_at_zero(self):
+        assert GridStore().last_processed_nmssn == 0
+
+    def test_advances_on_higher_value(self):
+        gs = GridStore()
+        gs.record_processed_nmssn(10)
+        assert gs.last_processed_nmssn == 10
+        gs.record_processed_nmssn(15)
+        assert gs.last_processed_nmssn == 15
+
+    def test_never_moves_backwards(self):
+        gs = GridStore()
+        gs.record_processed_nmssn(15)
+        gs.record_processed_nmssn(10)  # e.g. an out-of-order cloud record
+        assert gs.last_processed_nmssn == 15
+
+    def test_equal_value_is_a_noop(self):
+        gs = GridStore()
+        gs.record_processed_nmssn(10)
+        gs.record_processed_nmssn(10)
+        assert gs.last_processed_nmssn == 10
+
+    def test_none_is_ignored(self):
+        gs = GridStore()
+        gs.record_processed_nmssn(10)
+        gs.record_processed_nmssn(None)
+        assert gs.last_processed_nmssn == 10
+
+    def test_non_numeric_is_ignored_not_raised(self):
+        gs = GridStore()
+        gs.record_processed_nmssn("not_a_number")
+        assert gs.last_processed_nmssn == 0
+
+    def test_numeric_string_is_accepted(self):
+        """Cloud/MQTT fields often arrive as strings — same tolerance as
+        the rest of the codebase's _safe_int-style handling."""
+        gs = GridStore()
+        gs.record_processed_nmssn("42")
+        assert gs.last_processed_nmssn == 42
+
+    def test_live_and_cloud_path_share_one_watermark(self):
+        """The exact double-counting scenario from the GS-SMART-COVERAGE
+        plan §2: whichever path processes a mission first should make
+        the other path's candidate filter skip it."""
+        gs = GridStore()
+        # Live path (image.py) processes mission nMssn=50 first.
+        gs.record_processed_nmssn(50)
+        # Cloud-backfill path's candidate filter for the SAME mission:
+        candidate_nmssn = 50
+        assert not (candidate_nmssn > gs.last_processed_nmssn)  # correctly skipped
+
 
 class TestF22aObservedZonesConditions:
     """Unit tests for the guard conditions in async_check_observed_zones."""

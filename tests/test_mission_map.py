@@ -11,20 +11,23 @@ from custom_components.roomba_plus.mission_map import (
 )
 
 
-def _umf(nmssn=90, coverage=None, mission_id="01HB24"):
+def _umf(nmssn=90, coverage=None, mission_id="01HB24", escape_events_layer=None):
+    layers = [
+        {"layer_type": "coverage", "geometry": {
+            "type": "multipoint2d",
+            "point_area": [0.1049, 0.1049],
+            "coordinates": coverage if coverage is not None
+            else [[1.0, 2.0], [3.0, 4.5]],
+        }},
+        {"layer_type": "coverage_poly", "geometry": {
+            "type": "multipolygon2d", "coordinates": [[[0, 0], [1, 0]]],
+        }},
+    ]
+    if escape_events_layer is not None:
+        layers.append(escape_events_layer)
     return {"maps": [{
         "map_header": {"nmssn": nmssn, "mission_id": mission_id},
-        "layers": [
-            {"layer_type": "coverage", "geometry": {
-                "type": "multipoint2d",
-                "point_area": [0.1049, 0.1049],
-                "coordinates": coverage if coverage is not None
-                else [[1.0, 2.0], [3.0, 4.5]],
-            }},
-            {"layer_type": "coverage_poly", "geometry": {
-                "type": "multipolygon2d", "coordinates": [[[0, 0], [1, 0]]],
-            }},
-        ],
+        "layers": layers,
     }]}
 
 
@@ -152,3 +155,86 @@ class TestBugHuntRound3:
         )
         png = render_mission_map_png([[100.0, 100.0]], ["garbage"], [])
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestEscapeEvents:
+    """v3.4.0 GS-SMART-COVERAGE — escape_events layer extraction.
+
+    Shape verified against a real UMF payload (PyRoomba's committed
+    mission_map.txt sample, fetched 2026-07): {"layer_type":
+    "escape_events", "geometry": {"type": "pose2dconcise_event",
+    "list": [...]}}. Structural shape is confirmed; whether
+    lewis-firmware robots actually populate it for a real stuck
+    incident remains the separate, still-open Feldverifikations-Gate
+    item (plan §4.3) — these tests only cover parsing.
+    """
+
+    _EVENTS = [
+        {"pose": [4.4767, 0.1159, -1.5911], "event": "brush_stall_detected"},
+        {"pose": [3.5503, -1.3822, 0.236], "event": "wheel_dropped"},
+        {"pose": [0.6332, 1.5764, -0.5963], "event": "stasis_detected"},
+        {"pose": [0.2325, -1.8262, -0.3264], "event": "start_stuck"},
+        {"pose": [-0.0571, 1.107, 1.6877], "event": "start_evade"},
+    ]
+
+    @staticmethod
+    def _layer(events):
+        return {
+            "layer_type": "escape_events",
+            "geometry": {"type": "pose2dconcise_event", "list": events},
+        }
+
+    @pytest.mark.asyncio
+    async def test_absent_layer_yields_empty_list_no_warning(self, caplog):
+        """The common case: no escape_events layer in this UMF response
+        at all (most missions have no stuck events)."""
+        data = _data(_umf())
+        with caplog.at_level("WARNING"):
+            payload = await async_fetch_mission_map(data, _record())
+        assert payload["escape_events"] == []
+        assert "escape_events" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_empty_layer_yields_empty_list_no_warning(self, caplog):
+        """Layer present but with an empty list — a genuinely
+        stuck-free mission — must not warn."""
+        umf = _umf(escape_events_layer=self._layer([]))
+        data = _data(umf)
+        with caplog.at_level("WARNING"):
+            payload = await async_fetch_mission_map(data, _record())
+        assert payload["escape_events"] == []
+        assert "verify this against" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_populated_layer_extracted_verbatim(self):
+        """All 5 known event types, as seen in the real reference
+        payload, round-trip through unchanged (UMF-space, unconverted
+        — conversion is the caller's job)."""
+        umf = _umf(escape_events_layer=self._layer(self._EVENTS))
+        data = _data(umf)
+        payload = await async_fetch_mission_map(data, _record())
+        assert payload["escape_events"] == self._EVENTS
+
+    @pytest.mark.asyncio
+    async def test_unexpected_shape_warns_and_returns_empty_not_crash(self, caplog):
+        """A future/unknown UMF shape change must not crash the whole
+        fetch (same defensive posture as every other layer parse
+        here), but must log loudly enough to be diagnosable."""
+        umf = _umf(escape_events_layer={
+            "layer_type": "escape_events", "some_other_key": self._EVENTS,
+        })
+        data = _data(umf)
+        with caplog.at_level("WARNING"):
+            payload = await async_fetch_mission_map(data, _record())
+        assert payload["escape_events"] == []
+        assert "verify this against" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_present_alongside_coverage_in_same_response(self):
+        """escape_events extraction must not disturb the existing
+        coverage/coverage_poly extraction from the same response."""
+        umf = _umf(escape_events_layer=self._layer(self._EVENTS))
+        data = _data(umf)
+        payload = await async_fetch_mission_map(data, _record())
+        assert payload["coverage_mm"] == [[1000.0, 2000.0], [3000.0, 4500.0]]
+        assert payload["escape_events"] == self._EVENTS

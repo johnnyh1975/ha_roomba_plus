@@ -2646,3 +2646,501 @@ class TestL5CorrelationFinalizeGlue:
             )
         )
         rps.finalize_correlation.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.4.0 GS-SMART-COVERAGE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGsCoverageHookDispatch:
+    """Gate on the cloud-refresh hook: dispatched only when
+    map_capability == SMART, grid_store, and umf_aligner are all
+    present. The function itself no-ops on everything else (aligned
+    state, mission_store presence, actual candidates)."""
+
+    def _run_callback(self, *, map_capability, grid_store, umf_aligner):
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+        from custom_components.roomba_plus.models import MapCapability
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = grid_store
+        rd.umf_aligner = umf_aligner
+        rd.robot_profile_store = MagicMock()
+        rd.map_capability = map_capability
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        return [
+            call.kwargs.get("name")
+            for call in hass.async_create_task.call_args_list
+        ]
+
+    def test_dispatched_when_smart_with_grid_store_and_aligner(self):
+        from custom_components.roomba_plus.models import MapCapability
+        dispatched = self._run_callback(
+            map_capability=MapCapability.SMART,
+            grid_store=MagicMock(), umf_aligner=MagicMock(),
+        )
+        assert "roomba_plus_gs_smart_coverage" in dispatched
+
+    def test_not_dispatched_without_grid_store(self):
+        from custom_components.roomba_plus.models import MapCapability
+        dispatched = self._run_callback(
+            map_capability=MapCapability.SMART,
+            grid_store=None, umf_aligner=MagicMock(),
+        )
+        assert "roomba_plus_gs_smart_coverage" not in dispatched
+
+    def test_not_dispatched_without_umf_aligner(self):
+        from custom_components.roomba_plus.models import MapCapability
+        dispatched = self._run_callback(
+            map_capability=MapCapability.SMART,
+            grid_store=MagicMock(), umf_aligner=None,
+        )
+        assert "roomba_plus_gs_smart_coverage" not in dispatched
+
+    def test_not_dispatched_for_ephemeral_tier(self):
+        from custom_components.roomba_plus.models import MapCapability
+        dispatched = self._run_callback(
+            map_capability=MapCapability.EPHEMERAL,
+            grid_store=MagicMock(), umf_aligner=MagicMock(),
+        )
+        assert "roomba_plus_gs_smart_coverage" not in dispatched
+
+    def test_dispatched_before_grid_store_reading_checks(self):
+        """Ordering matters (plan §3.4): GS-SMART-COVERAGE must be
+        queued before stuck_hotspot/furniture_change/room_accessibility
+        so a same-cycle backfill is visible to them."""
+        from custom_components.roomba_plus.models import MapCapability
+        dispatched = self._run_callback(
+            map_capability=MapCapability.SMART,
+            grid_store=MagicMock(), umf_aligner=MagicMock(),
+        )
+        gs_idx = dispatched.index("roomba_plus_gs_smart_coverage")
+        for later in (
+            "roomba_plus_stuck_hotspot_check",
+            "roomba_plus_furniture_change_check",
+            "roomba_plus_room_accessibility_check",
+        ):
+            assert dispatched.index(later) > gs_idx, (
+                f"{later} dispatched before roomba_plus_gs_smart_coverage"
+            )
+
+
+def _gs_coverage_env(*, aligned=True, watermark=0):
+    """Minimal runtime_data + mission_store fixture for exercising
+    _async_update_gs_smart_coverage() directly (not through the hook)."""
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+
+    gs = MagicMock()
+    gs.last_processed_nmssn = watermark
+    gs.async_save = AsyncMock()
+
+    aligner = MagicMock()
+    aligner.aligned = aligned
+    aligner.umf_to_pose.side_effect = lambda x, y: (x * 10, y * 10)
+
+    ms = MagicMock()
+
+    data = MagicMock()
+    data.grid_store = gs
+    data.umf_aligner = aligner
+    data.mission_store = ms
+    entry.runtime_data = data
+
+    return hass, entry, data, gs, aligner, ms
+
+
+class TestGsSmartCoverageDispatchFunction:
+    """_async_update_gs_smart_coverage() itself — candidate selection,
+    rate cap, per-record error handling, and the actual GridStore
+    update call shape."""
+
+    @pytest.mark.asyncio
+    async def test_noop_without_grid_store(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        data.grid_store = None
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        ms.records.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_noop_without_mission_store(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        data.mission_store = None
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.update_from_mission.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_noop_without_umf_aligner(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        data.umf_aligner = None
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        ms.records.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_aligner_not_aligned(self):
+        """GS-SMART-UMF prerequisite: without alignment, umf_to_pose()
+        would return None for everything anyway — skip the whole
+        batch rather than fetch UMF data that can't be used."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env(aligned=False)
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        ms.records.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_records_without_pmaps_info_are_not_candidates(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 5},  # no pmaps_info at all
+        ]
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.update_from_mission.assert_not_called()
+        gs.async_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_records_at_or_below_watermark_are_not_candidates(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=10)
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
+            {"id": "m_2", "nMssn": 9, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
+        ]
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.update_from_mission.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rate_cap_limits_candidates_per_refresh(self):
+        """Plan §4.2 — at most 5 missions processed per refresh cycle,
+        even with a larger backlog."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+            MissionMapUnavailable,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": f"m_{i}", "nMssn": i,
+             "pmaps_info": [{"pmap_id": "p", "pmapv_id": f"v{i}"}]}
+            for i in range(1, 9)  # 8 candidates, backlog > cap
+        ]
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(side_effect=MissionMapUnavailable("no coverage")),
+        ) as mock_fetch:
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        assert mock_fetch.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_candidates_processed_in_ascending_nmssn_order(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": "m_3", "nMssn": 30, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
+             "started_at": "2026-07-01T10:00:00+00:00"},
+            {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
+             "started_at": "2026-07-01T10:00:00+00:00"},
+            {"id": "m_2", "nMssn": 20, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
+             "started_at": "2026-07-01T10:00:00+00:00"},
+        ]
+        payload = {"coverage_mm": [], "escape_events": []}
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(return_value=payload),
+        ):
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        processed_order = [
+            c.args[0] for c in gs.record_processed_nmssn.call_args_list
+        ]
+        assert processed_order == [10, 20, 30]
+
+    @pytest.mark.asyncio
+    async def test_unavailable_advances_watermark_no_crash(self):
+        """A structurally-bad record (no coverage layer, plan D5's
+        untested-lewis case) must not be retried forever — advance
+        the watermark past it."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+            MissionMapUnavailable,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
+        ]
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(side_effect=MissionMapUnavailable("no coverage")),
+        ):
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.record_processed_nmssn.assert_called_once_with(5)
+        gs.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_generic_fetch_failure_does_not_advance_watermark(self):
+        """A transient cloud/transport failure must be retried on the
+        next refresh — unlike MissionMapUnavailable/-Mismatch, the
+        watermark must NOT advance."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
+        ]
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(side_effect=Exception("cloud transport error")),
+        ):
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.record_processed_nmssn.assert_not_called()
+        gs.async_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_successful_mission_calls_update_from_mission_with_expected_shape(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        from custom_components.roomba_plus.map_renderer import (
+            ROBOT_DIAMETER_MM_ISJ_SERIES,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 5,
+             "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
+             "started_at": "2026-07-04T10:00:00+00:00"},
+        ]
+        payload = {
+            "coverage_mm": [[100.0, 200.0], [300.0, 400.0]],
+            "escape_events": [
+                {"pose": [1.0, 2.0, 0.0], "event": "start_stuck"},
+                {"pose": [3.0, 4.0, 0.0], "event": "start_evade"},  # excluded
+            ],
+        }
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(return_value=payload),
+        ):
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+
+        gs.update_from_mission.assert_called_once()
+        args, kwargs = gs.update_from_mission.call_args
+        pose_points, stuck_points = args
+        assert pose_points == [(1000.0, 2000.0), (3000.0, 4000.0)]
+        assert stuck_points == [(10.0, 20.0)]  # only start_stuck, start_evade excluded
+        assert kwargs["stuck_wh"] == (5, 10)  # 2026-07-04 is a Saturday, 10:00 local
+        assert kwargs["robot_radius_mm"] == ROBOT_DIAMETER_MM_ISJ_SERIES / 2
+        gs.record_processed_nmssn.assert_called_once_with(5)
+        gs.async_save.assert_awaited_once_with(hass, "test_entry")
+
+    @pytest.mark.asyncio
+    async def test_no_candidates_does_not_call_async_save(self):
+        """changed=False path — nothing to persist, don't write."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=100)
+        ms.records.return_value = []
+        await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        gs.async_save.assert_not_called()
+
+
+class TestGsCoverageLiveCloudMutualExclusion:
+    """Plan §2 — the actual double-counting regression scenario: a
+    mission already fed via the live path (image.py) must be skipped
+    by the cloud path's own candidate filter."""
+
+    @pytest.mark.asyncio
+    async def test_live_processed_mission_is_skipped_by_cloud_path(self):
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        # Simulates image.py having already called
+        # grid_store.record_processed_nmssn(77) for this mission.
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=77)
+        ms.records.return_value = [
+            {"id": "m_1", "nMssn": 77,
+             "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
+        ]
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(),
+        ) as mock_fetch:
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        mock_fetch.assert_not_awaited()
+        gs.update_from_mission.assert_not_called()
+
+
+class TestGsCoverageHelperFunctions:
+    """Unit tests for the small pure helpers backing the dispatch
+    function above."""
+
+    def test_umf_points_to_pose_converts_and_skips_unresolvable(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_umf_points_to_pose,
+        )
+        aligner = MagicMock()
+        aligner.umf_to_pose.side_effect = (
+            lambda x, y: None if x == 999 else (x + 1, y + 1)
+        )
+        pts = _gs_coverage_umf_points_to_pose(
+            [[1.0, 2.0], [999.0, 5.0], ["bad"], [3.0, 4.0]], aligner,
+        )
+        assert pts == [(2.0, 3.0), (4.0, 5.0)]
+
+    def test_classify_stuck_events_excludes_start_evade(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_classify_stuck_events,
+        )
+        aligner = MagicMock()
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        events = [
+            {"pose": [1.0, 1.0, 0.0], "event": "start_stuck"},
+            {"pose": [2.0, 2.0, 0.0], "event": "start_evade"},
+            {"pose": [3.0, 3.0, 0.0], "event": "brush_stall_detected"},
+            {"pose": [4.0, 4.0, 0.0], "event": "wheel_dropped"},
+            {"pose": [5.0, 5.0, 0.0], "event": "stasis_detected"},
+        ]
+        result = _gs_coverage_classify_stuck_events(events, aligner)
+        assert result == [(1.0, 1.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)]
+
+    def test_classify_stuck_events_logs_unknown_type_not_counted(self, caplog):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_classify_stuck_events,
+        )
+        aligner = MagicMock()
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        events = [{"pose": [1.0, 1.0, 0.0], "event": "some_future_event_type"}]
+        with caplog.at_level("INFO"):
+            result = _gs_coverage_classify_stuck_events(events, aligner)
+        assert result == []
+        assert "unclassified escape_event type" in caplog.text
+
+    def test_classify_stuck_events_skips_malformed_entries(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_classify_stuck_events,
+        )
+        aligner = MagicMock()
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        events = [
+            "not_a_dict",
+            {"event": "start_stuck"},  # no pose
+            {"pose": [1.0, 1.0, 0.0], "event": "start_stuck"},
+        ]
+        result = _gs_coverage_classify_stuck_events(events, aligner)
+        assert result == [(1.0, 1.0)]
+
+    def test_mission_start_weekday_hour_matches_image_py_derivation(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_mission_start_weekday_hour,
+        )
+        result = _gs_coverage_mission_start_weekday_hour(
+            "2026-07-04T10:00:00+00:00"
+        )
+        assert result == (5, 10)  # Saturday, 10:00 UTC == local in test env
+
+    def test_mission_start_weekday_hour_handles_missing_or_bad_input(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_mission_start_weekday_hour,
+        )
+        assert _gs_coverage_mission_start_weekday_hour(None) is None
+        assert _gs_coverage_mission_start_weekday_hour("") is None
+        assert _gs_coverage_mission_start_weekday_hour("not-a-date") is None
+
+    def test_safe_int_handles_none_and_garbage(self):
+        from custom_components.roomba_plus.callbacks import _gs_coverage_safe_int
+        assert _gs_coverage_safe_int(None) is None
+        assert _gs_coverage_safe_int("garbage") is None
+        assert _gs_coverage_safe_int("42") == 42
+        assert _gs_coverage_safe_int(42) == 42
+
+
+def _real_arithmetic_aligner():
+    """A MagicMock aligner whose umf_to_pose() actually does the real
+    UmfAligner arithmetic (cos_r * x_umf - sin_r * y_umf + tx, ...)
+    instead of an identity/None-branching stub — needed to expose the
+    v3.4.0 bug-hunt finding below, since an identity mock silently
+    passes non-numeric input straight through without ever hitting the
+    TypeError the real aligner would raise."""
+    aligner = MagicMock()
+    aligner.aligned = True
+
+    def _umf_to_pose(x, y):
+        rot, tx, ty = 0.0, 10.0, 20.0
+        cos_r, sin_r = 1.0, 0.0  # cos(0), sin(0) — avoids importing math here
+        return (cos_r * x - sin_r * y + tx, sin_r * x + cos_r * y + ty)
+
+    aligner.umf_to_pose.side_effect = _umf_to_pose
+    return aligner
+
+
+class TestGsCoverageNonNumericCoordinateResilience:
+    """v3.4.0 bug hunt — coverage_mm/escape_events poses are cloud data,
+    untrusted. A non-numeric coordinate reaching aligner.umf_to_pose()
+    used to raise TypeError there (real arithmetic: cos_r * x_umf),
+    uncaught by either helper function or their caller
+    (_async_update_gs_smart_coverage has no try/except around these
+    calls) — crashing the whole per-mission processing step, not just
+    skipping the one bad point/event."""
+
+    def test_umf_points_to_pose_skips_non_numeric_coordinate(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_umf_points_to_pose,
+        )
+        aligner = _real_arithmetic_aligner()
+        pts = _gs_coverage_umf_points_to_pose(
+            [["x", "y"], [1.0, 2.0]], aligner,
+        )
+        assert pts == [(11.0, 22.0)]  # only the valid point survives
+
+    def test_umf_points_to_pose_skips_none_coordinate(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_umf_points_to_pose,
+        )
+        aligner = _real_arithmetic_aligner()
+        pts = _gs_coverage_umf_points_to_pose(
+            [[None, 2.0], [3.0, 4.0]], aligner,
+        )
+        assert pts == [(13.0, 24.0)]
+
+    def test_classify_stuck_events_skips_non_numeric_pose(self):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_classify_stuck_events,
+        )
+        aligner = _real_arithmetic_aligner()
+        events = [
+            {"pose": ["x", "y", 0.0], "event": "start_stuck"},
+            {"pose": [1.0, 2.0, 0.0], "event": "start_stuck"},
+        ]
+        result = _gs_coverage_classify_stuck_events(events, aligner)
+        assert result == [(11.0, 22.0)]  # only the valid event survives

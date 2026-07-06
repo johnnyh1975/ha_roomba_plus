@@ -397,7 +397,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=[],
         ):
             attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
@@ -431,7 +431,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=[],
         ):
             attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
@@ -463,7 +463,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=[],
         ):
             attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)
@@ -493,7 +493,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=["A", "B"],
         ):
             pct = RoombaMissionProgress.native_value.fget(sensor)
@@ -524,7 +524,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
         ):
             pct = RoombaMissionProgress.native_value.fget(sensor)
@@ -553,7 +553,7 @@ class TestAttributesUseElapsedSec:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=["A", "B"],
         ):
             pct = RoombaMissionProgress.native_value.fget(sensor)
@@ -582,10 +582,10 @@ class TestAttributesUseElapsedSec:
         config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=["Cabina Armadio", "Camera da letto", "Soggiorno"],
         ), patch(
-            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            "custom_components.roomba_plus.sensor_rooms._compute_room_time_estimates",
             return_value=[None, None, None],
         ):
             attrs = _resolve_smart_tier_room_state(config_entry)
@@ -624,7 +624,7 @@ class TestCurrentRoomPrefersEstimate:
         sensor._config_entry.runtime_data = data
 
         with patch(
-            "custom_components.roomba_plus.sensor._get_planned_room_order",
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
             return_value=["Bathroom", "Corridor"],
         ), patch(
             # v2.9.0 — the shared _resolve_smart_tier_room_state() function
@@ -632,7 +632,7 @@ class TestCurrentRoomPrefersEstimate:
             # directly, not the RoombaMissionProgress instance's
             # _room_estimates() wrapper — patch the module-level function
             # that's actually invoked now.
-            "custom_components.roomba_plus.sensor._compute_room_time_estimates",
+            "custom_components.roomba_plus.sensor_rooms._compute_room_time_estimates",
             return_value=[60, 120],  # Estimates: Bathroom=60s, Corridor=120s
         ):
             attrs = RoombaMissionProgress.extra_state_attributes.fget(sensor)

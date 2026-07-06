@@ -1909,7 +1909,7 @@ class TestHealthChangeEvent:
         hass = MagicMock()
         sensor, _ = self._make_sensor(hass)
         with patch(
-            "custom_components.roomba_plus.sensor._compute_integration_health",
+            "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(100, {}),
         ), patch(
             "custom_components.roomba_plus.repairs.async_check_integration_health",
@@ -1929,7 +1929,7 @@ class TestHealthChangeEvent:
         sensor._last_health_score = 90
 
         with patch(
-            "custom_components.roomba_plus.sensor._compute_integration_health",
+            "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(40, {}),
         ), patch(
             "custom_components.roomba_plus.repairs.async_check_integration_health",
@@ -1956,7 +1956,7 @@ class TestHealthChangeEvent:
         sensor._last_health_score = 100
 
         with patch(
-            "custom_components.roomba_plus.sensor._compute_integration_health",
+            "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(85, {}),  # still "healthy" band, minor jitter
         ), patch(
             "custom_components.roomba_plus.repairs.async_check_integration_health",

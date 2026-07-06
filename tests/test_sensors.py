@@ -4476,7 +4476,7 @@ class TestRoomsOverdueSensor:
         sensor = self._sensor(
             recs, options={"room_schedule": {"Kitchen": "daily"}}
         )
-        with patch("custom_components.roomba_plus.sensor.dt_util") as dt_m:
+        with patch("custom_components.roomba_plus.sensor_rooms.dt_util") as dt_m:
             from homeassistant.util import dt as real_dt
             dt_m.now.return_value = real_dt.parse_datetime(
                 "2026-07-04T10:00:00+00:00"
