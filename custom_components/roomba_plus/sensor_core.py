@@ -36,11 +36,11 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
-    ERROR_CATALOGUE,
     JOB_INITIATOR_LABELS,
     MOP_RANK_LABELS,
     PAD_LABELS,
     SQFT_TO_M2,
+    get_localized_error_entry,
     has_carpet_boost,
     has_clean_base,
     has_pose,
@@ -1516,10 +1516,11 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if threshold is not None:
             return {"threshold_hours": threshold}
         # v1.8.0 L3: description + action for last_error_code
+        # v3.4.1: localised via hass.config.language, falls back to English
         if key == "last_error_code":
             code = self.native_value
             if code is not None:
-                catalogue = ERROR_CATALOGUE.get(int(code), {})
+                catalogue = get_localized_error_entry(int(code), self.hass.config.language)
                 return {
                     "description": catalogue.get("description", ""),
                     "action": catalogue.get("action", ""),

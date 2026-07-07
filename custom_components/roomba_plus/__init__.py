@@ -2478,7 +2478,25 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
 
     map_enabled = config_entry.options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED)
 
-    if has_pose(state) and map_enabled:
+    # v3.4.1 MAP-CAP-NO-POSE: previously gated on has_pose(state) alone,
+    # which requires cap.pose >= 1. Field-confirmed (mdarocha, i3+,
+    # "daredevil" firmware): a robot can have real persistent maps
+    # (smart_map.pmap_ids populated, has_smart_map(state) True) while its
+    # `cap` object has no "pose" key at all — has_pose(state) then
+    # returns False via the dict.get(..., 0) default, and map_capability
+    # stayed NONE regardless of pmaps. This silently skipped
+    # has_smart_map entirely (never even checked), which in turn skipped
+    # cloud_coordinator creation (gated on map_capability != NONE,
+    # further down this function) even with valid cloud credentials
+    # configured — no map, and total_cleaned_area fell back to the
+    # known-unreliable bbrun.sqft (see that sensor's own docstring)
+    # instead of the cloud-backed MissionArchive.cumulative_sqft it's
+    # supposed to prefer, since nothing was feeding the archive either.
+    # Fixed by entering this block on EITHER signal — has_smart_map is
+    # checked first and takes priority when both are present, unchanged
+    # from before; has_pose alone still yields EPHEMERAL exactly as
+    # before for 900-series robots with no persistent maps.
+    if (has_pose(state) or has_smart_map(state)) and map_enabled:
         if has_smart_map(state):
             map_capability = MapCapability.SMART
             _LOGGER.debug("Roomba+ map: SMART (persistent pmaps detected)")
@@ -2507,8 +2525,8 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
         )
     else:
         _LOGGER.debug(
-            "Roomba+ map: NONE (cap.pose=%s, map_enabled=%s)",
-            state.get("cap", {}).get("pose"), map_enabled,
+            "Roomba+ map: NONE (cap.pose=%s, pmaps=%s, map_enabled=%s)",
+            state.get("cap", {}).get("pose"), state.get("pmaps"), map_enabled,
         )
 
     # F9 — GridStore
@@ -2574,6 +2592,60 @@ async def _phase_data(ctx: _SetupContext) -> None:
     _bbrun = _state_for_bbrun.get("bbrun", {})
     _runtime = _state_for_bbrun.get("runtimeStats", {})
     _current_hr = _bbrun.get("hr") or _runtime.get("hr") or 0
+
+    # v3.4.1 MAINTENANCE-COLD-START: field-confirmed (mdarocha, i3+, 412
+    # missions / 294h prior runtime, no reset ever recorded in this
+    # integration). filter_reset_hr/brush_reset_hr default to 0 for a
+    # brand-new store — correct for a genuinely new robot (current_hr
+    # also ≈0), but wrong for one with substantial pre-existing runtime:
+    # hours_since_reset then comes out as the robot's ENTIRE prior
+    # lifetime, immediately exceeding any sane threshold and clamping to
+    # a confidently-displayed "0h remaining" — reading as "urgently
+    # overdue" for maintenance that, for all this integration actually
+    # knows, may have been done yesterday via the official app it has no
+    # visibility into. On first-ever load with the robot already
+    # reporting real hours, seed both baselines to "now" — assume
+    # maintenance is current as of whenever this integration starts
+    # watching, not as of hour zero.
+    #
+    # Gated on BOTH the dedicated *_baseline_seeded flag AND an empty
+    # *_reset_history — the flag alone is not enough, since it defaults
+    # to False for every install that predates v3.4.1 (the flag did not
+    # exist before), which would otherwise overwrite an EXISTING user's
+    # genuine, real reset_hr from a real past reset with today's
+    # current_hr. reset_history is the authoritative "has a real reset
+    # ever happened" signal; the flag exists only to stop this block
+    # from re-seeding reset_hr to the latest current_hr on every single
+    # restart once seeding has legitimately happened (auto-seeding
+    # deliberately does not add a reset_history entry, to avoid
+    # polluting the self-calibrating wear-rate learning with a
+    # synthetic, non-user-confirmed event) — reset_history staying empty
+    # forever after a pure auto-seed would otherwise look identical, on
+    # every subsequent load, to "never seeded yet".
+    _seeded_this_load = False
+    if (_current_hr > 0 and not maintenance_store.filter_baseline_seeded
+            and not maintenance_store.filter_reset_history):
+        maintenance_store.filter_reset_hr = _current_hr
+        maintenance_store.filter_baseline_seeded = True
+        _seeded_this_load = True
+        _LOGGER.debug(
+            "Roomba+ MaintenanceStore: seeded filter_reset_hr=%dh on first "
+            "load (no prior reset history, robot already has runtime)",
+            _current_hr,
+        )
+    if (_current_hr > 0 and not maintenance_store.brush_baseline_seeded
+            and not maintenance_store.brush_reset_history):
+        maintenance_store.brush_reset_hr = _current_hr
+        maintenance_store.brush_baseline_seeded = True
+        _seeded_this_load = True
+        _LOGGER.debug(
+            "Roomba+ MaintenanceStore: seeded brush_reset_hr=%dh on first "
+            "load (no prior reset history, robot already has runtime)",
+            _current_hr,
+        )
+    if _seeded_this_load:
+        await maintenance_store.async_save(hass, config_entry.entry_id)
+
     if _current_hr > 0:
         from .repairs import async_check_bbrun_reset
         await async_check_bbrun_reset(hass, config_entry, maintenance_store, _current_hr)

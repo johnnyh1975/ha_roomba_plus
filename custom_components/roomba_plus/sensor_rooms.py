@@ -1010,9 +1010,13 @@ def _id_to_display_name(cc: Any) -> dict[str, str]:
     rid as the final fallback, same as before this existed.
 
     Reliability of region_suggestions across many pmaps beyond the one
-    sample seen (see MISSIONSTORE_FIELD_REGISTRY.md) is unconfirmed —
-    this conservative positive-score gate is deliberately cautious about
-    that uncertainty, not just about formatting the suggestion nicely.
+    sample seen (see MISSIONSTORE_FIELD_REGISTRY.md) is unconfirmed for
+    most model families — this conservative positive-score gate is
+    deliberately cautious about that uncertainty, not just about
+    formatting the suggestion nicely. Second independent sample received
+    (July 2026, Thonno, i7/lewis firmware, RESEARCH-ROOMTYPE) — the
+    positive/negative gating held up exactly as expected on that
+    device/firmware. Still open for other model families.
     """
     if cc is None:
         return {}

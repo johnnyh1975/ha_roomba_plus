@@ -554,8 +554,23 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     74:  {"label": "Max area reached",          "description": "The robot has reached the maximum cleanable area.",        "action": "This is informational. Dock and recharge, then continue if needed."},
     75:  {"label": "Navigation problem",        "description": "The robot could not complete navigation in time.",         "action": "Clear the area of obstacles and try again."},
     76:  {"label": "Hardware problem detected", "description": "A hardware component has reported a fault.",               "action": "Reboot the robot. Contact iRobot support if the error persists."},
+    # v3.4.1 — codes 78/79/85/86/91-93/98/99 confirmed from direct iRobot Home
+    # app APK analysis (push_notification_error_*/history_error_* string
+    # resources, Klartext-verified). Codes 54-72/94-97 in the same numeric
+    # neighbourhood were checked and excluded — those belong to iRobot's Terra
+    # lawn-mower product line (shared app namespace), not vacuum/mop robots.
+    78:  {"label": "Left wheel error",           "description": "The left wheel is not responding correctly.",               "action": "Check the wheel for obstructions. Reboot the robot if the error persists."},
+    79:  {"label": "Right wheel error",          "description": "The right wheel is not responding correctly.",              "action": "Check the wheel for obstructions. Reboot the robot if the error persists."},
+    85:  {"label": "Path to charging station blocked", "description": "The robot could not reach the home base.",            "action": "Ensure the path to the home base is clear and unobstructed."},
+    86:  {"label": "Path to charging station blocked", "description": "The robot could not reach the home base.",            "action": "Ensure the path to the home base is clear and unobstructed."},
     88:  {"label": "Back-up refused",           "description": "The robot could not back up as required.",                 "action": "Check for obstacles behind the robot and clear the area."},
     89:  {"label": "Mission runtime too long",  "description": "The mission exceeded the maximum allowed runtime.",        "action": "The robot will dock and resume after charging."},
+    # v3.4.1 — see comment above codes 78/79/85/86 for source/exclusion notes.
+    91:  {"label": "Workspace path error",       "description": "The robot's understanding of the workspace no longer matches its surroundings.", "action": "Retrain the map for this space."},
+    92:  {"label": "Workspace path error",       "description": "The robot's understanding of the workspace no longer matches its surroundings.", "action": "Retrain the map for this space."},
+    93:  {"label": "Workspace path error",       "description": "The robot's understanding of the workspace no longer matches its surroundings.", "action": "Retrain the map for this space."},
+    98:  {"label": "Software error",             "description": "An internal software error occurred.",                     "action": "Reboot the robot. Contact iRobot support if the error persists."},
+    99:  {"label": "Navigation problem",         "description": "The robot is having trouble navigating.",                   "action": "Clear the area of obstacles and ensure good lighting."},
     101: {"label": "Battery not connected",     "description": "The battery is not detected.",                            "action": "Check that the battery is firmly seated. Contact support if needed."},
     102: {"label": "Charging error",            "description": "A charging error has occurred.",                          "action": "Check the home base contacts and the robot's charging port for debris."},
     103: {"label": "Charging error",            "description": "A charging error has occurred.",                          "action": "Check the home base contacts and the robot's charging port for debris."},
@@ -590,6 +605,33 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     163: {"label": "Mission failed",            "description": "The mission could not be completed.",                     "action": "Check for obstacles and retry."},
     216: {"label": "Charging base bag full",    "description": "The Clean Base bag is full and needs replacing.",         "action": "Replace the Clean Base bag."},
     224: {"label": "Smart Map localization failed", "description": "The robot could not localise on its Smart Map.",      "action": "Place the robot in an open area on the map and try again. Retrain the map if needed."},
+    # v3.4.1 — Combo wet-mopping tank/dock error category (450-463, 501-509),
+    # confirmed from direct iRobot Home app APK analysis (dock_history_error_*
+    # string resources, Klartext-verified). Consistent degradation pattern:
+    # the robot switches to vacuum-only rather than failing the mission outright.
+    450: {"label": "Tank missing",              "description": "The clean water tank is missing. Switched to vacuum only.", "action": "Insert the clean water tank."},
+    451: {"label": "Tank low",                  "description": "The clean water tank is low. Switched to vacuum only.",     "action": "Refill the clean water tank."},
+    452: {"label": "Tank hardware issue",       "description": "A tank hardware issue was detected. Switched to vacuum only.", "action": "Reseat the tank. Contact iRobot support if the error persists."},
+    453: {"label": "Port clog",                 "description": "A refill port is clogged. Switched to vacuum only.",      "action": "Clean the refill port on the dock and robot."},
+    454: {"label": "Nozzle clog",                "description": "A nozzle is clogged. Switched to vacuum only.",           "action": "Clean the mopping nozzle."},
+    455: {"label": "Clean Base pump issue",      "description": "The Clean Base pump has an issue.",                       "action": "Check the Clean Base for blockages. Contact support if the error persists."},
+    456: {"label": "Incorrect bin",              "description": "The wrong bin type is installed. Switched to vacuum only.", "action": "Install the correct bin for this robot."},
+    457: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    458: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    459: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    460: {"label": "Level sensor issue",         "description": "A tank level sensor issue was detected. Switched to vacuum only.", "action": "Clean the tank and level sensor. Contact support if the error persists."},
+    461: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    462: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    463: {"label": "Possible leak",              "description": "A possible leak was detected. Switched to vacuum only.",  "action": "Check the tank and connections for leaks. Contact support if the error persists."},
+    501: {"label": "Unable to refill",           "description": "The robot was unable to refill. Switched to vacuum only.", "action": "Check the Clean Base water supply and refill connections."},
+    502: {"label": "Charging contacts need cleaning", "description": "The charging contacts need cleaning.",               "action": "Clean the charging contacts on the robot and Clean Base."},
+    503: {"label": "Communication error",       "description": "A communication error occurred. Switched to vacuum only.", "action": "Reboot the robot. Contact support if the error persists."},
+    504: {"label": "Refill docking issue",       "description": "The robot had a refill docking issue. Switched to vacuum only.", "action": "Check that the robot is docking correctly at the Clean Base."},
+    505: {"label": "Communication error",       "description": "A communication error occurred. Reboot required.",         "action": "Reboot the robot."},
+    506: {"label": "Communication error",       "description": "A communication error occurred. Reboot required.",         "action": "Reboot the robot."},
+    507: {"label": "Communication error",       "description": "A communication error occurred. Reboot required.",         "action": "Reboot the robot."},
+    508: {"label": "Clean Base update failure",  "description": "The Clean Base software update failed.",                  "action": "Retry the update. Contact iRobot support if the error persists."},
+    509: {"label": "Clean Base update failure",  "description": "The Clean Base software update failed.",                  "action": "Retry the update. Contact iRobot support if the error persists."},
     1010: {"label": "Clear path",              "description": "The robot's path is obstructed.",                          "action": "Clear obstacles from the robot's path and restart."},
 }
 
@@ -598,6 +640,44 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
 ERROR_CODE_LABELS: Final[dict[int, str]] = {
     k: v["label"] for k, v in ERROR_CATALOGUE.items()
 }
+
+# v3.4.1 — localised ERROR_CATALOGUE lookup. ERROR_CATALOGUE itself stays
+# English-only (used directly by any pre-existing caller that hasn't been
+# updated); this is the new, opt-in entry point for localised text.
+# Deliberately NOT a method on an entity/hass-bound class so it can be unit
+# tested without a running HA instance — callers pass the language string
+# they already have (typically hass.config.language).
+def get_localized_error_entry(code: int, language: str | None) -> dict[str, str]:
+    """Return the label/description/action for an error code, localised.
+
+    Falls back field-by-field to English — a language with an incomplete
+    or missing translation for a given code never produces a blank string,
+    it silently reverts to the English catalogue entry for that field.
+
+    An error code not present in ERROR_CATALOGUE at all always returns an
+    empty dict, regardless of language — callers rely on dict.get(key,
+    fallback) patterns (e.g. repairs.py's `label = entry.get("label", f"Error
+    {code}")`), which only trigger the fallback when the *key* is absent,
+    not when its value is an empty string. Returning {"label": "", ...} for
+    an unknown code would silently defeat that fallback and show a blank
+    label instead — a v3.4.1 bug caught by test_const.py before release.
+    """
+    base = ERROR_CATALOGUE.get(code, {})
+    if not base:
+        return {}
+    if not language or language == "en":
+        return base
+    # Import here (not at module top) to avoid a hard dependency from
+    # const.py — a small, low-traffic module — on the much larger
+    # translation data file for every consumer of const.py, most of which
+    # never touch error codes at all.
+    from .error_translations import ERROR_CATALOGUE_TRANSLATIONS
+    localised = ERROR_CATALOGUE_TRANSLATIONS.get(language, {}).get(code, {})
+    return {
+        "label": localised.get("label", base.get("label", "")),
+        "description": localised.get("description", base.get("description", "")),
+        "action": localised.get("action", base.get("action", "")),
+    }
 
 
 PHASE_LABELS: Final[dict[str, str]] = {

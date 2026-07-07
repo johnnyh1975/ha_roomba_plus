@@ -322,12 +322,18 @@ data:
 | Sensor | Notes |
 |---|---|
 | Filter remaining hours | Configurable threshold; `threshold_hours` attribute |
-| Brush remaining hours | Configurable threshold; `threshold_hours` attribute |
+| Brush remaining hours | Configurable threshold; `threshold_hours` attribute. Covers main and side brushes together as a single maintenance action — the local protocol doesn't report separate wear signals for each, so there's no reliable way to split this into two sensors. If your official app shows them as separate checklist items, treat this one sensor as covering both. |
 | Cleaning pad remaining hours | Braava only |
 | Battery capacity retention (%) | Degradation relative to design capacity (profile-corrected, v2.5+) |
 | Estimated battery end of life (days) | Projected days until battery replacement — self-calibrated against this robot's own measurement noise floor (v3.1.0), so a near-new battery with normal estCap jitter no longer produces a meaningless multi-decade projection |
 
 **Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
+
+**First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate.
+
+#### Clean Base / dock status
+
+`sensor.{name}_clean_base_status` — the dock's own health, not the robot's onboard bin: tank/bag missing, low, clogged, a sealing problem, a full bag, an IR communication issue, or ready/empty. This is the entity that corresponds to what the official app calls the "docking station bag" indicator — distinct from `binary_sensor.{name}_bin_full`, which reflects the robot's own onboard dust bin (rarely full on a Clean-Base-equipped setup, since the robot empties into the dock automatically after each mission). Requires a Clean Base — absent otherwise.
 
 #### Navigation health (v3.1.0, SMART-tier)
 
@@ -355,7 +361,7 @@ Every reset above (button or service) writes a searchable Logbook entry and fire
 
 #### Maintenance due binary sensor
 
-`binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). Also available as the `maintenance_due` device trigger. If left unaddressed for 3+ days, also raises a Repair Issue — a backstop for anyone without an automation wired to the trigger.
+`binary_sensor.{name}_maintenance_due` — ON when any consumable reaches zero remaining hours. Attributes: `due` (list of consumables), `overdue_by_hours` (hours past threshold per consumable). Home Assistant's default dashboard tile for a `problem`-class binary sensor shows only on/off, not attributes — click into the entity's more-info dialog and check "Attributes" (or view it in Developer Tools → States) to see which consumable is actually due. Also available as the `maintenance_due` device trigger. If left unaddressed for 3+ days, also raises a Repair Issue — a backstop for anyone without an automation wired to the trigger.
 
 #### Maintenance to-do list (v3.4.0)
 

@@ -218,6 +218,7 @@ def render_mission_map_png(
     coverage_mm: list[list[float]],
     point_area_m: list[float],
     room_polygons_mm: list[list[tuple[float, float]]],
+    rotate: int = 0,
 ) -> bytes:
     """Compose room outlines + one mission's coverage points into a PNG.
 
@@ -225,6 +226,15 @@ def render_mission_map_png(
     constants come from map_renderer (one style, two consumers). The
     coverage point radius derives from the real point_area footprint so
     dense/sparse coverage reads truthfully instead of cosmetically.
+
+    rotate: clockwise rotation in degrees — 0 (default), 90, 180, or 270.
+    Any other value is treated as 0. Applied via PIL's transpose (not
+    rotate), which is a lossless pixel permutation for these four exact
+    multiples of 90° — no interpolation blur, unlike Image.rotate()
+    which is designed for arbitrary angles. Requested (v3.4.1) after a
+    field report that Smart Map orientation doesn't always match a
+    dashboard's expected layout, requiring external image processing
+    without this.
     """
     from PIL import Image, ImageDraw
 
@@ -235,6 +245,7 @@ def render_mission_map_png(
     ys = [p[1] for p in coverage_mm] + [v[1] for poly in room_polygons_mm for v in poly]
     if not xs:
         img = Image.new("RGBA", (_PNG_SIZE_PX, _PNG_SIZE_PX), BG_COLOUR)
+        img = _apply_rotation(img, rotate)
         buf = __import__("io").BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
@@ -277,5 +288,24 @@ def render_mission_map_png(
         )
 
     buf = __import__("io").BytesIO()
+    img = _apply_rotation(img, rotate)
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _apply_rotation(img: "Image.Image", rotate: int) -> "Image.Image":
+    """Lossless 90°-multiple clockwise rotation via transpose, not rotate().
+
+    Unknown/unsupported values silently fall back to no rotation (0)
+    rather than raising — a malformed query param should degrade
+    gracefully, not break the whole image response.
+    """
+    from PIL import Image
+
+    transpose_for = {
+        90: Image.Transpose.ROTATE_270,  # PIL's ROTATE_N is counter-clockwise
+        180: Image.Transpose.ROTATE_180,
+        270: Image.Transpose.ROTATE_90,
+    }
+    method = transpose_for.get(rotate)
+    return img.transpose(method) if method is not None else img

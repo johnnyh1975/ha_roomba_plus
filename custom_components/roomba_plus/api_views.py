@@ -1090,6 +1090,14 @@ class MissionMapPngView(HomeAssistantView):
     a picture-card/notification image without any card installed —
     this endpoint IS the v3.3.0 user-visible output; map.json is the
     card-v2.3.0 investment. Same error mapping as map.json.
+
+    v3.4.1 ROTATE-PARAM: optional `?rotate=90|180|270` query parameter,
+    clockwise, for Smart Maps whose orientation doesn't match a
+    dashboard's expected layout — requested by a field tester (i7/lewis)
+    who needed 270° (equivalently, 90° counter-clockwise) to match their
+    floor plan. Any other/missing value renders unrotated, matching prior
+    behaviour exactly — this is purely additive, no existing caller is
+    affected.
     """
 
     url = "/api/roomba_plus/{entry_id}/missions/{record_id}/map.png"
@@ -1107,10 +1115,14 @@ class MissionMapPngView(HomeAssistantView):
         aligner = data.umf_aligner
         if aligner is not None and aligner.aligned:
             rooms = list(aligner.room_polygons_umf.values())
+        try:
+            rotate = int(request.query.get("rotate", 0))
+        except ValueError:
+            rotate = 0
         from .mission_map import render_mission_map_png
         png = await hass.async_add_executor_job(
             render_mission_map_png, payload["coverage_mm"],
-            payload.get("point_area_m") or [], rooms,
+            payload.get("point_area_m") or [], rooms, rotate,
         )
         return web.Response(body=png, content_type="image/png")
 

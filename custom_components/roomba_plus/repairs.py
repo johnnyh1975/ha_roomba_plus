@@ -31,6 +31,7 @@ from .const import (
     MAP_RETRAIN_STUCK_MINUTES,
     MAP_RETRAIN_WARN_MINUTES,
     SQFT_TO_M2,
+    get_localized_error_entry,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1202,8 +1203,7 @@ async def async_check_error_recurrence(
         ir.async_delete_issue(hass, DOMAIN, "error_recurrence")
         return
 
-    from .const import ERROR_CATALOGUE
-    catalogue_entry = ERROR_CATALOGUE.get(worst_code, {})
+    catalogue_entry = get_localized_error_entry(worst_code, hass.config.language)
     label  = catalogue_entry.get("label",  f"Error {worst_code}")
     action = catalogue_entry.get("action", "")
 

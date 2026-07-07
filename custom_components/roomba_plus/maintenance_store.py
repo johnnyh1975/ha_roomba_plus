@@ -61,6 +61,17 @@ class MaintenanceStore:
     filter_reset_history: list[int] = field(default_factory=list)
     brush_reset_history: list[int] = field(default_factory=list)
 
+    # v3.4.1 MAINTENANCE-COLD-START — tracks whether filter_reset_hr/
+    # brush_reset_hr have already been auto-seeded to the robot's runtime
+    # hours on first-ever load (see __init__.py's async setup). Distinct
+    # from filter_reset_history/brush_reset_history, which only ever
+    # records REAL user-confirmed resets — this flag exists specifically
+    # so the auto-seed step fires exactly once per robot, not on every
+    # restart, without polluting the learned-wear-rate history with a
+    # synthetic, non-user-confirmed "reset" event.
+    filter_baseline_seeded: bool = False
+    brush_baseline_seeded: bool = False
+
     # IA74-MAINT (v2.6.0) — clean/inspect timestamps (calendar-based, no bbrun.hr)
     wheel_cleaned_at: str | None = None
     contact_cleaned_at: str | None = None
@@ -93,6 +104,12 @@ class MaintenanceStore:
             self.brush_reset_history = [
                 int(h) for h in data.get("brush_reset_history", [])
             ]
+            # v3.4.1 MAINTENANCE-COLD-START — False for pre-v3.4.1 installs
+            # (backward compat: treated as "not yet seeded", matching a
+            # fresh store — correct, since this flag didn't exist before
+            # and no seeding could have happened yet).
+            self.filter_baseline_seeded = bool(data.get("filter_baseline_seeded", False))
+            self.brush_baseline_seeded  = bool(data.get("brush_baseline_seeded",  False))
             # IA74-MAINT: calendar-based inspect timestamps
             self.wheel_cleaned_at   = data.get("wheel_cleaned_at")
             self.contact_cleaned_at = data.get("contact_cleaned_at")
@@ -118,6 +135,8 @@ class MaintenanceStore:
             "consecutive_skips": self.consecutive_skips, # F6g
             "filter_reset_history": self.filter_reset_history,  # L2
             "brush_reset_history":  self.brush_reset_history,   # L2
+            "filter_baseline_seeded": self.filter_baseline_seeded,  # v3.4.1
+            "brush_baseline_seeded":  self.brush_baseline_seeded,   # v3.4.1
             # IA74-MAINT
             "wheel_cleaned_at":   self.wheel_cleaned_at,
             "contact_cleaned_at": self.contact_cleaned_at,

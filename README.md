@@ -112,7 +112,7 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 ## Known limitations
 
 - **600-series is untested** — should work (same local MQTT protocol), but no field confirmation yet. See the capability matrix above for what it does and doesn't support by design.
-- **i-series (lewis firmware) mission cleaning maps are unconfirmed** — field-confirmed on Braava jet m6 only so far. See [Upgrade notes →](docs/UPGRADING.md).
+- **i-series (lewis firmware) mission cleaning maps confirmed** (July 2026, field-confirmed by Thonno on an i7) — previously confirmed on Braava jet m6 (sapphire firmware) only. See [Upgrade notes →](docs/UPGRADING.md).
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](RELEASE_NOTES_v3.4.0.md).
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](RELEASE_NOTES_v3.4.0.md).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](RELEASE_NOTES_v3.4.0.md).

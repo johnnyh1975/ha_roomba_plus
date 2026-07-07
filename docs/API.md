@@ -463,11 +463,18 @@ SMART robots with cloud credentials only; requires the mission record to carry
 ```
 GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.json
 GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png
+GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png?rotate=90
 ```
 
 `{record_id}` is the local mission record id; `latest` resolves to the most
 recent mission. The PNG is directly usable as a picture-card or notification
 image — room outlines (current map) plus this mission's real coverage points.
+
+**`rotate` query parameter** *(v3.4.1, PNG only)* — clockwise rotation in
+degrees: `90`, `180`, or `270`. Omit for unrotated (default). Any other
+value is treated as `0`. Useful when a Smart Map's stored orientation
+doesn't match your dashboard's expected layout — no external image
+processing needed. Lossless (pixel permutation, not interpolated).
 
 ```json
 {
@@ -487,7 +494,7 @@ image — room outlines (current map) plus this mission's real coverage points.
 
 | Status | Meaning |
 |---|---|
-| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer (currently an open question on i-series/lewis firmware — confirmed working on Braava jet m6, sapphire firmware family) |
+| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer — confirmed working on both Braava jet m6 (sapphire firmware) and i-series lewis firmware (field-confirmed July 2026); if you still get this on another model family, that's the remaining open question, not something to troubleshoot on your end |
 | 409 | Verification-gate mismatch — the cloud map's `map_header.nmssn` does not match the requested record; the wrong map is never served silently |
 | 502 | Cloud transport failure |
 
