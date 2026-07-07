@@ -1312,3 +1312,98 @@ class TestMaintenanceDueOnMessageRepairCheck:
         ):
             entity.on_message(self._msg(100))
         entity.hass.loop.call_soon_threadsafe.assert_not_called()
+
+
+class TestMaintenanceColdStartBaseline:
+    """v3.4.1 MAINTENANCE-COLD-START — field-confirmed (mdarocha, i3+, 412
+    missions / 294h prior runtime, no reset ever recorded in this
+    integration). The actual seeding logic lives in __init__.py's async
+    setup flow (no existing test scaffolding exercises that directly —
+    see test_const.py's MapCapabilityGatingNoLocalPose for the same
+    situation on a different fix in this release). These tests cover
+    the MaintenanceStore-level pieces the fix depends on: the new
+    persisted flags default correctly, survive save/load, and stay
+    backward compatible with pre-v3.4.1 stored data.
+    """
+
+    def test_baseline_seeded_flags_default_false(self):
+        store = MaintenanceStore()
+        assert store.filter_baseline_seeded is False
+        assert store.brush_baseline_seeded is False
+
+    @pytest.mark.asyncio
+    async def test_baseline_seeded_flags_persist_through_save_load(self):
+        ms = MaintenanceStore()
+        ms.filter_reset_hr = 294
+        ms.filter_baseline_seeded = True
+
+        saved: dict = {}
+
+        async def _save(data: dict) -> None:
+            saved.update(data)
+
+        async def _load() -> dict:
+            return saved
+
+        store_mock = MagicMock()
+        store_mock.async_save = _save
+        store_mock.async_load = _load
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+
+        with patch(
+            "custom_components.roomba_plus.maintenance_store.Store",
+            return_value=store_mock,
+        ):
+            await ms.async_save(hass, "e1")
+            ms2 = MaintenanceStore()
+            await ms2.async_load(hass, "e1")
+
+        assert ms2.filter_reset_hr == 294
+        assert ms2.filter_baseline_seeded is True
+        assert ms2.brush_baseline_seeded is False  # untouched, still default
+
+    @pytest.mark.asyncio
+    async def test_pre_v342_data_without_seeded_flags_defaults_false(self):
+        """A store saved before v3.4.1 has no *_baseline_seeded keys at
+        all in its persisted dict — loading it must default both to
+        False (never seeded), not crash."""
+        ms = MaintenanceStore()
+        ms.filter_reset_hr = 150
+        ms.brush_reset_hr = 150
+
+        # Simulate a pre-v3.4.1 persisted dict: no baseline_seeded keys.
+        pre_v342_data = {
+            "filter_reset_hr": 150,
+            "brush_reset_hr": 150,
+            "battery_reset_hr": 0,
+            "filter_reset_history": [150],
+            "brush_reset_history": [150],
+        }
+
+        async def _load() -> dict:
+            return pre_v342_data
+
+        store_mock = MagicMock()
+        store_mock.async_load = _load
+        hass = MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.maintenance_store.Store",
+            return_value=store_mock,
+        ):
+            ms2 = MaintenanceStore()
+            await ms2.async_load(hass, "e1")
+
+        assert ms2.filter_reset_hr == 150
+        assert ms2.filter_baseline_seeded is False
+        assert ms2.brush_baseline_seeded is False
+        # And this existing user's genuine reset history must be intact —
+        # exactly what the seeding logic's second gate condition protects.
+        assert ms2.filter_reset_history == [150]

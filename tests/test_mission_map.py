@@ -238,3 +238,89 @@ class TestEscapeEvents:
         payload = await async_fetch_mission_map(data, _record())
         assert payload["coverage_mm"] == [[1000.0, 2000.0], [3000.0, 4500.0]]
         assert payload["escape_events"] == self._EVENTS
+
+
+class TestRenderMissionMapPngRotation:
+    """v3.4.1 ROTATE-PARAM — requested by Thonno (i7/lewis) after finding
+    the unrotated map sideways relative to his dashboard layout.
+
+    Direction is verified empirically (find the actual coverage dot in
+    the output image) rather than trusted from PIL's documented transpose
+    semantics alone — a backwards rotation constant is exactly the kind
+    of subtle, easy-to-get-wrong bug this test exists to catch."""
+
+    @staticmethod
+    def _find_marker_quadrant(png_bytes: bytes) -> str:
+        """Locate the single coverage dot's quadrant in the rendered PNG.
+
+        Uses a coverage point placed far into one corner of the content
+        bounding box with a room polygon covering the whole canvas, so
+        the dot's rendered quadrant unambiguously reflects any rotation
+        applied. Returns one of "top_left", "top_right", "bottom_left",
+        "bottom_right".
+        """
+        import io
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        w, h = img.size
+        from custom_components.roomba_plus.map_renderer import CLEANED_COLOUR
+        target = tuple(CLEANED_COLOUR[:3])
+        matches = [
+            (x, y)
+            for y in range(0, h, 3)  # stride for speed, dot radius >> 3px
+            for x in range(0, w, 3)
+            if img.getpixel((x, y))[:3] == target
+        ]
+        assert matches, "coverage dot not found in rendered image"
+        avg_x = sum(m[0] for m in matches) / len(matches)
+        avg_y = sum(m[1] for m in matches) / len(matches)
+        vertical = "top" if avg_y < h / 2 else "bottom"
+        horizontal = "left" if avg_x < w / 2 else "right"
+        return f"{vertical}_{horizontal}"
+
+    def _render_with_single_corner_dot(self, rotate: int = 0) -> bytes:
+        from custom_components.roomba_plus.mission_map import (
+            render_mission_map_png,
+        )
+        # One coverage point near the top-right of a large room polygon —
+        # in unrotated (UMF y-up, image y-down) output this renders in
+        # the image's top-right quadrant.
+        return render_mission_map_png(
+            coverage_mm=[[4800.0, 4800.0]],
+            point_area_m=[0.1049, 0.1049],
+            room_polygons_mm=[
+                [(0.0, 0.0), (5000.0, 0.0), (5000.0, 5000.0), (0.0, 5000.0)],
+            ],
+            rotate=rotate,
+        )
+
+    def test_unrotated_dot_is_top_right(self):
+        png = self._render_with_single_corner_dot(rotate=0)
+        assert self._find_marker_quadrant(png) == "top_right"
+
+    def test_rotate_90_clockwise_moves_top_right_to_bottom_right(self):
+        """A 90° clockwise turn moves what was in the top-right corner
+        down to the bottom-right corner."""
+        png = self._render_with_single_corner_dot(rotate=90)
+        assert self._find_marker_quadrant(png) == "bottom_right"
+
+    def test_rotate_180_moves_top_right_to_bottom_left(self):
+        png = self._render_with_single_corner_dot(rotate=180)
+        assert self._find_marker_quadrant(png) == "bottom_left"
+
+    def test_rotate_270_clockwise_moves_top_right_to_top_left(self):
+        """270° clockwise (= 90° counter-clockwise) moves the top-right
+        corner to the top-left — this is the rotation Thonno actually
+        needs (his stated '90° counter-clockwise')."""
+        png = self._render_with_single_corner_dot(rotate=270)
+        assert self._find_marker_quadrant(png) == "top_left"
+
+    def test_unsupported_rotate_value_falls_back_to_unrotated(self):
+        png = self._render_with_single_corner_dot(rotate=45)
+        assert self._find_marker_quadrant(png) == "top_right"
+
+    def test_rotation_preserves_valid_png(self):
+        for rotate in (0, 90, 180, 270, 999):
+            png = self._render_with_single_corner_dot(rotate=rotate)
+            assert png[:8] == b"\x89PNG\r\n\x1a\n"

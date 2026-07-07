@@ -18,6 +18,8 @@ from custom_components.roomba_plus.sensor import _problem_zone_value
 from custom_components.roomba_plus.sensor import _last_error_code_value
 from custom_components.roomba_plus.sensor import _mission_store_value
 from custom_components.roomba_plus.const import ERROR_CATALOGUE
+from custom_components.roomba_plus.const import get_localized_error_entry
+from custom_components.roomba_plus.error_translations import ERROR_CATALOGUE_TRANSLATIONS
 from custom_components.roomba_plus.const import (
     has_carpet_boost,
     has_clean_base,
@@ -91,6 +93,39 @@ class TestErrorCatalogueBackwardCompat:
                 f"Code {code}: ERROR_CODE_LABELS={label!r} != catalogue label={ERROR_CATALOGUE[code]['label']!r}"
 
 
+class TestErrorCatalogueV341Additions:
+    """v3.4.1 — codes confirmed via direct iRobot Home app APK analysis."""
+
+    def test_new_individual_codes_present(self):
+        for code in [78, 79, 85, 86, 91, 92, 93, 98, 99]:
+            assert code in ERROR_CATALOGUE, f"Code {code} missing from ERROR_CATALOGUE"
+
+    def test_dock_category_present(self):
+        for code in [*range(450, 464), *range(501, 510)]:
+            assert code in ERROR_CATALOGUE, f"Dock code {code} missing from ERROR_CATALOGUE"
+
+    def test_terra_mower_codes_excluded(self):
+        """Codes confirmed via Klartext as iRobot's Terra lawn-mower line
+        (shared app namespace) must NOT be added to this vacuum/mop catalogue
+        — the original APK analysis pass mistakenly proposed the whole
+        54-72/94-97 numeric neighbourhood before the Klartext check caught
+        the mix-up. Note: 65/66/68 are deliberately excluded from this list
+        — those are pre-existing, legitimate vacuum-relevant entries already
+        in the catalogue before this range was ever examined, not Terra codes."""
+        terra_codes = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 67, 69, 70, 71, 72, 94, 95, 96, 97]
+        for code in terra_codes:
+            assert code not in ERROR_CATALOGUE, \
+                f"Code {code} is a Terra mower code and should not be in ERROR_CATALOGUE"
+
+    def test_dock_category_mentions_vacuum_only_degradation(self):
+        """Spot-check the documented 'switched to vacuum only' degradation
+        pattern survived verbatim from the source strings for a few codes."""
+        for code in [450, 451, 453, 457, 463]:
+            assert "vacuum only" in ERROR_CATALOGUE[code]["description"].lower(), \
+                f"Code {code} description missing expected vacuum-only degradation note"
+
+
+
 class TestRF0IMAH:
     def test_i_series_battery_mah_corrected(self):
         """Field-validated: estCap median ≈ 2488 mAh on lewis firmware."""
@@ -149,6 +184,25 @@ STATE_BRAAVA = {
 }
 
 STATE_EMPTY = {}
+
+# v3.4.1 MAP-CAP-NO-POSE — field-confirmed (mdarocha, i3+, "daredevil"
+# firmware, config-entry diagnostics upload). Real cap object has no
+# "pose" key at all (not just pose=0 — the key is entirely absent),
+# while smart_map.pmap_ids in the same diagnostics has one real entry —
+# confirming genuine SMART-tier persistent maps despite has_pose being
+# False. Only the fields relevant to the has_pose/has_smart_map
+# distinction are reproduced here, not the full diagnostics payload.
+STATE_I3_DAREDEVIL_NO_POSE_CAP = {
+    "cap": {
+        "binFullDetect": 2, "addOnHw": 1, "oMode": 2, "dockComm": 1,
+        "edge": 0, "maps": 3, "pmaps": 6, "mc": 0, "tLine": 2, "area": 1,
+        "eco": 1, "multiPass": 3, "team": 1, "pp": 0, "lang": 2,
+        "5ghz": 0, "prov": 3, "sched": 1, "svcConf": 1, "ota": 2,
+        "log": 2, "langOta": 2,
+        # deliberately no "pose" key
+    },
+    "pmaps": ["D8MepS5KRD6DTWlG-g5IEw"],
+}
 
 
 class TestHasPose:
@@ -282,3 +336,150 @@ class TestIsMop:
 
     def test_empty_state(self):
         assert is_mop(STATE_EMPTY) is False
+
+
+class TestGetLocalizedErrorEntry:
+    """v3.4.1 — get_localized_error_entry() and the ERROR_CATALOGUE_TRANSLATIONS
+    parallel structure in error_translations.py."""
+
+    def test_none_language_returns_english_base(self):
+        entry = get_localized_error_entry(1, None)
+        assert entry == ERROR_CATALOGUE[1]
+
+    def test_en_language_returns_english_base(self):
+        entry = get_localized_error_entry(1, "en")
+        assert entry == ERROR_CATALOGUE[1]
+
+    def test_de_returns_translated_text_not_english(self):
+        entry = get_localized_error_entry(1, "de")
+        assert entry["label"] != ERROR_CATALOGUE[1]["label"]
+        assert entry["label"] == "Linkes Rad hebt ab"
+
+    def test_unsupported_language_falls_back_to_english(self):
+        """A language never covered by ERROR_CATALOGUE_TRANSLATIONS (e.g.
+        Japanese) must silently degrade to English, not raise or return
+        blanks."""
+        entry = get_localized_error_entry(1, "ja")
+        assert entry == ERROR_CATALOGUE[1]
+
+    def test_unknown_error_code_returns_empty_dict_like_base(self):
+        assert get_localized_error_entry(99999, None) == {}
+        assert get_localized_error_entry(99999, "de") == {}
+
+    def test_partial_translation_falls_back_field_by_field(self, monkeypatch):
+        """A code with only a partial translation (e.g. label translated,
+        description/action missing) must never produce a blank string for
+        the missing fields — each field falls back to English independently."""
+        import custom_components.roomba_plus.const as const_module
+        partial = {"de": {1: {"label": "Nur Label übersetzt"}}}
+        monkeypatch.setattr(
+            "custom_components.roomba_plus.error_translations.ERROR_CATALOGUE_TRANSLATIONS",
+            partial,
+        )
+        entry = get_localized_error_entry(1, "de")
+        assert entry["label"] == "Nur Label übersetzt"
+        assert entry["description"] == ERROR_CATALOGUE[1]["description"]
+        assert entry["action"] == ERROR_CATALOGUE[1]["action"]
+
+    def test_all_six_languages_present(self):
+        assert set(ERROR_CATALOGUE_TRANSLATIONS.keys()) == {
+            "de", "fr", "it", "es", "pt", "nl",
+        }
+
+    def test_every_catalogue_code_translated_in_every_language(self):
+        """Regression guard: every code in ERROR_CATALOGUE (all 125,
+        including the v3.4.1 additions) must have a translation entry in
+        every one of the six supported languages — no silent gaps, no
+        orphaned codes translated that no longer exist in the catalogue."""
+        all_codes = set(ERROR_CATALOGUE.keys())
+        for lang, entries in ERROR_CATALOGUE_TRANSLATIONS.items():
+            translated = set(entries.keys())
+            missing = all_codes - translated
+            orphaned = translated - all_codes
+            assert not missing, f"{lang} is missing translations for codes: {sorted(missing)}"
+            assert not orphaned, f"{lang} has orphaned translations for codes: {sorted(orphaned)}"
+
+    def test_new_v341_codes_are_translated(self):
+        """Spot-check that the v3.4.1 error-catalogue additions specifically
+        got translations, not just the pre-existing 224 codes."""
+        new_codes = [78, 79, 85, 86, 91, 92, 93, 98, 99, 450, 463, 501, 509]
+        for lang in ERROR_CATALOGUE_TRANSLATIONS:
+            for code in new_codes:
+                assert code in ERROR_CATALOGUE_TRANSLATIONS[lang], \
+                    f"Code {code} missing {lang} translation"
+
+    def test_duplicate_english_text_codes_share_identical_translation(self):
+        """Codes 8 and 11 share the exact same English text ('Bin error')
+        in ERROR_CATALOGUE — the group-based dedup mechanism in
+        error_translations.py must therefore give them identical
+        translations too, not two independently (and potentially
+        inconsistently) typed-out versions."""
+        assert ERROR_CATALOGUE[8]["label"] == ERROR_CATALOGUE[11]["label"] == "Bin error"
+        for lang in ERROR_CATALOGUE_TRANSLATIONS:
+            assert ERROR_CATALOGUE_TRANSLATIONS[lang][8] == ERROR_CATALOGUE_TRANSLATIONS[lang][11]
+
+    def test_translated_entries_have_all_three_fields(self):
+        for lang, entries in ERROR_CATALOGUE_TRANSLATIONS.items():
+            for code, entry in entries.items():
+                for field in ("label", "description", "action"):
+                    assert field in entry, f"{lang} code {code} missing '{field}'"
+                    assert isinstance(entry[field], str), \
+                        f"{lang} code {code} field '{field}' is not a string"
+
+
+class TestMapCapabilityGatingNoLocalPose:
+    """v3.4.1 MAP-CAP-NO-POSE — field-confirmed (mdarocha, i3+, "daredevil"
+    firmware). __init__.py's _phase_spatial gates map/cloud-coordinator
+    setup on `(has_pose(state) or has_smart_map(state)) and map_enabled`.
+    Previously this was `has_pose(state) and map_enabled` alone, which
+    silently skipped has_smart_map entirely for any robot whose `cap`
+    object omits "pose" — even with real, populated pmaps. That in turn
+    skipped cloud_coordinator creation (gated on map_capability !=
+    NONE), with valid cloud credentials configured and unused: no map,
+    and total_cleaned_area fell back to the already-known-unreliable
+    bbrun.sqft instead of the cloud-backed MissionArchive.cumulative_sqft
+    it's supposed to prefer.
+
+    _phase_spatial itself isn't unit-tested directly anywhere in this
+    suite (it needs a real hass + config_entry + HA storage to exercise
+    GeometryStore/GridStore.async_load, and no existing test built that
+    scaffolding) — this tests the exact boolean condition the fix
+    changes, using has_pose/has_smart_map, which are directly.
+    """
+
+    def test_old_condition_would_incorrectly_exclude_this_robot(self):
+        """Documents the bug: has_pose alone says no map capability at
+        all for this robot, despite real pmaps being present."""
+        assert has_pose(STATE_I3_DAREDEVIL_NO_POSE_CAP) is False
+
+    def test_has_smart_map_is_true_despite_missing_pose_key(self):
+        assert has_smart_map(STATE_I3_DAREDEVIL_NO_POSE_CAP) is True
+
+    def test_new_condition_correctly_includes_this_robot(self):
+        state = STATE_I3_DAREDEVIL_NO_POSE_CAP
+        assert (has_pose(state) or has_smart_map(state)) is True
+
+    def test_smart_map_takes_priority_when_both_signals_present(self):
+        """For a robot with BOTH pose and pmaps (e.g. STATE_I7), the
+        has_smart_map check inside _phase_spatial is evaluated first and
+        yields SMART — unaffected by this fix, verified here so a future
+        change to check ordering doesn't silently flip priority."""
+        assert has_pose(STATE_I7) is True
+        assert has_smart_map(STATE_I7) is True
+
+    def test_900_series_fixture_unaffected_by_this_fix(self):
+        """STATE_980 has neither has_pose nor has_smart_map true (it's a
+        minimal fixture for testing those two functions' field-reading
+        logic in isolation, not a complete real 980 MQTT payload) — the
+        new OR-based condition must evaluate identically to the old
+        condition for this fixture: both False, unchanged."""
+        state = STATE_980
+        old_condition = has_pose(state)
+        new_condition = has_pose(state) or has_smart_map(state)
+        assert old_condition == new_condition == False
+
+    def test_600_series_fixture_unaffected_by_this_fix(self):
+        state = STATE_600
+        old_condition = has_pose(state)
+        new_condition = has_pose(state) or has_smart_map(state)
+        assert old_condition == new_condition == False

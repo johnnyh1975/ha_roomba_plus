@@ -2068,3 +2068,57 @@ class TestMissionMapViewsGlue:
         view = MissionMapPngView()
         resp = await view.get(self._request(entry), "e1", "m_1")
         assert resp.status == 404
+
+    def _request_with_query(self, entry, query: dict):
+        """v3.4.1 ROTATE-PARAM — like _request(), but with a real query dict
+        instead of a MagicMock default, so request.query.get(...) behaves
+        like an actual aiohttp request would."""
+        request = self._request(entry)
+        request.query = query
+        return request
+
+    @pytest.mark.asyncio
+    async def test_png_view_default_rotate_is_zero(self):
+        """No ?rotate query param — a real aiohttp request always provides
+        an empty (but real) query MultiDict here, never a bare Mock, so
+        this uses _request_with_query with an empty dict to match that
+        reality rather than the generic _request() helper's bare
+        MagicMock query (which, misleadingly, int()-converts to 1, not 0
+        — caught while writing this test; see git history for the fix
+        this prompted)."""
+        from custom_components.roomba_plus.api_views import MissionMapPngView
+        entry = self._entry_with_aligner(self._umf())
+        view = MissionMapPngView()
+        request = self._request_with_query(entry, {})
+        resp = await view.get(request, "e1", "m_1")
+        assert resp.content_type == "image/png"
+        hass = request.app["hass"]
+        args = hass.async_add_executor_job.call_args.args
+        assert args[-1] == 0
+
+    @pytest.mark.asyncio
+    async def test_png_view_passes_rotate_query_param_through(self):
+        from custom_components.roomba_plus.api_views import MissionMapPngView
+        entry = self._entry_with_aligner(self._umf())
+        view = MissionMapPngView()
+        request = self._request_with_query(entry, {"rotate": "270"})
+        await view.get(request, "e1", "m_1")
+        hass = request.app["hass"]
+        # render_mission_map_png(coverage_mm, point_area_m, rooms, rotate)
+        args = hass.async_add_executor_job.call_args.args
+        assert args[-1] == 270
+
+    @pytest.mark.asyncio
+    async def test_png_view_non_numeric_rotate_falls_back_to_zero(self):
+        """A malformed query param must degrade gracefully (unrotated
+        image), not 500 the whole endpoint."""
+        from custom_components.roomba_plus.api_views import MissionMapPngView
+        entry = self._entry_with_aligner(self._umf())
+        view = MissionMapPngView()
+        request = self._request_with_query(entry, {"rotate": "sideways"})
+        resp = await view.get(request, "e1", "m_1")
+        assert resp.content_type == "image/png"
+        hass = request.app["hass"]
+        args = hass.async_add_executor_job.call_args.args
+        assert args[-1] == 0
+
