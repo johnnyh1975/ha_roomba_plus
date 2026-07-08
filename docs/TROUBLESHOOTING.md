@@ -36,7 +36,7 @@ Go to Settings → Roomba+ → Configure → iRobot cloud credentials, re-save y
 
 **Smart Map zones not appearing (i/s/j-series)**
 
-Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
+Check the diagnostics download's `map.capability` field — should be `smart` or `ephemeral`, not `none`. This is determined from either `"cap": {"pose": ...}` being ≥ 1, *or* the presence of real entries under `smart_map.pmap_ids` *(v3.4.1 — either signal alone is now enough; previously pose alone gated this, which missed some robots with real persistent maps but no reported pose capability)*. If both are genuinely absent, this robot isn't reporting map capability at all — check `map_enabled` hasn't been turned off in Configure. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
 
 ---
 
@@ -124,6 +124,12 @@ Expected — v2.5 corrects the energy calculation for 900-series robots. The 980
 **Recent cleaned area / cleaning time show lower values than expected**
 
 These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time — the `source: recent_mission_window` attribute documents this. The **total missions** sensor is different: it reads the lifetime counter embedded in every cloud record.
+
+---
+
+**Total cleaned area looks far too low compared to the official app**
+
+If you have iRobot cloud credentials configured and this still happens on v3.4.1 or later, this shouldn't occur — a bug where certain robots (confirmed on an i3+ running "daredevil" firmware) never actually connected to the cloud despite valid credentials, due to a now-fixed gating condition, was the cause; update if you're on an older version. If you *don't* have cloud credentials configured at all, this is expected: the sensor falls back to a local counter (`bbrun.sqft`) that's known to be less reliable over long periods than the cloud-backed running total — adding cloud credentials (Settings → Devices → Roomba+ → Configure) is the fix in that case.
 
 ---
 

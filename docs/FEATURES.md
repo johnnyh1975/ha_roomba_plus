@@ -474,7 +474,7 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 
 | Sensor | Notes |
 |---|---|
-| `last_error_code` | From live MQTT or persisted MissionStore value; `description` + `action` attributes |
+| `last_error_code` | From live MQTT or persisted MissionStore value; `description` + `action` attributes, in your Home Assistant language where translated *(v3.4.1 — English, German, French, Italian, Spanish, Portuguese, Dutch; falls back to English per-field for anything not yet translated)* |
 | `last_error_at` | Timestamp of the last error or stuck event |
 | `last_error_zone` | Zone where the error occurred |
 | `stuck_count_30d` | Stuck events in the last 30 days |
