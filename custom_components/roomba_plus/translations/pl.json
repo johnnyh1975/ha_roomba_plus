@@ -1,0 +1,749 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dodaj Roomba+",
+        "description": "Wybierz wykrytego Roomba lub dodaj go ręcznie.",
+        "data": {
+          "host": "Wybierz robota"
+        }
+      },
+      "manual": {
+        "title": "Konfiguracja ręczna",
+        "description": "Wprowadź adres IP swojego Roomba. Dane logowania znajdziesz pod [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "host": "Adres IP"
+        },
+        "data_description": {
+          "host": "Lokalny adres IP Roomba"
+        }
+      },
+      "link": {
+        "title": "Połącz robota",
+        "description": "Naciśnij i przytrzymaj przycisk **HOME** na urządzeniu {name} przez około 2 sekundy, aż usłyszysz serię tonów, a następnie zwolnij. Dioda LED Wi-Fi zacznie migać."
+      },
+      "link_manual": {
+        "title": "Wprowadź hasło",
+        "description": "Automatyczne pobieranie hasła nie powiodło się. Wprowadź hasło Roomba ręcznie. Instrukcje: [{auth_help_url}]({auth_help_url}).",
+        "data": {
+          "password": "Hasło"
+        }
+      },
+      "cloud_credentials": {
+        "title": "Dane logowania do chmury iRobot (opcjonalne)",
+        "description": "Wszystkie polecenia (start, stop, wybór pomieszczenia) działają lokalnie przez MQTT i nigdy nie korzystają z chmury. Dane logowania do chmury są używane wyłącznie do odczytu nazw pomieszczeń, historii misji i ulubionych — robot jest zawsze sterowany bezpośrednio.\n\nWprowadź adres e-mail i hasło aplikacji iRobot, aby włączyć te funkcje chmurowe, lub pozostaw oba pola puste, aby korzystać tylko z lokalnego MQTT.",
+        "data": {
+          "irobot_username": "Adres e-mail iRobot",
+          "irobot_password": "Hasło iRobot"
+        },
+        "data_description": {
+          "irobot_username": "Adres e-mail używany do logowania w aplikacji iRobot.",
+          "irobot_password": "Hasło do aplikacji iRobot."
+        }
+      },
+      "reconfigure": {
+        "description": "Zaktualizuj ustawienia połączenia dla {name}.",
+        "data": {
+          "host": "Adres IP",
+          "password": "Hasło"
+        },
+        "data_description": {
+          "host": "Lokalny adres IP Roomba.",
+          "password": "Hasło robota (przytrzymaj przycisk HOME, aby je pobrać)."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie można połączyć się z robotem. Sprawdź, czy jest włączony i dostępny w sieci.",
+      "invalid_auth": "Nieprawidłowe dane logowania. Sprawdź BLID i hasło.",
+      "unknown": "Nieoczekiwany błąd. Sprawdź logi Home Assistant, aby uzyskać szczegóły.",
+      "cloud_auth_failed": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
+      "cloud_unavailable": "Nie można połączyć się z chmurą iRobot. Sprawdź połączenie internetowe i spróbuj ponownie.",
+      "invalid_cloud_credentials": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot."
+    },
+    "abort": {
+      "already_configured": "Ten robot jest już skonfigurowany.",
+      "not_irobot_device": "Wykryte urządzenie nie jest urządzeniem iRobot.",
+      "short_blid": "Przepływ konfiguracji dla tego robota jest już w toku.",
+      "cannot_connect": "Nie można połączyć się z robotem pod podanym adresem.",
+      "reconfigure_successful": "Ustawienia połączenia zostały pomyślnie zaktualizowane."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfiguruj Roomba+",
+        "menu_options": {
+          "settings": "Ustawienia połączenia",
+          "smart_zones_manual": "Ręczne wprowadzenie stref Smart Map",
+          "cloud_credentials": "Dane logowania do chmury iRobot",
+          "blocking_sensors": "Czujniki blokujące",
+          "map_management": "Zarządzanie strefami",
+          "presence_scheduling": "Harmonogramowanie zależne od obecności",
+          "demand_cleaning": "Sprzątanie na żądanie",
+          "rooms": "Pomieszczenia i strefy",
+          "rest980_migrate": "Importuj pomieszczenia z roomba_rest980"
+        }
+      },
+      "zones": {
+        "title": "Nazwij wykryte pomieszczenia",
+        "description": "Wykryto {zone_count} nowy(-e/-ch) obszar(-y/-ów). Przypisz nazwy, aby móc sprzątać je osobno:"
+      },
+      "smart_zones": {
+        "title": "Nazwij strefy Smart Map",
+        "description": "{zone_count} strefa(-y/-f) nie ma(-ją) jeszcze nazwy (ID: {zone_ids}). Przypisz nazwy, aby móc sprzątać je osobno:"
+      },
+      "settings": {
+        "title": "Ustawienia połączenia",
+        "data": {
+          "continuous": "Ciągłe połączenie",
+          "delay": "Opóźnienie reconnect (sekundy)",
+          "map_enabled": "Włącz mapę na żywo",
+          "map_size_px": "Rozmiar mapy (piksele)",
+          "map_scale_mm_per_px": "Skala (mm/piksel)",
+          "floor_label": "Etykieta piętra (np. Parter)",
+          "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)"
+        },
+        "data_description": {
+          "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
+          "delay": "Czas oczekiwania między próbami reconnect (w sekundach).",
+          "map_enabled": "Włącz mapę sprzątania na żywo dla robotów z wykrywaniem pozycji (Roomba 900, i, s, j, Braava m).",
+          "map_size_px": "Rozmiar płótna mapy w pikselach (400–1200). Domyślnie: 600.",
+          "map_scale_mm_per_px": "Milimetry na piksel (5–30). Domyślnie 10 = 6 m × 6 m przy 600 px."
+        }
+      },
+      "smart_zones_manual": {
+        "title": "Ręczne wprowadzenie stref Smart Map",
+        "description": "Wprowadź ID regionów pomieszczeń jako listę rozdzieloną przecinkami (np. 5, 12, 7). Znajdziesz je w diagnostyce HA pod options → discovered_zone_ids lub uruchom sprzątanie konkretnego pomieszczenia w aplikacji iRobot, gdy HA jest podłączone, a następnie sprawdź diagnostykę.",
+        "data": {
+          "region_ids": "ID regionów (rozdzielone przecinkami)",
+          "zone_names": "Przypisania nazw stref"
+        },
+        "data_description": {
+          "region_ids": "Przykład: 5, 12, 7",
+          "zone_names": "Jeden wpis na linię: 21=Korytarz, 22=Kuchnia, itp."
+        }
+      },
+      "cloud_credentials": {
+        "title": "Dane logowania do chmury iRobot",
+        "description": "Aktualnie zalogowany(-a) jako: {current_user}\n\nZaktualizuj dane logowania iRobot lub wyczyść oba pola, aby wyłączyć funkcje chmurowe.",
+        "data": {
+          "irobot_username": "Adres e-mail iRobot",
+          "irobot_password": "Hasło iRobot"
+        }
+      },
+      "blocking_sensors": {
+        "title": "Czujniki blokujące",
+        "data": {
+          "blocking_sensors": "Czujniki blokujące",
+          "blocking_behavior": "Zachowanie przy blokadzie",
+          "blocking_timeout_min": "Limit czasu kolejki (minuty)"
+        },
+        "description": "Skonfiguruj czujniki, które muszą być nieaktywne, zanim będzie można rozpocząć smart_start.",
+        "data_description": {
+          "blocking_sensors": "Czujniki binarne blokujące start, gdy są WŁĄCZONE (np. otwarte drzwi, wykryty ruch).",
+          "blocking_behavior": "Przerwij natychmiast lub umieść w kolejce do momentu zwolnienia czujników.",
+          "blocking_timeout_min": "Jak długo czekać na zwolnienie czujników przed rezygnacją."
+        }
+      },
+      "map_management": {
+        "title": "Zarządzanie strefami",
+        "data": {
+          "selected_zone": "Strefa do edycji"
+        },
+        "description": "Wybierz strefę do zmiany nazwy lub ukrycia. Zatwierdź bez wybranej strefy, aby zapisać zmiany.\n\n{zone_summary}"
+      },
+      "map_management_edit": {
+        "title": "Edytuj strefę: {zone_name}",
+        "data": {
+          "display_name": "Nazwa wyświetlana",
+          "hidden": "Ukryj tę strefę"
+        },
+        "description": "Ustaw nazwę wyświetlaną i widoczność tej strefy.",
+        "data_description": {
+          "display_name": "Nazwa własna widoczna w selektorach. Pozostaw puste, aby użyć nazwy domyślnej.",
+          "hidden": "Ukryte strefy są usuwane z selektorów i nie wywołują powiadomień o braku nazwy."
+        }
+      },
+      "presence_scheduling": {
+        "title": "Harmonogramowanie zależne od obecności",
+        "description": "Automatycznie odblokuj harmonogram sprzątania, gdy wszyscy opuszczą dom.",
+        "data": {
+          "presence_scheduling_enabled": "Włącz harmonogramowanie zależne od obecności",
+          "presence_entities": "Śledzone osoby",
+          "presence_mode": "Tryb",
+          "away_delay_min": "Opóźnienie po wyjściu (minuty)",
+          "clean_delay_min": "Opóźnienie przed startem drugiego robota"
+        }
+      },
+      "demand_cleaning": {
+        "title": "Sprzątanie na żądanie",
+        "description": "Automatycznie rozpocznij sprzątanie, gdy podłoga jest znacznie brudniejsza niż zwykle.",
+        "data": {
+          "demand_cleaning_enabled": "Włącz sprzątanie na żądanie",
+          "demand_clean_multiplier": "Mnożnik wyzwalacza (np. 1,5 = 50% powyżej średniej)"
+        }
+      },
+      "test_cloud_connection": {
+        "title": "Testowanie połączenia",
+        "description": "Weryfikacja danych logowania do chmury iRobot…"
+      },
+      "rest980_migrate": {
+        "title": "Importuj pomieszczenia z roomba_rest980",
+        "description": "Znaleziono {room_count} pomieszczenie(-a/-ń) w instalacji roomba_rest980, które nie mają jeszcze nazwy w Roomba+: {room_names}. Importować teraz? Pomieszczenia już nazwane tutaj pozostaną bez zmian.",
+        "data": {
+          "confirm_import": "Importuj te pomieszczenia"
+        }
+      },
+      "room_schedule": {
+        "title": "Częstotliwość sprzątania per pomieszczenie",
+        "description": "Ustaw, jak często każde pomieszczenie powinno być sprzątane. 'Nauczone' zachowuje samokalibrowany interwał z historii sprzątania pomieszczenia."
+      }
+    },
+    "error": {
+      "cloud_auth_failed": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
+      "cloud_unavailable": "Nie można połączyć się z chmurą iRobot. Sprawdź połączenie internetowe i spróbuj ponownie.",
+      "invalid_cloud_credentials": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
+      "cannot_connect": "Nie można nawiązać połączenia. Sprawdź połączenie internetowe i spróbuj ponownie.",
+      "no_valid_ids": "Nie znaleziono prawidłowych wpisów. Użyj formatu id=Nazwa, jeden wpis na linię.",
+      "pmap_not_resolved": "Nie można rozwiązać ID mapy. Upewnij się, że robot jest zadokowany i połączony, a następnie spróbuj ponownie."
+    },
+    "abort": {
+      "integration_not_loaded": "Nie można załadować integracji. Sprawdź logi i przeładuj przed otwarciem ustawień.",
+      "demand_cleaning_not_supported": "Sprzątanie na żądanie wymaga robota SMART ze skonfigurowanymi danymi logowania do chmury.",
+      "no_rest980_rooms_found": "Nie znaleziono pomieszczeń w instalacji roomba_rest980.",
+      "rest980_rooms_already_imported": "Wszystkie pomieszczenia z roomba_rest980 są już nazwane w Roomba+.",
+      "room_schedule_not_supported": "Częstotliwości per pomieszczenie wymagają robota z Smart Map i danymi logowania do chmury.",
+      "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_cycles": { "name": "Konserwacja – Cykle akumulatora" },
+      "total_cleaning_time": { "name": "Misje – Łączny czas" },
+      "average_mission_time": { "name": "Misje – Śr. czas trwania" },
+      "total_missions": { "name": "Łączna liczba misji" },
+      "successful_missions": { "name": "Misje zakończone sukcesem" },
+      "canceled_missions": { "name": "Misje anulowane" },
+      "failed_missions": { "name": "Misje nieudane" },
+      "total_cleaned_area": { "name": "Łączna posprzątana powierzchnia" },
+      "last_mission": { "name": "Misje – Ostatnia" },
+      "phase": { "name": "Status" },
+      "error": { "name": "Status – Błąd" },
+      "job_initiator": { "name": "Status – Uruchomione przez" },
+      "clean_mode": { "name": "Ustawienie – Przebiegi sprzątania" },
+      "scrubs_count": { "name": "Wykrycia brudu" },
+      "rssi": { "name": "Sygnał Wi-Fi" },
+      "filter_remaining_hours": { "name": "Konserwacja – Filtr" },
+      "brush_remaining_hours": { "name": "Konserwacja – Szczotki" },
+      "carpet_boost_mode": { "name": "Ustawienie – Wzmocnienie na dywanie" },
+      "clean_base_status": { "name": "Status stacji Clean Base" },
+      "dock_tank_level": { "name": "Poziom zbiornika stacji dokującej" },
+      "tank_level": { "name": "Poziom zbiornika" },
+      "mop_pad": { "name": "Nakładka mopa" },
+      "mop_behavior": { "name": "Mop – Przebiegi sprzątania (legacy)" },
+      "mop_tank_level": { "name": "Poziom zbiornika mopa" },
+      "readiness": { "name": "Status – Gotowość" },
+      "next_clean": { "name": "Status – Następne sprzątanie" },
+      "nav_quality": { "name": "Jakość nawigacji" },
+      "snr": { "name": "SNR" },
+      "signal_noise": { "name": "Szum sygnału" },
+      "ip_address": { "name": "Adres IP" },
+      "mission_start_time": { "name": "Start misji" },
+      "mission_elapsed_time": { "name": "Czas trwania misji" },
+      "mission_recharge_time": { "name": "Czas ładowania" },
+      "mission_expire_time": { "name": "Czas wygaśnięcia misji" },
+      "raw_state": { "name": "Stan surowy (debugowanie)" },
+      "lifetime_missions": { "name": "Łączna liczba misji (dożywotnio)" },
+      "filter_last_replaced": { "name": "Konserwacja – Ostatnia wymiana filtra" },
+      "brush_last_replaced": { "name": "Konserwacja – Ostatnia wymiana szczotek" },
+      "pad_last_replaced": { "name": "Konserwacja – Ostatnia wymiana nakładki" },
+      "battery_last_replaced": { "name": "Konserwacja – Ostatnia wymiana akumulatora" },
+      "clean_streak": { "name": "Misje – Seria sprzątań" },
+      "missions_last_30d": { "name": "Misje – Ostatnie 30 dni" },
+      "completion_rate_30d": { "name": "Misje – Wskaźnik ukończenia" },
+      "area_cleaned_today": { "name": "Misje – Posprzątana powierzchnia dziś" },
+      "room_areas": { "name": "Pomieszczenia – Powierzchnie podłóg" },
+      "relocalisation_rate": { "name": "Nawigacja – Wskaźnik relokalizacji" },
+      "room_cleaning_history": { "name": "Pomieszczenia – Historia sprzątania" },
+      "last_mission_summary": { "name": "Misje – Podsumowanie ostatniej misji" },
+      "last_mission_result": { "name": "Misje – Ostatni wynik" },
+      "last_mission_duration": { "name": "Misje – Czas trwania ostatniej" },
+      "last_error_code": { "name": "Błąd – Ostatni kod" },
+      "last_error_at": { "name": "Błąd – Ostatni czas" },
+      "last_error_zone": { "name": "Błąd – Ostatnia strefa" },
+      "stuck_count_30d": { "name": "Błąd – Zdarzenia utknięcia (30 dni)" },
+      "problem_zone": { "name": "Błąd – Problematyczna strefa" },
+      "consecutive_mission_anomalies": { "name": "Kolejne anomalne misje" },
+      "presence_clean_opportunities_7d": { "name": "Obecność – Możliwości sprzątania (7 dni)" },
+      "presence_clean_utilisation_7d": { "name": "Obecność – Wykorzystanie sprzątania (7 dni)" },
+      "next_likely_clean_window": { "name": "Obecność – Następne okno sprzątania" },
+      "filter_wear_rate": { "name": "Konserwacja – Zużycie filtra" },
+      "brush_wear_rate": { "name": "Konserwacja – Zużycie szczotek" },
+      "pad_wear_rate": { "name": "Konserwacja – Zużycie nakładki" },
+      "filter_days_until_due": { "name": "Konserwacja – Dni do wymiany filtra" },
+      "brush_days_until_due": { "name": "Konserwacja – Dni do wymiany szczotek" },
+      "pad_days_until_due": { "name": "Konserwacja – Dni do wymiany nakładki" },
+      "battery_capacity_mah": { "name": "Pojemność akumulatora" },
+      "nav_panics": { "name": "Zdarzenia paniki nawigacji" },
+      "cliff_events_front": { "name": "Zdarzenia klifu – Przód" },
+      "cliff_events_rear": { "name": "Zdarzenia klifu – Tył" },
+      "mission_recharge_minutes": { "name": "Misja – Pozostały czas ładowania" },
+      "mission_expire_minutes": { "name": "Misja – Czas do wygaśnięcia" },
+      "mission_id": { "name": "Misja – ID" },
+      "recent_completion_rate": { "name": "Ostatni wskaźnik ukończenia" },
+      "recent_recharges": { "name": "Ostatnie doładowania w trakcie misji" },
+      "recent_evacuations": { "name": "Ostatnie opróżnienia Clean Base" },
+      "recent_dirt_events": { "name": "Ostatnie wykrycia brudu" },
+      "recent_error_code": { "name": "Ostatni kod błędu (chmura)" },
+      "recent_error_time": { "name": "Ostatni czas błędu (chmura)" },
+      "recent_wifi_floor": { "name": "Wi-Fi – Minimalna siła sygnału" },
+      "recent_wifi_stability": { "name": "Wi-Fi – Stabilność sygnału" },
+      "mop_clean_mode": {
+        "name": "Mop – Tryb sprzątania",
+        "state": { "dry": "Suchy", "wet": "Mokry", "unknown": "Nieznany" }
+      },
+      "mop_tank_status": {
+        "name": "Mop – Status zbiornika",
+        "state": { "ready": "Gotowy", "fill_tank": "Napełnij zbiornik", "lid_open": "Pokrywa otwarta", "tank_missing": "Brak zbiornika", "unknown": "Nieznany" }
+      },
+      "mop_ars_behavior": {
+        "name": "Mop – Zachowanie ARS",
+        "state": {
+          "no_mop": "Bez mopa", "extended": "Rozszerzone", "standard": "Standardowe",
+          "deep": "Głębokie", "dirty_pause": "Pauza przy brudu", "dry": "Suche",
+          "wash": "Mycie", "dirty_pause_dry": "Pauza przy brudu + suche",
+          "dirty_pause_wash": "Pauza przy brudu + mycie", "dry_wash": "Suche + mycie",
+          "dirty_pause_dry_wash": "Pauza przy brudu + suche + mycie", "unknown": "Nieznane"
+        }
+      },
+      "recent_cleaning_speed": { "name": "Wydajność – Prędkość sprzątania" },
+      "recent_dirt_density": { "name": "Wydajność – Gęstość brudu" },
+      "recent_recharge_fraction": { "name": "Wydajność – Udział ładowania" },
+      "cleaning_speed_trend": {
+        "name": "Wydajność – Trend prędkości sprzątania",
+        "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
+      },
+      "recent_coverage_pct": { "name": "Wydajność – Pokrycie" },
+      "battery_capacity_retention": { "name": "Konserwacja – Zachowanie pojemności akumulatora" },
+      "estimated_battery_eol": { "name": "Konserwacja – Szacowany czas życia akumulatora" },
+      "consecutive_clean_skips": { "name": "Wydajność – Kolejne pominięte sprzątania" },
+      "recent_area_30d": { "name": "Posprzątana powierzchnia (30 dni)" },
+      "recent_time_30d": { "name": "Czas sprzątania (30 dni)" },
+      "optimal_clean_window": { "name": "Optymalne okno sprzątania" },
+      "recent_edge_coverage_ratio": { "name": "Ostatni wskaźnik pokrycia krawędzi" },
+      "total_energy_consumed": { "name": "Łączne zużycie energii" },
+      "mission_progress": { "name": "Postęp misji" },
+      "map_learning": { "name": "Uczenie się mapy" },
+      "zone_summary": { "name": "Podsumowanie stref" },
+      "wheel_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie kół" },
+      "contact_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie styków" },
+      "bin_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie pojemnika" },
+      "cleaning_performance": { "name": "Wydajność sprzątania" },
+      "cleaning_analytics_30d": { "name": "Analityka sprzątania (30 dni)" },
+      "wifi_health": { "name": "Zdrowie Wi-Fi" },
+      "event_counts_30d": { "name": "Liczba zdarzeń (30 dni)" },
+      "robot_health_score": { "name": "Wskaźnik zdrowia robota" },
+      "lifetime_completion_rate": { "name": "Łączny wskaźnik ukończenia" },
+      "battery_cycle_count_bms": { "name": "Liczba cykli BMS akumulatora" },
+      "battery_age_days": { "name": "Wiek akumulatora" },
+      "wifi_last_channel": { "name": "Ostatni kanał Wi-Fi" },
+      "wifi_channel_stability": { "name": "Stabilność kanału Wi-Fi" },
+      "missions_per_charge": { "name": "Misje na jedno ładowanie" },
+      "nav_landmark_quality": { "name": "Jakość punktów orientacyjnych nawigacji" },
+      "nav_good_landmarks": { "name": "Dobre punkty orientacyjne nawigacji" },
+      "optical_dirt_detections": { "name": "Optyczne wykrycia brudu" },
+      "piezo_dirt_detections": { "name": "Piezoelektryczne wykrycia brudu" },
+      "nav_orientations": { "name": "Orientacje nawigacji" },
+      "dock_contact_chatters": { "name": "Drgania styków stacji dokującej" },
+      "dock_knockoffs": { "name": "Przypadkowe odpięcia od stacji" },
+      "dock_charge_aborts": { "name": "Przerwane ładowania w stacji" },
+      "firmware_version": { "name": "Wersja oprogramowania" },
+      "integration_health": { "name": "Zdrowie integracji" },
+      "dock_firmware_version": { "name": "Wersja oprogramowania stacji" },
+      "last_mission_team_id": { "name": "Misje – ID zespołu ostatniej misji" },
+      "reset_diagnostics": { "name": "Resetuj diagnostykę" },
+      "health_score_trend": {
+        "name": "Trend wskaźnika zdrowia",
+        "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
+      },
+      "room_accessibility_scores": { "name": "Wskaźniki dostępności pomieszczeń" },
+      "rooms_overdue": { "name": "Zaległe pomieszczenia" },
+      "dirt_weather_correlation": { "name": "Korelacja brudu" }
+    },
+    "binary_sensor": {
+      "bin_full": { "name": "Pojemnik pełny" },
+      "connected": { "name": "Połączony" },
+      "bin_present": { "name": "Pojemnik obecny" },
+      "mop_ready": { "name": "Problem z mopem" },
+      "mop_tank_present": { "name": "Zbiornik mopa obecny" },
+      "mop_lid_closed": { "name": "Pokrywa mopa otwarta" },
+      "map_saving": { "name": "Zapisywanie Smart Map" },
+      "maintenance_due": {
+        "name": "Wymagana konserwacja",
+        "state": { "on": "Wymagana", "off": "OK" }
+      },
+      "start_blocked": {
+        "name": "Start zablokowany",
+        "state": { "on": "Zablokowany", "off": "Wolny" }
+      },
+      "schedule_hold_active": {
+        "name": "Wstrzymanie harmonogramu aktywne",
+        "state_attributes": {
+          "source": {
+            "name": "Źródło",
+            "state": { "presence_manager": "Menedżer obecności", "manual": "Ręcznie" }
+          }
+        }
+      },
+      "mop_lid_open": { "name": "Pokrywa otwarta" },
+      "mop_tank_present_direct": { "name": "Zbiornik obecny" },
+      "mid_mission_recharge": { "name": "Ładowanie w trakcie misji" },
+      "mission_active": { "name": "Misja aktywna" },
+      "demand_clean_blocked": { "name": "Sprzątanie na żądanie zablokowane" },
+      "cloud_connected": { "name": "Połączony z chmurą" },
+      "mqtt_stale": { "name": "MQTT nieaktywne" },
+      "firmware_updated": { "name": "Oprogramowanie zaktualizowane" },
+      "layout_change_detected": { "name": "Wykryto zmianę układu" }
+    },
+    "button": {
+      "evac": { "name": "Akcja – Opróżnij pojemnik" },
+      "locate": { "name": "Akcja – Znajdź robota" },
+      "reset_filter": { "name": "Konserwacja – Potwierdź wymianę filtra" },
+      "reset_brush": { "name": "Konserwacja – Potwierdź wymianę szczotek" },
+      "reset_battery": { "name": "Konserwacja – Potwierdź wymianę akumulatora" },
+      "clean_zone": { "name": "Sprzątaj strefę" },
+      "repeat_mission": { "name": "Powtórz ostatnią misję" },
+      "clean_smart_zone": { "name": "Sprzątaj strefę (Smart Map)" },
+      "favorite": { "name": "{name}" },
+      "spot": { "name": "Sprzątanie punktowe (eksperymentalne)" },
+      "quick": { "name": "Szybkie sprzątanie (eksperymentalne)" },
+      "sleep": { "name": "Uśpienie (eksperymentalne)" },
+      "power_off": { "name": "Wyłączenie (eksperymentalne)" },
+      "map_training": { "name": "Akcja – Rozpocznij trening mapy" }
+    },
+    "switch": {
+      "edge_clean": { "name": "Ustawienie – Sprzątanie krawędzi" },
+      "always_finish": { "name": "Ustawienie – Zawsze kończ" },
+      "schedule_hold": { "name": "Ustawienie – Wstrzymanie harmonogramu" },
+      "child_lock": { "name": "Ustawienie – Blokada dla dzieci" },
+      "eco_charge": { "name": "Ustawienie – Ładowanie Eco" }
+    },
+    "select": {
+      "cleaning_passes": { "name": "Ustawienie – Przebiegi sprzątania" },
+      "zone_select": { "name": "Wybierz strefę" },
+      "smart_zone_select": { "name": "Wybierz strefę Smart Map" },
+      "cloud_smart_zone_select": { "name": "Wybierz strefę (chmura)" },
+      "disposable_pad_wetness": {
+        "name": "Wilgotność jednorazowej nakładki",
+        "state": { "1": "Niska", "2": "Średnia", "3": "Wysoka" }
+      },
+      "reusable_pad_wetness": {
+        "name": "Wilgotność nakładki wielokrotnego użytku",
+        "state": { "1": "Niska", "2": "Średnia", "3": "Wysoka" }
+      },
+      "carpet_boost_select": {
+        "name": "Wzmocnienie na dywanie",
+        "state": { "automatic": "Automatyczne", "eco": "Eco", "performance": "Wydajność" }
+      }
+    },
+    "image": {
+      "map": { "name": "Mapa sprzątania" },
+      "coverage_map": { "name": "Mapa pokrycia" },
+      "rooms_map": { "name": "Mapa pomieszczeń" }
+    },
+    "device_tracker": {
+      "position": { "name": "Pozycja" }
+    },
+    "calendar": {
+      "schedule": { "name": "Harmonogram" }
+    },
+    "todo": {
+      "maintenance": { "name": "Konserwacja" }
+    }
+  },
+  "issues": {
+    "zones_need_naming": {
+      "title": "Wykryto nowe pomieszczenia",
+      "fix_flow": {
+        "step": {
+          "zones": {
+            "title": "Nazwij wykryte pomieszczenia",
+            "description": "Roomba+ wykrył nowe obszary. Otwórz ustawienia, aby je nazwać."
+          }
+        }
+      }
+    },
+    "smart_zones_need_naming": {
+      "title": "Odkryto nowe strefy Smart Map",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Nazwij strefy Smart Map",
+            "description": "Wprowadź jeden wpis na linię w formacie `id=Nazwa`. ID stref do nazwania: {zone_ids}",
+            "data": { "zones": "Przypisania stref" },
+            "data_description": { "zones": "Jeden wpis na linię: `21=Korytarz`, `22=Kuchnia`, itp." }
+          }
+        },
+        "error": {
+          "no_valid_entries": "Nie znaleziono prawidłowych wpisów. Użyj formatu `id=Nazwa`, jeden wpis na linię.",
+          "pmap_not_resolved": "Nie można rozwiązać ID mapy. Upewnij się, że robot jest zadokowany i połączony, a następnie spróbuj ponownie."
+        }
+      }
+    },
+    "maintenance_baselines_reset": {
+      "title": "Licznik czasu pracy robota mógł zostać zresetowany",
+      "description": "Licznik bbrun.hr robota jest niższy niż zapisane wartości bazowe resetowania dla: {parts}. Zazwyczaj oznacza to, że aktualizacja oprogramowania cicho zresetowała licznik. Szacunki pozostałych godzin dla materiałów eksploatacyjnych są teraz niewiarygodne. Zresetuj wszystkie materiały eksploatacyjne za pomocą przycisków Reset."
+    },
+    "performance_degradation": {
+      "title": "Wydajność sprzątania spada",
+      "description": "Roomba+ wykrył trwały spadek prędkości sprzątania w ciągu ostatnich kilku misji (przyczyna: {cause}). Może to wskazywać na zużyte szczotki, zatkany filtr lub znaczne zmiany warunków podłogi. Sprawdź stronę urządzenia pod kątem statusu materiałów eksploatacyjnych."
+    },
+    "battery_recharge_high": {
+      "title": "Częste ładowanie w trakcie misji przy degradacji akumulatora",
+      "description": "Robot poświęca znaczną część czasu sprzątania na ładowanie w trakcie misji, podczas gdy pojemność akumulatora spadła poniżej 75% wartości pierwotnej. Rozważ wymianę akumulatora."
+    },
+    "battery_contact_suspect": {
+      "title": "Możliwy problem ze stykami akumulatora lub stacji dokującej",
+      "description": "Roomba+ wykrył dowody problemu ze stykami akumulatora/stacji dokującej lub komunikacją (przyczyna: {cause}). Ostatnie szczytowe poziomy akumulatora w cyklach ładowania: {recent_peaks}. Nagły nieprawdopodobny skok zgłaszanego poziomu akumulatora lub malejący trend najwyższego poziomu ładowania zazwyczaj wskazuje na luźny lub skorodowany styk, a nie na sam akumulator — wyczyść styki robota i stacji przed założeniem, że akumulator jest uszkodzony."
+    },
+    "mixed_schedule": {
+      "title": "Wykryto konkurujące źródła harmonogramu",
+      "description": "W ciągu ostatnich 30 dni {schedule_pct}% sprzątań zostało uruchomionych przez harmonogramy HA, a {app_pct}% przez aplikację iRobot. Konkurujące harmonogramy mogą powodować podwójne sprzątania i pominięte pomieszczenia. Zarządzaj harmonogramem z jednego miejsca."
+    },
+    "accident_detected": {
+      "title": "Wykryto możliwy wypadek na podłodze",
+      "description": "Ostatnia misja zarejestrowała wyjątkowo wysoką liczbę zdarzeń brudu w bardzo krótkim czasie — możliwy wyciek cieczy lub wypadek. Sprawdź obszar przed ponownym wysłaniem robota."
+    },
+    "consecutive_skips": {
+      "title": "Robot pominął {count} kolejnych sprzątań",
+      "description": "Czujniki blokujące lub harmonogramowanie oparte na obecności uniemożliwiły {count} kolejnych zaplanowanych okazji do sprzątania. Sprawdź konfigurację czujników blokujących lub harmonogram obecności — mogą być zbyt restrykcyjne."
+    },
+    "map_drift_detected": {
+      "title": "Wykryto dryf Smart Map",
+      "description": "Ostatnie misje robota wykazują podwyższony dryf od oczekiwanej pozycji stacji dokującej (ostatni: {magnitude_cm} cm, kurs {bearing}°). Może to oznaczać, że stacja została przeniesiona lub robot ma trudności z relokalizacją. Zadokuj ponownie i pozwól na nowe mapowanie. To powiadomienie zniknie automatycznie, gdy dryf wróci do normy w ciągu kilku następnych misji."
+    },
+    "reloc_rate_elevated": {
+      "title": "Podwyższony wskaźnik relokalizacji",
+      "description": "Robot relokalizuje się znacznie częściej niż jego własna ustalona wartość bazowa ({baseline} na misję średnio). Może to wskazywać na degradację Smart Map — rozważ usunięcie i ponowne trenowanie mapy, jeśli zauważysz również komunikaty \"Znaleziono nową przestrzeń\" lub niedokładne śledzenie pomieszczeń. To powiadomienie zniknie automatycznie, gdy wskaźnik wróci do normy w ciągu kilku następnych misji."
+    },
+    "observed_zones_detected": {
+      "title": "Przeszkody wykryte przez robota w mapie chmury",
+      "description": "Twoja mapa chmury iRobot zawiera {zone_count} strefę(-y/-f) przeszkód wykrytych przez robota. Przeprowadź kilka misji sprzątania, aby Roomba+ mógł potwierdzić je lokalnie i zbudować dokładniejszą mapę przeszkód."
+    },
+    "error_recurrence": {
+      "title": "Powtarzający się błąd: {label}",
+      "description": "Błąd {error_code} ({label}) wystąpił {count} raz(-y/-ów) w ciągu ostatnich 30 dni. Ostatnio: faza {phase}, lokalizacja {room}. Zalecane działanie: {action}"
+    },
+    "cancellation_recurrence": {
+      "title": "Powtarzające się anulowania",
+      "description": "Misje były anulowane {count} raz(-y/-ów) w ciągu ostatnich 30 dni ({by_user_count} przez użytkownika/aplikację, {other_count} inne). Rozważ sprawdzenie konfliktów harmonogramu, interwencji aplikacji lub czy robot jest ręcznie zatrzymywany."
+    },
+    "schedule_suboptimal": {
+      "title": "Harmonogram może pomijać dni z dużym zabrudzeniem",
+      "description": "W {days} gęstość brudu była ponad {threshold}× powyżej 30-dniowej średniej i nie zarejestrowano żadnego sprzątania. Rozważ dodanie zaplanowanego sprzątania w te dni tygodnia."
+    },
+    "mission_anomaly": {
+      "title": "Wykryto nietypowe wzorce sprzątania",
+      "description": "Ostatnie {count} misji wykazało nieprawidłowe wzorce — robot może poświęcać więcej czasu niż zwykle na pokrycie mniejszego obszaru, doświadczać wyjątkowo długich ładowań lub napotykać ekstremalny poziom brudu. Sprawdź przeszkody, zużyte szczotki lub degradację akumulatora."
+    },
+    "stuck_pattern": {
+      "title": "Wykryto wzorzec utknięcia",
+      "description": "Twój Roomba najczęściej utyka w pobliżu {room} o {time}. Rozważ wyczyszczenie obszaru przed tymi sprzątaniami lub dostosowanie harmonogramu sprzątania."
+    },
+    "smberr_high": {
+      "title": "Wykryto dużą liczbę błędów SMBus akumulatora",
+      "description": "Robot zarejestrował {count} błędów komunikacji SMBus między płytą główną a układem akumulatora. Często wskazuje to na zużyte styki stacji dokującej lub starzejący się akumulator.\n\n**Zalecane działania:**\n1. Wyczyść styki ładowania robota i stacji suchą ściereczką.\n2. Jeśli błędy pozostają wysokie po czyszczeniu, akumulator może wymagać wymiany."
+    },
+    "dock_contact_health": {
+      "title": "Wykryto problem ze stykami stacji dokującej",
+      "description": "Robot zgłasza problemy ze stykami stacji dokującej:\n\n- Drgania styków: {chatters}\n- Przypadkowe odpięcia: {knockoffs}\n- Przerwane ładowania: {aborts}\n\n**Zalecane działania:**\n1. Wyczyść styki ładowania robota i stacji suchą ściereczką.\n2. Upewnij się, że stacja stoi na płaskiej, stabilnej powierzchni.\n3. Jeśli liczba odpięć jest wysoka, sprawdź czy w pobliżu stacji nie ma przeszkód."
+    },
+    "cloud_stale": {
+      "title": "Dane z chmury są nieaktualne",
+      "description": "Roomba+ nie otrzymał pomyślnej aktualizacji z chmury od {minutes} minut. Sprawdź dane logowania do konta iRobot i połączenie internetowe. Lokalne dane MQTT są nadal dostępne."
+    },
+    "mqtt_watchdog": {
+      "title": "Utracono połączenie MQTT robota podczas misji",
+      "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji sprzątania. Ostatnia znana faza przed utratą połączenia: {last_phase}. Łączność robota z chmurą: {cloud_hint}. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — najpierw sprawdź robota osobiście."
+    },
+    "integration_health": {
+      "title": "Zdrowie integracji jest obniżone",
+      "description": "Wskaźnik zdrowia integracji Roomba+ był poniżej 50 przez co najmniej 30 minut (aktualny wynik: {score}/100). Uwzględnia liczbę aktywnych problemów naprawy, wiek wiadomości MQTT i aktualność archiwum misji. Sprawdź atrybuty encji sensor.*_integration_health, aby zobaczyć, który sygnał jest dotknięty, i przejrzyj inne aktywne problemy naprawy dla tego robota."
+    },
+    "map_retrain_in_progress": {
+      "title": "Aktualizacja Smart Map trwa dłużej niż zwykle",
+      "description": "Smart Map robota jest aktualizowana od co najmniej {minutes} minut. Normalna aktualizacja jest zazwyczaj szybsza — może się to zdarzyć po dużej zmianie układu. Nie jest wymagane żadne działanie; powiadomienie zniknie automatycznie po zakończeniu aktualizacji."
+    },
+    "map_retrain_stuck": {
+      "title": "Aktualizacja Smart Map wydaje się zablokowana",
+      "description": "Smart Map robota jest aktualizowana od co najmniej {minutes} minut bez zakończenia. To dłużej niż powinna trwać prawdziwa aktualizacja. Spróbuj zrestartować robota z aplikacji iRobot lub skontaktuj się z pomocą techniczną iRobot, jeśli problem będzie się utrzymywał."
+    },
+    "maintenance_due": {
+      "title": "Konserwacja jest zaległa",
+      "description": "Następujące materiały eksploatacyjne wymagają wymiany od co najmniej 3 dni: {items}. Sprawdź atrybuty czujnika binarnego maintenance_due pod kątem dokładnych godzin zaległości, a następnie użyj odpowiedniego przycisku reset lub akcji roomba_plus.reset_* po wymianie."
+    },
+    "mqtt_watchdog_cloud_connected": {
+      "title": "Utracono połączenie MQTT robota podczas misji",
+      "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: połączony — wskazuje to na problem po stronie lokalnej/Home Assistant, a nie awarię Wi-Fi po stronie robota. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
+    },
+    "mqtt_watchdog_cloud_disconnected": {
+      "title": "Utracono połączenie MQTT robota podczas misji",
+      "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: rozłączony — sugeruje to awarię Wi-Fi po stronie robota. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
+    },
+    "mqtt_watchdog_cloud_unknown": {
+      "title": "Utracono połączenie MQTT robota podczas misji",
+      "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: nieznana (to pole nie jest dostępne w tym oprogramowaniu). Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
+    },
+    "health_trend_declining": {
+      "title": "Trend wskaźnika zdrowia spada",
+      "description": "Roomba+ wykrył, że złożony wskaźnik zdrowia był poniżej własnej ustalonej wartości bazowej robota przez {days} kolejnych dni. Może to wskazywać na rozwijające się zużycie mechaniczne, problemy z nawigacją lub zmiany środowiskowe — sprawdź poszczególne sygnały wskaźnika zdrowia (zachowanie akumulatora, efektywność nawigacji, prędkość sprzątania, anomalie misji, wskaźnik utknięcia), aby znaleźć prawdopodobną przyczynę."
+    },
+    "room_accessibility_low": {
+      "title": "{room}: niski wskaźnik dostępności",
+      "description": "{room} uzyskał {score}/100 punktów dostępności z powodu {reason}. Sprawdź to pomieszczenie pod kątem przeszkód, wąskich przejść lub mebli, które mogą ograniczać zdolność robota do skutecznego sprzątania."
+    },
+    "layout_change_detected": {
+      "title": "Wykryto możliwą zmianę układu",
+      "description": "Miejsce w pobliżu ({x_mm}, {y_mm}) było niezawodnie sprzątane przez długi czas i teraz zostało pominięte w kilku kolejnych misjach — znak, że nowe meble lub inna przeszkoda mogą je blokować. Sprawdź obszar lub odrzuć, jeśli było to oczekiwane (np. celowo dodano dywan)."
+    },
+    "stuck_hotspot_detected": {
+      "title": "Wykryto powtarzające się miejsce utknięcia",
+      "description": "Robot wielokrotnie utykał w pobliżu klastra {cell_count} komórek w {room} (kurs {bearing}° od stacji dokującej, {stuck_count} zarejestrowanych zdarzeń utknięcia, aktualnie pokryte wyraźnie gorzej niż otaczający obszar). Sprawdź obszar pod kątem przeszkody — przewody, niski szczelina lub coś, w co robot ciągle się zahacza."
+    },
+    "coverage_frequency_overdue": {
+      "title": "{room} może wymagać sprzątania",
+      "description": "{room} był ostatnio sprzątany {days_since_last} dni temu — wyraźnie dłużej niż przybliżony {expected_interval_days}-dniowy rytm ustalony przez tego robota dla tego pomieszczenia na podstawie jego własnej historii sprzątania. Sprawdź, czy harmonogram nadal go obejmuje lub czy pomieszczenie było ostatnio niedostępne."
+    },
+    "dirt_correlation": {
+      "title": "Wykryto silną korelację brudu",
+      "description": "Robot zbiera znacznie {direction} brudu, gdy {entity} jest wysoki(-a) (r={r}, 30+ misji). Rozważ dostosowanie harmonogramów sprzątania do tego wzorca."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "cleaning_started": "Sprzątanie rozpoczęte",
+      "cleaning_finished": "Sprzątanie zakończone",
+      "stuck": "Robot utknął",
+      "bin_full": "Pojemnik pełny",
+      "docked": "Zadokowany",
+      "error": "Zgłoszono błąd",
+      "room_completed": "Pomieszczenie ukończone",
+      "maintenance_due": "Wymagana konserwacja",
+      "health_score_drop": "Wskaźnik zdrowia spadł",
+      "map_retrain_started": "Trening mapy rozpoczęty",
+      "map_retrain_completed": "Trening mapy zakończony",
+      "firmware_updated": "Oprogramowanie zaktualizowane"
+    }
+  },
+  "services": {
+    "clean_room": {
+      "name": "Sprzątaj pomieszczenie",
+      "description": "Rozpocznij ukierunkowane sprzątanie jednego lub kilku nazwanych pomieszczeń na robotach z Smart Map.",
+      "fields": {
+        "room_name": {
+          "name": "Nazwa pomieszczenia",
+          "description": "Nazwa pomieszczenia lub lista nazw pomieszczeń do sprzątania. Musi odpowiadać etykietom przypisanym w opcjach Roomba+. Najpierw uruchom sprzątanie ukierunkowane na pomieszczenie w aplikacji iRobot, jeśli żadne pomieszczenia jeszcze nie są widoczne."
+        },
+        "ordered": {
+          "name": "Kolejność sekwencji",
+          "description": "Sprzątaj pomieszczenia w podanej kolejności zamiast pozwolić robotowi wybrać."
+        }
+      }
+    },
+    "reset_filter": {
+      "name": "Resetuj filtr",
+      "description": "Zapisz aktualny czas jako datę wymiany filtra."
+    },
+    "reset_brush": {
+      "name": "Resetuj szczotki",
+      "description": "Zapisz aktualny czas jako datę wymiany szczotek."
+    },
+    "reset_battery": {
+      "name": "Resetuj akumulator",
+      "description": "Zapisz aktualny czas jako datę wymiany akumulatora."
+    },
+    "reset_pad": {
+      "name": "Resetuj nakładkę czyszczącą",
+      "description": "Zapisz aktualny czas jako datę wymiany nakładki (tylko Braava)."
+    },
+    "smart_start": {
+      "name": "Inteligentny start",
+      "description": "Rozpocznij sprzątanie z kontrolą czujników blokujących."
+    },
+    "clean_sequence": {
+      "name": "Uruchom sekwencyjne sprzątanie",
+      "description": "Uruchom robota B po zakończeniu bieżącej misji robota A. Nasłuchiwacz uruchamia się raz i usuwa się automatycznie.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot wyzwalający",
+          "description": "Encja odkurzacza dla robota A (musi zakończyć pierwszy)."
+        },
+        "target_entity_id": {
+          "name": "Robot docelowy",
+          "description": "Encja odkurzacza dla robota B (uruchamiany po zakończeniu A)."
+        },
+        "require_completed": {
+          "name": "Wymagaj ukończenia",
+          "description": "Gdy prawda, robot B uruchamia się tylko jeśli robot A zadokował normalnie."
+        },
+        "delay_minutes": {
+          "name": "Opóźnienie (minuty)",
+          "description": "Czekaj tyle minut po zadokowaniu robota A przed uruchomieniem robota B."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "rooms_not_found": {
+      "message": "Nieznane pomieszczenie(-a): {names}. Sprawdź, czy nazwy odpowiadają tym przypisanym w opcjach Roomba+."
+    },
+    "rooms_different_floors": {
+      "message": "Wszystkie pomieszczenia muszą być na tym samym piętrze. Podano pomieszczenia z różnych map: {pmap_ids}."
+    },
+    "not_smart_map": {
+      "message": "Sprzątanie pomieszczeń wymaga robota z ukończoną Smart Map (i7, s9, seria j lub Braava jet m6). Ten robot nie ma Smart Map — jeśli jest to kompatybilny model, upewnij się, że jego mapa jest zapisana w aplikacji iRobot."
+    },
+    "no_rooms_configured": {
+      "message": "Brak skonfigurowanych pomieszczeń. Aby użyć tej akcji: (1) Otwórz aplikację iRobot, (2) Rozpocznij sprzątanie ukierunkowane na pomieszczenie dla każdego pomieszczenia, (3) Wróć do Home Assistant — pomieszczenia pojawią się automatycznie w opcjach Roomba+ gdzie możesz przypisać nazwy."
+    },
+    "pmap_not_resolved": {
+      "message": "Nie można rozwiązać ID mapy dla jednego lub kilku pomieszczeń. Upewnij się, że robot zgłosił stan mapy przez MQTT."
+    },
+    "map_updating": {
+      "message": "Robot aktualnie aktualizuje Smart Map. Poczekaj aż czujnik gotowości pokaże 'Gotowy', a następnie spróbuj ponownie."
+    },
+    "entity_not_found": {
+      "message": "Encja {entity_id} nie znaleziona w rejestrze encji."
+    },
+    "maintenance_store_unavailable": {
+      "message": "Magazyn konserwacji nie jest dostępny dla {entity_id}. Przeładuj integrację i spróbuj ponownie."
+    },
+    "no_valid_segments": {
+      "message": "Żadne segmenty nie pasują do bieżącej mapy. Mapa mogła zostać ponownie przetrenowana — uruchom ponownie misję w pomieszczeniu w aplikacji iRobot, aby odświeżyć układ pomieszczeń."
+    },
+    "config_entry_not_found": {
+      "message": "Nie znaleziono wpisu konfiguracji dla {entity_id}. Spróbuj przeładować integrację."
+    },
+    "room_name_and_room_passes_conflict": {
+      "message": "Podaj room_name lub room_passes, ale nie oba jednocześnie."
+    },
+    "room_name_or_room_passes_required": {
+      "message": "Podaj room_name lub room_passes."
+    },
+    "no_rooms_resolved": {
+      "message": "Brak pomieszczeń do sprzątania — podaj co najmniej jedną nazwę pomieszczenia."
+    }
+  },
+  "selector": {
+    "room_schedule_frequency": {
+      "options": {
+        "learned": "Nauczone (samokalibrowane)",
+        "daily": "Codziennie",
+        "every_2_days": "Co 2 dni",
+        "three_per_week": "3 razy w tygodniu",
+        "weekly": "Raz w tygodniu"
+      }
+    }
+  }
+}
