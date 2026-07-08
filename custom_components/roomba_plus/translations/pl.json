@@ -196,7 +196,7 @@
         }
       },
       "room_schedule": {
-        "title": "Częstotliwość sprzątania per pomieszczenie",
+        "title": "Częstotliwość sprzątania dla każdego pomieszczenia",
         "description": "Ustaw, jak często każde pomieszczenie powinno być sprzątane. 'Nauczone' zachowuje samokalibrowany interwał z historii sprzątania pomieszczenia."
       }
     },
@@ -213,7 +213,7 @@
       "demand_cleaning_not_supported": "Sprzątanie na żądanie wymaga robota SMART ze skonfigurowanymi danymi logowania do chmury.",
       "no_rest980_rooms_found": "Nie znaleziono pomieszczeń w instalacji roomba_rest980.",
       "rest980_rooms_already_imported": "Wszystkie pomieszczenia z roomba_rest980 są już nazwane w Roomba+.",
-      "room_schedule_not_supported": "Częstotliwości per pomieszczenie wymagają robota z Smart Map i danymi logowania do chmury.",
+      "room_schedule_not_supported": "Częstotliwości dla poszczególnych pomieszczeń wymagają robota z Smart Map i danymi logowania do chmury.",
       "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map."
     }
   },
@@ -311,10 +311,10 @@
         "name": "Mop – Zachowanie ARS",
         "state": {
           "no_mop": "Bez mopa", "extended": "Rozszerzone", "standard": "Standardowe",
-          "deep": "Głębokie", "dirty_pause": "Pauza przy brudu", "dry": "Suche",
-          "wash": "Mycie", "dirty_pause_dry": "Pauza przy brudu + suche",
-          "dirty_pause_wash": "Pauza przy brudu + mycie", "dry_wash": "Suche + mycie",
-          "dirty_pause_dry_wash": "Pauza przy brudu + suche + mycie", "unknown": "Nieznane"
+          "deep": "Głębokie", "dirty_pause": "Pauza przy zabrudzeniu", "dry": "Suche",
+          "wash": "Mycie", "dirty_pause_dry": "Pauza przy zabrudzeniu + suche",
+          "dirty_pause_wash": "Pauza przy zabrudzeniu + mycie", "dry_wash": "Suche + mycie",
+          "dirty_pause_dry_wash": "Pauza przy zabrudzeniu + suche + mycie", "unknown": "Nieznane"
         }
       },
       "recent_cleaning_speed": { "name": "Wydajność – Prędkość sprzątania" },
@@ -325,8 +325,8 @@
         "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
       },
       "recent_coverage_pct": { "name": "Wydajność – Pokrycie" },
-      "battery_capacity_retention": { "name": "Konserwacja – Zachowanie pojemności akumulatora" },
-      "estimated_battery_eol": { "name": "Konserwacja – Szacowany czas życia akumulatora" },
+      "battery_capacity_retention": { "name": "Konserwacja – Utrzymanie pojemności akumulatora" },
+      "estimated_battery_eol": { "name": "Konserwacja – Szacowana żywotność akumulatora" },
       "consecutive_clean_skips": { "name": "Wydajność – Kolejne pominięte sprzątania" },
       "recent_area_30d": { "name": "Posprzątana powierzchnia (30 dni)" },
       "recent_time_30d": { "name": "Czas sprzątania (30 dni)" },
@@ -338,12 +338,12 @@
       "zone_summary": { "name": "Podsumowanie stref" },
       "wheel_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie kół" },
       "contact_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie styków" },
-      "bin_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie pojemnika" },
+      "bin_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie pojemnika na brud" },
       "cleaning_performance": { "name": "Wydajność sprzątania" },
       "cleaning_analytics_30d": { "name": "Analityka sprzątania (30 dni)" },
-      "wifi_health": { "name": "Zdrowie Wi-Fi" },
+      "wifi_health": { "name": "Kondycja Wi-Fi" },
       "event_counts_30d": { "name": "Liczba zdarzeń (30 dni)" },
-      "robot_health_score": { "name": "Wskaźnik zdrowia robota" },
+      "robot_health_score": { "name": "Ocena kondycji robota" },
       "lifetime_completion_rate": { "name": "Łączny wskaźnik ukończenia" },
       "battery_cycle_count_bms": { "name": "Liczba cykli BMS akumulatora" },
       "battery_age_days": { "name": "Wiek akumulatora" },
@@ -359,12 +359,12 @@
       "dock_knockoffs": { "name": "Przypadkowe odpięcia od stacji" },
       "dock_charge_aborts": { "name": "Przerwane ładowania w stacji" },
       "firmware_version": { "name": "Wersja oprogramowania" },
-      "integration_health": { "name": "Zdrowie integracji" },
+      "integration_health": { "name": "Kondycja integracji" },
       "dock_firmware_version": { "name": "Wersja oprogramowania stacji" },
       "last_mission_team_id": { "name": "Misje – ID zespołu ostatniej misji" },
       "reset_diagnostics": { "name": "Resetuj diagnostykę" },
       "health_score_trend": {
-        "name": "Trend wskaźnika zdrowia",
+        "name": "Trend kondycji robota",
         "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
       },
       "room_accessibility_scores": { "name": "Wskaźniki dostępności pomieszczeń" },
@@ -372,9 +372,9 @@
       "dirt_weather_correlation": { "name": "Korelacja brudu" }
     },
     "binary_sensor": {
-      "bin_full": { "name": "Pojemnik pełny" },
+      "bin_full": { "name": "Pojemnik na brud pełny" },
       "connected": { "name": "Połączony" },
-      "bin_present": { "name": "Pojemnik obecny" },
+      "bin_present": { "name": "Pojemnik na brud obecny" },
       "mop_ready": { "name": "Problem z mopem" },
       "mop_tank_present": { "name": "Zbiornik mopa obecny" },
       "mop_lid_closed": { "name": "Pokrywa mopa otwarta" },
@@ -407,7 +407,7 @@
       "layout_change_detected": { "name": "Wykryto zmianę układu" }
     },
     "button": {
-      "evac": { "name": "Akcja – Opróżnij pojemnik" },
+      "evac": { "name": "Akcja – Opróżnij pojemnik na brud" },
       "locate": { "name": "Akcja – Znajdź robota" },
       "reset_filter": { "name": "Konserwacja – Potwierdź wymianę filtra" },
       "reset_brush": { "name": "Konserwacja – Potwierdź wymianę szczotek" },
@@ -423,7 +423,7 @@
       "map_training": { "name": "Akcja – Rozpocznij trening mapy" }
     },
     "switch": {
-      "edge_clean": { "name": "Ustawienie – Sprzątanie krawędzi" },
+      "edge_clean": { "name": "Ustawienie – Sprzątanie przy krawędziach" },
       "always_finish": { "name": "Ustawienie – Zawsze kończ" },
       "schedule_hold": { "name": "Ustawienie – Wstrzymanie harmonogramu" },
       "child_lock": { "name": "Ustawienie – Blokada dla dzieci" },
@@ -568,8 +568,8 @@
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji sprzątania. Ostatnia znana faza przed utratą połączenia: {last_phase}. Łączność robota z chmurą: {cloud_hint}. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — najpierw sprawdź robota osobiście."
     },
     "integration_health": {
-      "title": "Zdrowie integracji jest obniżone",
-      "description": "Wskaźnik zdrowia integracji Roomba+ był poniżej 50 przez co najmniej 30 minut (aktualny wynik: {score}/100). Uwzględnia liczbę aktywnych problemów naprawy, wiek wiadomości MQTT i aktualność archiwum misji. Sprawdź atrybuty encji sensor.*_integration_health, aby zobaczyć, który sygnał jest dotknięty, i przejrzyj inne aktywne problemy naprawy dla tego robota."
+      "title": "Kondycja integracji jest obniżona",
+      "description": "Kondycja integracji Roomba+ była poniżej 50 przez co najmniej 30 minut (aktualny wynik: {score}/100). Uwzględnia liczbę aktywnych problemów naprawy, wiek wiadomości MQTT i aktualność archiwum misji. Sprawdź atrybuty encji sensor.*_integration_health, aby zobaczyć, który sygnał jest dotknięty, i przejrzyj inne aktywne problemy naprawy dla tego robota."
     },
     "map_retrain_in_progress": {
       "title": "Aktualizacja Smart Map trwa dłużej niż zwykle",
@@ -596,8 +596,8 @@
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: nieznana (to pole nie jest dostępne w tym oprogramowaniu). Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
     },
     "health_trend_declining": {
-      "title": "Trend wskaźnika zdrowia spada",
-      "description": "Roomba+ wykrył, że złożony wskaźnik zdrowia był poniżej własnej ustalonej wartości bazowej robota przez {days} kolejnych dni. Może to wskazywać na rozwijające się zużycie mechaniczne, problemy z nawigacją lub zmiany środowiskowe — sprawdź poszczególne sygnały wskaźnika zdrowia (zachowanie akumulatora, efektywność nawigacji, prędkość sprzątania, anomalie misji, wskaźnik utknięcia), aby znaleźć prawdopodobną przyczynę."
+      "title": "Trend kondycji robota spada",
+      "description": "Roomba+ wykrył, że złożona kondycja robota była poniżej własnej ustalonej wartości bazowej przez {days} kolejnych dni. Może to wskazywać na rozwijające się zużycie mechaniczne, problemy z nawigacją lub zmiany środowiskowe — sprawdź poszczególne sygnały kondycji (pojemność akumulatora, efektywność nawigacji, prędkość sprzątania, anomalie misji, wskaźnik utknięcia), aby znaleźć prawdopodobną przyczynę."
     },
     "room_accessibility_low": {
       "title": "{room}: niski wskaźnik dostępności",
@@ -609,7 +609,7 @@
     },
     "stuck_hotspot_detected": {
       "title": "Wykryto powtarzające się miejsce utknięcia",
-      "description": "Robot wielokrotnie utykał w pobliżu klastra {cell_count} komórek w {room} (kurs {bearing}° od stacji dokującej, {stuck_count} zarejestrowanych zdarzeń utknięcia, aktualnie pokryte wyraźnie gorzej niż otaczający obszar). Sprawdź obszar pod kątem przeszkody — przewody, niski szczelina lub coś, w co robot ciągle się zahacza."
+      "description": "Robot wielokrotnie utykał w pobliżu klastra {cell_count} komórek w {room} (kurs {bearing}° od stacji dokującej, {stuck_count} zarejestrowanych zdarzeń utknięcia, aktualnie pokryte wyraźnie gorzej niż otaczający obszar). Sprawdź obszar pod kątem przeszkody — przewody, niska szczelina lub coś, w co robot ciągle się zahacza."
     },
     "coverage_frequency_overdue": {
       "title": "{room} może wymagać sprzątania",
@@ -617,7 +617,7 @@
     },
     "dirt_correlation": {
       "title": "Wykryto silną korelację brudu",
-      "description": "Robot zbiera znacznie {direction} brudu, gdy {entity} jest wysoki(-a) (r={r}, 30+ misji). Rozważ dostosowanie harmonogramów sprzątania do tego wzorca."
+      "description": "Robot zbiera znacznie {direction} brudu, gdy wartość {entity} jest wysoka (r={r}, 30+ misji). Rozważ dostosowanie harmonogramów sprzątania do tego wzorca."
     }
   },
   "device_automation": {
@@ -625,12 +625,12 @@
       "cleaning_started": "Sprzątanie rozpoczęte",
       "cleaning_finished": "Sprzątanie zakończone",
       "stuck": "Robot utknął",
-      "bin_full": "Pojemnik pełny",
+      "bin_full": "Pojemnik na brud pełny",
       "docked": "Zadokowany",
       "error": "Zgłoszono błąd",
       "room_completed": "Pomieszczenie ukończone",
       "maintenance_due": "Wymagana konserwacja",
-      "health_score_drop": "Wskaźnik zdrowia spadł",
+      "health_score_drop": "Ocena kondycji spadła",
       "map_retrain_started": "Trening mapy rozpoczęty",
       "map_retrain_completed": "Trening mapy zakończony",
       "firmware_updated": "Oprogramowanie zaktualizowane"
@@ -685,7 +685,7 @@
         },
         "require_completed": {
           "name": "Wymagaj ukończenia",
-          "description": "Gdy prawda, robot B uruchamia się tylko jeśli robot A zadokował normalnie."
+          "description": "Jeśli zaznaczono, robot B uruchomi się tylko wtedy, gdy robot A zadokował normalnie."
         },
         "delay_minutes": {
           "name": "Opóźnienie (minuty)",
