@@ -3,19 +3,19 @@
     "step": {
       "user": {
         "title": "Dodaj Roomba+",
-        "description": "Wybierz wykrytego Roomba lub dodaj go ręcznie.",
+        "description": "Wybierz wykrytego robota Roomba lub dodaj go ręcznie.",
         "data": {
           "host": "Wybierz robota"
         }
       },
       "manual": {
         "title": "Konfiguracja ręczna",
-        "description": "Wprowadź adres IP swojego Roomba. Dane logowania znajdziesz pod [{auth_help_url}]({auth_help_url}).",
+        "description": "Wprowadź adres IP swojego robota Roomba. Dane logowania znajdziesz pod [{auth_help_url}]({auth_help_url}).",
         "data": {
           "host": "Adres IP"
         },
         "data_description": {
-          "host": "Lokalny adres IP Roomba"
+          "host": "Lokalny adres IP robota Roomba"
         }
       },
       "link": {
@@ -48,7 +48,7 @@
           "password": "Hasło"
         },
         "data_description": {
-          "host": "Lokalny adres IP Roomba.",
+          "host": "Lokalny adres IP robota Roomba.",
           "password": "Hasło robota (przytrzymaj przycisk HOME, aby je pobrać)."
         }
       }
