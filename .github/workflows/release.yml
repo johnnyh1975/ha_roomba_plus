@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Derive version from tag
         id: version
@@ -62,7 +62,7 @@ jobs:
       # consistent: the PR gate and the release gate should never silently
       # test different things.
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -155,6 +155,7 @@ jobs:
           cp hacs.json /tmp/full-package/
           cp README.md /tmp/full-package/
           cp pyproject.toml /tmp/full-package/
+          cp requirements-test-frozen.txt /tmp/full-package/
           if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
             cp "${{ steps.notes.outputs.path }}" "/tmp/full-package/RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
           fi
@@ -162,7 +163,7 @@ jobs:
           zip -r "${GITHUB_WORKSPACE}/ha_roomba_plus-${{ steps.version.outputs.tag }}-full.zip" .
 
       - name: Create GitHub Release with assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
