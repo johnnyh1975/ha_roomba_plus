@@ -53,6 +53,18 @@ class TestLocationNameDockedFallback:
         _set_state(roomba, phase="")
         assert tracker.location_name == "Angedockt"
 
+
+class TestLocationNameNullRegression:
+    """v3.4.2 NULL-REGRESSION — cleanMissionStatus: null must not crash
+    location_name, the same confirmed-real class of bug as bbrun/bin/cap
+    elsewhere in this codebase (see test_edge_cases.py)."""
+
+    def test_explicit_null_clean_mission_status_does_not_raise(self):
+        tracker, roomba, _ = _make_tracker()
+        roomba.master_state = {"state": {"reported": {"cleanMissionStatus": None}}}
+        # Falls through to the empty-phase branch, same as a docked robot.
+        assert tracker.location_name == "Angedockt"
+
     def test_docked_label_respects_language(self):
         tracker, roomba, _ = _make_tracker()
         tracker.hass.config.language = "en"

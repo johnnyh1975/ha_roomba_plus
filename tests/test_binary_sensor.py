@@ -1215,3 +1215,26 @@ class TestLayoutChangeDetected:
         from homeassistant.components.binary_sensor import BinarySensorDeviceClass
         sensor = _make_layout_change_sensor(grid_store=None)
         assert sensor.device_class == BinarySensorDeviceClass.PROBLEM
+
+
+class TestBinStatusNullRegression:
+    """v3.4.2 NULL-REGRESSION — bin: null must not crash RoombaBinFullStatus/
+    RoombaBinPresentStatus, same confirmed-real bug class as elsewhere in
+    this codebase (see test_edge_cases.py)."""
+
+    def _entity(self, cls, reported: dict):
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": reported}}
+        entity = cls.__new__(cls)
+        entity.vacuum = roomba
+        return entity
+
+    def test_bin_full_status_survives_explicit_null_bin(self):
+        from custom_components.roomba_plus.binary_sensor import RoombaBinStatus
+        entity = self._entity(RoombaBinStatus, {"bin": None})
+        assert entity.is_on is False
+
+    def test_bin_present_status_survives_explicit_null_bin(self):
+        from custom_components.roomba_plus.binary_sensor import RoombaBinPresentStatus
+        entity = self._entity(RoombaBinPresentStatus, {"bin": None})
+        assert entity.is_on is True   # defaults to "present" when unknown

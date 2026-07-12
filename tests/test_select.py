@@ -663,3 +663,72 @@ class TestNullRegressionExplicitNulls:
     def test_reusable_pad_wetness_explicit_null(self):
         from custom_components.roomba_plus.select import _REUSABLE_PAD_DESC
         assert _REUSABLE_PAD_DESC.current_option_fn({"padWetness": None}) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.4.2 NULL-REGRESSION — active_pmapv_details explicit null (tech-debt
+# backlog item, "select.py Cloud-Details-Null-Zugriffe": details.get(key, {})
+# only guards a MISSING key, not one present with an explicit null value from
+# the cloud coordinator — same class of bug as the padWetness case above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestActivePmapvDetailsNullRegression:
+    def test_async_setup_entry_survives_null_active_pmapv_details(self):
+        """A pmap entry with active_pmapv_details=None must not crash entity
+        setup — previously details.get("active_pmapv", {}) would raise
+        AttributeError on a None `details`, unguarded, inside async_setup_entry
+        (unlike the second site below, this one has no surrounding try/except)."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from custom_components.roomba_plus.select import async_setup_entry
+        from custom_components.roomba_plus.models import MapCapability
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.runtime_data.roomba = MagicMock()
+        config_entry.runtime_data.blid = "TESTBLID"
+        config_entry.runtime_data.map_capability = MapCapability.SMART
+        config_entry.runtime_data.has_cloud = True
+        cc = MagicMock()
+        cc.active_pmap_id = "p1"
+        cc.data = {"pmaps": [{"active_pmapv_details": None}]}
+        config_entry.runtime_data.cloud_coordinator = cc
+
+        added: list = []
+        def fake_add_entities(entities, *a, **kw):
+            added.extend(entities)
+
+        with patch(
+            "custom_components.roomba_plus.select.roomba_reported_state",
+            return_value={"pmaps": ["p1"]},
+        ):
+            # Must not raise.
+            asyncio.get_event_loop().run_until_complete(
+                async_setup_entry(hass, config_entry, fake_add_entities)
+            )
+
+    def test_learning_percentage_survives_null_active_pmapv_details(self):
+        """Same null-guard, second site: extra_state_attributes' F7g
+        learning_percentage lookup. Already wrapped in a broad
+        except-Exception, so it wouldn't crash the entity before this fix
+        either — but silently via a catch-all rather than an explicit guard."""
+        from custom_components.roomba_plus.select import CloudSmartZoneSelect
+
+        entity = object.__new__(CloudSmartZoneSelect)
+        entity._regions = [{"id": "r1", "name": "Kitchen",
+                             "region_type": "default", "pmap_id": "p1"}]
+        entity._zones         = []
+        entity._map_name      = "Home"
+        entity._pmap_id       = "p1"
+        entity._is_active_map = True
+        entity._selected      = "Kitchen"
+
+        cc = MagicMock()
+        cc.keepout_zones = []
+        cc.data = {"pmaps": [{"active_pmapv_details": None}]}
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator = cc
+        entity._config_entry = entry
+
+        attrs = entity.extra_state_attributes  # must not raise
+        assert "learning_percentage" not in attrs or attrs.get("learning_percentage") is None

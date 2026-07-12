@@ -3089,6 +3089,47 @@ class TestFavoriteButton:
         btn.hass.async_add_executor_job.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_press_multi_entry_commanddefs_logs_warning_and_uses_first(self):
+        """Multi-entry commanddefs: warn about the dropped entries, still send entry 0."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f3",
+            "name": "Multi",
+            "commanddefs": [
+                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "1"}]},
+                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "2"}]},
+            ],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
+            await btn.async_press()
+
+        mock_log.warning.assert_called_once()
+        args = btn.hass.async_add_executor_job.call_args[0]
+        assert args[2]["regions"] == [{"region_id": "1"}]
+
+    @pytest.mark.asyncio
+    async def test_press_single_entry_commanddefs_no_warning(self):
+        """Single-entry commanddefs: no warning should fire."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f4",
+            "name": "Single",
+            "commanddefs": [{"command": "start", "pmap_id": "map1"}],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
+            await btn.async_press()
+
+        mock_log.warning.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_press_extracts_params_excluding_command_key(self):
         """All keys except 'command' become params."""
         entry = _make_config_entry(has_cloud=True)

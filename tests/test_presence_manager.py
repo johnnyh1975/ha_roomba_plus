@@ -386,6 +386,22 @@ class TestHandleSomeoneHome:
         from custom_components.roomba_plus.const import EVENT_PERSON_DETECTED_DURING_CLEAN
         assert EVENT_PERSON_DETECTED_DURING_CLEAN in hass.bus.fired
 
+    @pytest.mark.asyncio
+    async def test_explicit_null_clean_mission_status_does_not_raise(self):
+        """v3.4.2 NULL-REGRESSION — cleanMissionStatus: null must not crash
+        the event-fire check, same confirmed-real bug class as bbrun/bin/cap
+        elsewhere (see test_edge_cases.py)."""
+        manager, hass = _make_manager(
+            {"person.alice": "home"}, sched_hold=False,
+        )
+        manager._entry.runtime_data.roomba.master_state["state"]["reported"][
+            "cleanMissionStatus"
+        ] = None
+        manager._did_unfreeze = True
+        await manager._handle_someone_home()  # must not raise
+        from custom_components.roomba_plus.const import EVENT_PERSON_DETECTED_DURING_CLEAN
+        assert EVENT_PERSON_DETECTED_DURING_CLEAN not in hass.bus.fired
+
 
 class TestSchedHoldNotSupported:
     @pytest.mark.asyncio

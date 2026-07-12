@@ -1628,3 +1628,70 @@ class TestReviewRemainderErrorPaths:
         api._session.post = MagicMock(return_value=ctx)
         with pytest.raises(AuthenticationError, match="CognitoId"):
             await api._login_irobot("uid", "sig", "ts")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v3.4.2 NULL-REGRESSION — active_pmapv_details explicit null, cloud_coordinator.py
+#
+# Same root cause as select.py's Cloud-Details-Null-Zugriffe tech-debt item
+# (fixed in the same release): pmap.get("active_pmapv_details", {}) only
+# guards a MISSING key, not one present with an explicit null value from the
+# cloud API. Found systemically across six call sites in this file —
+# active_pmap_id, active_user_pmapv_id, regions, zones, learning_percentage,
+# and the Variant A/B/C resolver inside _fetch_active_umf — all fixed with
+# the same (dict.get(key) or {}) guard. These tests cover the five
+# synchronous properties; _fetch_active_umf itself is async and network-
+# bound, exercised indirectly via TestActivePmapNewest-style fixtures above
+# rather than duplicated here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestActivePmapvDetailsNullRegression:
+    def _coordinator_with_null_details(self, extra_pmap_fields: dict | None = None):
+        from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
+        cc = object.__new__(IrobotCloudCoordinator)
+        pmap = {"active_pmapv_details": None, "pmap_id": "p1"}
+        if extra_pmap_fields:
+            pmap.update(extra_pmap_fields)
+        cc.data = {"pmaps": [pmap]}
+        return cc
+
+    def test_active_pmap_id_survives_null_details(self):
+        cc = self._coordinator_with_null_details()
+        assert cc.active_pmap_id is None
+
+    def test_active_user_pmapv_id_survives_null_details(self):
+        cc = self._coordinator_with_null_details()
+        # active_id resolves to None (no valid pmapv anywhere) → short-circuits
+        # before the second null-details access, but must not raise regardless.
+        assert cc.active_user_pmapv_id is None
+
+    def test_regions_survives_null_details(self):
+        cc = self._coordinator_with_null_details()
+        # No active_id resolvable → regions short-circuits to [] before
+        # reaching the null details, but must not raise if it ever does.
+        assert cc.regions == []
+
+    def test_zones_survives_null_details(self):
+        cc = self._coordinator_with_null_details()
+        assert cc.zones == []
+
+    def test_learning_percentage_survives_null_details(self):
+        cc = self._coordinator_with_null_details()
+        assert cc.learning_percentage is None
+
+    def test_regions_survives_null_details_when_pmap_id_matches_active(self):
+        """Stronger case: active_id IS resolvable (from a second, valid pmap),
+        so `regions` actually reaches the null-details pmap's `.get()` chain
+        instead of short-circuiting on `if not active_id`."""
+        from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
+        cc = object.__new__(IrobotCloudCoordinator)
+        cc.data = {"pmaps": [
+            {"active_pmapv_details": None, "pmap_id": "p1"},
+            _make_pmap("p2", [{"id": "r1", "name": "Kitchen"}]),
+        ]}
+        # active_pmap_id will resolve to "p2" (the only pmap with a valid ts-bearing
+        # entry) — regions() then iterates and must skip the null-details pmap
+        # without raising before reaching the matching one.
+        assert cc.active_pmap_id == "p2"
+        result = cc.regions
+        assert result and result[0]["pmap_id"] == "p2"

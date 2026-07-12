@@ -483,3 +483,49 @@ class TestMapCapabilityGatingNoLocalPose:
         old_condition = has_pose(state)
         new_condition = has_pose(state) or has_smart_map(state)
         assert old_condition == new_condition == False
+
+
+class TestGetRobotProfile:
+    """APK-CONFIG-VERIFY — SKU-prefix profile lookup and its diagnostic
+    logging for prefixes confirmed real (via base_roomba_config.json) but
+    not yet profiled by this project."""
+
+    def test_known_prefix_returns_profile(self):
+        from custom_components.roomba_plus.const import get_robot_profile
+        profile = get_robot_profile("i755840")
+        assert profile is not None
+        assert profile.name == "i-series"
+
+    def test_r_prefix_aliases_to_900_series(self):
+        from custom_components.roomba_plus.const import get_robot_profile
+        profile = get_robot_profile("R980040")
+        assert profile is not None
+        assert profile.name == "900-series"
+
+    def test_no_sku_returns_none_quietly(self):
+        from custom_components.roomba_plus.const import get_robot_profile
+        assert get_robot_profile(None) is None
+
+    def test_known_irobot_family_without_profile_logs_info(self, caplog):
+        """A 'c'-prefix SKU (Combo, confirmed real in base_roomba_config.json)
+        has no RobotProfile entry yet — should log at INFO, not silently
+        return None with no trace."""
+        from custom_components.roomba_plus.const import get_robot_profile
+        import logging
+        with caplog.at_level(logging.INFO, logger="custom_components.roomba_plus.const"):
+            profile = get_robot_profile("c712340")
+        assert profile is None
+        assert any(
+            "known iRobot product family" in r.message for r in caplog.records
+        )
+
+    def test_truly_unrecognised_prefix_logs_debug_not_info(self, caplog):
+        from custom_components.roomba_plus.const import get_robot_profile
+        import logging
+        with caplog.at_level(logging.DEBUG, logger="custom_components.roomba_plus.const"):
+            profile = get_robot_profile("z999999")
+        assert profile is None
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert not any("known iRobot product family" in r.message for r in info_records)
+        assert any("unrecognised prefix" in r.message for r in debug_records)

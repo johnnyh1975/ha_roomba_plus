@@ -2683,6 +2683,13 @@ class TestLatestPlannedOrder:
         ms = _ms_with_timeline({"finEvents": []})
         assert ms.latest_planned_order(REGION_MAP) is None
 
+    def test_returns_none_when_plan_explicitly_null(self):
+        """v3.4.2 NULL-REGRESSION — timeline.plan: null (not just missing) must
+        not crash, same confirmed-real bug class as active_pmapv_details
+        elsewhere in this codebase."""
+        ms = _ms_with_timeline({"plan": None, "finEvents": []})
+        assert ms.latest_planned_order(REGION_MAP) is None
+
     def test_returns_none_without_timeline(self):
         ms = _ms_without_timeline()
         assert ms.latest_planned_order(REGION_MAP) is None

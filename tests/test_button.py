@@ -122,3 +122,14 @@ class TestZoneCleanButtonStartsClean:
 
         assert "Kitchen" in caplog.text
         assert "bbox" in caplog.text.lower()
+
+
+class TestMaintenanceResetButtonCurrentHrNullRegression:
+    """v3.4.2 NULL-REGRESSION — bbrun: null must not crash _current_hr(),
+    same confirmed-real bug class as elsewhere in this codebase."""
+
+    def test_explicit_null_bbrun_returns_zero(self):
+        from custom_components.roomba_plus.button import FilterResetButton
+        btn = object.__new__(FilterResetButton)
+        btn.vacuum_state = {"bbrun": None}
+        assert btn._current_hr() == 0

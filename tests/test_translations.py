@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 _ROOT = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
 _STRINGS = _ROOT / "strings.json"
 _TRANSLATIONS = _ROOT / "translations"
-_TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt"]
+_TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt", "pl"]
 _SOURCE_FILES = [
     _ROOT / "services.py",
     _ROOT / "vacuum.py",
@@ -434,8 +434,8 @@ class TestTranslationKeys:
         for key in self.NEW_KEYS:
             assert key in sensor_keys, f"Missing {key} in strings.json"
 
-    def test_all_7_languages_have_keys(self):
-        langs = ["de", "es", "fr", "it", "nl", "pt"]
+    def test_all_8_languages_have_keys(self):
+        langs = ["de", "es", "fr", "it", "nl", "pt", "pl"]
         for lang in langs:
             path = TRANSLATIONS_DIR / f"{lang}.json"
             data = json.loads(path.read_text())

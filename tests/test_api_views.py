@@ -1751,6 +1751,77 @@ class TestResolveCloudExplainRecord:
         assert _resolve_cloud_explain_record(data, "c_not_a_number") is None
 
 
+class TestResolveCloudMissionMapRecord:
+    """MISSION-MAP-CLOUD-ROWS — same synthetic "c_{ts}" resolution as
+    EXPLAIN-CLOUD (v3.3.1), never carried over to /mission-map until now."""
+
+    def test_returns_none_when_no_cloud_coordinator(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator = None
+        assert _resolve_cloud_mission_map_record(data, "c_1700000000") is None
+
+    def test_returns_none_for_non_c_prefixed_id(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = []
+        assert _resolve_cloud_mission_map_record(data, "m_1700000000") is None
+
+    def test_returns_none_for_malformed_timestamp(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = []
+        assert _resolve_cloud_mission_map_record(data, "c_not_a_number") is None
+
+    def test_returns_none_when_no_raw_record_matches(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = [
+            {"startTime": 1699999999, "timestamp": 1700003600, "nMssn": 88},
+        ]
+        assert _resolve_cloud_mission_map_record(data, "c_1700000000") is None
+
+    def test_resolves_matching_record_via_starttime(self):
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = [
+            {"startTime": 1700000000, "timestamp": 1700003600, "nMssn": 90,
+             "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}]},
+        ]
+        result = _resolve_cloud_mission_map_record(data, "c_1700000000")
+        assert result == {
+            "id": "c_1700000000",
+            "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}],
+            "nMssn": 90,
+        }
+
+    def test_resolves_matching_record_via_timestamp_fallback(self):
+        """No startTime on the raw record — same fallback precedence
+        _cloud_record_to_unified() uses when minting the id in the
+        first place (id = f"c_{start_ts}" if start_ts else f"c_{end_ts}")."""
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = [
+            {"timestamp": 1700003600, "nMssn": 91,
+             "pmaps_info": [{"pmap_id": "P2", "pmapv_id": "V8"}]},
+        ]
+        result = _resolve_cloud_mission_map_record(data, "c_1700003600")
+        assert result["pmaps_info"] == [{"pmap_id": "P2", "pmapv_id": "V8"}]
+
+    def test_resolved_record_with_no_pmaps_info_is_not_this_functions_concern(self):
+        """A resolved EPHEMERAL-tier record with no pmaps_info still
+        returns a dict (id + nMssn, pmaps_info=None) — the 404 for that
+        case happens downstream inside async_fetch_mission_map(), same
+        as any local record in that state."""
+        from custom_components.roomba_plus.api_views import _resolve_cloud_mission_map_record
+        data = MagicMock()
+        data.cloud_coordinator.raw_records = [
+            {"startTime": 1700000000, "nMssn": 90},
+        ]
+        result = _resolve_cloud_mission_map_record(data, "c_1700000000")
+        assert result == {"id": "c_1700000000", "pmaps_info": None, "nMssn": 90}
+
+
 def _real_mission_archive(derived_records: list[dict]):
     from custom_components.roomba_plus.mission_archive import MissionArchive
     archive = MissionArchive()
@@ -1979,6 +2050,48 @@ class TestMissionMapViews:
         assert payload["coverage_mm"] == [[1000.0, 2000.0]]
         assert payload["nmssn"] == 90
         assert payload["pmapv_id"] == "V7"
+
+    @pytest.mark.asyncio
+    async def test_cloud_only_row_resolves_via_c_prefix(self):
+        """MISSION-MAP-CLOUD-ROWS — a cloud-only synthetic id ("c_{ts}"),
+        never in ms.records, must resolve via the raw cloud history
+        instead of 404ing — the same gap class EXPLAIN-CLOUD (v3.3.1)
+        fixed for /explain, never carried over here until now."""
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([], umf=self._umf())
+        entry.runtime_data.cloud_coordinator.raw_records = [
+            {"startTime": 1700000000, "timestamp": 1700003600, "nMssn": 90,
+             "pmaps_info": [{"pmap_id": "P1", "pmapv_id": "V7"}]},
+        ]
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "c_1700000000")
+        assert err is None
+        assert payload["coverage_mm"] == [[1000.0, 2000.0]]
+        assert payload["pmapv_id"] == "V7"
+
+    @pytest.mark.asyncio
+    async def test_cloud_only_row_unresolvable_is_404(self):
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([])
+        entry.runtime_data.cloud_coordinator.raw_records = []
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "c_1700000000")
+        assert payload is None and err[0] == 404
+
+    @pytest.mark.asyncio
+    async def test_cloud_only_row_without_pmaps_info_is_404_downstream(self):
+        """Known remaining gap, unchanged by this fix: an EPHEMERAL-tier
+        cloud record with no pmaps_info still 404s — correctly, via the
+        existing async_fetch_mission_map() branch, not a new failure
+        mode introduced by the c_-prefix resolution itself."""
+        from custom_components.roomba_plus.api_views import _mission_map_payload
+        entry = self._entry([])
+        entry.runtime_data.cloud_coordinator.raw_records = [
+            {"startTime": 1700000000, "nMssn": 90},
+        ]
+        payload, data, err = await _mission_map_payload(
+            self._request(entry), "e1", "c_1700000000")
+        assert payload is None and err[0] == 404
 
 
 # ─────────────────────────────────────────────────────────────────────────────

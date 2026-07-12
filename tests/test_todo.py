@@ -250,6 +250,15 @@ class TestNewStateFilter:
         todo = _make_todo()
         assert todo.new_state_filter({"bbrun": {}}) is True
 
+
+class TestCurrentHrNullRegression:
+    """v3.4.2 NULL-REGRESSION — bbrun: null must not crash _current_hr(),
+    same confirmed-real bug class as elsewhere in this codebase."""
+
+    def test_explicit_null_bbrun_returns_zero(self):
+        todo = _make_todo({"bbrun": None})
+        assert todo._current_hr() == 0
+
     def test_true_for_clean_schedule2_update(self):
         todo = _make_todo()
         assert todo.new_state_filter({"cleanSchedule2": []}) is True
