@@ -9,6 +9,13 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
+# Added (session: CI pipeline review) — cancels superseded runs on rapid
+# successive pushes to the same PR/branch, so CI minutes aren't spent on
+# runs whose result no longer matters by the time they'd finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hacs:
     name: HACS Validation
@@ -31,3 +38,152 @@ jobs:
 
       - name: Hassfest validation
         uses: home-assistant/actions/hassfest@master
+
+  # ── Added (session: CI pipeline review) ─────────────────────────────────
+  #
+  # Below this line: four new jobs. None of hacs/hassfest above needed any
+  # changes — same triggers already cover push/PR/nightly/manual for these
+  # too.
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-test-frozen.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test-frozen.txt
+
+      - name: Run full test suite with coverage
+        run: |
+          python -m pytest tests/ --cov=custom_components/roomba_plus \
+            --cov-report=term-missing --cov-report=xml -q
+
+      # No coverage threshold/failure gate here, deliberately: this is the
+      # first time coverage has been measured in CI at all (previously
+      # pinned as a dependency, never actually run). 76% overall as of
+      # v3.4.2, ranging from 100% in several small modules down to 31% in
+      # sensor_core.py and 55% in vacuum.py. Setting a threshold now would
+      # mean picking a number with no real baseline behind it. Once a few
+      # releases' worth of real numbers exist, revisit whether a ratchet
+      # (must not decrease) or a floor makes sense.
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 30
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      # F = Pyflakes rule family (see pyproject.toml's [tool.ruff.lint] for
+      # why only F, and why formatting/style rules are deliberately not
+      # enabled). Exceptions (58 sensor.py SENSOR-SPLIT facade re-exports,
+      # 19 TYPE_CHECKING forward-reference false positives) are annotated
+      # inline with `# noqa: F401`/`# noqa: F821` at the specific lines —
+      # nothing hidden in this workflow or in an external filter.
+      - name: Run ruff check
+        run: ruff check .
+
+  translations:
+    name: Translation Completeness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check strings.json vs. all translations/*.json
+        run: python3 scripts/check_translations.py
+
+  blueprints:
+    name: Blueprint Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install pyyaml jinja2
+
+      - name: Validate blueprint YAML + Jinja syntax
+        run: python3 scripts/validate_blueprints.py
+
+  version-badge:
+    name: Version Badge Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Directly motivated by a real drift found during this project's own
+      # v3.4.2 work: the README badge stayed at "3.4.0" through two
+      # subsequent releases before being caught by hand. Runs on every
+      # push to main (not just at release time — release.yml's own
+      # manifest-vs-tag check is a different, narrower check), so drift
+      # can't sit unnoticed between releases again.
+      - name: Check README badge vs. manifest.json
+        run: python3 scripts/check_version_badge.py
+
+  markdown-links:
+    name: Markdown Link Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # continue-on-error: true, deliberately — 7 of 8 currently-flagged
+      # links involve emoji/em-dash headings where this script's GitHub-
+      # anchor reimplementation isn't confidently verified (see the
+      # script's own docstring). One confirmed-real broken link (a
+      # "#migration" anchor pointing at a heading that didn't exist) was
+      # found and fixed during this same session. Recommended: manually
+      # click-check the remaining 7 against the live rendered pages, fix
+      # or accept each, then remove continue-on-error here.
+      - name: Check relative markdown links
+        continue-on-error: true
+        run: python3 scripts/check_markdown_links.py

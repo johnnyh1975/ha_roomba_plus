@@ -53,6 +53,31 @@ jobs:
           fi
           echo "Version check passed: $MANIFEST_VERSION"
 
+      # ── Added (session: CI pipeline review) ────────────────────────────
+      # Zero-failure-before-packaging as a pipeline gate, not a convention
+      # someone has to remember. Placed as early as possible — right after
+      # the cheap version-string check, before spending any time on
+      # release-notes lookup or ZIP packaging. Same full-suite choice
+      # (no --ignore flags) as validate.yml's test job, kept deliberately
+      # consistent: the PR gate and the release gate should never silently
+      # test different things.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-test-frozen.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test-frozen.txt
+
+      - name: Run full test suite (release gate — must pass before packaging)
+        run: |
+          python -m pytest tests/ -q
+      # ── End added section ───────────────────────────────────────────────
+
       - name: Prepare release notes
         id: notes
         run: |
@@ -85,14 +110,51 @@ jobs:
           cd /tmp/hacs-package
           zip -r "${GITHUB_WORKSPACE}/ha_roomba_plus.zip" .
 
+      # ── Added (session: CI pipeline review) ────────────────────────────
+      # Directly motivated by a near-miss during this project's own v3.4.2
+      # work: a build was produced with custom_components/roomba_plus/
+      # wrapped inside the zip PLUS hacs.json included — exactly the
+      # doubled-nesting bug the comment above says was already fixed once,
+      # in v3.1.2. Caught only because the packaging logic above was
+      # checked by hand against what had been built; this makes that
+      # check automatic instead of relying on a human noticing again.
+      - name: Validate HACS ZIP structure
+        run: |
+          echo "Checking ha_roomba_plus.zip structure..."
+          FILE_LIST=$(unzip -l ha_roomba_plus.zip | awk 'NR>3 {print $4}' | grep -v '^$')
+
+          if ! echo "$FILE_LIST" | grep -qx "manifest.json"; then
+            echo "::error::manifest.json not found at zip root — is custom_components/roomba_plus/ wrapped instead of flattened?"
+            echo "$FILE_LIST"
+            exit 1
+          fi
+
+          if echo "$FILE_LIST" | grep -q "custom_components"; then
+            echo "::error::Found a 'custom_components' path inside the zip — this is the doubled-nesting bug fixed in v3.1.2. The zip must contain the bare files of custom_components/roomba_plus/ directly, not the folder itself."
+            echo "$FILE_LIST" | grep "custom_components"
+            exit 1
+          fi
+
+          if echo "$FILE_LIST" | grep -qx "hacs.json"; then
+            echo "::error::hacs.json found inside the zip — it must NOT be included; HACS reads it from the repo root via the GitHub API, never from this zip."
+            exit 1
+          fi
+
+          echo "ha_roomba_plus.zip structure OK: manifest.json at root, no custom_components/ wrapper, no hacs.json."
+      # ── End added section ───────────────────────────────────────────────
+
       - name: Build full-review ZIP
         run: |
           mkdir -p /tmp/full-package
           cp -r custom_components /tmp/full-package/
           cp -r tests /tmp/full-package/
           cp -r docs /tmp/full-package/
+          cp -r blueprints /tmp/full-package/
+          cp -r scripts /tmp/full-package/
+          cp -r .github /tmp/full-package/
           cp hacs.json /tmp/full-package/
           cp README.md /tmp/full-package/
+          cp pyproject.toml /tmp/full-package/
           if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
             cp "${{ steps.notes.outputs.path }}" "/tmp/full-package/RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
           fi

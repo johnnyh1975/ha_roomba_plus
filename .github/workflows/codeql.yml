@@ -1,0 +1,45 @@
+name: CodeQL
+
+# Separate from validate.yml deliberately — CodeQL's own runtime (several
+# minutes for the analysis step alone) shouldn't slow down the fast
+# hacs/hassfest/test/lint/translations/blueprints feedback loop on every
+# push. Weekly schedule catches drift from dependency updates even with
+# no code changes; PR/push-to-main still covers actual code changes
+# promptly.
+#
+# Motivated by this project handling real cloud credentials and auth
+# tokens (Gigya login flow, AWS Cognito, custom IoT authorizer token
+# handling in cloud_api.py) — exactly the kind of code where a static
+# security scan is worth having, even for a Home Assistant custom
+# integration that isn't itself internet-facing.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 3 * * 1"  # Mondays, offset from validate.yml's nightly run
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
