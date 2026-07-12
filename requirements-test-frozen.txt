@@ -31,7 +31,7 @@ btsocket==0.3.0
 cached-ipaddress==1.1.2
 certifi==2026.6.17
 cffi==2.0.0
-charset-normalizer==3.4.7
+charset-normalizer==3.4.9
 ciso8601==2.3.2
 coverage==7.6.8
 cronsim==2.6
