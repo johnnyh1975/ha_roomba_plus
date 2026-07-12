@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # requirements-test-frozen.txt — 133 pinned test/dev dependencies, no
+  # automated way currently to notice a security patch landing upstream.
+  # Weekly (not daily) — this is test tooling, not runtime dependencies
+  # shipped to users; no urgency that justifies daily PR noise.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # The workflow files themselves (actions/checkout, actions/setup-python,
+  # hacs/action, home-assistant/actions, softprops/action-gh-release, etc.)
+  # — same reasoning as above, weekly.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
