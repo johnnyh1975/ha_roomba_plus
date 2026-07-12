@@ -129,7 +129,7 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         None — regardless of robot tier or room-detection reliability."""
         data = self._config_entry.runtime_data
         state = roomba_reported_state(self.vacuum)
-        phase = state.get("cleanMissionStatus", {}).get("phase", "")
+        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
 
         if phase in MISSION_END_PHASES or phase == "":
             return self._label(_DOCKED_LABEL)
@@ -192,7 +192,7 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
 
         data = self._config_entry.runtime_data
         mts = getattr(data, "mission_timer_store", None)
-        phase = state.get("cleanMissionStatus", {}).get("phase", "")
+        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
         if (
             mts is not None
             and mts.mission_id is not None

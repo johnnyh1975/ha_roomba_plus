@@ -42,7 +42,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .entity import IRobotEntity
-from .models import MapCapability, RoombaConfigEntry
+from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -65,7 +65,7 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
         name="Action – Empty bin",
         entity_category=EntityCategory.CONFIG,
         command="evac",
-        filter_fn=lambda s: s.get("cap", {}).get("dockComm") == 1,
+        filter_fn=lambda s: (s.get("cap") or {}).get("dockComm") == 1,
     ),
     RoombaButtonDescription(
         key="locate",
@@ -242,7 +242,7 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
 
     def _current_hr(self) -> int:
         """Return current bbrun.hr (lifetime operating hours)."""
-        return self.vacuum_state.get("bbrun", {}).get("hr", 0)
+        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
 
     def _maintenance_store(self) -> Any:
         """Return the MaintenanceStore from runtime_data."""
@@ -620,6 +620,22 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
             return
 
         # commanddefs[0] is the primary command — mirrors roomba_rest980 behaviour.
+        # NOTE (ia74/roomba_rest980 issue #9): the official app's own data model
+        # (core.Favorite.mCommandDefs, confirmed identical in both the Classic
+        # and Prime APKs) allows more than one entry here. Neither app's native
+        # execution path (executeMissionForFavorite -> GenericGlobalDataService
+        # ::sendCommand) iterates over it before handing the whole Favorite
+        # object off to a deeper, unexported service layer — so it remains
+        # unconfirmed whether multi-entry favorites occur in practice and, if
+        # so, whether steps are meant to run sequentially. Until that's field-
+        # verified, we only ever act on entry 0 and make the drop visible
+        # instead of silently discarding any further steps.
+        if len(command_defs) > 1:
+            _LOGGER.warning(
+                "FavoriteButton '%s': favorite has %d commanddefs entries — "
+                "only the first will be sent, the rest are ignored",
+                self._attr_name, len(command_defs),
+            )
         cmd = command_defs[0]
         command = cmd.get("command", "start")
         params = {k: v for k, v in cmd.items() if k != "command"}

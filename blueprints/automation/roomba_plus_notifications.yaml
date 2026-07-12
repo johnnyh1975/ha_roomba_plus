@@ -1,0 +1,201 @@
+blueprint:
+  name: Roomba+ Curated Notifications
+  description: >
+    A curated core set of five Roomba+ notifications: mission complete,
+    maintenance due, robot stuck, map retrain detected, and battery capacity
+    critical. Pick which of the five you want and wire in your own
+    notification action (a mobile app notify, persistent_notification, TTS —
+    whatever you already use) — this blueprint handles picking the right
+    robot, building the message, and firing your action.
+
+    Battery capacity critical uses this robot's own self-calibrated
+    "estimated days until end-of-life" sensor rather than a fixed capacity
+    percentage, so the same warning buffer means something similar
+    regardless of your robot's age or usage pattern.
+
+    Two template variables are available inside your notification action:
+    {{ notification_title }} and {{ notification_message }}.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/roomba_plus_notifications.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    robot_device:
+      name: Robot
+      description: >
+        The Roomba+ device this blueprint watches. Used to correctly match
+        this robot's own mission-complete, stuck, and map-retrain events in a
+        multi-robot household — matched internally on the robot's Home
+        Assistant config entry, not on its name, so renaming the device or
+        the robot later won't break this.
+      selector:
+        device:
+          entity:
+            integration: roomba_plus
+
+    notify_action:
+      name: Notification action
+      description: >
+        What to do when one of the enabled events below fires. Typically a
+        notify action (e.g. notify.mobile_app_yourphone) or
+        persistent_notification.create — anything that accepts a title and a
+        message. Use {{ notification_title }} and {{ notification_message }}.
+      selector:
+        action:
+
+    enable_mission_complete:
+      name: Mission complete
+      description: Notify when a cleaning mission ends (with result and any anomaly explanation).
+      default: true
+      selector:
+        boolean:
+
+    enable_maintenance_due:
+      name: Maintenance due
+      description: Notify when the filter and/or brush reaches its replacement interval.
+      default: true
+      selector:
+        boolean:
+
+    enable_stuck:
+      name: Robot stuck
+      description: Notify when the robot has stopped reporting for longer than expected mid-mission.
+      default: true
+      selector:
+        boolean:
+
+    enable_map_retrain:
+      name: Map retrain detected
+      description: >
+        Notify when the robot starts retraining its Smart Map. Room names
+        may be temporarily inconsistent until the retrain finishes.
+      default: true
+      selector:
+        boolean:
+
+    enable_battery_critical:
+      name: Battery capacity critical
+      description: Notify when this robot's own learned battery degradation crosses its end-of-life estimate.
+      default: true
+      selector:
+        boolean:
+
+    maintenance_due_entity:
+      name: Maintenance due sensor
+      description: >
+        Required only if "Maintenance due" is enabled above. The
+        binary_sensor.*_maintenance_due entity for this robot.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          integration: roomba_plus
+
+    battery_eol_entity:
+      name: Estimated battery EOL sensor
+      description: >
+        Required only if "Battery capacity critical" is enabled above. The
+        sensor.*_estimated_battery_eol entity for this robot. This sensor
+        needs some cleaning history before it reports a value at all — that's
+        expected, not a bug (see the integration's docs on self-calibration).
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          integration: roomba_plus
+
+    battery_warning_days:
+      name: Battery warning buffer (days)
+      description: >
+        Fire the battery-critical notification this many estimated days
+        before end-of-life, not only once the estimate actually reaches
+        zero. Set to 0 to only notify right at end-of-life.
+      default: 14
+      selector:
+        number:
+          min: 0
+          max: 90
+          unit_of_measurement: days
+          mode: box
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: event
+    event_type: roomba_plus_mission_completed
+    id: mission_complete
+  - trigger: state
+    entity_id: !input maintenance_due_entity
+    to: "on"
+    id: maintenance_due
+  - trigger: event
+    event_type: roomba_plus_stuck
+    id: stuck
+  - trigger: event
+    event_type: roomba_plus_map_retrain_started
+    id: map_retrain
+  - trigger: numeric_state
+    entity_id: !input battery_eol_entity
+    below: !input battery_warning_days
+    id: battery_critical
+
+conditions:
+  # Respect the per-notification enable/disable toggles.
+  - condition: template
+    value_template: >
+      {% set enabled = {
+        "mission_complete": !input enable_mission_complete,
+        "maintenance_due": !input enable_maintenance_due,
+        "stuck": !input enable_stuck,
+        "map_retrain": !input enable_map_retrain,
+        "battery_critical": !input enable_battery_critical,
+      } %}
+      {{ enabled.get(trigger.id, false) }}
+  # For the three event-based triggers (no entity_id of their own), confirm
+  # the event actually belongs to the selected robot's config entry — NOT
+  # matched on name/title, which can drift out of sync with the device name
+  # after a rename. State-based triggers (maintenance_due, battery_critical)
+  # are already scoped correctly via their own entity selector above, so
+  # this check is a no-op for those.
+  - condition: template
+    value_template: >
+      {% if trigger.id in ("mission_complete", "stuck", "map_retrain") %}
+        {{ trigger.event.data.entry_id in (device_attr((!input robot_device), "config_entries") or []) }}
+      {% else %}
+        true
+      {% endif %}
+
+actions:
+  - variables:
+      notification_title: >
+        {% set robot = device_attr((!input robot_device), "name") %}
+        {% if trigger.id == "mission_complete" %}
+          {{ robot }}: mission {{ trigger.event.data.result }}
+        {% elif trigger.id == "maintenance_due" %}
+          {{ robot }}: maintenance due
+        {% elif trigger.id == "stuck" %}
+          {{ robot }}: stuck
+        {% elif trigger.id == "map_retrain" %}
+          {{ robot }}: map retrain detected
+        {% elif trigger.id == "battery_critical" %}
+          {{ robot }}: battery capacity critical
+        {% endif %}
+      notification_message: >
+        {% if trigger.id == "mission_complete" %}
+          {{ trigger.event.data.rooms_cleaned }} room(s), {{ trigger.event.data.area_sqft }} sq ft.
+          {%- if trigger.event.data.is_anomalous %} {{ trigger.event.data.anomaly_reason }} — {{ trigger.event.data.recommended_action }}{% endif %}
+        {% elif trigger.id == "maintenance_due" %}
+          Due: {{ trigger.to_state.attributes.due | join(", ") }}.
+        {% elif trigger.id == "stuck" %}
+          Stuck for {{ trigger.event.data.minutes_stuck }} min in {{ trigger.event.data.last_room or "an unknown room" }}.
+        {% elif trigger.id == "map_retrain" %}
+          Room names may be temporarily inconsistent until this finishes.
+        {% elif trigger.id == "battery_critical" %}
+          Estimated {{ states(!input battery_eol_entity) }} day(s) remaining until this robot's own learned end-of-life threshold.
+        {% endif %}
+  - !input notify_action

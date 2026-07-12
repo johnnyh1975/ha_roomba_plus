@@ -233,6 +233,52 @@ def _resolve_cloud_explain_record(
     return None
 
 
+def _resolve_cloud_mission_map_record(
+    data: "RoombaData", mission_id: str
+) -> dict[str, Any] | None:
+    """MISSION-MAP-CLOUD-ROWS — resolve a synthetic "c_{ts}" id (minted by
+    _cloud_record_to_unified() for cloud-only mission rows that never made
+    it into MissionStore._records) against the cloud coordinator's raw
+    /missionhistory cache, so cloud-source rows get Mission Map support
+    too. Mirrors _resolve_cloud_explain_record()'s same startTime-then-
+    timestamp precedence, so the reverse lookup matches the same record
+    the id was minted from — this was the same gap class EXPLAIN-CLOUD
+    (v3.3.1) fixed for /explain, never carried over to /mission-map.
+
+    Returns the minimal shape async_fetch_mission_map() actually reads
+    (id, pmaps_info, nMssn) — not the full unified shape, same rationale
+    as _cloud_record_to_explain_input() targeting its consumer directly
+    instead of adding a translation hop through the REST shape.
+
+    Returns None when unresolvable (no cloud coordinator, malformed id, or
+    no matching raw record) — caller translates that into a 404, same as
+    any other unresolvable record_id. A resolved record with no
+    pmaps_info (EPHEMERAL tier, or never merged) is NOT this function's
+    concern — that 404s correctly inside async_fetch_mission_map() itself,
+    same as any local record in that state.
+    """
+    if not mission_id.startswith("c_") or data.cloud_coordinator is None:
+        return None
+    try:
+        target_ts = int(mission_id[len("c_"):])
+    except ValueError:
+        return None
+    for raw in data.cloud_coordinator.raw_records:
+        start_ts = raw.get("startTime")
+        end_ts   = raw.get("timestamp")
+        candidate_ts = start_ts if start_ts else end_ts
+        try:
+            if candidate_ts is not None and int(candidate_ts) == target_ts:
+                return {
+                    "id":         mission_id,
+                    "pmaps_info": raw.get("pmaps_info"),
+                    "nMssn":      raw.get("nMssn"),
+                }
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
     """Convert a local MissionStore record to the unified per-mission shape.
 
@@ -1157,6 +1203,13 @@ async def _mission_map_payload(
         return None, None, (404, "No mission history available")
     if record_id == "latest":
         record = ms.latest()
+    elif record_id.startswith("c_"):
+        # MISSION-MAP-CLOUD-ROWS — synthetic cloud-only id, never in
+        # ms.records. Same fallback shape as EXPLAIN-CLOUD (v3.3.1);
+        # None here means genuinely unresolvable (not merely no
+        # pmaps_info — that 404s further down, inside
+        # async_fetch_mission_map() itself).
+        record = _resolve_cloud_mission_map_record(data, record_id)
     else:
         record = next(
             (r for r in ms.records if str(r.get("id")) == record_id), None

@@ -580,8 +580,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Log pmap structure to answer: does activeDetails=2 embed polygon
         # geometry, or does that require the separate /umf endpoint?
         for _p in result["pmaps"]:
-            _det = _p.get("active_pmapv_details", {})
-            _pmapv = _det.get("active_pmapv", {})
+            _det = _p.get("active_pmapv_details") or {}
+            _pmapv = _det.get("active_pmapv") or {}
             _regions = _det.get("regions", [])
             # Determine which key holds the region ID — critical for CR4 attributes.
             # The API uses "region_id" in some account types, "id" in others.
@@ -596,7 +596,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 len(_det.get("zones", [])),
                 _rid_key,
                 sorted(_regions[0].keys()) if _regions else [],
-                sorted(_det.get("map_header", {}).keys()),
+                sorted((_det.get("map_header") or {}).keys()),
             )
             # v2.4.2 — log time_estimates value to confirm structure for
             # mission progress feature (v2.6.0 roadmap). Only logged once
@@ -711,8 +711,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         best_pid: str | None = None
         best_ts: str = ""
         for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details", {})
-            pmapv = details.get("active_pmapv", {})
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
             pid = pmapv.get("pmap_id")
             if not pid:
                 continue
@@ -747,8 +747,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not active_id:
             return None
         for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details", {})
-            pmapv = details.get("active_pmapv", {})
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
             pmap_id_candidate = pmapv.get("pmap_id") or pmap.get("pmap_id")
             if pmap_id_candidate != active_id:
                 continue
@@ -770,8 +770,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.data:
             return None
         for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details", {})
-            pct = details.get("map_header", {}).get("learning_percentage")
+            details = pmap.get("active_pmapv_details") or {}
+            pct = (details.get("map_header") or {}).get("learning_percentage")
             if pct is not None:
                 try:
                     return int(pct)
@@ -834,8 +834,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not active_id:
             return []
         for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details", {})
-            pmapv = details.get("active_pmapv", {})
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
             if pmapv.get("pmap_id") != active_id:
                 continue  # skip disabled / inactive maps
             regions_raw = details.get("regions", [])
@@ -877,8 +877,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not active_id:
             return []
         for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details", {})
-            pmapv = details.get("active_pmapv", {})
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
             if pmapv.get("pmap_id") != active_id:
                 continue
             zones_raw = details.get("zones", [])
@@ -986,7 +986,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # on the first update, silently skipping the UMF fetch every startup.
         active_id: str | None = None
         for _p in pmaps:
-            _pmapv = _p.get("active_pmapv_details", {}).get("active_pmapv", {})
+            _pmapv = (_p.get("active_pmapv_details") or {}).get("active_pmapv") or {}
             _pid = _pmapv.get("pmap_id") or _p.get("pmap_id")
             if _pid:
                 active_id = _pid
@@ -1018,8 +1018,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # All variants use active_pmapv_details.active_pmapv.pmap_id for pmap_id
             # match, except Variant C which falls back to pmap["pmap_id"] at root.
             #
-            details = pmap.get("active_pmapv_details", {})
-            pmapv   = details.get("active_pmapv", {})
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv   = details.get("active_pmapv") or {}
 
             # pmap_id match — try Variant A/B first, then Variant C
             pmap_id_candidate = pmapv.get("pmap_id") or pmap.get("pmap_id")

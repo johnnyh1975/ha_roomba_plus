@@ -9,7 +9,6 @@ from homeassistant.const import ATTR_CONNECTIONS
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
-from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import DOMAIN
@@ -43,7 +42,7 @@ class IRobotEntity(Entity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self.robot_unique_id)},
             serial_number=(
-                self.vacuum_state.get("hwPartsRev", {}).get("navSerialNo")
+                (self.vacuum_state.get("hwPartsRev") or {}).get("navSerialNo")
             ),
             manufacturer="iRobot",
             model=self.vacuum_state.get("sku"),
@@ -58,7 +57,7 @@ class IRobotEntity(Entity):
         # DeviceInfo name field, not the connection tuple, so this is safe as
         # long as `name` above is set correctly.
         mac_address: str | None = (
-            self.vacuum_state.get("hwPartsRev", {}).get("wlan0HwAddr")
+            (self.vacuum_state.get("hwPartsRev") or {}).get("wlan0HwAddr")
             or self.vacuum_state.get("mac")
         )
         if mac_address:
@@ -167,7 +166,7 @@ class IRobotEntity(Entity):
     @property
     def dock_tank_level(self) -> int | None:
         """Dock tank fill level."""
-        return self.vacuum_state.get("dock", {}).get("tankLvl")
+        return (self.vacuum_state.get("dock") or {}).get("tankLvl")
 
     @property
     def last_mission(self) -> Any | None:

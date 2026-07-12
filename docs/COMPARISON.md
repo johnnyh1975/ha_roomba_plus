@@ -3,7 +3,7 @@
 # Roomba Integrations — Feature Comparison
 
 > Based on source code analysis · last verified July 2026 against
-> Roomba+ **v3.4.1** and roomba_rest980 **v1.19.1**
+> Roomba+ **v3.3.0** and roomba_rest980 **v1.19.1**
 > (manifest version; quality_scale.yaml documents Bronze→Platinum rules, all met).
 > Covers all three main integration paths for iRobot robots in Home Assistant.
 
@@ -20,7 +20,7 @@
 | 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
 | 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3,836 tests, 7 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3,863 tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -59,7 +59,7 @@
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6 ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ 3,836 tests ★ | ✅ | ❌ |
+| Unit tests | ✅ 3,803 tests ★ | ✅ | ❌ |
 | Quality Scale | **Gold ★** | Silver | **Bronze** |
 | Translations | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only | ⚠️ EN only |
 
@@ -185,7 +185,7 @@
 | Repair Issues | ✅ 10 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
-| Integration tests | ✅ 3,836 pytest tests ★ | ✅ | ❌ |
+| Integration tests | ✅ 3,803 pytest tests ★ | ✅ | ❌ |
 | GitHub Actions CI | ✅ ★ | ❌ | ✅ push + PR + nightly hassfest + HACS validation |
 
 ---

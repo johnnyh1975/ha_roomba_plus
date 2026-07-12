@@ -1,11 +1,14 @@
 """Constants for the Roomba+ integration."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Final
 
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import Platform
+
+_LOGGER = logging.getLogger(__name__)
 
 # ── Domain ────────────────────────────────────────────────────────────────────
 DOMAIN: Final = "roomba_plus"
@@ -289,6 +292,19 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
     ),
 }
 
+# APK-CONFIG-VERIFY (July 2026) — SKU prefixes confirmed real by iRobot's own
+# res/raw/base_roomba_config.json (Classic app decompilation), covering the
+# full public SKU list: R1/R67/R69/R89/R96/R97/R98, e4/e5/e6, s5/s9, m6,
+# i1-i8, c3/c7, t72, q7, j7/j8/j9, a, p, q0, y0 (XST0020 is a VMRS test rig,
+# excluded here). Prefixes with no ROBOT_PROFILES entry below are genuine
+# iRobot product families (at minimum Combo "c", plus a/p/q/t/y) that no
+# field tester in this project currently owns — not typos or noise. Kept
+# separate from ROBOT_PROFILES so an unmatched-but-known prefix can be
+# logged distinctly from a truly unrecognised one (see get_robot_profile()).
+_KNOWN_IROBOT_SKU_PREFIXES: Final[frozenset[str]] = frozenset(
+    "6 e r a c i j m p q s t y".split()
+)
+
 
 def get_robot_profile(
     sku: str | None,
@@ -325,6 +341,25 @@ def get_robot_profile(
         prefix = "9"
     profile = ROBOT_PROFILES.get(prefix)
     if profile is None:
+        # APK-CONFIG-VERIFY — distinguish "real iRobot SKU family we just
+        # haven't profiled yet" (e.g. a Combo "c"-series) from a genuinely
+        # unrecognised prefix, so a field report about this is actionable
+        # instead of a silent no-op.
+        original_prefix = sku[0].lower()
+        if original_prefix in _KNOWN_IROBOT_SKU_PREFIXES:
+            _LOGGER.info(
+                "Roomba+: SKU '%s' belongs to a known iRobot product family "
+                "('%s'-prefix) without a RobotProfile entry yet — self-"
+                "calibrating features will have no manufacturer prior until "
+                "one is added.",
+                sku, original_prefix,
+            )
+        else:
+            _LOGGER.debug(
+                "Roomba+: SKU '%s' has an unrecognised prefix — no "
+                "RobotProfile available.",
+                sku,
+            )
         return None
 
     # Override battery_chemistry from live device state when it differs from

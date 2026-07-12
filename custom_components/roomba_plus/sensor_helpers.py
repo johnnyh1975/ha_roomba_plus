@@ -342,7 +342,7 @@ def _area_cleaned_today(store: Any) -> StateType:
 
 def _last_error_code_value(entity: "IRobotEntity") -> StateType:
     """Live MQTT error code takes priority over persisted value."""
-    live = entity.vacuum_state.get("cleanMissionStatus", {}).get("error", 0)
+    live = (entity.vacuum_state.get("cleanMissionStatus") or {}).get("error", 0)
     if live:
         return live
     stored = entity._config_entry.runtime_data.last_error_code

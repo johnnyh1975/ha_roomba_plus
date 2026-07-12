@@ -29,7 +29,6 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import logging
-import asyncio
 import time
 from typing import Any
 

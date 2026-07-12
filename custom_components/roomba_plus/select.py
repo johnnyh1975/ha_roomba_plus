@@ -29,7 +29,7 @@ from .const import (
     has_smart_map,
 )
 from .entity import IRobotEntity
-from .models import MapCapability, RoombaConfigEntry
+from .models import RoombaConfigEntry
 from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
 def resolve_zone_name(
@@ -128,9 +128,9 @@ async def async_setup_entry(
             cc = data.cloud_coordinator
             active_pmap_id = cc.active_pmap_id  # type: ignore[union-attr]
             for pmap in cc.data.get("pmaps", []):  # type: ignore[union-attr]
-                details = pmap.get("active_pmapv_details", {})
-                pmap_id = details.get("active_pmapv", {}).get("pmap_id", "")
-                map_name = details.get("map_header", {}).get("name", "Map")
+                details = pmap.get("active_pmapv_details") or {}
+                pmap_id = (details.get("active_pmapv") or {}).get("pmap_id", "")
+                map_name = (details.get("map_header") or {}).get("name", "Map")
                 regions = details.get("regions", [])
                 zones = details.get("zones", [])
                 is_active = (pmap_id == active_pmap_id)
@@ -162,7 +162,7 @@ async def async_setup_entry(
 # ReusablePadWetnessSelect, CarpetBoostSelect with a single generic class
 # + four frozen dataclass descriptors.
 
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass
 from typing import Callable, Coroutine
 from homeassistant.components.select import SelectEntityDescription
 
@@ -848,9 +848,9 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
             cc = self._config_entry.runtime_data.cloud_coordinator
             if cc and cc.data:
                 for pmap in cc.data.get("pmaps", []):
-                    details = pmap.get("active_pmapv_details", {})
-                    if details.get("active_pmapv", {}).get("pmap_id") == self._pmap_id:
-                        learning_pct = details.get("map_header", {}).get("learning_percentage")
+                    details = pmap.get("active_pmapv_details") or {}
+                    if (details.get("active_pmapv") or {}).get("pmap_id") == self._pmap_id:
+                        learning_pct = (details.get("map_header") or {}).get("learning_percentage")
                         break
         except Exception:  # noqa: BLE001
             pass

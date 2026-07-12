@@ -26,11 +26,10 @@ Design constraints:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import statistics
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -107,11 +106,11 @@ class DirtThresholdManager:
         self._entry = config_entry
         self._last_trigger_time: datetime | None = None
         # P2: Store is stateless — construct once and reuse across load/save calls
-        self._store: "Store | None" = None
+        self._store: "Store | None" = None  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
         # L1: per-weekday baseline; populated after ≥4 cloud records per weekday
         self._baseline_by_weekday: dict[int, float] = {}
 
-    def _get_store(self, entry_id: str) -> "Store":
+    def _get_store(self, entry_id: str) -> "Store":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
         """Return the cached Store, creating it on first call."""
         if self._store is None:
             from homeassistant.helpers.storage import Store
@@ -330,7 +329,7 @@ class DirtThresholdManager:
 
         # Gate 4: robot must be docked/idle
         state = data.roomba_reported_state()
-        cycle = state.get("cleanMissionStatus", {}).get("cycle", "none")
+        cycle = (state.get("cleanMissionStatus") or {}).get("cycle", "none")
         if cycle != "none":
             return True, f"robot_busy_{cycle}"
 

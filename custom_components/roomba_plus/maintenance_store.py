@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass, field
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store

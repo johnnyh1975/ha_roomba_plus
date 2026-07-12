@@ -293,7 +293,7 @@ def render_mission_map_png(
     return buf.getvalue()
 
 
-def _apply_rotation(img: "Image.Image", rotate: int) -> "Image.Image":
+def _apply_rotation(img: "Image.Image", rotate: int) -> "Image.Image":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     """Lossless 90°-multiple clockwise rotation via transpose, not rotate().
 
     Unknown/unsupported values silently fall back to no rotation (0)

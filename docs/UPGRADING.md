@@ -9,29 +9,6 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
----
-
-### Upgrading to v3.4.1
-
-No config entry migration — all persisted data is additive, existing
-stored data loads unchanged.
-
-**If your map or cloud data was previously missing entirely** (not just
-delayed) on an otherwise cloud-configured robot, this may now start
-working automatically on the next restart — a gating condition that
-required a live-pose capability flag before checking for real, persistent
-maps at all has been relaxed. No action needed; if you were affected,
-you'll simply start seeing a map and cloud-backed sensors.
-
-**Maintenance countdown behavior changed for first-time installs on an
-already-used robot.** If you're adding Roomba+ to a robot that already
-has significant runtime hours (e.g. months of prior use via the official
-app), the filter/brush remaining-hours countdown no longer treats the
-robot's entire prior lifetime as "since last replacement" — it assumes
-maintenance is current as of install time instead. This only affects the
-first load after adding a robot that has never had a reset recorded in
-Roomba+ before; existing installs with real reset history are unaffected.
-
 ### Upgrading to v3.4.0
 
 No config entry migration — all persisted data is additive, existing stored

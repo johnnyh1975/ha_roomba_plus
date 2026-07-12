@@ -840,6 +840,16 @@
       "rooms_map": {
         "name": "Rooms Map"
       }
+    },
+    "calendar": {
+      "schedule": {
+        "name": "Schedule"
+      }
+    },
+    "todo": {
+      "maintenance": {
+        "name": "Maintenance"
+      }
     }
   },
   "issues": {

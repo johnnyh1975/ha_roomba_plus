@@ -20,7 +20,6 @@ from typing import Any, Final
 from roombapy import Roomba, RoombaConnectionError, RoombaFactory
 
 from homeassistant import exceptions
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_DELAY,
     CONF_HOST,
@@ -29,9 +28,8 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt as dt_util
 
 from .callbacks import (
     make_map_retrain_callback,

@@ -258,7 +258,7 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     """
     data = config_entry.runtime_data
     state = data.roomba_reported_state()
-    phase = state.get("cleanMissionStatus", {}).get("phase", "")
+    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
     mts = data.mission_timer_store
     if mts is None or mts.mission_id is None:
         return {}
@@ -421,7 +421,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         """Return completion % (0–100) or None when inactive."""
         data = self._config_entry.runtime_data
         state = data.roomba_reported_state()
-        phase = state.get("cleanMissionStatus", {}).get("phase", "")
+        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
         mts = data.mission_timer_store
 
         # Not in a cleaning phase → not active

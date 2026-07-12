@@ -132,7 +132,7 @@ class RoombaData:
     # v2.6.0 MP1 — Persistent mission run-timer (SMART + cloud only)
     mission_timer_store: "MissionTimerStore | None" = None
     # v2.8.0 ARC1 — CloudMissionArchive (cloud + any map_capability)
-    mission_archive: "MissionArchive | None" = None
+    mission_archive: "MissionArchive | None" = None  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

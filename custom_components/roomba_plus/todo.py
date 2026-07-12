@@ -74,7 +74,7 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
     # ── Shared helpers (same pattern as button.py's reset buttons) ──────────
 
     def _current_hr(self) -> int:
-        return self.vacuum_state.get("bbrun", {}).get("hr", 0)
+        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
 
     def _maintenance_store(self) -> Any:
         return self._config_entry.runtime_data.maintenance_store

@@ -1,0 +1,27 @@
+[tool.ruff]
+# Only the code paths this project actually lints in CI. Tests are
+# intentionally excluded here — they have their own, much noisier set of
+# patterns (fixtures, mocks) that would need a separate pass to evaluate
+# properly; scope was Pyflakes parity for custom_components/roomba_plus,
+# not a project-wide lint rollout.
+include = ["custom_components/roomba_plus/*.py"]
+
+[tool.ruff.lint]
+# F = Pyflakes rule family — deliberately the ONLY rule set enabled.
+# This matches exactly what the project's manual pyflakes checks already
+# covered (session: v3.4.2 cleanup + CI review), so switching tooling
+# doesn't silently expand scope. Formatting (ruff format / style rules
+# like E-series) is explicitly out of scope — see the CI job comment for
+# why: a project-wide style pass is a separate, much bigger decision the
+# maintainer hasn't made yet, not something to bundle in here.
+select = ["F"]
+
+# No per-file or blanket ignores here, deliberately: every current
+# exception (sensor.py's ~58 deliberate SENSOR-SPLIT facade re-exports,
+# and 19 TYPE_CHECKING forward-reference false positives across
+# dirt_threshold_manager.py / map_renderer.py / mission_map.py /
+# models.py / repairs.py) is annotated inline with `# noqa: F401` /
+# `# noqa: F821` and a one-line reason, right at the specific line it
+# applies to — not hidden in this config file. A new genuinely-unused
+# import or variable anywhere else has nothing to suppress it and will
+# be caught.

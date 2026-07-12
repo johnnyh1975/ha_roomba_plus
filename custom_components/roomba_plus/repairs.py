@@ -30,7 +30,6 @@ from .const import (
     MAINTENANCE_DUE_GRACE_DAYS,
     MAP_RETRAIN_STUCK_MINUTES,
     MAP_RETRAIN_WARN_MINUTES,
-    SQFT_TO_M2,
     get_localized_error_entry,
 )
 
@@ -369,7 +368,7 @@ async def async_check_performance_degradation(
     cause = "unknown"
     if store:
         from .const import CONF_BRUSH_HOURS, CONF_FILTER_HOURS
-        current_hr = data.roomba_reported_state().get("bbrun", {}).get("hr", 0)
+        current_hr = (data.roomba_reported_state().get("bbrun") or {}).get("hr", 0)
         brush_rem = store.brush_remaining(
             current_hr,
             entry.options.get(CONF_BRUSH_HOURS, 150),
@@ -839,7 +838,7 @@ _CHARGE_PEAK_DECLINE_CYCLES = 3   # consecutive declining peaks to flag a trend
 
 async def async_check_battery_contact_issue(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """F6f — fire a Repair Issue on evidence of a battery/dock contact or
     BMS bus-communication problem, via two independent signals:
@@ -1094,7 +1093,7 @@ async def async_enrich_drift_issue(
 
 async def async_check_observed_zones(
     hass: HomeAssistant,
-    entry: "RoombaConfigEntry",
+    entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """F22a — fire Repair Issue when cloud has obstacle zones but GridStore is empty.
 
@@ -1322,7 +1321,7 @@ async def async_check_cancellation_recurrence(
 
 async def async_check_schedule_optimisation(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """F12c — raise a Repair Issue when high-dirt days lack a scheduled clean.
 
@@ -1412,7 +1411,7 @@ _WEEKDAY_NAMES = [
 
 async def async_check_stuck_pattern(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """L7 — fire Repair Issue when a stuck cell has a dominant time pattern.
 
@@ -1482,7 +1481,7 @@ async def async_check_stuck_pattern(
 
 async def async_check_mission_anomaly(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """L3 — Fire or clear the mission_anomaly Repair Issue.
 
@@ -1519,7 +1518,7 @@ async def async_check_mission_anomaly(
 
 async def async_check_smberr(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """SMBERR — Fire or clear the smberr_high Repair Issue.
 
@@ -1595,7 +1594,7 @@ _DOCK_ABORTS_THRESHOLD = 20      # aborted charging sessions
 
 async def async_check_dock_health(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """DOCK-HEALTH (v2.8.0) — Fire or clear the dock_contact_health Repair Issue.
 
@@ -1665,7 +1664,7 @@ async def async_check_dock_health(
 
 async def async_check_cloud_stale(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     cloud_coordinator: Any,
 ) -> None:
     """CLOUD-STALE (v2.8.3) — fire or clear the cloud_stale Repair Issue.
@@ -1682,7 +1681,6 @@ async def async_check_cloud_stale(
     issue represents HA failing to fetch data, regardless of whether the robot
     itself can still reach iRobot servers.
     """
-    from datetime import timedelta
     from .const import CLOUD_STALE_MINUTES
 
     issue_id = f"cloud_stale_{config_entry.entry_id}"
@@ -1728,7 +1726,7 @@ _health_low_since: dict[str, float] = {}
 
 def async_check_integration_health(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """INTEG-HEALTH (v2.9.0) — fire or clear the integration_health Repair Issue.
 
@@ -1784,7 +1782,7 @@ _map_updating_since: dict[str, float] = {}
 
 def async_check_map_retrain_workflow(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     map_updating: bool,
 ) -> None:
     """MAP-RETRAIN-WF (v2.9.0) — escalating Repair Issue while the robot's
@@ -1856,7 +1854,7 @@ _maintenance_due_since: dict[str, float] = {}
 
 def async_check_maintenance_due(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",
+    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     due_items: list[str],
 ) -> None:
     """maintenance_due Repair Issue (v2.9.0) — backstop for users without
@@ -1950,7 +1948,7 @@ def async_check_reloc_alert(hass: "HomeAssistant", config_entry: Any) -> None:
 
 
 async def async_check_dirt_correlation(
-    hass: "HomeAssistant", config_entry: "RoombaConfigEntry"
+    hass: "HomeAssistant", config_entry: "RoombaConfigEntry"  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
     """v3.3.0 CROSS-CORR — Repair Issue when a strong correlation
     (|r| > 0.5, n >= 30) between mission dirt and a configured external

@@ -1054,7 +1054,7 @@ class MapRenderer:
 
     def _draw_cleaned_area(
         self, draw: ImageDraw.ImageDraw,
-        fit_px: Callable[[int, int], tuple[int, int]],
+        fit_px: Callable[[int, int], tuple[int, int]],  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     ) -> None:
         """Draw a filled circle per pose point to approximate cleaned area.
 
@@ -1071,7 +1071,7 @@ class MapRenderer:
 
     def _draw_path(
         self, draw: ImageDraw.ImageDraw,
-        fit_px: Callable[[int, int], tuple[int, int]],
+        fit_px: Callable[[int, int], tuple[int, int]],  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     ) -> None:
         """Draw the travel path polyline, clipped to canvas bounds.
 

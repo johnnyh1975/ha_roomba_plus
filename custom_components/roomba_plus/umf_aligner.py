@@ -10,7 +10,6 @@ so that internal calculations and thresholds remain in mm throughout.
 
 from __future__ import annotations
 
-import io
 import logging
 import math
 from typing import TYPE_CHECKING, Any
@@ -547,7 +546,6 @@ def _point_in_polygon(
     Returns True when (x, y) is inside the polygon.
     No external geometry library required.
     """
-    n      = len(polygon)
     inside = False
     px, py = polygon[-1]
     for qx, qy in polygon:

@@ -22,9 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import statistics
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -188,7 +187,7 @@ class PresenceManager:
             self._did_unfreeze = False
 
             # Fire event if a clean is actively running
-            phase = state.get("cleanMissionStatus", {}).get("phase", "")
+            phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
             if phase in _ACTIVE_CLEANING_PHASES:
                 self._hass.bus.async_fire(EVENT_PERSON_DETECTED_DURING_CLEAN, {})
 

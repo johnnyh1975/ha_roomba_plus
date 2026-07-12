@@ -32,7 +32,6 @@ from .mission_map import (
 import time as _time_mod
 
 if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigEntry
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry, RoombaData
 

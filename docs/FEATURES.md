@@ -474,7 +474,7 @@ Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_rem
 
 | Sensor | Notes |
 |---|---|
-| `last_error_code` | From live MQTT or persisted MissionStore value; `description` + `action` attributes, in your Home Assistant language where translated *(v3.4.1 — English, German, French, Italian, Spanish, Portuguese, Dutch; falls back to English per-field for anything not yet translated)* |
+| `last_error_code` | From live MQTT or persisted MissionStore value; `description` + `action` attributes |
 | `last_error_at` | Timestamp of the last error or stuck event |
 | `last_error_zone` | Zone where the error occurred |
 | `stuck_count_30d` | Stuck events in the last 30 days |
@@ -519,7 +519,7 @@ The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt
 
 **Robot health score (v2.7+):**
 
-`sensor.{name}_robot_health_score` — composite 0–100 score combining battery retention, navigation efficiency, cleaning speed trend, anomaly rate, and stuck rate. Visible in the main sensor list (not diagnostic). Shows Unknown until 20 missions of history have accumulated. Carries `status_text` and `recommendation` attributes (v3.1.0, all 7 languages) for a plain-language summary alongside the numeric score — `integration_health` has the same attributes.
+`sensor.{name}_robot_health_score` — composite 0–100 score combining battery retention, navigation efficiency, cleaning speed trend, anomaly rate, and stuck rate. Visible in the main sensor list (not diagnostic). Shows Unknown until 20 missions of history have accumulated. Carries `status_text` and `recommendation` attributes (v3.1.0, all 8 languages as of v3.4.2) for a plain-language summary alongside the numeric score — `integration_health` has the same attributes.
 
 #### Map intelligence — Smart Map robots (v2.6+)
 
@@ -634,7 +634,7 @@ Settings → Devices → Roomba+ → Configure
 | 🗓 Scheduling | Blocking sensors · Presence-aware scheduling · Demand cleaning |
 | 🗺 Map | Zone management · Rooms & zones |
 
-*Smart Map robots also show a conditional* **Import rooms from roomba_rest980** *entry (v2.9.0+) when an existing roomba_rest980 installation is detected — see [Migration](#migration).*
+*Smart Map robots also show a conditional* **Import rooms from roomba_rest980** *entry (v2.9.0+) when an existing roomba_rest980 installation is detected — see [Migration](../README.md#migration).*
 
 #### Diagnostics download
 

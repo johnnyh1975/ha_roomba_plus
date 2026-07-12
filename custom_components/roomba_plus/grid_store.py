@@ -1077,7 +1077,6 @@ def _point_in_polygon_grid(
     Module-level (not on GridStore) so umf_aligner.py can import the same
     algorithm independently without cross-import. Returns True when inside.
     """
-    n      = len(polygon)
     inside = False
     px, py = polygon[-1]
     for qx, qy in polygon:

@@ -29,10 +29,15 @@ rules:
   config-flow-test-coverage:
     status: done
     comment: >
-      11 integration tests in tests_integration/ using pytest-homeassistant-custom-component.
-      Covers async_migrate_entry (v1→v2), config flow error handling, reconfigure flow
-      (form display + cannot_connect error), and options flow menu routing + settings save.
-      Stub-based suite (1022 tests) retained in tests/ with separate pytest.ini.
+      20 tests in tests/test_config_flow.py (stub-based, no HA install
+      required) — kept out of the main tests/ run
+      (--ignore=tests/test_config_flow.py, same exclusion as
+      test_rest980_migrate.py) and run standalone. Covers
+      async_migrate_entry (v1→v2), config flow error handling, reconfigure
+      flow (form display + cannot_connect error), and options flow menu
+      routing + settings save. Note: this comment previously described a
+      separate tests_integration/ directory with its own pytest.ini; that
+      no longer exists in the current tree — corrected v3.4.2.
   dependency-transparency:
     status: done
     comment: roombapy==1.9.1 pinned in manifest.requirements.
@@ -93,7 +98,7 @@ rules:
     status: done
     comment: >
       102 entity keys across sensor, binary_sensor, select, button platforms.
-      7 languages (EN/DE/FR/ES/IT/NL/PT). All keys present in strings.json
+      8 languages (EN/DE/FR/ES/IT/NL/PT/PL). All keys present in strings.json
       and all translation files.
   integration-owner:
     status: done
@@ -115,12 +120,11 @@ rules:
   test-coverage:
     status: done
     comment: >
-      2712 unit tests across 45 test files (was 1548/33 — stale since
-      before v2.8.0; corrected v2.8.6). Stub-based — no HA install
-      required. Covers all stores, sensors, cloud coordinator, services,
-      callbacks, migration (v1→v13), classification, REST API, backfill,
-      UmfAligner, device triggers, logbook, and wiring. Integration tests (11)
-      in tests_integration/ with pytest-homeassistant-custom-component.
+      3878 tests across 56 test files (was 2712/45 — stale since before
+      v3.4.2; corrected v3.4.2). Stub-based — no HA install required.
+      Covers all stores, sensors, cloud coordinator, services, callbacks,
+      migration (v1→v13), classification, REST API, backfill, UmfAligner,
+      device triggers, logbook, and wiring.
 
   # ── Gold ──────────────────────────────────────────────────────────────────
   devices:

@@ -62,11 +62,11 @@ async def async_setup_entry(
     entities: list[IRobotEntity] = []
 
     # Bin full: only create when the robot reports bin.full
-    if "full" in state.get("bin", {}):
+    if "full" in (state.get("bin") or {}):
         entities.append(RoombaBinStatus(roomba, blid))
 
     # Bin present: only create when the robot reports bin.present
-    if "present" in state.get("bin", {}):
+    if "present" in (state.get("bin") or {}):
         entities.append(RoombaBinPresentStatus(roomba, blid))
 
     # Connection sensor: always created
@@ -153,7 +153,7 @@ class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         """Return True when the bin is full."""
-        return roomba_reported_state(self.vacuum).get("bin", {}).get("full", False)
+        return (roomba_reported_state(self.vacuum).get("bin") or {}).get("full", False)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bin" in new_state
@@ -184,7 +184,7 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         """Return True when the bin is present."""
         return bool(
-            roomba_reported_state(self.vacuum).get("bin", {}).get("present", True)
+            (roomba_reported_state(self.vacuum).get("bin") or {}).get("present", True)
         )
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -453,7 +453,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         overdue: dict[str, int] = {}
         store = self._entry.runtime_data.maintenance_store
         if store and due:
-            current_hr = self.vacuum_state.get("bbrun", {}).get("hr", 0)
+            current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
             options = self._entry.options
             if "filter" in due:
                 threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
@@ -474,7 +474,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         store = self._entry.runtime_data.maintenance_store
         if not store:
             return []
-        current_hr = self.vacuum_state.get("bbrun", {}).get("hr", 0)
+        current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
         options = self._entry.options
         items: list[str] = []
         if store.filter_remaining(

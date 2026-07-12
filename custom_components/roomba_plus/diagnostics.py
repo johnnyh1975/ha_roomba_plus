@@ -11,7 +11,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
-from .models import MapCapability, RoombaConfigEntry
+from .models import RoombaConfigEntry
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
 

@@ -598,7 +598,7 @@ class MissionStore:
         timeline = latest.get("timeline")
         if not isinstance(timeline, dict):
             return None
-        upcoming = timeline.get("plan", {}).get("upcoming")
+        upcoming = (timeline.get("plan") or {}).get("upcoming")
         if not upcoming:
             return None
         rids = [self._extract_rid(r) for r in upcoming]

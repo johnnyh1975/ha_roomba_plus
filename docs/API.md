@@ -467,8 +467,12 @@ GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png?rotate=90
 ```
 
 `{record_id}` is the local mission record id; `latest` resolves to the most
-recent mission. The PNG is directly usable as a picture-card or notification
-image — room outlines (current map) plus this mission's real coverage points.
+recent mission. It also accepts the cloud-only `"c_{ts}"` id format that
+`format=records` uses for cloud-source-only rows (v3.4.2) — these previously
+always returned 404, since such missions were never written to local
+storage; same fix class as `/explain`'s `c_{ts}` support (v3.3.1). The PNG is
+directly usable as a picture-card or notification image — room outlines
+(current map) plus this mission's real coverage points.
 
 **`rotate` query parameter** *(v3.4.1, PNG only)* — clockwise rotation in
 degrees: `90`, `180`, or `270`. Omit for unrotated (default). Any other
