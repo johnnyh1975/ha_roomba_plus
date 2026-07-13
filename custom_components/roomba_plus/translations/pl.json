@@ -219,247 +219,638 @@
   },
   "entity": {
     "sensor": {
-      "battery_cycles": { "name": "Konserwacja – Cykle akumulatora" },
-      "total_cleaning_time": { "name": "Misje – Łączny czas" },
-      "average_mission_time": { "name": "Misje – Śr. czas trwania" },
-      "total_missions": { "name": "Łączna liczba misji" },
-      "successful_missions": { "name": "Misje zakończone sukcesem" },
-      "canceled_missions": { "name": "Misje anulowane" },
-      "failed_missions": { "name": "Misje nieudane" },
-      "total_cleaned_area": { "name": "Łączna posprzątana powierzchnia" },
-      "last_mission": { "name": "Misje – Ostatnia" },
-      "phase": { "name": "Status" },
-      "error": { "name": "Status – Błąd" },
-      "job_initiator": { "name": "Status – Uruchomione przez" },
-      "clean_mode": { "name": "Ustawienie – Przebiegi sprzątania" },
-      "scrubs_count": { "name": "Wykrycia brudu" },
-      "rssi": { "name": "Sygnał Wi-Fi" },
-      "filter_remaining_hours": { "name": "Konserwacja – Filtr" },
-      "brush_remaining_hours": { "name": "Konserwacja – Szczotki" },
-      "carpet_boost_mode": { "name": "Ustawienie – Wzmocnienie na dywanie" },
-      "clean_base_status": { "name": "Status stacji Clean Base" },
-      "dock_tank_level": { "name": "Poziom zbiornika stacji dokującej" },
-      "tank_level": { "name": "Poziom zbiornika" },
-      "mop_pad": { "name": "Nakładka mopa" },
-      "mop_behavior": { "name": "Mop – Przebiegi sprzątania (legacy)" },
-      "mop_tank_level": { "name": "Poziom zbiornika mopa" },
-      "readiness": { "name": "Status – Gotowość" },
-      "next_clean": { "name": "Status – Następne sprzątanie" },
-      "nav_quality": { "name": "Jakość nawigacji" },
-      "snr": { "name": "SNR" },
-      "signal_noise": { "name": "Szum sygnału" },
-      "ip_address": { "name": "Adres IP" },
-      "mission_start_time": { "name": "Start misji" },
-      "mission_elapsed_time": { "name": "Czas trwania misji" },
-      "mission_recharge_time": { "name": "Czas ładowania" },
-      "mission_expire_time": { "name": "Czas wygaśnięcia misji" },
-      "raw_state": { "name": "Stan surowy (debugowanie)" },
-      "lifetime_missions": { "name": "Łączna liczba misji (dożywotnio)" },
-      "filter_last_replaced": { "name": "Konserwacja – Ostatnia wymiana filtra" },
-      "brush_last_replaced": { "name": "Konserwacja – Ostatnia wymiana szczotek" },
-      "pad_last_replaced": { "name": "Konserwacja – Ostatnia wymiana nakładki" },
-      "battery_last_replaced": { "name": "Konserwacja – Ostatnia wymiana akumulatora" },
-      "clean_streak": { "name": "Misje – Seria sprzątań" },
-      "missions_last_30d": { "name": "Misje – Ostatnie 30 dni" },
-      "completion_rate_30d": { "name": "Misje – Wskaźnik ukończenia" },
-      "area_cleaned_today": { "name": "Misje – Posprzątana powierzchnia dziś" },
-      "room_areas": { "name": "Pomieszczenia – Powierzchnie podłóg" },
-      "relocalisation_rate": { "name": "Nawigacja – Wskaźnik relokalizacji" },
-      "room_cleaning_history": { "name": "Pomieszczenia – Historia sprzątania" },
-      "last_mission_summary": { "name": "Misje – Podsumowanie ostatniej misji" },
-      "last_mission_result": { "name": "Misje – Ostatni wynik" },
-      "last_mission_duration": { "name": "Misje – Czas trwania ostatniej" },
-      "last_error_code": { "name": "Błąd – Ostatni kod" },
-      "last_error_at": { "name": "Błąd – Ostatni czas" },
-      "last_error_zone": { "name": "Błąd – Ostatnia strefa" },
-      "stuck_count_30d": { "name": "Błąd – Zdarzenia utknięcia (30 dni)" },
-      "problem_zone": { "name": "Błąd – Problematyczna strefa" },
-      "consecutive_mission_anomalies": { "name": "Kolejne anomalne misje" },
-      "presence_clean_opportunities_7d": { "name": "Obecność – Możliwości sprzątania (7 dni)" },
-      "presence_clean_utilisation_7d": { "name": "Obecność – Wykorzystanie sprzątania (7 dni)" },
-      "next_likely_clean_window": { "name": "Obecność – Następne okno sprzątania" },
-      "filter_wear_rate": { "name": "Konserwacja – Zużycie filtra" },
-      "brush_wear_rate": { "name": "Konserwacja – Zużycie szczotek" },
-      "pad_wear_rate": { "name": "Konserwacja – Zużycie nakładki" },
-      "filter_days_until_due": { "name": "Konserwacja – Dni do wymiany filtra" },
-      "brush_days_until_due": { "name": "Konserwacja – Dni do wymiany szczotek" },
-      "pad_days_until_due": { "name": "Konserwacja – Dni do wymiany nakładki" },
-      "battery_capacity_mah": { "name": "Pojemność akumulatora" },
-      "nav_panics": { "name": "Zdarzenia paniki nawigacji" },
-      "cliff_events_front": { "name": "Zdarzenia klifu – Przód" },
-      "cliff_events_rear": { "name": "Zdarzenia klifu – Tył" },
-      "mission_recharge_minutes": { "name": "Misja – Pozostały czas ładowania" },
-      "mission_expire_minutes": { "name": "Misja – Czas do wygaśnięcia" },
-      "mission_id": { "name": "Misja – ID" },
-      "recent_completion_rate": { "name": "Ostatni wskaźnik ukończenia" },
-      "recent_recharges": { "name": "Ostatnie doładowania w trakcie misji" },
-      "recent_evacuations": { "name": "Ostatnie opróżnienia Clean Base" },
-      "recent_dirt_events": { "name": "Ostatnie wykrycia brudu" },
-      "recent_error_code": { "name": "Ostatni kod błędu (chmura)" },
-      "recent_error_time": { "name": "Ostatni czas błędu (chmura)" },
-      "recent_wifi_floor": { "name": "Wi-Fi – Minimalna siła sygnału" },
-      "recent_wifi_stability": { "name": "Wi-Fi – Stabilność sygnału" },
+      "battery_cycles": {
+        "name": "Konserwacja – Cykle akumulatora"
+      },
+      "total_cleaning_time": {
+        "name": "Misje – Łączny czas"
+      },
+      "average_mission_time": {
+        "name": "Misje – Śr. czas trwania"
+      },
+      "total_missions": {
+        "name": "Łączna liczba misji"
+      },
+      "successful_missions": {
+        "name": "Misje zakończone sukcesem"
+      },
+      "canceled_missions": {
+        "name": "Misje anulowane"
+      },
+      "failed_missions": {
+        "name": "Misje nieudane"
+      },
+      "total_cleaned_area": {
+        "name": "Łączna posprzątana powierzchnia"
+      },
+      "last_mission": {
+        "name": "Misje – Ostatnia"
+      },
+      "phase": {
+        "name": "Status"
+      },
+      "error": {
+        "name": "Status – Błąd"
+      },
+      "job_initiator": {
+        "name": "Status – Uruchomione przez"
+      },
+      "clean_mode": {
+        "name": "Ustawienie – Przebiegi sprzątania"
+      },
+      "scrubs_count": {
+        "name": "Wykrycia brudu"
+      },
+      "rssi": {
+        "name": "Sygnał Wi-Fi"
+      },
+      "filter_remaining_hours": {
+        "name": "Konserwacja – Filtr"
+      },
+      "brush_remaining_hours": {
+        "name": "Konserwacja – Szczotki"
+      },
+      "carpet_boost_mode": {
+        "name": "Ustawienie – Wzmocnienie na dywanie"
+      },
+      "clean_base_status": {
+        "name": "Status stacji Clean Base"
+      },
+      "dock_tank_level": {
+        "name": "Poziom zbiornika stacji dokującej"
+      },
+      "tank_level": {
+        "name": "Poziom zbiornika"
+      },
+      "mop_pad": {
+        "name": "Nakładka mopa"
+      },
+      "mop_behavior": {
+        "name": "Mop – Przebiegi sprzątania (legacy)"
+      },
+      "mop_tank_level": {
+        "name": "Poziom zbiornika mopa"
+      },
+      "readiness": {
+        "name": "Status – Gotowość"
+      },
+      "next_clean": {
+        "name": "Status – Następne sprzątanie"
+      },
+      "nav_quality": {
+        "name": "Jakość nawigacji"
+      },
+      "snr": {
+        "name": "SNR"
+      },
+      "signal_noise": {
+        "name": "Szum sygnału"
+      },
+      "ip_address": {
+        "name": "Adres IP"
+      },
+      "mission_start_time": {
+        "name": "Start misji"
+      },
+      "mission_elapsed_time": {
+        "name": "Czas trwania misji"
+      },
+      "mission_recharge_time": {
+        "name": "Czas ładowania"
+      },
+      "mission_expire_time": {
+        "name": "Czas wygaśnięcia misji"
+      },
+      "raw_state": {
+        "name": "Stan surowy (debugowanie)"
+      },
+      "lifetime_missions": {
+        "name": "Łączna liczba misji (dożywotnio)"
+      },
+      "filter_last_replaced": {
+        "name": "Konserwacja – Ostatnia wymiana filtra"
+      },
+      "brush_last_replaced": {
+        "name": "Konserwacja – Ostatnia wymiana szczotek"
+      },
+      "pad_last_replaced": {
+        "name": "Konserwacja – Ostatnia wymiana nakładki"
+      },
+      "battery_last_replaced": {
+        "name": "Konserwacja – Ostatnia wymiana akumulatora"
+      },
+      "clean_streak": {
+        "name": "Misje – Seria sprzątań"
+      },
+      "missions_last_30d": {
+        "name": "Misje – Ostatnie 30 dni"
+      },
+      "completion_rate_30d": {
+        "name": "Misje – Wskaźnik ukończenia"
+      },
+      "area_cleaned_today": {
+        "name": "Misje – Posprzątana powierzchnia dziś"
+      },
+      "room_areas": {
+        "name": "Pomieszczenia – Powierzchnie podłóg"
+      },
+      "relocalisation_rate": {
+        "name": "Nawigacja – Wskaźnik relokalizacji"
+      },
+      "room_cleaning_history": {
+        "name": "Pomieszczenia – Historia sprzątania"
+      },
+      "last_mission_summary": {
+        "name": "Misje – Podsumowanie ostatniej misji"
+      },
+      "last_mission_result": {
+        "name": "Misje – Ostatni wynik"
+      },
+      "last_mission_duration": {
+        "name": "Misje – Czas trwania ostatniej"
+      },
+      "last_error_code": {
+        "name": "Błąd – Ostatni kod"
+      },
+      "last_error_at": {
+        "name": "Błąd – Ostatni czas"
+      },
+      "last_error_zone": {
+        "name": "Błąd – Ostatnia strefa"
+      },
+      "stuck_count_30d": {
+        "name": "Błąd – Zdarzenia utknięcia (30 dni)"
+      },
+      "problem_zone": {
+        "name": "Błąd – Problematyczna strefa"
+      },
+      "consecutive_mission_anomalies": {
+        "name": "Kolejne anomalne misje"
+      },
+      "presence_clean_opportunities_7d": {
+        "name": "Obecność – Możliwości sprzątania (7 dni)"
+      },
+      "presence_clean_utilisation_7d": {
+        "name": "Obecność – Wykorzystanie sprzątania (7 dni)"
+      },
+      "next_likely_clean_window": {
+        "name": "Obecność – Następne okno sprzątania"
+      },
+      "filter_wear_rate": {
+        "name": "Konserwacja – Zużycie filtra"
+      },
+      "brush_wear_rate": {
+        "name": "Konserwacja – Zużycie szczotek"
+      },
+      "pad_wear_rate": {
+        "name": "Konserwacja – Zużycie nakładki"
+      },
+      "filter_days_until_due": {
+        "name": "Konserwacja – Dni do wymiany filtra"
+      },
+      "brush_days_until_due": {
+        "name": "Konserwacja – Dni do wymiany szczotek"
+      },
+      "pad_days_until_due": {
+        "name": "Konserwacja – Dni do wymiany nakładki"
+      },
+      "battery_capacity_mah": {
+        "name": "Pojemność akumulatora"
+      },
+      "nav_panics": {
+        "name": "Zdarzenia paniki nawigacji"
+      },
+      "cliff_events_front": {
+        "name": "Zdarzenia klifu – Przód"
+      },
+      "cliff_events_rear": {
+        "name": "Zdarzenia klifu – Tył"
+      },
+      "mission_recharge_minutes": {
+        "name": "Misja – Pozostały czas ładowania"
+      },
+      "mission_expire_minutes": {
+        "name": "Misja – Czas do wygaśnięcia"
+      },
+      "mission_id": {
+        "name": "Misja – ID"
+      },
+      "recent_completion_rate": {
+        "name": "Ostatni wskaźnik ukończenia"
+      },
+      "recent_recharges": {
+        "name": "Ostatnie doładowania w trakcie misji"
+      },
+      "recent_evacuations": {
+        "name": "Ostatnie opróżnienia Clean Base"
+      },
+      "recent_dirt_events": {
+        "name": "Ostatnie wykrycia brudu"
+      },
+      "recent_error_code": {
+        "name": "Ostatni kod błędu (chmura)"
+      },
+      "recent_error_time": {
+        "name": "Ostatni czas błędu (chmura)"
+      },
+      "recent_wifi_floor": {
+        "name": "Wi-Fi – Minimalna siła sygnału"
+      },
+      "recent_wifi_stability": {
+        "name": "Wi-Fi – Stabilność sygnału"
+      },
       "mop_clean_mode": {
         "name": "Mop – Tryb sprzątania",
-        "state": { "dry": "Suchy", "wet": "Mokry", "unknown": "Nieznany" }
+        "state": {
+          "dry": "Suchy",
+          "wet": "Mokry",
+          "unknown": "Nieznany"
+        }
       },
       "mop_tank_status": {
         "name": "Mop – Status zbiornika",
-        "state": { "ready": "Gotowy", "fill_tank": "Napełnij zbiornik", "lid_open": "Pokrywa otwarta", "tank_missing": "Brak zbiornika", "unknown": "Nieznany" }
+        "state": {
+          "ready": "Gotowy",
+          "fill_tank": "Napełnij zbiornik",
+          "lid_open": "Pokrywa otwarta",
+          "tank_missing": "Brak zbiornika",
+          "unknown": "Nieznany"
+        }
       },
       "mop_ars_behavior": {
         "name": "Mop – Zachowanie ARS",
         "state": {
-          "no_mop": "Bez mopa", "extended": "Rozszerzone", "standard": "Standardowe",
-          "deep": "Głębokie", "dirty_pause": "Pauza przy zabrudzeniu", "dry": "Suche",
-          "wash": "Mycie", "dirty_pause_dry": "Pauza przy zabrudzeniu + suche",
-          "dirty_pause_wash": "Pauza przy zabrudzeniu + mycie", "dry_wash": "Suche + mycie",
-          "dirty_pause_dry_wash": "Pauza przy zabrudzeniu + suche + mycie", "unknown": "Nieznane"
+          "no_mop": "Bez mopa",
+          "extended": "Rozszerzone",
+          "standard": "Standardowe",
+          "deep": "Głębokie",
+          "dirty_pause": "Pauza przy zabrudzeniu",
+          "dry": "Suche",
+          "wash": "Mycie",
+          "dirty_pause_dry": "Pauza przy zabrudzeniu + suche",
+          "dirty_pause_wash": "Pauza przy zabrudzeniu + mycie",
+          "dry_wash": "Suche + mycie",
+          "dirty_pause_dry_wash": "Pauza przy zabrudzeniu + suche + mycie",
+          "unknown": "Nieznane"
         }
       },
-      "recent_cleaning_speed": { "name": "Wydajność – Prędkość sprzątania" },
-      "recent_dirt_density": { "name": "Wydajność – Gęstość brudu" },
-      "recent_recharge_fraction": { "name": "Wydajność – Udział ładowania" },
+      "recent_cleaning_speed": {
+        "name": "Wydajność – Prędkość sprzątania"
+      },
+      "recent_dirt_density": {
+        "name": "Wydajność – Gęstość brudu"
+      },
+      "recent_recharge_fraction": {
+        "name": "Wydajność – Udział ładowania"
+      },
       "cleaning_speed_trend": {
         "name": "Wydajność – Trend prędkości sprzątania",
-        "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
+        "state": {
+          "improving": "Poprawa",
+          "stable": "Stabilny",
+          "declining": "Spadek",
+          "unknown": "Nieznany"
+        }
       },
-      "recent_coverage_pct": { "name": "Wydajność – Pokrycie" },
-      "battery_capacity_retention": { "name": "Konserwacja – Utrzymanie pojemności akumulatora" },
-      "estimated_battery_eol": { "name": "Konserwacja – Szacowana żywotność akumulatora" },
-      "consecutive_clean_skips": { "name": "Wydajność – Kolejne pominięte sprzątania" },
-      "recent_area_30d": { "name": "Posprzątana powierzchnia (30 dni)" },
-      "recent_time_30d": { "name": "Czas sprzątania (30 dni)" },
-      "optimal_clean_window": { "name": "Optymalne okno sprzątania" },
-      "recent_edge_coverage_ratio": { "name": "Ostatni wskaźnik pokrycia krawędzi" },
-      "total_energy_consumed": { "name": "Łączne zużycie energii" },
-      "mission_progress": { "name": "Postęp misji" },
-      "map_learning": { "name": "Uczenie się mapy" },
-      "zone_summary": { "name": "Podsumowanie stref" },
-      "wheel_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie kół" },
-      "contact_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie styków" },
-      "bin_last_cleaned": { "name": "Konserwacja – Ostatnie czyszczenie pojemnika na brud" },
-      "cleaning_performance": { "name": "Wydajność sprzątania" },
-      "cleaning_analytics_30d": { "name": "Analityka sprzątania (30 dni)" },
-      "wifi_health": { "name": "Kondycja Wi-Fi" },
-      "event_counts_30d": { "name": "Liczba zdarzeń (30 dni)" },
-      "robot_health_score": { "name": "Ocena kondycji robota" },
-      "lifetime_completion_rate": { "name": "Łączny wskaźnik ukończenia" },
-      "battery_cycle_count_bms": { "name": "Liczba cykli BMS akumulatora" },
-      "battery_age_days": { "name": "Wiek akumulatora" },
-      "wifi_last_channel": { "name": "Ostatni kanał Wi-Fi" },
-      "wifi_channel_stability": { "name": "Stabilność kanału Wi-Fi" },
-      "missions_per_charge": { "name": "Misje na jedno ładowanie" },
-      "nav_landmark_quality": { "name": "Jakość punktów orientacyjnych nawigacji" },
-      "nav_good_landmarks": { "name": "Dobre punkty orientacyjne nawigacji" },
-      "optical_dirt_detections": { "name": "Optyczne wykrycia brudu" },
-      "piezo_dirt_detections": { "name": "Piezoelektryczne wykrycia brudu" },
-      "nav_orientations": { "name": "Orientacje nawigacji" },
-      "dock_contact_chatters": { "name": "Drgania styków stacji dokującej" },
-      "dock_knockoffs": { "name": "Przypadkowe odpięcia od stacji" },
-      "dock_charge_aborts": { "name": "Przerwane ładowania w stacji" },
-      "firmware_version": { "name": "Wersja oprogramowania" },
-      "integration_health": { "name": "Kondycja integracji" },
-      "dock_firmware_version": { "name": "Wersja oprogramowania stacji" },
-      "last_mission_team_id": { "name": "Misje – ID zespołu ostatniej misji" },
-      "reset_diagnostics": { "name": "Resetuj diagnostykę" },
+      "recent_coverage_pct": {
+        "name": "Wydajność – Pokrycie"
+      },
+      "battery_capacity_retention": {
+        "name": "Konserwacja – Utrzymanie pojemności akumulatora"
+      },
+      "estimated_battery_eol": {
+        "name": "Konserwacja – Szacowana żywotność akumulatora"
+      },
+      "consecutive_clean_skips": {
+        "name": "Wydajność – Kolejne pominięte sprzątania"
+      },
+      "recent_area_30d": {
+        "name": "Posprzątana powierzchnia (30 dni)"
+      },
+      "recent_time_30d": {
+        "name": "Czas sprzątania (30 dni)"
+      },
+      "optimal_clean_window": {
+        "name": "Optymalne okno sprzątania"
+      },
+      "recent_edge_coverage_ratio": {
+        "name": "Ostatni wskaźnik pokrycia krawędzi"
+      },
+      "total_energy_consumed": {
+        "name": "Łączne zużycie energii"
+      },
+      "mission_progress": {
+        "name": "Postęp misji"
+      },
+      "map_learning": {
+        "name": "Uczenie się mapy"
+      },
+      "zone_summary": {
+        "name": "Podsumowanie stref"
+      },
+      "wheel_last_cleaned": {
+        "name": "Konserwacja – Ostatnie czyszczenie kół"
+      },
+      "contact_last_cleaned": {
+        "name": "Konserwacja – Ostatnie czyszczenie styków"
+      },
+      "bin_last_cleaned": {
+        "name": "Konserwacja – Ostatnie czyszczenie pojemnika na brud"
+      },
+      "cleaning_performance": {
+        "name": "Wydajność sprzątania"
+      },
+      "cleaning_analytics_30d": {
+        "name": "Analityka sprzątania (30 dni)"
+      },
+      "wifi_health": {
+        "name": "Kondycja Wi-Fi"
+      },
+      "event_counts_30d": {
+        "name": "Liczba zdarzeń (30 dni)"
+      },
+      "robot_health_score": {
+        "name": "Ocena kondycji robota"
+      },
+      "lifetime_completion_rate": {
+        "name": "Łączny wskaźnik ukończenia"
+      },
+      "battery_cycle_count_bms": {
+        "name": "Liczba cykli BMS akumulatora"
+      },
+      "battery_age_days": {
+        "name": "Wiek akumulatora"
+      },
+      "wifi_last_channel": {
+        "name": "Ostatni kanał Wi-Fi"
+      },
+      "wifi_channel_stability": {
+        "name": "Stabilność kanału Wi-Fi"
+      },
+      "missions_per_charge": {
+        "name": "Misje na jedno ładowanie"
+      },
+      "nav_landmark_quality": {
+        "name": "Jakość punktów orientacyjnych nawigacji"
+      },
+      "nav_good_landmarks": {
+        "name": "Dobre punkty orientacyjne nawigacji"
+      },
+      "optical_dirt_detections": {
+        "name": "Optyczne wykrycia brudu"
+      },
+      "piezo_dirt_detections": {
+        "name": "Piezoelektryczne wykrycia brudu"
+      },
+      "nav_orientations": {
+        "name": "Orientacje nawigacji"
+      },
+      "dock_contact_chatters": {
+        "name": "Drgania styków stacji dokującej"
+      },
+      "dock_knockoffs": {
+        "name": "Przypadkowe odpięcia od stacji"
+      },
+      "dock_charge_aborts": {
+        "name": "Przerwane ładowania w stacji"
+      },
+      "firmware_version": {
+        "name": "Wersja oprogramowania"
+      },
+      "integration_health": {
+        "name": "Kondycja integracji"
+      },
+      "dock_firmware_version": {
+        "name": "Wersja oprogramowania stacji"
+      },
+      "last_mission_team_id": {
+        "name": "Misje – ID zespołu ostatniej misji"
+      },
+      "reset_diagnostics": {
+        "name": "Resetuj diagnostykę"
+      },
       "health_score_trend": {
         "name": "Trend kondycji robota",
-        "state": { "improving": "Poprawa", "stable": "Stabilny", "declining": "Spadek", "unknown": "Nieznany" }
+        "state": {
+          "improving": "Poprawa",
+          "stable": "Stabilny",
+          "declining": "Spadek",
+          "unknown": "Nieznany"
+        }
       },
-      "room_accessibility_scores": { "name": "Wskaźniki dostępności pomieszczeń" },
-      "rooms_overdue": { "name": "Zaległe pomieszczenia" },
-      "dirt_weather_correlation": { "name": "Korelacja brudu" }
+      "room_accessibility_scores": {
+        "name": "Wskaźniki dostępności pomieszczeń"
+      },
+      "rooms_overdue": {
+        "name": "Zaległe pomieszczenia"
+      },
+      "dirt_weather_correlation": {
+        "name": "Korelacja brudu"
+      }
     },
     "binary_sensor": {
-      "bin_full": { "name": "Pojemnik na brud pełny" },
-      "connected": { "name": "Połączony" },
-      "bin_present": { "name": "Pojemnik na brud obecny" },
-      "mop_ready": { "name": "Problem z mopem" },
-      "mop_tank_present": { "name": "Zbiornik mopa obecny" },
-      "mop_lid_closed": { "name": "Pokrywa mopa otwarta" },
-      "map_saving": { "name": "Zapisywanie Smart Map" },
+      "bin_full": {
+        "name": "Pojemnik na brud pełny"
+      },
+      "connected": {
+        "name": "Połączony"
+      },
+      "bin_present": {
+        "name": "Pojemnik na brud obecny"
+      },
+      "mop_ready": {
+        "name": "Problem z mopem"
+      },
+      "mop_tank_present": {
+        "name": "Zbiornik mopa obecny"
+      },
+      "mop_lid_closed": {
+        "name": "Pokrywa mopa otwarta"
+      },
+      "map_saving": {
+        "name": "Zapisywanie Smart Map"
+      },
       "maintenance_due": {
         "name": "Wymagana konserwacja",
-        "state": { "on": "Wymagana", "off": "OK" }
+        "state": {
+          "on": "Wymagana",
+          "off": "OK"
+        }
       },
       "start_blocked": {
         "name": "Start zablokowany",
-        "state": { "on": "Zablokowany", "off": "Wolny" }
+        "state": {
+          "on": "Zablokowany",
+          "off": "Wolny"
+        }
       },
       "schedule_hold_active": {
         "name": "Wstrzymanie harmonogramu aktywne",
         "state_attributes": {
           "source": {
             "name": "Źródło",
-            "state": { "presence_manager": "Menedżer obecności", "manual": "Ręcznie" }
+            "state": {
+              "presence_manager": "Menedżer obecności",
+              "manual": "Ręcznie"
+            }
           }
         }
       },
-      "mop_lid_open": { "name": "Pokrywa otwarta" },
-      "mop_tank_present_direct": { "name": "Zbiornik obecny" },
-      "mid_mission_recharge": { "name": "Ładowanie w trakcie misji" },
-      "mission_active": { "name": "Misja aktywna" },
-      "demand_clean_blocked": { "name": "Sprzątanie na żądanie zablokowane" },
-      "cloud_connected": { "name": "Połączony z chmurą" },
-      "mqtt_stale": { "name": "MQTT nieaktywne" },
-      "firmware_updated": { "name": "Oprogramowanie zaktualizowane" },
-      "layout_change_detected": { "name": "Wykryto zmianę układu" }
+      "mop_lid_open": {
+        "name": "Pokrywa otwarta"
+      },
+      "mop_tank_present_direct": {
+        "name": "Zbiornik obecny"
+      },
+      "mid_mission_recharge": {
+        "name": "Ładowanie w trakcie misji"
+      },
+      "mission_active": {
+        "name": "Misja aktywna"
+      },
+      "demand_clean_blocked": {
+        "name": "Sprzątanie na żądanie zablokowane"
+      },
+      "cloud_connected": {
+        "name": "Połączony z chmurą"
+      },
+      "mqtt_stale": {
+        "name": "MQTT nieaktywne"
+      },
+      "firmware_updated": {
+        "name": "Oprogramowanie zaktualizowane"
+      },
+      "layout_change_detected": {
+        "name": "Wykryto zmianę układu"
+      }
     },
     "button": {
-      "evac": { "name": "Akcja – Opróżnij pojemnik na brud" },
-      "locate": { "name": "Akcja – Znajdź robota" },
-      "reset_filter": { "name": "Konserwacja – Potwierdź wymianę filtra" },
-      "reset_brush": { "name": "Konserwacja – Potwierdź wymianę szczotek" },
-      "reset_battery": { "name": "Konserwacja – Potwierdź wymianę akumulatora" },
-      "clean_zone": { "name": "Sprzątaj strefę" },
-      "repeat_mission": { "name": "Powtórz ostatnią misję" },
-      "clean_smart_zone": { "name": "Sprzątaj strefę (Smart Map)" },
-      "favorite": { "name": "{name}" },
-      "spot": { "name": "Sprzątanie punktowe (eksperymentalne)" },
-      "quick": { "name": "Szybkie sprzątanie (eksperymentalne)" },
-      "sleep": { "name": "Uśpienie (eksperymentalne)" },
-      "power_off": { "name": "Wyłączenie (eksperymentalne)" },
-      "map_training": { "name": "Akcja – Rozpocznij trening mapy" }
+      "evac": {
+        "name": "Akcja – Opróżnij pojemnik na brud"
+      },
+      "locate": {
+        "name": "Akcja – Znajdź robota"
+      },
+      "reset_filter": {
+        "name": "Konserwacja – Potwierdź wymianę filtra"
+      },
+      "reset_brush": {
+        "name": "Konserwacja – Potwierdź wymianę szczotek"
+      },
+      "reset_battery": {
+        "name": "Konserwacja – Potwierdź wymianę akumulatora"
+      },
+      "clean_zone": {
+        "name": "Sprzątaj strefę"
+      },
+      "repeat_mission": {
+        "name": "Powtórz ostatnią misję"
+      },
+      "clean_smart_zone": {
+        "name": "Sprzątaj strefę (Smart Map)"
+      },
+      "favorite": {
+        "name": "{name}"
+      },
+      "spot": {
+        "name": "Sprzątanie punktowe (eksperymentalne)"
+      },
+      "quick": {
+        "name": "Szybkie sprzątanie (eksperymentalne)"
+      },
+      "sleep": {
+        "name": "Uśpienie (eksperymentalne)"
+      },
+      "power_off": {
+        "name": "Wyłączenie (eksperymentalne)"
+      },
+      "map_training": {
+        "name": "Akcja – Rozpocznij trening mapy"
+      }
     },
     "switch": {
-      "edge_clean": { "name": "Ustawienie – Sprzątanie przy krawędziach" },
-      "always_finish": { "name": "Ustawienie – Zawsze kończ" },
-      "schedule_hold": { "name": "Ustawienie – Wstrzymanie harmonogramu" },
-      "child_lock": { "name": "Ustawienie – Blokada dla dzieci" },
-      "eco_charge": { "name": "Ustawienie – Ładowanie Eco" }
+      "edge_clean": {
+        "name": "Ustawienie – Sprzątanie przy krawędziach"
+      },
+      "always_finish": {
+        "name": "Ustawienie – Zawsze kończ"
+      },
+      "schedule_hold": {
+        "name": "Ustawienie – Wstrzymanie harmonogramu"
+      },
+      "child_lock": {
+        "name": "Ustawienie – Blokada dla dzieci"
+      },
+      "eco_charge": {
+        "name": "Ustawienie – Ładowanie Eco"
+      },
+      "gentle_mode": {
+        "name": "Ustawienie – Tryb delikatny"
+      }
     },
     "select": {
-      "cleaning_passes": { "name": "Ustawienie – Przebiegi sprzątania" },
-      "zone_select": { "name": "Wybierz strefę" },
-      "smart_zone_select": { "name": "Wybierz strefę Smart Map" },
-      "cloud_smart_zone_select": { "name": "Wybierz strefę (chmura)" },
+      "cleaning_passes": {
+        "name": "Ustawienie – Przebiegi sprzątania"
+      },
+      "zone_select": {
+        "name": "Wybierz strefę"
+      },
+      "smart_zone_select": {
+        "name": "Wybierz strefę Smart Map"
+      },
+      "cloud_smart_zone_select": {
+        "name": "Wybierz strefę (chmura)"
+      },
       "disposable_pad_wetness": {
         "name": "Wilgotność jednorazowej nakładki",
-        "state": { "1": "Niska", "2": "Średnia", "3": "Wysoka" }
+        "state": {
+          "1": "Niska",
+          "2": "Średnia",
+          "3": "Wysoka"
+        }
       },
       "reusable_pad_wetness": {
         "name": "Wilgotność nakładki wielokrotnego użytku",
-        "state": { "1": "Niska", "2": "Średnia", "3": "Wysoka" }
+        "state": {
+          "1": "Niska",
+          "2": "Średnia",
+          "3": "Wysoka"
+        }
       },
       "carpet_boost_select": {
         "name": "Wzmocnienie na dywanie",
-        "state": { "automatic": "Automatyczne", "eco": "Eco", "performance": "Wydajność" }
+        "state": {
+          "automatic": "Automatyczne",
+          "eco": "Eco",
+          "performance": "Wydajność"
+        }
       }
     },
     "image": {
-      "map": { "name": "Mapa sprzątania" },
-      "coverage_map": { "name": "Mapa pokrycia" },
-      "rooms_map": { "name": "Mapa pomieszczeń" }
+      "map": {
+        "name": "Mapa sprzątania"
+      },
+      "coverage_map": {
+        "name": "Mapa pokrycia"
+      },
+      "rooms_map": {
+        "name": "Mapa pomieszczeń"
+      }
     },
     "device_tracker": {
-      "position": { "name": "Pozycja" }
+      "position": {
+        "name": "Pozycja"
+      }
     },
     "calendar": {
-      "schedule": { "name": "Harmonogram" }
+      "schedule": {
+        "name": "Harmonogram"
+      }
     },
     "todo": {
-      "maintenance": { "name": "Konserwacja" }
+      "maintenance": {
+        "name": "Konserwacja"
+      }
     }
   },
   "issues": {
@@ -481,8 +872,12 @@
           "init": {
             "title": "Nazwij strefy Smart Map",
             "description": "Wprowadź jeden wpis na linię w formacie `id=Nazwa`. ID stref do nazwania: {zone_ids}",
-            "data": { "zones": "Przypisania stref" },
-            "data_description": { "zones": "Jeden wpis na linię: `21=Korytarz`, `22=Kuchnia`, itp." }
+            "data": {
+              "zones": "Przypisania stref"
+            },
+            "data_description": {
+              "zones": "Jeden wpis na linię: `21=Korytarz`, `22=Kuchnia`, itp."
+            }
           }
         },
         "error": {

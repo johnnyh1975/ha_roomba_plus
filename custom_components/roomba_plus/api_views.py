@@ -868,6 +868,12 @@ class HouseholdSummaryView(HomeAssistantView):
     F10b — aggregates all roomba_plus config entries. Returns per-robot
     breakdown with floor label, per-floor breakdown when labels are configured,
     and combined totals.
+
+    v3.4.3 FLEET-1 — each robot entry additionally carries a health rollup
+    (health_trend from RobotProfileStore.health_score_trend(),
+    battery_capacity_retention_pct, maintenance_due, needs_attention), plus
+    a top-level fleet_health summary (robot_count, robots_needing_attention)
+    derived from those same per-robot fields.
     """
 
     url = "/api/roomba_plus/household"
@@ -907,6 +913,36 @@ class HouseholdSummaryView(HomeAssistantView):
 
             floor_label = getattr(data, "floor_label", "") or ""
 
+            # v3.4.3 FLEET-1 — per-robot health rollup. Reuses already-
+            # computed/cached signals living directly on RoombaData/
+            # RobotProfileStore rather than recomputing the full L8
+            # weighted health score (which needs several more live inputs
+            # not cached as simple fields) or reading through HA's entity/
+            # state layer (no existing precedent in this file for that —
+            # every other field here comes from a store object already on
+            # `data`, same pattern followed here).
+            health_trend = None
+            if data.robot_profile_store is not None:
+                health_trend = data.robot_profile_store.health_score_trend()
+
+            maintenance_due = False
+            if data.maintenance_store is not None:
+                # Local import — api_views.py is imported eagerly by
+                # __init__.py at module level (unlike platform modules
+                # such as switch.py/binary_sensor.py, which HA loads
+                # later), so a top-level `from . import
+                # roomba_reported_state` here creates a genuine circular
+                # import. Deferred import resolves it: by the time
+                # get() actually runs (at request time), __init__.py has
+                # long since finished initializing.
+                from . import roomba_reported_state
+                vac_state = roomba_reported_state(data.roomba)
+                maintenance_due = bool(
+                    data.maintenance_store.due_items(vac_state, entry.options)
+                )
+
+            needs_attention = maintenance_due or health_trend == "declining"
+
             robots.append({
                 "entry_id":       entry.entry_id,
                 "name":           entry.title or "Roomba",
@@ -915,6 +951,10 @@ class HouseholdSummaryView(HomeAssistantView):
                 "completed":      completed,
                 "completion_pct": comp_pct,
                 "area_sqft":      area,
+                "health_trend":                    health_trend,
+                "battery_capacity_retention_pct":  data.battery_retention_value,
+                "maintenance_due":                 maintenance_due,
+                "needs_attention":                 needs_attention,
             })
             total_missions  += missions
             total_completed += completed
@@ -936,6 +976,12 @@ class HouseholdSummaryView(HomeAssistantView):
             if total_missions else 0.0
         )
 
+        # v3.4.3 FLEET-1 — fleet-wide health rollup, derived from the
+        # per-robot fields already built above (no re-iteration needed).
+        robots_needing_attention = [
+            r["name"] for r in robots if r["needs_attention"]
+        ]
+
         result: dict[str, Any] = {
             "period_days": days,
             "total": {
@@ -943,6 +989,10 @@ class HouseholdSummaryView(HomeAssistantView):
                 "completed":      total_completed,
                 "completion_pct": total_comp_pct,
                 "area_sqft":      total_area,
+            },
+            "fleet_health": {
+                "robot_count":              len(robots),
+                "robots_needing_attention": robots_needing_attention,
             },
             "robots": robots,
         }

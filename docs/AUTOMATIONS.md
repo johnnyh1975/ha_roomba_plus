@@ -236,6 +236,51 @@ https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/aut
 
 One blueprint import covers all your robots — repeat step 1 to create one automation instance per robot, each pointing at that robot's own entities.
 
+## Three more blueprints (v3.4.3)
+
+### Demand clean alert
+
+Notifies you when your robot starts cleaning on its own — triggered by the
+built-in dirt-sensor threshold, not your schedule or a manual start.
+
+```
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/demand_clean_alert.yaml
+```
+
+Pick this robot's `sensor.*_job_initiator` entity ("Status – Started by")
+and your notification action.
+
+### Vacuum then mop
+
+For two-robot households: starts a Braava mop automatically once a Roomba
+vacuum finishes.
+
+```
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/roomba_then_braava.yaml
+```
+
+Pick the vacuum device, the mop's vacuum entity, which mission results
+should trigger the mop (default: completed or stuck-then-resumed — not
+cancelled or errored runs), and a wait time (default 5 minutes) to let
+dust settle first.
+
+### Smart start on away
+
+Starts cleaning when everyone leaves — either immediately, or timed so
+cleaning is likely done before you return.
+
+```
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/smart_start_on_away.yaml
+```
+
+Needs a presence entity (a `group`/`person`/`zone` that's `not_home` only
+when everyone relevant has left — this blueprint watches it, it doesn't
+build the presence logic itself) and the robot's vacuum entity. In "timed"
+mode, also set an expected return time and an estimated cleaning duration
+(check `sensor.*_average_mission_time` for a real number instead of
+guessing) — if the computed start time has already passed by the time
+everyone's away, cleaning starts immediately instead of not at all.
+
 ---
 
 *[Roomba+](../README.md) · [Features](FEATURES.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*

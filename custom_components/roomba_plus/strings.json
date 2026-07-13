@@ -790,6 +790,9 @@
       },
       "eco_charge": {
         "name": "Setting – Eco charge"
+      },
+      "gentle_mode": {
+        "name": "Setting – Gentle mode"
       }
     },
     "select": {

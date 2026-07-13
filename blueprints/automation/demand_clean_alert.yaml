@@ -1,0 +1,53 @@
+blueprint:
+  name: Roomba+ Demand Clean Alert
+  description: >
+    Notifies you when your robot starts a mission on its own — triggered by
+    the built-in dirt-sensor threshold (DirtThresholdManager), not your
+    schedule and not a manual start. Useful if you want to know "why is my
+    robot suddenly running?" without checking Home Assistant.
+
+    Uses the `sensor.*_job_initiator` sensor (shows what started the
+    current/most recent mission) rather than the mission-completed event,
+    since only this sensor's underlying field distinguishes a demand
+    clean from every other trigger reason.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/demand_clean_alert.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    job_initiator_entity:
+      name: "Started by sensor"
+      description: >
+        This robot's `sensor.*_job_initiator` entity (name: "Status –
+        Started by").
+      selector:
+        entity:
+          domain: sensor
+          integration: roomba_plus
+
+    notify_action:
+      name: Notification action
+      description: >
+        What to do when a demand clean starts. Two variables are available:
+        {{ notification_title }} and {{ notification_message }}.
+      selector:
+        action:
+
+mode: single
+
+triggers:
+  - trigger: state
+    entity_id: !input job_initiator_entity
+    to: "Demand clean"
+
+actions:
+  - variables:
+      notification_title: "{{ trigger.to_state.name }}"
+      notification_message: >
+        Your robot noticed something dirty and started cleaning on its own
+        — not your schedule, not a manual start.
+  - !input notify_action

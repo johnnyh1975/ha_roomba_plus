@@ -783,6 +783,9 @@
       },
       "eco_charge": {
         "name": "Impostazione – Carica eco"
+      },
+      "gentle_mode": {
+        "name": "Impostazione – Modalità delicata"
       }
     },
     "select": {

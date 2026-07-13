@@ -18,6 +18,14 @@ import statistics
 from dataclasses import dataclass, field
 
 from homeassistant.core import HomeAssistant
+
+from .const import (
+    CONF_BRUSH_HOURS,
+    CONF_FILTER_HOURS,
+    DEFAULT_BRUSH_HOURS,
+    DEFAULT_FILTER_HOURS,
+    is_mop,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -261,6 +269,29 @@ class MaintenanceStore:
         return statistics.median(intervals) if intervals else None
 
     # ── Remaining-life calculations ───────────────────────────────────────────
+
+    def due_items(self, vacuum_state: dict, options: dict) -> list[str]:
+        """v3.4.3 FLEET-1 — return consumable keys currently at zero
+        remaining hours.
+
+        Extracted from binary_sensor.py's RoombaMaintenanceDue._due_items()
+        (identical logic, now shared) so the household REST endpoint's
+        fleet-health rollup can report the same "is maintenance due"
+        signal without duplicating the threshold/mop-vs-vacuum-key logic
+        a second time. binary_sensor.py's _due_items() now delegates here.
+        """
+        current_hr = (vacuum_state.get("bbrun") or {}).get("hr", 0)
+        items: list[str] = []
+        if self.filter_remaining(
+            current_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
+        ) == 0:
+            items.append("filter")
+        brush_key = "pad" if is_mop(vacuum_state) else "brush"
+        if self.brush_remaining(
+            current_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
+        ) == 0:
+            items.append(brush_key)
+        return items
 
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next filter replacement.

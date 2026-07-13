@@ -783,6 +783,9 @@
       },
       "eco_charge": {
         "name": "Einstellung – Öko-Laden"
+      },
+      "gentle_mode": {
+        "name": "Einstellung – Sanfter Modus"
       }
     },
     "select": {

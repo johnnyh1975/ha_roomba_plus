@@ -783,6 +783,9 @@
       },
       "eco_charge": {
         "name": "Paramètre – Charge éco"
+      },
+      "gentle_mode": {
+        "name": "Réglage – Mode doux"
       }
     },
     "select": {

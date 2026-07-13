@@ -330,7 +330,7 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /household
 
-Household-wide aggregate across all configured Roomba+ robots.
+Household-wide aggregate across all configured Roomba+ robots. Since v3.4.3, also includes a fleet-health rollup — see below.
 
 ```
 GET /api/roomba_plus/household?days=28
@@ -349,6 +349,10 @@ GET /api/roomba_plus/household?days=28
     "completion_pct": 91.5,
     "area_sqft": 8960.0
   },
+  "fleet_health": {
+    "robot_count": 2,
+    "robots_needing_attention": ["Roomba Upstairs"]
+  },
   "robots": [
     {
       "entry_id": "abc123",
@@ -357,7 +361,11 @@ GET /api/roomba_plus/household?days=28
       "missions": 31,
       "completed": 29,
       "completion_pct": 93.5,
-      "area_sqft": 6200.0
+      "area_sqft": 6200.0,
+      "health_trend": "stable",
+      "battery_capacity_retention_pct": 91.2,
+      "maintenance_due": false,
+      "needs_attention": false
     }
   ],
   "floors": [
@@ -372,6 +380,8 @@ GET /api/roomba_plus/household?days=28
 ```
 
 `floors` is omitted when no robot has a floor label configured. `area_sqft` is null when no robot has cloud records with area data.
+
+**Fleet health (v3.4.3):** `fleet_health.robots_needing_attention` lists the `name` of every robot where `needs_attention` is `true` — useful for a multi-robot dashboard that only needs to surface robots that actually need a look. Per robot: `health_trend` (`"improving"`/`"stable"`/`"declining"`/`null` until enough history exists), `battery_capacity_retention_pct` (same value as `sensor.*_battery_capacity_retention`), `maintenance_due` (same check as `binary_sensor.*_maintenance_due`), and `needs_attention` (`maintenance_due` OR a declining health trend). These reuse already-computed values rather than recalculating anything — the endpoint is only ever as fresh as those values already are elsewhere in the integration.
 
 ```bash
 curl -H "Authorization: Bearer <token>" \

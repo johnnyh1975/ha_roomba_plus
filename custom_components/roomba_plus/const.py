@@ -781,6 +781,13 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     "rmtApp": "iRobot app",
     "manual": "Robot",
     "localApp": "Home Assistant",
+    "demand": "Demand clean",  # v3.4.3 — found while building demand_clean_alert
+    # blueprint: DirtThresholdManager/callbacks.py's MS1 override writes
+    # initiator="demand" (confirmed real, not hypothetical — see both
+    # sites), but this dict had no mapping for it, silently falling
+    # through to the "none" default below. A demand-triggered mission was
+    # therefore indistinguishable from "no initiator info at all" on this
+    # sensor — same value, "None", for two different real situations.
     "none": "None",
 }
 

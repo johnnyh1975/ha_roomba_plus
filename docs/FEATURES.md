@@ -100,9 +100,9 @@ Every feature below is tagged with which robots support it:
 | Sleep | Sends the robot to low-power sleep state |
 | Power off | Powers the robot off completely |
 
-#### Child lock & eco charge switches (v3.2.0)
+#### Child lock, eco charge & gentle mode switches (v3.2.0, v3.4.3)
 
-Two config-category switches, created only on models that report the underlying preference: **Child lock** (`childLock`) disables the robot's physical onboard buttons — useful for households with kids or pets that might otherwise trigger a clean by accident. **Eco charge** (`ecoCharge`) toggles the robot's reduced-power charging mode. `sensor.*_dock_firmware_version` (diagnostic, disabled by default) exposes the dock's own firmware version separately from the robot's.
+Three config-category switches, each created only on models that report the underlying preference: **Child lock** (`childLock`) disables the robot's physical onboard buttons — useful for households with kids or pets that might otherwise trigger a clean by accident. **Eco charge** (`ecoCharge`) toggles the robot's reduced-power charging mode. **Gentle mode** (`gentle`, v3.4.3) reduces vacuum/brush aggressiveness for quieter, gentler cleaning — useful for a sleeping baby or a nervous pet. `sensor.*_dock_firmware_version` (diagnostic, disabled by default) exposes the dock's own firmware version separately from the robot's.
 
 ---
 

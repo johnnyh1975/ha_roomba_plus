@@ -59,6 +59,12 @@ async def async_setup_entry(
     if "ecoCharge" in state:
         entities.append(EcoChargeSwitch(roomba, blid))
 
+    # Gentle mode: present when gentle key exists in state (v3.4.3
+    # GENTLE-MODE — confirmed stable across multiple i7 firmware
+    # generations in real field data, analogous to EdgeCleanSwitch above)
+    if "gentle" in state:
+        entities.append(GentleModeSwitch(roomba, blid))
+
     async_add_entities(entities)
 
 
@@ -269,3 +275,48 @@ class EcoChargeSwitch(IRobotEntity, SwitchEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "ecoCharge" in new_state
+
+
+class GentleModeSwitch(IRobotEntity, SwitchEntity):
+    """Switch that enables/disables the robot's gentle cleaning mode.
+
+    The Roomba preference is called 'gentle':
+      gentle=True  -> gentle mode active (reduced vacuum/brush aggressiveness)
+      gentle=False -> normal cleaning (default)
+
+    v3.4.3 GENTLE-MODE — confirmed stable across multiple i7 firmware
+    generations in real field data (see CLASSIC_APK_ANALYSIS_FINDINGS.md),
+    never implemented despite that stability. Same shape as EcoChargeSwitch
+    above — a plain preference boolean, no inversion.
+
+    Only created on models that report this preference.
+    """
+
+    _attr_translation_key = "gentle_mode"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, roomba, blid: str) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_gentle_mode"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True when gentle mode is active."""
+        return bool(self.vacuum_state.get("gentle", False))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable gentle mode."""
+        _LOGGER.debug("GentleMode: turning ON (gentle=True)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "gentle", True
+        )
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable gentle mode."""
+        _LOGGER.debug("GentleMode: turning OFF (gentle=False)")
+        await self.hass.async_add_executor_job(
+            self.vacuum.set_preference, "gentle", False
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "gentle" in new_state

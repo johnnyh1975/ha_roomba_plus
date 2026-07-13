@@ -1,0 +1,96 @@
+blueprint:
+  name: Roomba+ Smart Start on Away
+  description: >
+    Starts cleaning when everyone leaves. Two modes: start immediately, or
+    time it so cleaning is likely done before you return (covers the
+    "clean before we get back" case with one blueprint instead of two).
+
+    "Timed" mode computes a start delay from your expected return time
+    minus an estimated cleaning duration — if that computed start time has
+    already passed by the time everyone's away, cleaning starts
+    immediately instead of not at all.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/smart_start_on_away.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    presence_entity:
+      name: "Presence entity"
+      description: >
+        A `group`/`person`/`zone`-backed entity that is "not_home" only
+        when everyone relevant has left (e.g. a `group.all_people` you've
+        already set up). This blueprint just watches its state — it
+        doesn't build the presence logic itself.
+      selector:
+        entity:
+          domain: ["group", "person", "zone"]
+
+    vacuum_entity:
+      name: Robot
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+    mode:
+      name: Start mode
+      default: immediately
+      selector:
+        select:
+          options:
+            - label: "Start immediately when everyone leaves"
+              value: immediately
+            - label: "Time it to finish before an expected return"
+              value: timed_before_return
+
+    return_time:
+      name: Expected return time
+      description: Only used in "timed" mode. The time you'd like cleaning finished by.
+      default: "17:00:00"
+      selector:
+        time:
+
+    estimated_duration_minutes:
+      name: Estimated cleaning duration (minutes)
+      description: >
+        Only used in "timed" mode. How long this robot's missions usually
+        take — check `sensor.*_average_mission_time` for a real number
+        instead of guessing.
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 300
+          unit_of_measurement: minutes
+          mode: box
+
+mode: single
+
+triggers:
+  - trigger: state
+    entity_id: !input presence_entity
+    to: "not_home"
+
+actions:
+  - variables:
+      delay_minutes: >
+        {% if (!input mode) == "timed_before_return" %}
+          {% set target = today_at(!input return_time) %}
+          {% if target < now() %}
+            {% set target = target + timedelta(days=1) %}
+          {% endif %}
+          {% set clean_start = target - timedelta(minutes=(!input estimated_duration_minutes)) %}
+          {% set computed = ((clean_start - now()).total_seconds() / 60) | round(0, "floor") %}
+          {{ [0, computed] | max }}
+        {% else %}
+          0
+        {% endif %}
+  - delay:
+      minutes: "{{ delay_minutes }}"
+  - action: vacuum.start
+    target:
+      entity_id: !input vacuum_entity

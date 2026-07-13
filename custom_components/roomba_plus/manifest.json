@@ -42,7 +42,7 @@
   "requirements": [
     "roombapy==1.9.1"
   ],
-  "version": "3.4.2",
+  "version": "3.4.3",
   "zeroconf": [
     {
       "name": "irobot-*",

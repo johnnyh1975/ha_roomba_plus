@@ -470,23 +470,17 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         }
 
     def _due_items(self) -> list[str]:
-        """Return list of consumable keys currently at zero remaining hours."""
+        """Return list of consumable keys currently at zero remaining hours.
+
+        v3.4.3 FLEET-1 — delegates to MaintenanceStore.due_items(), which
+        now holds this logic (extracted so the household REST endpoint's
+        fleet-health rollup can share it without duplication). Behaviour
+        unchanged.
+        """
         store = self._entry.runtime_data.maintenance_store
         if not store:
             return []
-        current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
-        options = self._entry.options
-        items: list[str] = []
-        if store.filter_remaining(
-            current_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-        ) == 0:
-            items.append("filter")
-        brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
-        if store.brush_remaining(
-            current_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-        ) == 0:
-            items.append(brush_key)
-        return items
+        return store.due_items(self.vacuum_state, self._entry.options)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bbrun" in new_state

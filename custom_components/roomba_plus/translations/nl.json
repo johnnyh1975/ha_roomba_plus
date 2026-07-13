@@ -783,6 +783,9 @@
       },
       "eco_charge": {
         "name": "Instelling – Eco opladen"
+      },
+      "gentle_mode": {
+        "name": "Instelling – Zachte modus"
       }
     },
     "select": {

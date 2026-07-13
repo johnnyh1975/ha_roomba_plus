@@ -783,6 +783,9 @@
       },
       "eco_charge": {
         "name": "Ajuste – Carga ecológica"
+      },
+      "gentle_mode": {
+        "name": "Ajuste – Modo suave"
       }
     },
     "select": {

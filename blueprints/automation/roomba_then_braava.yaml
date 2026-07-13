@@ -1,0 +1,88 @@
+blueprint:
+  name: Roomba+ Vacuum then Mop
+  description: >
+    Starts a Braava mop automatically once a Roomba vacuum finishes its
+    mission — for two-robot households doing a vacuum-then-mop routine
+    without manually starting the second robot every time.
+
+    Matched on the vacuum robot's own config entry (via `entry_id` in the
+    mission-completed event), not on its name — a later rename of either
+    robot won't break this, same approach as the notification blueprint.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/roomba_then_braava.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    roomba_device:
+      name: Vacuum robot
+      description: >
+        The Roomba+ device to watch for mission completion. Used to
+        correctly match this robot's own event in a multi-robot household
+        — matched on the robot's config entry internally, not its name.
+      selector:
+        device:
+          entity:
+            integration: roomba_plus
+
+    braava_entity:
+      name: Mop robot
+      description: The Braava vacuum entity to start once the vacuum robot finishes.
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+    only_on_result:
+      name: Only start mop when vacuum mission was
+      description: >
+        Skip starting the mop if the vacuum mission didn't finish the way
+        you'd want a mop run to follow (e.g. don't mop after a cancelled
+        or errored vacuum run).
+      default: ["completed", "stuck_and_resumed"]
+      selector:
+        select:
+          multiple: true
+          options:
+            - "completed"
+            - "stuck_and_resumed"
+            - "cancelled"
+            - "error"
+
+    wait_minutes:
+      name: Wait before starting the mop (minutes)
+      description: >
+        Delay after the vacuum finishes before the mop starts — gives dust
+        a moment to settle and the vacuum time to clear the area.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: minutes
+          mode: box
+
+mode: queued
+max: 5
+
+triggers:
+  - trigger: event
+    event_type: roomba_plus_mission_completed
+
+conditions:
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.entry_id in (device_attr((!input roomba_device), "config_entries") or []) }}
+  - condition: template
+    value_template: >
+      {{ trigger.event.data.result in (!input only_on_result) }}
+
+actions:
+  - delay:
+      minutes: !input wait_minutes
+  - action: vacuum.start
+    target:
+      entity_id: !input braava_entity
