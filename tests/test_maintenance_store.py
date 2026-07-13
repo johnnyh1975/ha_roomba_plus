@@ -308,6 +308,54 @@ class TestMaintenanceStoreReset:
         store.reset_filter(200)
         assert store.filter_remaining(400, 200) == 0
 
+
+class TestMaintenanceStoreDueItems:
+    """v3.4.3 FLEET-1 — due_items(), extracted from binary_sensor.py's
+    RoombaMaintenanceDue._due_items() so the household REST endpoint can
+    share the exact same logic."""
+
+    def test_nothing_due_fresh_robot(self):
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 10}}
+        assert store.due_items(state, {}) == []
+
+    def test_filter_due_at_threshold(self):
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 60}}  # DEFAULT_FILTER_HOURS == 60
+        assert "filter" in store.due_items(state, {})
+
+    def test_brush_key_for_vacuum(self):
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 200}}  # DEFAULT_BRUSH_HOURS == 200
+        due = store.due_items(state, {})
+        assert "brush" in due
+        assert "pad" not in due
+
+    def test_pad_key_for_mop(self):
+        """is_mop(state) — detectedPad present → 'pad' not 'brush'."""
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 200}, "detectedPad": "wet"}
+        due = store.due_items(state, {})
+        assert "pad" in due
+        assert "brush" not in due
+
+    def test_custom_thresholds_from_options(self):
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 30}}
+        assert store.due_items(state, {"filter_threshold_hours": 30}) == ["filter"]
+
+    def test_both_due_simultaneously(self):
+        store = MaintenanceStore()
+        state = {"bbrun": {"hr": 300}}
+        due = store.due_items(state, {})
+        assert set(due) == {"filter", "brush"}
+
+    def test_missing_bbrun_defaults_to_zero_hours(self):
+        """No bbrun at all -> current_hr defaults to 0, nothing due yet
+        (matches the pre-extraction binary_sensor.py behaviour)."""
+        store = MaintenanceStore()
+        assert store.due_items({}, {}) == []
+
     def test_filter_remaining_overdue_after_reset(self):
         """Past threshold, still clamped at 0."""
         store = MaintenanceStore()

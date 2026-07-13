@@ -26,6 +26,7 @@ from custom_components.roomba_plus.api_views import MissionHistoryImportView
 from custom_components.roomba_plus.api_views import MissionHistoryView
 from custom_components.roomba_plus.const import DOMAIN
 from custom_components.roomba_plus.mission_store import MissionStore
+from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 
 
 def _cloud_rec(
@@ -781,69 +782,6 @@ class TestHazardsFormat:
 
     def test_records_in_valid_formats(self):
         assert "records" in _VALID_FORMATS
-
-
-class TestHouseholdAggregation:
-    """Test the aggregation math directly without HTTP."""
-
-    def test_completion_pct_zero_when_no_missions(self):
-        missions, completed = 0, 0
-        pct = round(100 * completed / missions, 1) if missions else 0.0
-        assert pct == 0.0
-
-    def test_completion_pct_full(self):
-        missions, completed = 10, 10
-        pct = round(100 * completed / missions, 1)
-        assert pct == 100.0
-
-    def test_completion_pct_partial(self):
-        missions, completed = 10, 8
-        pct = round(100 * completed / missions, 1)
-        assert pct == 80.0
-
-    def test_floor_aggregation_combines_robots(self):
-        floors: dict = {}
-        robots = [
-            {"floor": "Ground", "missions": 10, "completed": 9, "area_sqft": 500.0},
-            {"floor": "Ground", "missions": 5,  "completed": 4, "area_sqft": 200.0},
-        ]
-        for robot in robots:
-            label = robot["floor"]
-            if label:
-                f = floors.setdefault(label, {
-                    "label": label, "missions": 0, "completed": 0, "area_sqft": None,
-                })
-                f["missions"]  += robot["missions"]
-                f["completed"] += robot["completed"]
-                if robot["area_sqft"] is not None:
-                    f["area_sqft"] = (f["area_sqft"] or 0.0) + robot["area_sqft"]
-        assert floors["Ground"]["missions"] == 15
-        assert floors["Ground"]["completed"] == 13
-        assert floors["Ground"]["area_sqft"] == 700.0
-
-    def test_empty_floor_label_not_in_floors(self):
-        floors: dict = {}
-        robots = [{"floor": "", "missions": 5, "completed": 4, "area_sqft": None}]
-        for robot in robots:
-            label = robot["floor"]
-            if label:
-                floors[label] = robot
-        assert "" not in floors
-        assert len(floors) == 0
-
-    def test_total_area_accumulates_across_robots(self):
-        total_area: float | None = None
-        for area in [300.0, 250.0, None]:
-            if area is not None:
-                total_area = (total_area or 0.0) + area
-        assert total_area == 550.0
-
-    def test_total_area_none_when_no_robot_has_area(self):
-        total_area: float | None = None
-        for area in [None, None]:
-            if area is not None:
-                total_area = (total_area or 0.0) + area
-        assert total_area is None
 
 
 class TestApiViewsRecordsV23:
@@ -2235,3 +2173,296 @@ class TestMissionMapViewsGlue:
         args = hass.async_add_executor_job.call_args.args
         assert args[-1] == 0
 
+
+class TestHouseholdSummaryView:
+    """GET /api/roomba_plus/household — previously entirely untested.
+
+    v3.4.3 FLEET-1 added a per-robot health rollup (health_trend,
+    battery_capacity_retention_pct, maintenance_due, needs_attention) plus
+    a top-level fleet_health summary; this class covers both that new
+    behaviour and the pre-existing missions/completed/area/floors rollup,
+    since neither had a dedicated test before now.
+    """
+
+    def _make_entry(
+        self,
+        entry_id: str,
+        name: str,
+        records: list[dict] | None = None,
+        floor_label: str = "",
+        health_trend: str | None = None,
+        battery_retention: float | None = None,
+        vac_state: dict | None = None,
+        maintenance_store: MaintenanceStore | None = None,
+        has_robot_profile_store: bool = True,
+    ) -> MagicMock:
+        entry = MagicMock()
+        entry.entry_id = entry_id
+        entry.title = name
+        entry.options = {}
+
+        data = MagicMock()
+        data.mission_store = _make_mission_store(records or [])
+        data.floor_label = floor_label
+        data.battery_retention_value = battery_retention
+
+        if has_robot_profile_store:
+            rps = MagicMock()
+            rps.health_score_trend.return_value = health_trend
+            data.robot_profile_store = rps
+        else:
+            data.robot_profile_store = None
+
+        data.maintenance_store = (
+            maintenance_store if maintenance_store is not None else MaintenanceStore()
+        )
+        data.roomba = MagicMock()
+        data.roomba.master_state = {"state": {"reported": vac_state or {}}}
+
+        entry.runtime_data = data
+        return entry
+
+    def _make_request(self, hass: MagicMock, days: str | None = None) -> MagicMock:
+        req = MagicMock()
+        req.app = {"hass": hass}
+        req.query = {"days": days} if days else {}
+        return req
+
+    @pytest.mark.asyncio
+    async def test_single_robot_basic_rollup(self):
+        """Pre-existing behaviour: missions/completed/area, unaffected by
+        FLEET-1's additions."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        records = [
+            _digest_rec("2026-06-16T08:00:00+00:00", area_sqft=250.0, result="completed"),
+            _digest_rec("2026-06-16T14:00:00+00:00", area_sqft=500.0, result="stuck"),
+        ]
+        entry = self._make_entry("e1", "Downstairs", records=records)
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["total"]["missions"] == 2
+        assert body["total"]["completed"] == 1
+        assert body["robots"][0]["entry_id"] == "e1"
+        assert body["robots"][0]["name"] == "Downstairs"
+
+    @pytest.mark.asyncio
+    async def test_floors_aggregate_across_robots(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        r1 = [_digest_rec("2026-06-16T08:00:00+00:00", area_sqft=100.0, result="completed")]
+        r2 = [_digest_rec("2026-06-16T09:00:00+00:00", area_sqft=200.0, result="completed")]
+        entry1 = self._make_entry("e1", "Up", records=r1, floor_label="Upstairs")
+        entry2 = self._make_entry("e2", "Down", records=r2, floor_label="Upstairs")
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry1, entry2]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        # Total-level accumulation across robots (real-endpoint replacement
+        # for the old synthetic test_total_area_accumulates_across_robots).
+        assert body["total"]["area_sqft"] == 300.0
+        assert len(body["floors"]) == 1
+        assert body["floors"][0]["missions"] == 2
+        # Floor-level accumulation (real-endpoint replacement for the old
+        # synthetic test_floor_aggregation_combines_robots).
+        assert body["floors"][0]["area_sqft"] == 300.0
+
+    @pytest.mark.asyncio
+    async def test_fleet_health_no_robots_needing_attention(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry(
+            "e1", "Healthy", health_trend="stable", battery_retention=95.0,
+            vac_state={"bbrun": {"hr": 5}},
+        )
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        robot = body["robots"][0]
+        assert robot["health_trend"] == "stable"
+        assert robot["battery_capacity_retention_pct"] == 95.0
+        assert robot["maintenance_due"] is False
+        assert robot["needs_attention"] is False
+        assert body["fleet_health"] == {
+            "robot_count": 1,
+            "robots_needing_attention": [],
+        }
+
+    @pytest.mark.asyncio
+    async def test_maintenance_due_flags_needs_attention(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry(
+            "e1", "Filter Due", health_trend="stable",
+            vac_state={"bbrun": {"hr": 200}},  # >= DEFAULT_FILTER_HOURS
+        )
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        robot = body["robots"][0]
+        assert robot["maintenance_due"] is True
+        assert robot["needs_attention"] is True
+        assert body["fleet_health"]["robots_needing_attention"] == ["Filter Due"]
+
+    @pytest.mark.asyncio
+    async def test_declining_health_flags_needs_attention_without_maintenance(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry(
+            "e1", "Declining", health_trend="declining",
+            vac_state={"bbrun": {"hr": 1}},  # nothing due
+        )
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        robot = body["robots"][0]
+        assert robot["maintenance_due"] is False
+        assert robot["needs_attention"] is True
+        assert body["fleet_health"]["robots_needing_attention"] == ["Declining"]
+
+    @pytest.mark.asyncio
+    async def test_multi_robot_fleet_health_only_lists_attention_needed(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        healthy = self._make_entry(
+            "e1", "Healthy", health_trend="improving",
+            vac_state={"bbrun": {"hr": 1}},
+        )
+        needs_help = self._make_entry(
+            "e2", "Needs Help", health_trend="declining",
+            vac_state={"bbrun": {"hr": 1}},
+        )
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [healthy, needs_help]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["fleet_health"]["robot_count"] == 2
+        assert body["fleet_health"]["robots_needing_attention"] == ["Needs Help"]
+
+    @pytest.mark.asyncio
+    async def test_no_robot_profile_store_health_trend_is_none(self):
+        """Robot with no RobotProfileStore yet (e.g. very first run) must
+        not crash — health_trend degrades to None, not an AttributeError."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry(
+            "e1", "New Robot", has_robot_profile_store=False,
+            vac_state={"bbrun": {"hr": 1}},
+        )
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["robots"][0]["health_trend"] is None
+        assert body["robots"][0]["needs_attention"] is False
+
+    @pytest.mark.asyncio
+    async def test_zero_missions_completion_pct_is_zero(self):
+        """Real-endpoint replacement for the old synthetic
+        test_completion_pct_zero_when_no_missions."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry("e1", "Idle")  # no records at all
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["total"]["missions"] == 0
+        assert body["total"]["completion_pct"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_full_completion_pct(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        records = [
+            _digest_rec("2026-06-16T08:00:00+00:00", result="completed"),
+            _digest_rec("2026-06-16T09:00:00+00:00", result="completed"),
+        ]
+        entry = self._make_entry("e1", "Perfect", records=records)
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["total"]["completion_pct"] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_empty_floor_label_excluded_from_floors(self):
+        """Real-endpoint replacement for the old synthetic
+        test_empty_floor_label_not_in_floors."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry("e1", "No Floor", floor_label="")
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert "floors" not in body
+
+    @pytest.mark.asyncio
+    async def test_total_area_none_when_no_robot_has_area(self):
+        """Real-endpoint replacement for the old synthetic test of the
+        same name — no record anywhere has area_sqft set."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        records = [_digest_rec("2026-06-16T08:00:00+00:00", area_sqft=None)]
+        entry = self._make_entry("e1", "No Area", records=records)
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["total"]["area_sqft"] is None
+
+    @pytest.mark.asyncio
+    async def test_no_maintenance_store_defaults_to_not_due(self):
+        """Mirrors the no-robot-profile-store case for maintenance_store —
+        must degrade gracefully, not crash."""
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        entry = self._make_entry("e1", "No Store")
+        entry.runtime_data.maintenance_store = None
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [entry]
+
+        view = HouseholdSummaryView()
+        resp = await view.get(self._make_request(hass))
+        body = json.loads(resp.body)
+
+        assert body["robots"][0]["maintenance_due"] is False

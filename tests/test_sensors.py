@@ -1842,6 +1842,42 @@ class TestEventCounts30dSensor:
         assert attrs.get("dirt_events") == 13
 
 
+class TestJobInitiatorLabels:
+    """v3.4.3 — found while building the demand_clean_alert blueprint:
+    JOB_INITIATOR_LABELS had no "demand" mapping, even though
+    DirtThresholdManager/callbacks.py's MS1 override genuinely writes
+    initiator="demand" — silently fell through to the "none" default,
+    making a demand-triggered mission indistinguishable from "no
+    initiator info at all" on this sensor."""
+
+    def _make_entity(self, initiator: str) -> MagicMock:
+        e = MagicMock()
+        e.clean_mission_status = {"initiator": initiator}
+        return e
+
+    def test_demand_has_its_own_label(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(d for d in SENSORS if d.key == "job_initiator")
+        e = self._make_entity("demand")
+        assert desc.value_fn(e) == "Demand clean"
+
+    def test_demand_label_distinct_from_none_fallback(self):
+        """The actual regression: before the fix, both of these returned
+        the same string ("None"), making them indistinguishable."""
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(d for d in SENSORS if d.key == "job_initiator")
+        demand_result = desc.value_fn(self._make_entity("demand"))
+        none_result = desc.value_fn(self._make_entity("none"))
+        assert demand_result != none_result
+
+    def test_existing_labels_unaffected(self):
+        from custom_components.roomba_plus.sensor import SENSORS
+        desc = next(d for d in SENSORS if d.key == "job_initiator")
+        assert desc.value_fn(self._make_entity("schedule")) == "iRobot schedule"
+        assert desc.value_fn(self._make_entity("manual")) == "Robot"
+
+
+
 class TestBatteryCycles:
     """battery_cycles sensor must use batInfo.cCount for i/s-series."""
 

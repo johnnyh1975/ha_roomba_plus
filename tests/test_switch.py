@@ -18,6 +18,7 @@ from custom_components.roomba_plus.switch import (
     ScheduleHoldSwitch,
     ChildLockSwitch,
     EcoChargeSwitch,
+    GentleModeSwitch,
     async_setup_entry,
 )
 
@@ -202,6 +203,47 @@ class TestEcoChargeSwitch:
         )
 
 
+# ── GentleModeSwitch: ON when gentle is True (NOT inverted) ─────────────────
+# v3.4.3 GENTLE-MODE
+
+class TestGentleModeSwitch:
+    def test_on_when_gentle_true(self):
+        s = _make(GentleModeSwitch, {"gentle": True})
+        assert s.is_on is True
+
+    def test_off_when_gentle_false(self):
+        s = _make(GentleModeSwitch, {"gentle": False})
+        assert s.is_on is False
+
+    def test_default_off_when_key_missing(self):
+        s = _make(GentleModeSwitch, {})
+        assert s.is_on is False
+
+    @pytest.mark.asyncio
+    async def test_turn_on_sends_gentle_true(self):
+        s = _make(GentleModeSwitch, {"gentle": False})
+        await s.async_turn_on()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "gentle", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_sends_gentle_false(self):
+        s = _make(GentleModeSwitch, {"gentle": True})
+        await s.async_turn_off()
+        s.hass.async_add_executor_job.assert_awaited_once_with(
+            s.vacuum.set_preference, "gentle", False
+        )
+
+    def test_new_state_filter_true_when_gentle_present(self):
+        s = _make(GentleModeSwitch, {"gentle": True})
+        assert s.new_state_filter({"gentle": False}) is True
+
+    def test_new_state_filter_false_when_gentle_absent(self):
+        s = _make(GentleModeSwitch, {"gentle": True})
+        assert s.new_state_filter({"ecoCharge": False}) is False
+
+
 # ── async_setup_entry: gating by capability key presence ────────────────────
 
 class TestSwitchSetupGating:
@@ -238,13 +280,14 @@ class TestSwitchSetupGating:
         assert len(added) == 1
         assert isinstance(added[0], EdgeCleanSwitch)
 
-    def test_all_five_when_all_keys_present(self):
+    def test_all_six_when_all_keys_present(self):
         added = self._setup({
             "openOnly": False,
             "binPause": True,
             "schedHold": False,
             "childLock": False,
             "ecoCharge": False,
+            "gentle": False,
         })
         types = {type(e) for e in added}
         assert types == {
@@ -253,6 +296,7 @@ class TestSwitchSetupGating:
             ScheduleHoldSwitch,
             ChildLockSwitch,
             EcoChargeSwitch,
+            GentleModeSwitch,
         }
 
     def test_clean_base_model_gets_always_finish(self):
@@ -269,3 +313,8 @@ class TestSwitchSetupGating:
         added = self._setup({"ecoCharge": False})
         assert len(added) == 1
         assert isinstance(added[0], EcoChargeSwitch)
+
+    def test_only_gentle_mode_when_gentle_present(self):
+        added = self._setup({"gentle": False})
+        assert len(added) == 1
+        assert isinstance(added[0], GentleModeSwitch)
