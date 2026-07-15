@@ -1235,6 +1235,21 @@ class TestExportEndpoint:
         assert body["export_version"] == 1
 
 
+def _recent_iso(hours_ago: float = 24) -> str:
+    """A timestamp safely inside HouseholdSummaryView's default 28-day
+    window, computed relative to real now() instead of a hardcoded date.
+
+    Three tests in TestHouseholdSummaryView used to hardcode
+    "2026-06-16T..." — that date was comfortably inside the 28-day window
+    when written, but is fixed real-world elapsed time away from being
+    outside it. Relative dates don't have that expiry.
+    """
+    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        hours=hours_ago
+    )
+    return dt.isoformat()
+
+
 def _digest_rec(
     started_at: str,
     ended_at: str | None = None,
@@ -2235,8 +2250,8 @@ class TestHouseholdSummaryView:
         from custom_components.roomba_plus.api_views import HouseholdSummaryView
 
         records = [
-            _digest_rec("2026-06-16T08:00:00+00:00", area_sqft=250.0, result="completed"),
-            _digest_rec("2026-06-16T14:00:00+00:00", area_sqft=500.0, result="stuck"),
+            _digest_rec(_recent_iso(24), area_sqft=250.0, result="completed"),
+            _digest_rec(_recent_iso(18), area_sqft=500.0, result="stuck"),
         ]
         entry = self._make_entry("e1", "Downstairs", records=records)
         hass = MagicMock()
@@ -2255,8 +2270,8 @@ class TestHouseholdSummaryView:
     async def test_floors_aggregate_across_robots(self):
         from custom_components.roomba_plus.api_views import HouseholdSummaryView
 
-        r1 = [_digest_rec("2026-06-16T08:00:00+00:00", area_sqft=100.0, result="completed")]
-        r2 = [_digest_rec("2026-06-16T09:00:00+00:00", area_sqft=200.0, result="completed")]
+        r1 = [_digest_rec(_recent_iso(24), area_sqft=100.0, result="completed")]
+        r2 = [_digest_rec(_recent_iso(23), area_sqft=200.0, result="completed")]
         entry1 = self._make_entry("e1", "Up", records=r1, floor_label="Upstairs")
         entry2 = self._make_entry("e2", "Down", records=r2, floor_label="Upstairs")
         hass = MagicMock()
@@ -2404,8 +2419,8 @@ class TestHouseholdSummaryView:
         from custom_components.roomba_plus.api_views import HouseholdSummaryView
 
         records = [
-            _digest_rec("2026-06-16T08:00:00+00:00", result="completed"),
-            _digest_rec("2026-06-16T09:00:00+00:00", result="completed"),
+            _digest_rec(_recent_iso(24), result="completed"),
+            _digest_rec(_recent_iso(23), result="completed"),
         ]
         entry = self._make_entry("e1", "Perfect", records=records)
         hass = MagicMock()

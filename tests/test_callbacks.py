@@ -2388,18 +2388,16 @@ class TestFullLifecycleSequenceToResult:
 
 
 class TestCloudRefreshCallbackDispatchesV320Checks:
-    """v3.2.0 bug-hunt fix — make_cloud_refresh_callback's
-    _on_cloud_refresh_complete must actually dispatch all five v3.2.0
-    repair checks (health_trend_declining, room_accessibility,
-    furniture_change, stuck_hotspot, coverage_frequency).
+    """make_cloud_refresh_callback's _on_cloud_refresh_complete dispatches
+    the surviving grid-store-dependent check.
 
-    Found via a systematic post-release audit: four of these five were
-    built and thoroughly unit-tested as standalone functions, but never
-    wired into anything the running integration actually calls — the
-    tests exercised the functions directly, which passed, but nothing in
-    production would ever have invoked them. This test asserts on the
-    actual dispatch call names so that gap can't silently reopen if this
-    callback is refactored later.
+    v3.5.0 Repairs redesign: of the former five v3.2.0 checks, only
+    furniture_change (layout-change detection) remains a repair. The others
+    were removed — room_accessibility/stuck_hotspot data is already exposed
+    via the ?format=hazards endpoint + map, coverage_frequency was a
+    derivable nudge, and health_trend/performance are already surfaced by
+    their sensors. This test pins the surviving dispatch so it can't
+    silently drop out on a later refactor.
     """
 
     def _run_callback(self):
@@ -2430,47 +2428,20 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
             for call in hass.async_create_task.call_args_list
         ]
 
-    def test_all_five_v320_checks_dispatched(self):
+    def test_furniture_change_dispatched(self):
         dispatched = self._run_callback()
-        expected = {
+        assert "roomba_plus_furniture_change_check" in dispatched
+
+    def test_removed_checks_not_dispatched(self):
+        """The four v3.5.0-removed checks must no longer be dispatched."""
+        dispatched = set(self._run_callback())
+        for gone in (
             "roomba_plus_room_accessibility_check",
-            "roomba_plus_furniture_change_check",
             "roomba_plus_stuck_hotspot_check",
             "roomba_plus_coverage_frequency_check",
-        }
-        missing = expected - set(dispatched)
-        assert not missing, f"Missing dispatch(es): {missing}"
-
-    def test_room_accessibility_not_dispatched_without_umf_aligner(self):
-        """Correctly gated — no umf_aligner means no room polygons, so
-        dispatching the check would be pure overhead."""
-        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
-
-        hass = MagicMock()
-        config_entry = MagicMock()
-        config_entry.entry_id = "test_entry"
-        rd = config_entry.runtime_data
-        rd.mission_store = MagicMock()
-        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
-            corrected=0, enriched=0,
-        )
-        rd.dirt_threshold_manager = None
-        rd.grid_store = MagicMock()
-        rd.umf_aligner = None
-        rd.robot_profile_store = MagicMock()
-
-        cloud_coordinator = MagicMock()
-        cloud_coordinator.last_update_success = True
-        cloud_coordinator.umf_data = {}
-
-        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
-        callback_fn()
-
-        dispatched = [
-            call.kwargs.get("name")
-            for call in hass.async_create_task.call_args_list
-        ]
-        assert "roomba_plus_room_accessibility_check" not in dispatched
+            "roomba_plus_dirt_correlation_check",
+        ):
+            assert gone not in dispatched
 
     def test_grid_store_dependent_checks_not_dispatched_without_grid_store(self):
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
@@ -2500,8 +2471,6 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
             for call in hass.async_create_task.call_args_list
         ]
         assert "roomba_plus_furniture_change_check" not in dispatched
-        assert "roomba_plus_stuck_hotspot_check" not in dispatched
-        assert "roomba_plus_room_accessibility_check" not in dispatched
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2721,23 +2690,23 @@ class TestGsCoverageHookDispatch:
         assert "roomba_plus_gs_smart_coverage" not in dispatched
 
     def test_dispatched_before_grid_store_reading_checks(self):
-        """Ordering matters (plan §3.4): GS-SMART-COVERAGE must be
-        queued before stuck_hotspot/furniture_change/room_accessibility
-        so a same-cycle backfill is visible to them."""
+        """Ordering matters (plan §3.4): GS-SMART-COVERAGE must be queued
+        before furniture_change so a same-cycle backfill is visible to it.
+
+        v3.5.0: stuck_hotspot and room_accessibility were removed from this
+        ordering constraint along with their repair checks; furniture_change
+        is the only surviving grid-store-reading check.
+        """
         from custom_components.roomba_plus.models import MapCapability
         dispatched = self._run_callback(
             map_capability=MapCapability.SMART,
             grid_store=MagicMock(), umf_aligner=MagicMock(),
         )
         gs_idx = dispatched.index("roomba_plus_gs_smart_coverage")
-        for later in (
-            "roomba_plus_stuck_hotspot_check",
-            "roomba_plus_furniture_change_check",
-            "roomba_plus_room_accessibility_check",
-        ):
-            assert dispatched.index(later) > gs_idx, (
-                f"{later} dispatched before roomba_plus_gs_smart_coverage"
-            )
+        assert dispatched.index("roomba_plus_furniture_change_check") > gs_idx, (
+            "roomba_plus_furniture_change_check dispatched before "
+            "roomba_plus_gs_smart_coverage"
+        )
 
 
 def _gs_coverage_env(*, aligned=True, watermark=0):

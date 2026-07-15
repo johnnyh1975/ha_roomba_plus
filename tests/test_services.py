@@ -9,6 +9,9 @@ from __future__ import annotations
 
 
 
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -82,6 +85,9 @@ class TestServicesRegistration:
             (DOMAIN, "clean_overdue_rooms"),
             # v3.3.0 SMART-ORDER
             (DOMAIN, "auto_clean_dirty_rooms"),
+            # v3.5.0 FULL-BACKUP
+            (DOMAIN, "create_backup"),
+            (DOMAIN, "restore_backup"),
         }
         assert expected == set(registered.keys())
 
@@ -96,7 +102,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 15
+        assert len(registered) == 17
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -107,7 +113,7 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 15
+        assert len(registered) == 17
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -1596,3 +1602,172 @@ class TestSeamSensorService:
         # "Kitchen" never matches → learned/insufficient → no-op.
         hass.services.async_call.assert_awaited_once()
         assert hass.services.async_call.call_args[0][2]["room_name"] == ["Kitchen"]
+
+
+# ── v3.5.0 FULL-BACKUP ────────────────────────────────────────────────────────
+
+
+def _make_backup_hass(tmp_path):
+    """A hass double whose async_add_executor_job really runs the blocking
+    fn against a real (tmp_path-backed) filesystem — the ZIP read/write
+    logic is exercised for real, not mocked away."""
+    hass = MagicMock()
+    hass.config.path.side_effect = lambda name: str(tmp_path / name)
+
+    async def _run_executor(fn, *args):
+        return fn(*args)
+
+    hass.async_add_executor_job = AsyncMock(side_effect=_run_executor)
+    return hass
+
+
+def _make_backup_config_entry(entry_id="e1", blid="ABC123"):
+    entry = MagicMock()
+    entry.entry_id = entry_id
+    entry.runtime_data.blid = blid
+    entry.runtime_data.map_capability.value = "EPHEMERAL"
+    return entry
+
+
+def _wire_entity_lookup(hass, config_entry):
+    ent = MagicMock()
+    ent.config_entry_id = config_entry.entry_id
+    er_patcher = patch(
+        "custom_components.roomba_plus.services.er.async_get",
+        return_value=MagicMock(async_get=MagicMock(return_value=ent)),
+    )
+    hass.config_entries.async_get_entry.return_value = config_entry
+    return er_patcher
+
+
+class TestCreateBackup:
+    @pytest.mark.asyncio
+    async def test_writes_zip_with_available_stores(self, tmp_path):
+        from custom_components.roomba_plus.services import async_handle_create_backup
+
+        hass = _make_backup_hass(tmp_path)
+        entry = _make_backup_config_entry()
+
+        store_data = {
+            "roomba_plus_missions_e1": {"records": [1, 2, 3]},
+            "roomba_plus_grid_e1": {"cells": {}},
+        }
+
+        async def fake_load(self):
+            return store_data.get(self.key)
+
+        with _wire_entity_lookup(hass, entry), patch(
+            "custom_components.roomba_plus.services.Store.async_load", fake_load
+        ):
+            call = MagicMock()
+            call.data = {"entity_id": "vacuum.test"}
+            result = await async_handle_create_backup(hass, call)
+
+        assert "mission_store" in result["included_stores"]
+        assert "grid_store" in result["included_stores"]
+        assert "maintenance_store" in result["excluded_stores_no_data"]
+        assert Path(result["path"]).is_file()
+
+        import zipfile
+        with zipfile.ZipFile(result["path"]) as zf:
+            names = set(zf.namelist())
+            assert "manifest.json" in names
+            assert "roomba_plus_missions.json" in names
+            assert "roomba_plus_maintenance.json" not in names
+            manifest = json.loads(zf.read("manifest.json"))
+            assert manifest["robot"]["blid"] == "ABC123"
+
+    @pytest.mark.asyncio
+    async def test_unknown_entity_raises(self, tmp_path):
+        from custom_components.roomba_plus.services import async_handle_create_backup
+        from homeassistant.exceptions import ServiceValidationError
+
+        hass = _make_backup_hass(tmp_path)
+        with patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=MagicMock(async_get=MagicMock(return_value=None)),
+        ):
+            call = MagicMock()
+            call.data = {"entity_id": "vacuum.nonexistent"}
+            with pytest.raises(ServiceValidationError):
+                await async_handle_create_backup(hass, call)
+
+
+class TestRestoreBackup:
+    @pytest.mark.asyncio
+    async def test_restores_and_reloads_live_stores(self, tmp_path):
+        from custom_components.roomba_plus.services import (
+            async_handle_create_backup,
+            async_handle_restore_backup,
+        )
+
+        hass = _make_backup_hass(tmp_path)
+        entry = _make_backup_config_entry()
+
+        store_data = {"roomba_plus_missions_e1": {"records": [1, 2, 3]}}
+
+        async def fake_load(self):
+            return store_data.get(self.key)
+
+        saved: dict[str, dict] = {}
+
+        async def fake_save(self, data):
+            saved[self.key] = data
+
+        with _wire_entity_lookup(hass, entry), patch(
+            "custom_components.roomba_plus.services.Store.async_load", fake_load
+        ), patch(
+            "custom_components.roomba_plus.services.Store.async_save", fake_save
+        ):
+            create_call = MagicMock()
+            create_call.data = {"entity_id": "vacuum.test"}
+            created = await async_handle_create_backup(hass, create_call)
+
+            entry.runtime_data.mission_store = MagicMock()
+            entry.runtime_data.mission_store.async_load = AsyncMock()
+
+            restore_call = MagicMock()
+            restore_call.data = {
+                "entity_id": "vacuum.test",
+                "path": created["path"],
+            }
+            result = await async_handle_restore_backup(hass, restore_call)
+
+        assert "mission_store" in result["restored_stores"]
+        assert "roomba_plus_missions_e1" in saved
+        assert saved["roomba_plus_missions_e1"] == {"records": [1, 2, 3]}
+        entry.runtime_data.mission_store.async_load.assert_awaited_once_with(
+            hass, "e1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_file_raises(self, tmp_path):
+        from custom_components.roomba_plus.services import async_handle_restore_backup
+        from homeassistant.exceptions import HomeAssistantError
+
+        hass = _make_backup_hass(tmp_path)
+        entry = _make_backup_config_entry()
+        with _wire_entity_lookup(hass, entry):
+            call = MagicMock()
+            call.data = {
+                "entity_id": "vacuum.test",
+                "path": str(tmp_path / "does_not_exist.zip"),
+            }
+            with pytest.raises(HomeAssistantError):
+                await async_handle_restore_backup(hass, call)
+
+    @pytest.mark.asyncio
+    async def test_corrupt_zip_raises(self, tmp_path):
+        from custom_components.roomba_plus.services import async_handle_restore_backup
+        from homeassistant.exceptions import HomeAssistantError
+
+        bad_zip = tmp_path / "corrupt.zip"
+        bad_zip.write_bytes(b"not actually a zip file")
+
+        hass = _make_backup_hass(tmp_path)
+        entry = _make_backup_config_entry()
+        with _wire_entity_lookup(hass, entry):
+            call = MagicMock()
+            call.data = {"entity_id": "vacuum.test", "path": str(bad_zip)}
+            with pytest.raises(HomeAssistantError):
+                await async_handle_restore_backup(hass, call)

@@ -39,7 +39,7 @@ from custom_components.roomba_plus.const import has_clean_base
 from custom_components.roomba_plus.const import has_pose
 from custom_components.roomba_plus.sensor import SENSORS
 from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
-from custom_components.roomba_plus.repairs import async_check_smberr
+from custom_components.roomba_plus.repairs import _smberr_elevated
 
 
 def _make_entry(mts: MissionTimerStore) -> MagicMock:
@@ -1888,82 +1888,49 @@ class TestArc1CloudCoordinatorWiring:
 
 
 class TestSmberrTypeSafety:
-    @pytest.mark.asyncio
-    async def test_non_numeric_smberr_does_not_crash(self):
+    """v3.5.0 — smberr moved from its own standalone Repair
+    (async_check_smberr) into _smberr_elevated(), a shared helper now used
+    as a confidence input by async_check_battery_contact_issue and
+    async_check_dock_health. These tests moved with it — the type-safety
+    guarantees (_safe_int_repairs) still matter, just for the new home of
+    this logic."""
+
+    def test_non_numeric_smberr_does_not_crash(self):
+        from custom_components.roomba_plus.repairs import _smberr_elevated
         entry = _entry({"state": {"reported": {"bbchg": {"smberr": "corrupted"}}}})
-        hass = MagicMock()
-        def _close_coro(*args, **kwargs):
-            import asyncio as _asyncio
-            for a in args:
-                if _asyncio.iscoroutine(a):
-                    a.close()
-        hass.async_create_task = _close_coro
-        await async_check_smberr(hass, entry)  # must not raise
+        elevated, count = _smberr_elevated(entry.runtime_data)  # must not raise
+        assert elevated is False
+        assert count == 0
 
-    @pytest.mark.asyncio
-    async def test_state_explicit_none_does_not_crash(self):
+    def test_state_explicit_none_does_not_crash(self):
+        from custom_components.roomba_plus.repairs import _smberr_elevated
         entry = _entry({"state": None})
-        hass = MagicMock()
-        def _close_coro(*args, **kwargs):
-            import asyncio as _asyncio
-            for a in args:
-                if _asyncio.iscoroutine(a):
-                    a.close()
-        hass.async_create_task = _close_coro
-        await async_check_smberr(hass, entry)
+        elevated, count = _smberr_elevated(entry.runtime_data)
+        assert elevated is False
+        assert count == 0
 
-    @pytest.mark.asyncio
-    async def test_smberr_field_absent_returns_early(self):
+    def test_smberr_field_absent_returns_not_elevated(self):
+        from custom_components.roomba_plus.repairs import _smberr_elevated
         entry = _entry({"state": {"reported": {"bbchg": {}}}})
-        hass = MagicMock()
-        def _close_coro(*args, **kwargs):
-            import asyncio as _asyncio
-            for a in args:
-                if _asyncio.iscoroutine(a):
-                    a.close()
-        hass.async_create_task = _close_coro
-        with patch(
-            "custom_components.roomba_plus.repairs.ir.async_create_issue"
-        ) as mock_create, patch(
-            "custom_components.roomba_plus.repairs.ir.async_delete_issue"
-        ) as mock_delete:
-            await async_check_smberr(hass, entry)
-        mock_create.assert_not_called()
-        mock_delete.assert_not_called()
+        elevated, count = _smberr_elevated(entry.runtime_data)
+        assert elevated is False
+        assert count == 0
 
-    @pytest.mark.asyncio
-    async def test_valid_high_smberr_still_fires_issue(self):
+    def test_valid_high_smberr_reports_elevated(self):
         """Regression: confirmed field data scenario (i7+, 7-year battery)
-        must still correctly fire the Repair Issue."""
+        must still correctly report elevated."""
+        from custom_components.roomba_plus.repairs import _smberr_elevated
         entry = _entry({"state": {"reported": {"bbchg": {"smberr": 50432}}}})
-        hass = MagicMock()
-        def _close_coro(*args, **kwargs):
-            import asyncio as _asyncio
-            for a in args:
-                if _asyncio.iscoroutine(a):
-                    a.close()
-        hass.async_create_task = _close_coro
-        with patch(
-            "custom_components.roomba_plus.repairs.ir.async_create_issue"
-        ) as mock_create:
-            await async_check_smberr(hass, entry)
-        mock_create.assert_called_once()
+        elevated, count = _smberr_elevated(entry.runtime_data)
+        assert elevated is True
+        assert count == 50432
 
-    @pytest.mark.asyncio
-    async def test_valid_low_smberr_clears_issue(self):
+    def test_valid_low_smberr_reports_not_elevated(self):
+        from custom_components.roomba_plus.repairs import _smberr_elevated
         entry = _entry({"state": {"reported": {"bbchg": {"smberr": 0}}}})
-        hass = MagicMock()
-        def _close_coro(*args, **kwargs):
-            import asyncio as _asyncio
-            for a in args:
-                if _asyncio.iscoroutine(a):
-                    a.close()
-        hass.async_create_task = _close_coro
-        with patch(
-            "custom_components.roomba_plus.repairs.ir.async_delete_issue"
-        ) as mock_delete:
-            await async_check_smberr(hass, entry)
-        mock_delete.assert_called_once()
+        elevated, count = _smberr_elevated(entry.runtime_data)
+        assert elevated is False
+        assert count == 0
 
 
 class TestDockHealthStateNoneGuard:

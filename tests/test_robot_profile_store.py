@@ -1154,7 +1154,7 @@ class TestRobotProfileStoreCorruptionResilience:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestRelocBaseline:
-    """L9-MAP (v3.1.0) — update_reloc_baseline / reloc_baseline_ready / reloc_alert_triggered."""
+    """L9-MAP (v3.1.0) — update_reloc_baseline / reloc_baseline_ready / reloc_percentile_rank (v3.5.0)."""
 
     def test_first_update_sets_baseline_directly(self):
         """First observation becomes the initial baseline value."""
@@ -1195,79 +1195,97 @@ class TestRelocBaseline:
             rps.update_reloc_baseline(0)
         assert rps.reloc_baseline_ready is True
 
-    def test_alert_not_triggered_when_not_ready(self):
-        """reloc_alert_triggered is always False before baseline is ready,
-        regardless of how extreme the recent values are."""
+    def test_percentile_rank_none_below_min_missions(self):
+        """reloc_percentile_rank is None before enough history has
+        accumulated, regardless of how extreme the recent values are."""
         rps = RobotProfileStore()
         for _ in range(10):
             rps.update_reloc_baseline(50)  # extreme values, but too few missions
-        assert rps.reloc_alert_triggered() is False
+        assert rps.reloc_percentile_rank() is None
 
-    def test_alert_triggered_above_multiplier(self):
-        """Recent window mean > 3x the established (pre-window) baseline
-        triggers the alert. Since update_reloc_baseline() updates both the
-        running mean AND the window together, this test establishes the
-        baseline with reloc_baseline_ready already True from a long quiet
-        history, then pushes a short burst of high values — the running
-        mean barely moves (large n) while the recent window fills with the
-        spike, which is exactly the scenario the alert is meant to catch.
-        """
+    def test_percentile_rank_high_for_genuine_spike(self):
+        """A burst of high values against a long quiet history ranks near
+        the top of the robot's own historical distribution — no fixed
+        multiplier, purely relative to what this robot has itself seen."""
         rps = RobotProfileStore()
-        # Long quiet history so the running mean is well-established and
-        # barely moves when a handful of high readings are added afterwards.
+        # Long quiet history establishes the reference distribution.
         for _ in range(100):
             rps.update_reloc_baseline(1)
-        baseline_before_spike = rps.reloc_baseline
-        assert baseline_before_spike == pytest.approx(1.0)
-
-        # Now a burst of high values — window fills with these, but with
-        # n=110 the running mean only nudges up slightly.
+        # A burst of high values — window fills with these.
         for _ in range(10):
             rps.update_reloc_baseline(10)
-
-        # Recent window is now all 10s; baseline only rose slightly (n large).
         assert rps.recent_relocs == [10] * 10
-        assert rps.reloc_baseline < 2.0  # still close to the pre-spike baseline
-        assert rps.reloc_alert_triggered() is True
+        rank = rps.reloc_percentile_rank()
+        assert rank is not None
+        assert rank > 90  # current window is higher than nearly all history
 
-    def test_alert_not_triggered_within_multiplier(self):
-        """Recent window mean below the 3x threshold does not trigger."""
-        rps = RobotProfileStore()
+    def test_percentile_rank_is_order_statistic_not_magnitude(self):
+        """Honest property check: reloc_percentile_rank is a rank statistic
+        — it reflects whether the current window is unusual for this
+        robot, not by how much. Two differently-sized sustained increases
+        that create the same window structure (10 uniform new values
+        against the same older baseline) rank identically, because rank
+        statistics discard magnitude by design. This is expected, not a
+        bug — the property that matters is captured by the other tests
+        (None below min missions, zero-inflated ties ranking mid, a
+        clearly-still-typical reading ranking low).
+        """
+        rps_a = RobotProfileStore()
         for _ in range(100):
-            rps.update_reloc_baseline(1)
+            rps_a.update_reloc_baseline(1)
         for _ in range(10):
-            rps.update_reloc_baseline(2)  # 2x-ish, not 3x+
-        assert rps.reloc_alert_triggered() is False
+            rps_a.update_reloc_baseline(10)
+        rank_a = rps_a.reloc_percentile_rank()
 
-    def test_zero_baseline_special_case(self):
-        """A near-zero baseline (robot has almost never relocalised) triggers
-        on ANY non-zero recent activity, since multiplying a tiny baseline by
-        _RELOC_ALERT_MULTIPLIER would otherwise never meaningfully trigger.
+        rps_b = RobotProfileStore()
+        for _ in range(100):
+            rps_b.update_reloc_baseline(1)
+        for _ in range(10):
+            rps_b.update_reloc_baseline(2)
+        rank_b = rps_b.reloc_percentile_rank()
+
+        assert rank_a is not None and rank_b is not None
+        assert rank_a == rank_b  # same window structure -> same rank
+
+    def test_percentile_rank_zero_inflated_history_ranks_typical_reading_mid(self):
+        """v3.5.0 — the whole reason the fixed multiplier was replaced: on
+        a robot whose history is entirely zero, a current reading of zero
+        is completely typical. It must rank near the middle (mean-rank tie
+        handling), not misleadingly at either extreme — a naive fixed
+        threshold against a zero baseline would either never fire or
+        hair-trigger on the first nonzero value, neither of which reflects
+        reality here.
         """
         rps = RobotProfileStore()
         for _ in range(100):
             rps.update_reloc_baseline(0)
-        assert rps.reloc_baseline == 0.0
-        # Push a burst with a single non-zero value into the window — this
-        # nudges the running mean slightly above exactly 0.0 (e.g. 0.009),
-        # which the < 0.05 tolerance check still correctly catches.
-        for _ in range(9):
-            rps.update_reloc_baseline(0)
-        rps.update_reloc_baseline(1)
-        assert rps.reloc_baseline < 0.05  # still effectively zero
-        assert rps.reloc_alert_triggered() is True
+        rank = rps.reloc_percentile_rank()
+        assert rank is not None
+        assert 40 <= rank <= 60  # a typical (all-zero) reading, not extreme
 
-    def test_zero_baseline_no_alert_when_still_zero(self):
-        """Baseline 0.0 with a window that's still all zeros does not alert."""
+    def test_percentile_rank_still_low_for_zero_after_real_history_has_spikes(self):
+        """A current all-zero window ranks LOW (not mid) once the robot's
+        own history actually contains a meaningful mix of nonzero values —
+        confirms the percentile genuinely reflects the shape of each
+        robot's own distribution rather than a hardcoded rule."""
         rps = RobotProfileStore()
-        for _ in range(20):
+        # Half zero, half elevated — a genuinely mixed history.
+        for _ in range(50):
             rps.update_reloc_baseline(0)
-        assert rps.reloc_alert_triggered() is False
+        for _ in range(50):
+            rps.update_reloc_baseline(5)
+        # Now bring the recent window back down to all-zero.
+        for _ in range(10):
+            rps.update_reloc_baseline(0)
+        rank = rps.reloc_percentile_rank()
+        assert rank is not None
+        assert rank < 50
 
     def test_persistence_fields_round_trip_via_attributes(self):
-        """reloc_baseline state is captured correctly by the three persisted
-        attributes (reloc_baseline, reloc_mission_count, recent_relocs) —
-        the same fields async_save()/async_load() read and write.
+        """reloc_baseline state is captured correctly by the four persisted
+        attributes (reloc_baseline, reloc_mission_count, recent_relocs,
+        reloc_history [v3.5.0]) — the same fields async_save()/async_load()
+        read and write.
         """
         rps = RobotProfileStore()
         for v in [0, 1, 0, 2, 0]:
@@ -1279,21 +1297,26 @@ class TestRelocBaseline:
             "reloc_baseline": rps.reloc_baseline,
             "reloc_mission_count": rps.reloc_mission_count,
             "recent_relocs": rps.recent_relocs,
+            "reloc_history": rps.reloc_history,
         }
         restored = RobotProfileStore()
         rb = persisted.get("reloc_baseline")
         restored.reloc_baseline = float(rb) if rb is not None else None
         restored.reloc_mission_count = int(persisted.get("reloc_mission_count", 0))
         restored.recent_relocs = [int(v) for v in persisted.get("recent_relocs", [])]
+        restored.reloc_history = [int(v) for v in persisted.get("reloc_history", [])]
 
         assert restored.reloc_baseline == pytest.approx(rps.reloc_baseline)
         assert restored.reloc_mission_count == rps.reloc_mission_count
         assert restored.recent_relocs == rps.recent_relocs
+        assert restored.reloc_history == rps.reloc_history
 
     def test_missing_reloc_fields_default_safely(self):
         """A legacy payload without reloc_baseline fields loads with safe
         defaults — no crash, baseline starts fresh. Mirrors the .get()
-        defaulting pattern used in the real async_load().
+        defaulting pattern used in the real async_load(). Includes
+        reloc_history (v3.5.0) — a legacy payload predating it must also
+        default safely, not crash.
         """
         legacy_payload = {
             "version": 1,
@@ -1306,10 +1329,12 @@ class TestRelocBaseline:
         restored.reloc_baseline = float(rb) if rb is not None else None
         restored.reloc_mission_count = int(legacy_payload.get("reloc_mission_count", 0))
         restored.recent_relocs = [int(v) for v in legacy_payload.get("recent_relocs", [])]
+        restored.reloc_history = [int(v) for v in legacy_payload.get("reloc_history", [])]
 
         assert restored.reloc_baseline is None
         assert restored.reloc_mission_count == 0
         assert restored.recent_relocs == []
+        assert restored.reloc_history == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────

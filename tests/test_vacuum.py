@@ -110,6 +110,7 @@ def _make_vacuum_entity(state: dict | None = None, runtime_data=None):
     v.vacuum_state = state or {}
     v._config_entry = entry
     v._cap_position = False
+    v._segment_mismatch_streak = 0
     return v
 
 
@@ -466,7 +467,13 @@ class TestChangeDetection:
         v._handle_coordinator_update()
         v.async_create_segments_issue.assert_not_called()
 
-    def test_issue_raised_when_ids_differ(self):
+    def test_no_issue_on_single_mismatched_refresh(self):
+        """v3.5.0 SEGMENT-DEBOUNCE: a single mismatched refresh must NOT
+        trigger the remap flow — only a mismatch sustained across
+        _SEGMENT_MISMATCH_DEBOUNCE consecutive refreshes does. This is the
+        actual fix for dixi83's field report (a transient region-ID/pmap-ID
+        inconsistency on iRobot's own cloud side firing the disruptive
+        native remap prompt on every single refresh)."""
         from homeassistant.components.vacuum import Segment
         v = _make_vacuum_entity()
         # last_seen has a region that no longer exists
@@ -476,7 +483,57 @@ class TestChangeDetection:
         ]
         v.async_create_segments_issue = MagicMock()
         v._handle_coordinator_update()
+        v.async_create_segments_issue.assert_not_called()
+
+    def test_issue_raised_after_sustained_mismatch(self):
+        """The remap flow DOES trigger once the mismatch persists across
+        _SEGMENT_MISMATCH_DEBOUNCE consecutive refreshes — a genuine
+        retrain still gets reliably detected, just not on the first blip."""
+        from homeassistant.components.vacuum import Segment
+        v = _make_vacuum_entity()
+        v.last_seen_segments = [
+            Segment(id="MAP001_19", name="Living Room"),
+            Segment(id="MAP001_99", name="Old Room"),  # gone
+        ]
+        v.async_create_segments_issue = MagicMock()
+        for _ in range(v._SEGMENT_MISMATCH_DEBOUNCE - 1):
+            v._handle_coordinator_update()
+        v.async_create_segments_issue.assert_not_called()
+        v._handle_coordinator_update()  # the Nth consecutive mismatch
         v.async_create_segments_issue.assert_called_once()
+
+    def test_mismatch_streak_resets_on_recovery(self):
+        """A transient mismatch that resolves before reaching the debounce
+        threshold resets the streak — it doesn't carry over and combine
+        with a later, unrelated mismatch."""
+        from homeassistant.components.vacuum import Segment
+        v = _make_vacuum_entity()
+        mismatched = [
+            Segment(id="MAP001_19", name="Living Room"),
+            Segment(id="MAP001_99", name="Old Room"),  # gone
+        ]
+        matched = [
+            Segment(id="MAP001_19", name="Living Room"),
+            Segment(id="MAP001_21", name="Kitchen"),
+        ]
+        v.async_create_segments_issue = MagicMock()
+
+        v.last_seen_segments = mismatched
+        v._handle_coordinator_update()
+        v._handle_coordinator_update()
+        assert v._segment_mismatch_streak == 2
+
+        v.last_seen_segments = matched  # resolves — matches current_ids
+        v._handle_coordinator_update()
+        assert v._segment_mismatch_streak == 0
+        v.async_create_segments_issue.assert_not_called()
+
+        # A fresh mismatch afterwards starts counting from zero again, not
+        # picking up where the earlier (unrelated) streak left off.
+        v.last_seen_segments = mismatched
+        v._handle_coordinator_update()
+        assert v._segment_mismatch_streak == 1
+        v.async_create_segments_issue.assert_not_called()
 
     def test_no_issue_when_no_cloud(self):
         from homeassistant.components.vacuum import Segment

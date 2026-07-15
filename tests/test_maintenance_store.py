@@ -12,23 +12,11 @@ from __future__ import annotations
 import pytest
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 import datetime
-import tests.conftest
-from custom_components.roomba_plus.const import DEFAULT_FILTER_HOURS
-from custom_components.roomba_plus.const import DEFAULT_BRUSH_HOURS
 from custom_components.roomba_plus.sensor import RoombaSensorDescription
 from custom_components.roomba_plus.sensor import SENSORS
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from unittest.mock import call
 from custom_components.roomba_plus.mission_store import MissionStore
-from custom_components.roomba_plus.repairs import async_check_bbrun_reset
-from custom_components.roomba_plus.repairs import async_check_performance_degradation
-from custom_components.roomba_plus.repairs import async_check_battery_recharge
-from custom_components.roomba_plus.repairs import async_check_mixed_schedule
-from custom_components.roomba_plus.repairs import async_check_accident_detection
-from custom_components.roomba_plus.repairs import async_check_consecutive_skips
-from custom_components.roomba_plus.repairs import async_enrich_drift_issue
 import sys
 from custom_components.roomba_plus.sensor import _raw_cleaning_speed
 from custom_components.roomba_plus.sensor import _raw_dirt_density
@@ -36,18 +24,12 @@ from custom_components.roomba_plus.sensor import _raw_recharge_fraction
 from custom_components.roomba_plus.sensor import _raw_cleaning_speed_trend
 from custom_components.roomba_plus.sensor import _battery_capacity_retention
 from custom_components.roomba_plus.sensor import _estimated_battery_eol
-import statistics
 from datetime import UTC
 from datetime import datetime as datetime_v250_learning
 from datetime import timedelta
 from custom_components.roomba_plus.dirt_threshold_manager import DirtThresholdManager
-from custom_components.roomba_plus.const import SQFT_TO_M2
-import asyncio
-from collections import defaultdict
 from datetime import datetime as datetime_v260_learning
 from datetime import timezone
-from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
 from homeassistant.util import dt as dt_util
 
 
@@ -223,7 +205,6 @@ def _make_store_with_records(records: list[dict]) -> MissionStore:
 def _recent_weekday_ts(weekday: int, weeks_back: int = 1) -> int:
     """Return a UTC Unix timestamp for the most recent occurrence of `weekday`
     (0=Mon…6=Sun), going back `weeks_back` weeks to stay within the 12-week window."""
-    from datetime import date
     today = datetime_v250_learning.now(UTC)
     # Find the Monday of this week, then offset to the desired weekday
     days_since_monday = today.weekday()  # 0 if today is Monday
@@ -828,59 +809,6 @@ class TestMidMissionAttributes:
             assert val is None or isinstance(val, (int, float)), (
                 f"Non-primitive value in mid-mission attrs: {val!r}"
             )
-
-
-class TestConsecutiveSkips:
-    @pytest.mark.asyncio
-    async def test_no_issue_below_3_skips(self):
-        store = MaintenanceStore()
-        store.consecutive_skips = 2
-        entry = _make_entry(maintenance_store=store)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_consecutive_skips(_make_hass(), entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_at_3_skips(self):
-        store = MaintenanceStore()
-        store.consecutive_skips = 3
-        entry = _make_entry(maintenance_store=store)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_consecutive_skips(_make_hass(), entry)
-            mock_ir.async_create_issue.assert_called_once()
-            assert mock_ir.async_create_issue.call_args[1]["translation_key"] == "consecutive_skips"
-            assert mock_ir.async_create_issue.call_args[1]["translation_placeholders"]["count"] == "3"
-
-    @pytest.mark.asyncio
-    async def test_issue_cleared_when_skips_zero(self):
-        store = MaintenanceStore()
-        store.consecutive_skips = 0
-        entry = _make_entry(maintenance_store=store)
-        hass = _make_hass()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_consecutive_skips(hass, entry)
-            mock_ir.async_delete_issue.assert_called_once_with(
-                hass, "roomba_plus", "consecutive_skips"
-            )
-
-    def test_consecutive_skips_sensor_in_sensors(self):
-        keys = [d.key for d in SENSORS]
-        assert "consecutive_clean_skips" in keys
-
-    def test_skips_increments_on_timeout(self):
-        """consecutive_skips increments after a blocking timeout."""
-        store = MaintenanceStore()
-        assert store.consecutive_skips == 0
-        store.consecutive_skips += 1
-        assert store.consecutive_skips == 1
-
-    def test_skips_reset_on_completed_mission(self):
-        store = MaintenanceStore()
-        store.consecutive_skips = 4
-        # Simulate the reset logic in callbacks.py
-        if store.consecutive_skips > 0:
-            store.consecutive_skips = 0
-        assert store.consecutive_skips == 0
 
 
 class TestCleaningSpeed:

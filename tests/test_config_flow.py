@@ -306,3 +306,146 @@ class TestAsyncStepZonesEphemeral:
         result = await flow.async_step_zones(None)
 
         flow.async_create_entry.assert_called_once()
+
+
+# ── v3.5.0 bug-hunt — the reauth flow (async_step_reauth/reauth_confirm) ──────
+#
+# cloud_coordinator.py's _async_setup()/_async_update_data() already raise
+# ConfigEntryAuthFailed on a bad cloud login (pre-dates v3.5.0), which calls
+# config_entry.async_start_reauth() -> this flow's async_step_reauth. That
+# method didn't exist anywhere in this file until v3.5.0's cloud_stale split
+# (repairs.py) started explicitly relying on it instead of a custom Repair
+# Issue for the auth-failure case — this was the missing other half of that
+# fix, found by reviewing config_flow.py rather than assuming it already
+# existed.
+
+def _make_reauth_flow(reauth_entry_data=None):
+    """Bare-construct RoombaPlusConfigFlow with just enough wired up for the
+    reauth steps: hass, minimal FlowHandler attributes (context/flow_id/
+    handler — needed by HA's own async_abort/async_show_form, which
+    object.__new__ bypasses the normal __init__ for), and _get_reauth_entry()
+    short-circuited directly rather than threading through HA's real
+    context/source machinery."""
+    from custom_components.roomba_plus.config_flow import RoombaPlusConfigFlow
+    from custom_components.roomba_plus.const import CONF_BLID
+
+    flow = object.__new__(RoombaPlusConfigFlow)
+    flow.hass = MagicMock()
+    flow.context = {}
+    flow.flow_id = "test_flow_id"
+    flow.handler = "roomba_plus"
+    reauth_entry = MagicMock()
+    reauth_entry.data = reauth_entry_data or {CONF_BLID: "31B8091051311850"}
+    flow._get_reauth_entry = MagicMock(return_value=reauth_entry)
+    return flow, reauth_entry
+
+
+class TestReauthEntryPoint:
+    @pytest.mark.asyncio
+    async def test_reauth_routes_straight_to_confirm_form(self):
+        """async_step_reauth is HA's entry point; it must not show its own
+        form — it routes straight to reauth_confirm."""
+        from custom_components.roomba_plus.const import CONF_BLID
+        flow, _entry = _make_reauth_flow()
+        result = await flow.async_step_reauth({CONF_BLID: "31B8091051311850"})
+        assert result["type"] == "form"
+        assert result["step_id"] == "reauth_confirm"
+
+
+class TestReauthConfirmForm:
+    @pytest.mark.asyncio
+    async def test_initial_call_shows_form_prefilled_with_current_username(self):
+        from custom_components.roomba_plus.const import CONF_BLID, CONF_IROBOT_USERNAME
+        flow, _entry = _make_reauth_flow(reauth_entry_data={
+            CONF_BLID: "31B8091051311850",
+            CONF_IROBOT_USERNAME: "old@example.com",
+        })
+        result = await flow.async_step_reauth_confirm()
+        assert result["type"] == "form"
+        assert result["step_id"] == "reauth_confirm"
+        assert result["errors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_valid_credentials_update_entry_and_abort(self):
+        """Successful reauth must update the EXISTING entry (never create a
+        new one) and reload it — the actual point of using
+        async_update_reload_and_abort() over async_create_entry()."""
+        from custom_components.roomba_plus.const import (
+            CONF_BLID, CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
+        )
+        flow, reauth_entry = _make_reauth_flow(reauth_entry_data={
+            CONF_BLID: "31B8091051311850",
+            CONF_IROBOT_USERNAME: "old@example.com",
+            CONF_IROBOT_PASSWORD: "old_password",
+        })
+        mock_api = MagicMock()
+        mock_api.authenticate = AsyncMock()
+        with patch(
+            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
+            return_value=mock_api,
+        ), patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=MagicMock(),
+        ):
+            result = await flow.async_step_reauth_confirm({
+                CONF_IROBOT_USERNAME: "new@example.com",
+                CONF_IROBOT_PASSWORD: "new_password",
+            })
+
+        mock_api.authenticate.assert_awaited_once()
+        assert result["type"] == "abort"
+        # async_update_reload_and_abort calls async_update_entry with
+        # KEYWORD args (entry=..., data=...), not positional — verified
+        # against HA's own source before writing this assertion.
+        flow.hass.config_entries.async_update_entry.assert_called_once()
+        call_kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
+        assert call_kwargs["entry"] is reauth_entry
+        assert call_kwargs["data"][CONF_IROBOT_USERNAME] == "new@example.com"
+        assert call_kwargs["data"][CONF_IROBOT_PASSWORD] == "new_password"
+        # The reload half — async_schedule_reload is sync (a @callback), not
+        # awaited, despite the "async_" prefix; also verified against source.
+        flow.hass.config_entries.async_schedule_reload.assert_called_once_with(
+            reauth_entry.entry_id
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_credentials_show_error_not_abort(self):
+        from custom_components.roomba_plus.cloud_api import AuthenticationError
+        flow, _entry = _make_reauth_flow()
+        mock_api = MagicMock()
+        mock_api.authenticate = AsyncMock(side_effect=AuthenticationError("bad creds"))
+        with patch(
+            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
+            return_value=mock_api,
+        ), patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=MagicMock(),
+        ):
+            result = await flow.async_step_reauth_confirm({
+                "irobot_username": "wrong@example.com",
+                "irobot_password": "wrong_password",
+            })
+        assert result["type"] == "form"
+        assert result["step_id"] == "reauth_confirm"
+        assert result["errors"] == {"base": "invalid_cloud_credentials"}
+        flow.hass.config_entries.async_update_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cloud_unreachable_shows_cannot_connect_error(self):
+        from custom_components.roomba_plus.cloud_api import CloudApiError
+        flow, _entry = _make_reauth_flow()
+        mock_api = MagicMock()
+        mock_api.authenticate = AsyncMock(side_effect=CloudApiError("timeout"))
+        with patch(
+            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
+            return_value=mock_api,
+        ), patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=MagicMock(),
+        ):
+            result = await flow.async_step_reauth_confirm({
+                "irobot_username": "user@example.com",
+                "irobot_password": "password",
+            })
+        assert result["errors"] == {"base": "cannot_connect"}
+        flow.hass.config_entries.async_update_entry.assert_not_called()

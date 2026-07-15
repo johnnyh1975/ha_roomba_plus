@@ -11,31 +11,18 @@ from __future__ import annotations
 
 import pytest
 import re
-from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
-from unittest.mock import call
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 from custom_components.roomba_plus.mission_store import MissionStore
-from custom_components.roomba_plus.repairs import async_check_bbrun_reset
-from custom_components.roomba_plus.repairs import async_check_performance_degradation
-from custom_components.roomba_plus.repairs import async_check_health_trend_declining
-from custom_components.roomba_plus.repairs import async_check_room_accessibility
 from custom_components.roomba_plus.repairs import async_check_furniture_change
-from custom_components.roomba_plus.repairs import async_check_stuck_hotspot
-from custom_components.roomba_plus.repairs import async_check_coverage_frequency
-from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-from custom_components.roomba_plus.repairs import async_check_battery_recharge
 from custom_components.roomba_plus.repairs import async_check_battery_contact_issue
 from custom_components.roomba_plus.repairs import async_check_mixed_schedule
 from custom_components.roomba_plus.repairs import async_check_accident_detection
-from custom_components.roomba_plus.repairs import async_check_consecutive_skips
 from custom_components.roomba_plus.repairs import async_enrich_drift_issue
+from custom_components.roomba_plus.repairs import async_check_favorite_multi_command
 import sys
-from custom_components.roomba_plus.sensor import SENSORS
-import math
 from custom_components.roomba_plus.umf_aligner import UmfAligner
-import time
 from custom_components.roomba_plus.entity import IRobotEntity
 from custom_components.roomba_plus.repairs import _DOCK_ABORTS_THRESHOLD
 from custom_components.roomba_plus.repairs import _DOCK_CHATTERS_THRESHOLD
@@ -153,197 +140,6 @@ def _make_config_entry(bbchg: dict):
     entry.entry_id = "test_entry"
     entry.runtime_data.roomba_reported_state.return_value = {"bbchg": bbchg}
     return entry
-
-
-class TestPerformanceDegradation:
-    @pytest.mark.asyncio
-    async def test_no_issue_below_3_consecutive(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.cleaning_speed_trend_value = "declining"
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_performance_degradation(hass, entry)  # 1
-            await async_check_performance_degradation(hass, entry)  # 2
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_at_3_consecutive(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.cleaning_speed_trend_value = "declining"
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            for _ in range(3):
-                await async_check_performance_degradation(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            args = mock_ir.async_create_issue.call_args
-            assert args[1]["translation_key"] == "performance_degradation"
-
-    @pytest.mark.asyncio
-    async def test_counter_resets_on_stable(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.cleaning_speed_trend_value = "declining"
-        with patch("custom_components.roomba_plus.repairs.ir"):
-            await async_check_performance_degradation(hass, entry)
-            await async_check_performance_degradation(hass, entry)
-        entry.runtime_data.cleaning_speed_trend_value = "stable"
-        with patch("custom_components.roomba_plus.repairs.ir"):
-            await async_check_performance_degradation(hass, entry)
-        assert entry.runtime_data.consecutive_declining_speed == 0
-
-
-class TestHealthTrendDeclining:
-    """v3.2.0 L10 — async_check_health_trend_declining.
-
-    Fires at 14+ declining days (RobotProfileStore.health_score_declining_days()),
-    auto-resolves (issue deleted) once the streak breaks — mirrors
-    async_check_observed_zones's dismiss-on-recovery pattern rather than
-    TestPerformanceDegradation's counter-based approach, since the
-    "declining" judgment itself already lives in RobotProfileStore.
-    """
-
-    def _rps_with_declining_streak(self, declining_days: int, reference_days: int = 44):
-        """Build a RobotProfileStore with `reference_days` stable days
-        followed by `declining_days` clearly-lower days.
-
-        v3.2.0 bug-hunt fix — default bumped from 20 to 44: with the
-        exclusion buffer widened to 30 days (see
-        _HEALTH_SCORE_REFERENCE_EXCLUSION_DAYS's docstring),
-        _reference_scores() size = reference_days + declining_days - 30.
-        44 guarantees a clean, >=14-entry reference set regardless of
-        declining_days (even for the smallest streaks tested here, like
-        the 5-day one in test_issue_deleted_when_streak_breaks)."""
-        rps = RobotProfileStore()
-        import datetime as _dt
-        d0 = _dt.date(2026, 6, 1)
-        dates = [(d0 + _dt.timedelta(days=i)).isoformat()
-                 for i in range(reference_days + declining_days)]
-        for d in dates[:reference_days]:
-            rps.record_health_score(85.0, d)
-        for d in dates[reference_days:]:
-            rps.record_health_score(40.0, d)
-        return rps
-
-    @pytest.mark.asyncio
-    async def test_no_issue_below_14_declining_days(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.robot_profile_store = self._rps_with_declining_streak(13)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_health_trend_declining(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_at_14_declining_days(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.robot_profile_store = self._rps_with_declining_streak(14)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_health_trend_declining(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            args = mock_ir.async_create_issue.call_args
-            assert args[1]["translation_key"] == "health_trend_declining"
-            assert args[1]["translation_placeholders"] == {"days": "14"}
-
-    @pytest.mark.asyncio
-    async def test_issue_deleted_when_streak_breaks(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.robot_profile_store = self._rps_with_declining_streak(5)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_health_trend_declining(hass, entry)
-            mock_ir.async_delete_issue.assert_called_once_with(
-                hass, "roomba_plus", "health_trend_declining"
-            )
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_op_when_no_profile_store(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.robot_profile_store = None
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_health_trend_declining(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-            mock_ir.async_delete_issue.assert_not_called()
-
-
-class TestRoomAccessibility:
-    """v3.2.0 ROOM-ACCESS — async_check_room_accessibility."""
-
-    def _make_entry_with_room(self, score: float | None, limiting_factor: str | None = "obstacle_density"):
-        entry = _make_entry()
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"1": 10.0}
-        entry.runtime_data.umf_aligner = aligner
-
-        gs = MagicMock()
-        gs.coverage_by_polygon.return_value = {"1": 0.5}
-        gs.stuck_by_polygon.return_value = {"1": 1}
-        entry.runtime_data.grid_store = gs
-        entry.runtime_data.mission_archive = None
-
-        cc = MagicMock()
-        cc.regions = [{"id": "1", "name": "Kitchen"}]
-        entry.runtime_data.cloud_coordinator = cc
-
-        with patch(
-            "custom_components.roomba_plus.robot_profile_store.RobotProfileStore.room_accessibility_scores",
-            return_value={"1": {"score": score, "limiting_factor": limiting_factor}},
-        ):
-            yield entry
-
-    @pytest.mark.asyncio
-    async def test_no_op_without_umf_aligner(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.umf_aligner = None
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_room_accessibility(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_op_without_grid_store(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.umf_aligner = MagicMock()
-        entry.runtime_data.grid_store = None
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_room_accessibility(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_below_60(self):
-        hass = _make_hass()
-        for entry in self._make_entry_with_room(score=54.0):
-            with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-                await async_check_room_accessibility(hass, entry)
-                mock_ir.async_create_issue.assert_called_once()
-                args = mock_ir.async_create_issue.call_args
-                assert args[0][2] == "room_accessibility_1"
-                assert args[1]["translation_placeholders"]["room"] == "Kitchen"
-                assert args[1]["translation_placeholders"]["score"] == "54"
-
-    @pytest.mark.asyncio
-    async def test_no_issue_at_or_above_60(self):
-        hass = _make_hass()
-        for entry in self._make_entry_with_room(score=60.0):
-            with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-                await async_check_room_accessibility(hass, entry)
-                mock_ir.async_create_issue.assert_not_called()
-                mock_ir.async_delete_issue.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_issue_deleted_when_score_none(self):
-        """A room with no computed score (e.g. no signals available at
-        all) is treated as "nothing to flag", not as an automatic 0."""
-        hass = _make_hass()
-        for entry in self._make_entry_with_room(score=None, limiting_factor=None):
-            with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-                await async_check_room_accessibility(hass, entry)
-                mock_ir.async_create_issue.assert_not_called()
-                mock_ir.async_delete_issue.assert_called_once()
 
 
 class TestFurnitureChange:
@@ -523,228 +319,25 @@ class TestFurnitureChange:
             gs.clear_furniture_dismissed.assert_called_once_with((1, 2))
 
 
-class TestStuckHotspot:
-    """v3.2.0 STUCK-HOTSPOT — async_check_stuck_hotspot, including the
-    coverage_impact_pp-based auto-resolve (NOT stuck_count-based, since
-    stuck_count is a lifetime counter that never decreases)."""
+def _make_contact_entry(batpct=None, phase=""):
+    """Build a fake config entry for async_check_battery_contact_issue tests.
 
-    def _entry_with_clusters(self, clusters, umf_aligner=None):
-        entry = _make_entry()
-        gs = MagicMock()
-        gs.stuck_clusters.return_value = clusters
-        entry.runtime_data.grid_store = gs
-        entry.runtime_data.umf_aligner = umf_aligner
-        return entry, gs
-
-    @pytest.mark.asyncio
-    async def test_no_op_without_grid_store(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.grid_store = None
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_clusters_no_issue(self):
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_for_negative_impact_cluster(self):
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 12,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -45.0,
-        }])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            args = mock_ir.async_create_issue.call_args
-            assert args[0][2] == "stuck_hotspot_10_10"
-            assert args[1]["translation_placeholders"]["cell_count"] == "2"
-            assert args[1]["translation_placeholders"]["stuck_count"] == "12"
-
-    @pytest.mark.asyncio
-    async def test_resolved_when_impact_recovers_despite_stuck_count(self):
-        """Core auto-resolve nuance: even with a large permanent
-        stuck_count history, a cluster whose coverage has recovered
-        (impact above the resolved threshold) gets its issue deleted,
-        not recreated."""
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 50,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -2.0,
-        }])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-            mock_ir.async_delete_issue.assert_called_once_with(
-                hass, "roomba_plus", "stuck_hotspot_10_10"
-            )
-
-    @pytest.mark.asyncio
-    async def test_none_impact_treated_as_still_active(self):
-        """Insufficient surrounding data (impact=None) is NOT the same as
-        "resolved" — issue still fires; we simply can't yet judge whether
-        it's recovered."""
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 6,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": None,
-        }])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_room_name_resolved_when_smart_tier(self):
-        aligner = MagicMock()
-        aligner.aligned = True
-        aligner.pose_to_umf.return_value = (5.0, 3.0)
-        aligner.room_name_at.return_value = "Kitchen"
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 6,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -30.0,
-        }], umf_aligner=aligner)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            args = mock_ir.async_create_issue.call_args
-            assert args[1]["translation_placeholders"]["room"] == "Kitchen"
-            aligner.pose_to_umf.assert_called_once_with(1500.0, 1500.0)
-
-    @pytest.mark.asyncio
-    async def test_no_umf_aligner_falls_back_to_unnamed(self):
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 6,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -30.0,
-        }], umf_aligner=None)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            args = mock_ir.async_create_issue.call_args
-            assert args[1]["translation_placeholders"]["room"] == "an unnamed area"
-
-    @pytest.mark.asyncio
-    async def test_not_aligned_falls_back_to_unnamed(self):
-        aligner = MagicMock()
-        aligner.aligned = False
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 6,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -30.0,
-        }], umf_aligner=aligner)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_stuck_hotspot(hass, entry)
-            args = mock_ir.async_create_issue.call_args
-            assert args[1]["translation_placeholders"]["room"] == "an unnamed area"
-            aligner.pose_to_umf.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_orphaned_issue_deleted_when_anchor_no_longer_active(self):
-        """v3.2.0 bug-hunt fix — active_anchors was built but never used,
-        so stale issues from a shifted cluster anchor (e.g. a new
-        adjacent hotspot cell changes which cell sorts first) never got
-        cleaned up. A pre-existing registry issue for an anchor that's
-        no longer part of any current cluster must now be deleted."""
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(10, 10), (11, 10)], "stuck_count": 6,
-            "x_mm": 1500.0, "y_mm": 1500.0, "coverage_impact_pp": -30.0,
-        }])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            mock_ir.async_get.return_value.issues = {
-                ("roomba_plus", "stuck_hotspot_10_10"): MagicMock(),   # active
-                ("roomba_plus", "stuck_hotspot_99_99"): MagicMock(),   # orphaned
-            }
-            await async_check_stuck_hotspot(hass, entry)
-            deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
-            assert "stuck_hotspot_99_99" in deleted_ids
-            assert "stuck_hotspot_10_10" not in deleted_ids
-
-    @pytest.mark.asyncio
-    async def test_cleanup_ignores_other_domains_and_issue_types(self):
-        """The registry sweep must only touch this integration's own
-        stuck_hotspot_* issues — never another domain's issues, and
-        never this integration's OTHER issue types (e.g. mqtt_watchdog)."""
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            mock_ir.async_get.return_value.issues = {
-                ("roomba_plus", "mqtt_watchdog_test_entry"): MagicMock(),
-                ("some_other_integration", "stuck_hotspot_10_10"): MagicMock(),
-            }
-            await async_check_stuck_hotspot(hass, entry)
-            deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
-            assert "mqtt_watchdog_test_entry" not in deleted_ids
-            assert "stuck_hotspot_10_10" not in deleted_ids
-
-    @pytest.mark.asyncio
-    async def test_negative_grid_coordinates_parsed_correctly(self):
-        """Grid cells can have negative gx/gy (cells behind/left of the
-        dock) — the issue_id parser must correctly split e.g.
-        "stuck_hotspot_-5_-10" back into (-5, -10), not mis-split on the
-        embedded minus signs."""
-        hass = _make_hass()
-        entry, gs = self._entry_with_clusters([{
-            "cells": [(-5, -10), (-4, -10)], "stuck_count": 6,
-            "x_mm": -750.0, "y_mm": -1500.0, "coverage_impact_pp": -30.0,
-        }])
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            mock_ir.async_get.return_value.issues = {
-                ("roomba_plus", "stuck_hotspot_-5_-10"): MagicMock(),
-            }
-            await async_check_stuck_hotspot(hass, entry)
-            deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
-            assert "stuck_hotspot_-5_-10" not in deleted_ids
-
-
-class TestBatteryRecharge:
-    @pytest.mark.asyncio
-    async def test_no_issue_when_conditions_not_met(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.recharge_fraction_value = 5.0   # low
-        entry.runtime_data.battery_retention_value = 95.0  # good
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            for _ in range(3):
-                await async_check_battery_recharge(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_when_both_conditions_met_for_3_updates(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.recharge_fraction_value = 20.0  # high
-        entry.runtime_data.battery_retention_value = 70.0  # degraded
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            for _ in range(3):
-                await async_check_battery_recharge(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            assert mock_ir.async_create_issue.call_args[1]["translation_key"] == "battery_recharge_high"
-
-
-def _make_contact_entry(batpct=50.0, phase="run"):
-    """F6f test helper -- _make_entry()'s data is a MagicMock, so the new
-    last_batpct_value/charge_cycle_peaks/etc. fields need explicit
-    realistic starting values (None/0/[]/False), or accessing them on the
-    unconfigured mock returns another MagicMock instead of a real default,
-    which would crash the actual comparison logic in the check function."""
-    entry = _make_entry()
-    data = entry.runtime_data
-    data.roomba_reported_state = MagicMock(
+    Reconstructed in v3.5.0 after the Repairs redesign removed the sibling
+    test class this helper originally lived in; TestBatteryContactIssue still
+    relies on it. Provides every runtime_data attribute the contact-issue
+    check reads.
+    """
+    entry = MagicMock()
+    rd = entry.runtime_data
+    rd.roomba_reported_state = MagicMock(
         return_value={"batPct": batpct, "cleanMissionStatus": {"phase": phase}}
     )
-    data.last_batpct_value = None
-    data.last_batpct_at = None
-    data.consecutive_battery_contact_anomaly = 0
-    data.current_charge_cycle_peak = None
-    data.charge_cycle_peaks = []
-    data.was_charging = False
+    rd.last_batpct_value = None
+    rd.last_batpct_at = None
+    rd.consecutive_battery_contact_anomaly = 0
+    rd.charge_cycle_peaks = []
+    rd.current_charge_cycle_peak = None
+    rd.was_charging = False
     return entry
 
 
@@ -906,39 +499,43 @@ class TestBatteryContactIssue:
 
 class TestMixedSchedule:
     @pytest.mark.asyncio
-    async def test_no_issue_with_single_initiator(self):
+    async def test_no_event_with_single_initiator(self):
         store = MissionStore()
         for i in range(15):
             store._records.append(_record(initiator="schedule", days_ago=i+1))
         entry = _make_entry(mission_store=store)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_mixed_schedule(_make_hass(), entry)
-            mock_ir.async_create_issue.assert_not_called()
+        hass = _make_hass()
+        await async_check_mixed_schedule(hass, entry)
+        hass.bus.async_fire.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_issue_fires_with_mixed_initiators(self):
+    async def test_event_fires_with_mixed_initiators(self):
+        from custom_components.roomba_plus.const import EVENT_MIXED_SCHEDULE
         store = MissionStore()
         for i in range(8):
             store._records.append(_record(initiator="schedule", days_ago=i+1))
         for i in range(7):
             store._records.append(_record(initiator="rmtApp", days_ago=i+10))
         entry = _make_entry(mission_store=store)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_mixed_schedule(_make_hass(), entry)
-            mock_ir.async_create_issue.assert_called_once()
-            assert mock_ir.async_create_issue.call_args[1]["translation_key"] == "mixed_schedule"
+        hass = _make_hass()
+        await async_check_mixed_schedule(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        args = hass.bus.async_fire.call_args[0]
+        assert args[0] == EVENT_MIXED_SCHEDULE
+        assert "schedule_pct" in args[1]
+        assert "app_pct" in args[1]
 
     @pytest.mark.asyncio
-    async def test_no_issue_below_10_records(self):
+    async def test_no_event_below_10_records(self):
         store = MissionStore()
         for i in range(5):
             store._records.append(_record(initiator="schedule", days_ago=i+1))
         for i in range(4):
             store._records.append(_record(initiator="rmtApp", days_ago=i+6))
         entry = _make_entry(mission_store=store)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_mixed_schedule(_make_hass(), entry)
-            mock_ir.async_create_issue.assert_not_called()
+        hass = _make_hass()
+        await async_check_mixed_schedule(hass, entry)
+        hass.bus.async_fire.assert_not_called()
 
 
 class TestAccidentDetection:
@@ -985,33 +582,33 @@ class TestAccidentDetection:
 
 class TestDriftEnrichment:
     @pytest.mark.asyncio
-    async def test_enrichment_fires_issue(self):
+    async def test_enrichment_fires_event(self):
+        from custom_components.roomba_plus.const import EVENT_MAP_DRIFT_DETECTED
         entry = _make_entry()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_enrich_drift_issue(_make_hass(), entry, dx=100.0, dy=0.0)
-            mock_ir.async_create_issue.assert_called_once()
-            args = mock_ir.async_create_issue.call_args[1]
-            assert args["translation_key"] == "map_drift_detected"
-            assert "bearing" in args["translation_placeholders"]
-            assert "magnitude_cm" in args["translation_placeholders"]
+        hass = _make_hass()
+        await async_enrich_drift_issue(hass, entry, dx=100.0, dy=0.0)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_MAP_DRIFT_DETECTED
+        assert "bearing" in data
+        assert "magnitude_cm" in data
 
     @pytest.mark.asyncio
     async def test_bearing_east_for_positive_dx(self):
         entry = _make_entry()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_enrich_drift_issue(_make_hass(), entry, dx=1000.0, dy=0.0)
-            placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
-            bearing = int(placeholders["bearing"])
-            assert 80 <= bearing <= 100  # approximately east
+        hass = _make_hass()
+        await async_enrich_drift_issue(hass, entry, dx=1000.0, dy=0.0)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert 80 <= data["bearing"] <= 100  # approximately east
 
     @pytest.mark.asyncio
     async def test_magnitude_calculated_correctly(self):
         entry = _make_entry()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            # dx=300mm, dy=400mm → 500mm → 50cm
-            await async_enrich_drift_issue(_make_hass(), entry, dx=300.0, dy=400.0)
-            placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
-            assert placeholders["magnitude_cm"] == "50.0"
+        hass = _make_hass()
+        # dx=300mm, dy=400mm → 500mm → 50cm
+        await async_enrich_drift_issue(hass, entry, dx=300.0, dy=400.0)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["magnitude_cm"] == 50.0
 
 
 class TestStuckRecovery:
@@ -1084,41 +681,33 @@ class TestErrorRecurrence:
         return entry
 
     @pytest.mark.asyncio
-    async def test_below_threshold_deletes_issue(self):
+    async def test_below_threshold_no_event(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms    = self._ms_with_errors(15, 2)
         entry = self._entry(ms)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue") as mock_delete, \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            mock_delete.assert_called_once()
-            mock_create.assert_not_called()
+        await async_check_error_recurrence(hass, entry)
+        hass.bus.async_fire.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_at_threshold_creates_issue(self):
+    async def test_at_threshold_fires_event(self):
+        from custom_components.roomba_plus.const import EVENT_ERROR_RECURRENCE
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms    = self._ms_with_errors(15, 3)
         entry = self._entry(ms)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            mock_create.assert_called_once()
-            call_kwargs = mock_create.call_args.kwargs
-            assert call_kwargs["translation_key"] == "error_recurrence"
-            placeholders = call_kwargs["translation_placeholders"]
-            assert placeholders["count"] == "3"
-            assert placeholders["error_code"] == "15"
+        await async_check_error_recurrence(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_ERROR_RECURRENCE
+        assert data["count"] == 3
+        assert data["error_code"] == 15
 
     @pytest.mark.asyncio
     async def test_most_frequent_code_chosen(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
         from custom_components.roomba_plus.mission_store import MissionStore
         from homeassistant.util import dt as dt_util
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms = MissionStore()
         now_str = dt_util.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
         ms._records = (
@@ -1133,11 +722,9 @@ class TestErrorRecurrence:
         )
         entry = self._entry(ms)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["error_code"] == "15"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["error_code"] == 15
 
     @pytest.mark.asyncio
     async def test_no_mission_store_no_crash(self):
@@ -1150,7 +737,6 @@ class TestErrorRecurrence:
     @pytest.mark.asyncio
     async def test_room_name_populated_from_aligner(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms = self._ms_with_errors(15, 3)
         ms._records[-1]["error_position_mm"] = {"x": 2500.0, "y": 2500.0}
         ms._records[-1]["phase_at_error"]     = "run"
@@ -1161,24 +747,19 @@ class TestErrorRecurrence:
         aligner._regions = [{"id": "r1", "name": "Kitchen"}]
         entry = self._entry(ms, aligner=aligner)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["room"] == "Kitchen"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["room"] == "Kitchen"
 
     @pytest.mark.asyncio
     async def test_room_name_unknown_without_aligner(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms = self._ms_with_errors(15, 3)
         entry = self._entry(ms, aligner=None)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["room"] == "unknown location"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["room"] == "unknown location"
 
 
 class TestErrorRecurrenceArchivePreferred:
@@ -1219,47 +800,38 @@ class TestErrorRecurrenceArchivePreferred:
     @pytest.mark.asyncio
     async def test_archive_used_when_it_has_records(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         archive = self._archive_with_pause_ids(216, 3)
         # A conflicting local MissionStore that must be ignored — if it were
         # used instead, count/error_code below would differ.
         ms = TestErrorRecurrence()._ms_with_errors(99, 5)
         entry = self._entry(ms=ms, archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["error_code"] == "216"
-            assert placeholders["count"] == "3"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["error_code"] == 216
+        assert data["count"] == 3
 
     @pytest.mark.asyncio
     async def test_falls_back_to_mission_store_when_archive_empty(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         from custom_components.roomba_plus.mission_archive import MissionArchive
         archive = MissionArchive()  # record_count == 0
         ms = TestErrorRecurrence()._ms_with_errors(15, 3)
         entry = self._entry(ms=ms, archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["error_code"] == "15"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["error_code"] == 15
 
     @pytest.mark.asyncio
     async def test_falls_back_to_mission_store_when_no_archive(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms = TestErrorRecurrence()._ms_with_errors(15, 3)
         entry = self._entry(ms=ms, archive=None)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["error_code"] == "15"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["error_code"] == 15
 
     @pytest.mark.asyncio
     async def test_no_store_and_no_archive_no_crash(self):
@@ -1278,7 +850,6 @@ class TestErrorRecurrenceArchivePreferred:
         local MissionStore — which doesn't depend on cloud connectivity at
         all — keeps recording a genuine recurring failure during that gap."""
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         from custom_components.roomba_plus.mission_archive import MissionArchive
         from homeassistant.util import dt as dt_util
         from datetime import timedelta
@@ -1299,11 +870,9 @@ class TestErrorRecurrenceArchivePreferred:
         ms = TestErrorRecurrence()._ms_with_errors(15, 3)
         entry = self._entry(ms=ms, archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_error_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["error_code"] == "15"
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["error_code"] == 15
 
 
 class TestCancellationRecurrence:
@@ -1346,65 +915,51 @@ class TestCancellationRecurrence:
         return ms
 
     @pytest.mark.asyncio
-    async def test_below_threshold_deletes_issue(self):
+    async def test_below_threshold_no_event(self):
         from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         archive = self._archive_with_results(["cancelled", "cancelled"])
         entry = self._entry(archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue") as mock_delete, \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_cancellation_recurrence(hass, entry)
-            mock_delete.assert_called_once()
-            mock_create.assert_not_called()
+        await async_check_cancellation_recurrence(hass, entry)
+        hass.bus.async_fire.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_at_threshold_creates_issue_with_breakdown(self):
+    async def test_at_threshold_fires_event_with_breakdown(self):
+        from custom_components.roomba_plus.const import EVENT_CANCELLATION_RECURRENCE
         from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         archive = self._archive_with_results(
             ["cancelled_by_user", "cancelled_by_user", "cancelled"]
         )
         entry = self._entry(archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_cancellation_recurrence(hass, entry)
-            mock_create.assert_called_once()
-            call_kwargs = mock_create.call_args.kwargs
-            assert call_kwargs["translation_key"] == "cancellation_recurrence"
-            placeholders = call_kwargs["translation_placeholders"]
-            assert placeholders["count"] == "3"
-            assert placeholders["by_user_count"] == "2"
-            assert placeholders["other_count"] == "1"
+        await async_check_cancellation_recurrence(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_CANCELLATION_RECURRENCE
+        assert data["count"] == 3
+        assert data["by_user_count"] == 2
+        assert data["other_count"] == 1
 
     @pytest.mark.asyncio
     async def test_completed_results_not_counted(self):
         from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         archive = self._archive_with_results(
             ["completed", "completed", "stuck_and_resumed", "error_17"]
         )
         entry = self._entry(archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue") as mock_delete, \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_cancellation_recurrence(hass, entry)
-            mock_delete.assert_called_once()
-            mock_create.assert_not_called()
+        await async_check_cancellation_recurrence(hass, entry)
+        hass.bus.async_fire.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_falls_back_to_mission_store_when_no_archive(self):
         from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         ms = self._ms_with_results(["cancelled", "cancelled", "cancelled_by_user"])
         entry = self._entry(ms=ms, archive=None)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_cancellation_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["count"] == "3"
+        await async_check_cancellation_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["count"] == 3
 
     @pytest.mark.asyncio
     async def test_falls_back_to_mission_store_when_archive_has_only_old_records(self):
@@ -1413,7 +968,6 @@ class TestCancellationRecurrence:
         but nothing in the trailing 30 days must not be treated as 'no
         failures' when the local MissionStore has a real recent pattern."""
         from custom_components.roomba_plus.repairs import async_check_cancellation_recurrence
-        import custom_components.roomba_plus.repairs as repairs_mod
         from custom_components.roomba_plus.mission_archive import MissionArchive
         from homeassistant.util import dt as dt_util
         from datetime import timedelta
@@ -1431,11 +985,9 @@ class TestCancellationRecurrence:
         ms = self._ms_with_results(["cancelled", "cancelled", "cancelled_by_user"])
         entry = self._entry(ms=ms, archive=archive)
         hass  = MagicMock()
-        with patch.object(repairs_mod.ir, "async_delete_issue"), \
-             patch.object(repairs_mod.ir, "async_create_issue") as mock_create:
-            await async_check_cancellation_recurrence(hass, entry)
-            placeholders = mock_create.call_args.kwargs["translation_placeholders"]
-            assert placeholders["count"] == "3"
+        await async_check_cancellation_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["count"] == 3
 
     @pytest.mark.asyncio
     async def test_no_store_and_no_archive_no_crash(self):
@@ -1444,50 +996,89 @@ class TestCancellationRecurrence:
         await async_check_cancellation_recurrence(MagicMock(), entry)  # no exception
 
 
-class TestSmberr:
-    """SMBERR — async_check_smberr fires / clears smberr_high Repair Issue."""
-
-    def _make_entry(self, smberr_value):
-        """Return a minimal config_entry mock with bbchg.smberr set."""
-        from unittest.mock import MagicMock
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        vacuum_state = {"bbchg": {"smberr": smberr_value}}
-        entry.runtime_data.roomba_reported_state.return_value = vacuum_state
-        return entry
+class TestSmberrMergedIntoContactRepairs:
+    """v3.5.0 Repairs redesign — the standalone smberr_high Repair was
+    merged into async_check_battery_contact_issue and
+    async_check_dock_health as a confidence input (via the shared
+    _smberr_elevated() helper — see tests/test_edge_cases.py::
+    TestSmberrTypeSafety for its own type-safety coverage), rather than
+    just deleted. These tests verify the merge actually changes behavior
+    in both consumers, not just that the helper itself works standalone.
+    """
 
     @pytest.mark.asyncio
-    async def test_smberr_above_threshold_creates_issue(self):
-        """smberr > 10 000 must create a smberr_high Repair Issue."""
-        from unittest.mock import MagicMock, patch
-        from custom_components.roomba_plus.repairs import async_check_smberr
-
+    async def test_dock_health_thresholds_halve_when_smberr_elevated(self):
+        """A chatters count that would NOT fire on its own (below the
+        normal threshold) DOES fire once smberr is also elevated —
+        corroborating evidence lowers the bar."""
+        below_normal_threshold = _DOCK_CHATTERS_THRESHOLD // 2 + 5
+        entry = _make_config_entry({
+            "nChatters": below_normal_threshold,
+            "nKnockoffs": 0,
+            "nAborts": 0,
+            "smberr": 50_432,  # i7+ field value — elevated
+        })
         hass = MagicMock()
-        entry = self._make_entry(smberr_value=50_432)  # i7+ field value
-        with patch(
-            "custom_components.roomba_plus.repairs.ir.async_create_issue"
-        ) as mock_create:
-            await async_check_smberr(hass, entry)
-        mock_create.assert_called_once()
-        _, kwargs = mock_create.call_args[0], mock_create.call_args[1]
-        assert mock_create.call_args[0][2] == "smberr_high_test_entry"
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_dock_health(hass, entry)
+        mock_ir.async_create_issue.assert_called_once()
+        placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
+        assert "SMBus errors" in placeholders["smberr_context"]
 
     @pytest.mark.asyncio
-    async def test_smberr_below_threshold_clears_issue(self):
-        """smberr ≤ 10 000 must delete (clear) any existing Repair Issue."""
-        from unittest.mock import MagicMock, patch
-        from custom_components.roomba_plus.repairs import async_check_smberr
-
+    async def test_dock_health_normal_thresholds_when_smberr_not_elevated(self):
+        """The same below-normal-threshold chatters count does NOT fire
+        without smberr corroboration — confirms the halving is genuinely
+        conditional, not a silent, permanent threshold change."""
+        below_normal_threshold = _DOCK_CHATTERS_THRESHOLD // 2 + 5
+        entry = _make_config_entry({
+            "nChatters": below_normal_threshold,
+            "nKnockoffs": 0,
+            "nAborts": 0,
+            "smberr": 0,
+        })
         hass = MagicMock()
-        entry = self._make_entry(smberr_value=0)  # i8+ field value
-        with patch(
-            "custom_components.roomba_plus.repairs.ir.async_delete_issue"
-        ) as mock_delete, patch(
-            "custom_components.roomba_plus.repairs.ir.async_create_issue"
-        ) as mock_create:
-            await async_check_smberr(hass, entry)
-        mock_delete.assert_called_once()
-        mock_create.assert_not_called()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_dock_health(hass, entry)
+        mock_ir.async_create_issue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dock_health_context_empty_when_not_elevated(self):
+        """smberr_context is an empty string (not a stray 'None'/'0') in
+        the fired issue's placeholders when smberr isn't elevated."""
+        entry = _make_config_entry({
+            "nChatters": _DOCK_CHATTERS_THRESHOLD + 1,
+            "nKnockoffs": 0,
+            "nAborts": 0,
+            "smberr": 0,
+        })
+        hass = MagicMock()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_dock_health(hass, entry)
+        placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
+        assert placeholders["smberr_context"] == ""
+
+    @pytest.mark.asyncio
+    async def test_battery_contact_debounce_drops_to_one_when_smberr_elevated(self):
+        """A single implausible batPct jump — normally not enough to fire
+        (_CONTACT_ANOMALY_DEBOUNCE requires 2+ consecutive) — DOES fire
+        when smberr is also elevated."""
+        entry = _make_contact_entry(batpct=28.0)
+        entry.runtime_data.roomba_reported_state.return_value = {
+            "batPct": 28.0,
+            "cleanMissionStatus": {"phase": ""},
+            "bbchg": {"smberr": 50_432},
+        }
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_battery_contact_issue(hass, entry)  # establish baseline=28
+            entry.runtime_data.roomba_reported_state.return_value = {
+                "batPct": 60.0,  # implausible single jump
+                "cleanMissionStatus": {"phase": ""},
+                "bbchg": {"smberr": 50_432},
+            }
+            await async_check_battery_contact_issue(hass, entry)
+        mock_ir.async_create_issue.assert_called_once()
 
 
 class TestDockStatsProperty:
@@ -1632,13 +1223,23 @@ class TestDockHealthRepairIssue:
 
 # ── v2.8.3 — CLOUD-STALE repair issue tests ───────────────────────────────────
 
-class TestCloudStaleRepairIssue:
-    """CLOUD-STALE (v2.8.3) — async_check_cloud_stale fires/clears correctly."""
+class TestCloudStaleEvent:
+    """CLOUD-STALE (v2.8.3) — async_check_cloud_stale fires/re-arms
+    correctly. v3.5.0: demoted from Repair Issue to event, split by cause
+    (auth failures are left to HA's own native ConfigEntryAuthFailed
+    reauth Repair — this check must not duplicate that)."""
 
-    def _make_coordinator(self, last_success_offset_minutes: float | None):
-        """Return a mock coordinator with last_success_time set relative to now."""
+    def _make_coordinator(self, last_success_offset_minutes: float | None,
+                           last_exception=None, last_update_success=True):
+        """Return a mock coordinator with last_success_time set relative to
+        now, and last_exception/last_update_success explicitly set (defaults
+        chosen so a bare call reads as 'healthy' — being explicit here
+        avoids relying on MagicMock's auto-vivified truthiness, which would
+        silently make the auth-failure gate never trigger in tests)."""
         from datetime import timezone, timedelta, datetime
         cc = MagicMock()
+        cc.last_exception = last_exception
+        cc.last_update_success = last_update_success
         if last_success_offset_minutes is None:
             cc.last_success_time = None
         else:
@@ -1655,40 +1256,87 @@ class TestCloudStaleRepairIssue:
 
     @pytest.mark.asyncio
     async def test_fires_when_stale_beyond_threshold(self):
-        """Issue fires when last_success_time > CLOUD_STALE_MINUTES ago."""
+        """Event fires when last_success_time > CLOUD_STALE_MINUTES ago."""
+        from custom_components.roomba_plus.const import (
+            CLOUD_STALE_MINUTES, EVENT_CLOUD_STALE,
+        )
         from custom_components.roomba_plus.repairs import async_check_cloud_stale
-        from custom_components.roomba_plus.const import CLOUD_STALE_MINUTES
         hass = MagicMock()
         entry = self._make_entry()
         cc = self._make_coordinator(CLOUD_STALE_MINUTES + 5)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_cloud_stale(hass, entry, cc)
-        mock_ir.async_create_issue.assert_called_once()
-        kwargs = mock_ir.async_create_issue.call_args[1]
-        assert kwargs["translation_key"] == "cloud_stale"
+        await async_check_cloud_stale(hass, entry, cc)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_CLOUD_STALE
+        assert data["minutes"] >= CLOUD_STALE_MINUTES
 
     @pytest.mark.asyncio
-    async def test_clears_when_fresh(self):
-        """Issue clears when last_success_time is within threshold."""
+    async def test_no_event_when_fresh(self):
+        """No event when last_success_time is within threshold."""
         from custom_components.roomba_plus.repairs import async_check_cloud_stale
         hass = MagicMock()
         entry = self._make_entry()
         cc = self._make_coordinator(5)  # 5 min ago — well within 60 min threshold
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_cloud_stale(hass, entry, cc)
-        mock_ir.async_delete_issue.assert_called_once()
-        mock_ir.async_create_issue.assert_not_called()
+        await async_check_cloud_stale(hass, entry, cc)
+        hass.bus.async_fire.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_clears_when_no_success_yet(self):
-        """No issue when last_success_time is None (startup, no fetch yet)."""
+    async def test_no_event_when_no_success_yet(self):
+        """No event when last_success_time is None (startup, no fetch yet)."""
         from custom_components.roomba_plus.repairs import async_check_cloud_stale
         hass = MagicMock()
         entry = self._make_entry()
         cc = self._make_coordinator(None)
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_cloud_stale(hass, entry, cc)
-        mock_ir.async_create_issue.assert_not_called()
+        await async_check_cloud_stale(hass, entry, cc)
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_event_when_cause_is_auth_failure(self):
+        """v3.5.0 — the actual point of the split: a sustained staleness
+        caused by a CURRENT auth failure must NOT also fire this event.
+        HA's own ConfigEntryAuthFailed-driven reauth Repair already covers
+        it; firing here too would be two signals for one root cause."""
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from custom_components.roomba_plus.const import CLOUD_STALE_MINUTES
+        from custom_components.roomba_plus.repairs import async_check_cloud_stale
+        hass = MagicMock()
+        entry = self._make_entry()
+        cc = self._make_coordinator(
+            CLOUD_STALE_MINUTES + 5,
+            last_exception=ConfigEntryAuthFailed("bad credentials"),
+            last_update_success=False,
+        )
+        await async_check_cloud_stale(hass, entry, cc)
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_for_unrelated_staleness_after_auth_recovery(self):
+        """Bug-hunt fix, found by checking HA's own DataUpdateCoordinator
+        source rather than trusting the mock: last_exception is STICKY —
+        HA never resets it to None on a later successful refresh. Naively
+        checking 'is last_exception a ConfigEntryAuthFailed' alone would
+        mean a single historical auth failure, resolved via reauth days
+        ago, permanently suppresses this event for any later, unrelated
+        genuine staleness. This is exactly that scenario: last_exception
+        still holds an old ConfigEntryAuthFailed, but last_update_success
+        is True (the coordinator has since recovered) — a NEW staleness
+        must still fire normally."""
+        from custom_components.roomba_plus.const import (
+            CLOUD_STALE_MINUTES, EVENT_CLOUD_STALE,
+        )
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from custom_components.roomba_plus.repairs import async_check_cloud_stale
+        hass = MagicMock()
+        entry = self._make_entry()
+        cc = self._make_coordinator(
+            CLOUD_STALE_MINUTES + 5,
+            last_exception=ConfigEntryAuthFailed("old, already-resolved failure"),
+            last_update_success=True,  # coordinator has since recovered
+        )
+        await async_check_cloud_stale(hass, entry, cc)
+        hass.bus.async_fire.assert_called_once()
+        event_type, _data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_CLOUD_STALE
 
 
 class TestComputeIntegrationHealth:
@@ -1911,8 +1559,6 @@ class TestHealthChangeEvent:
         with patch(
             "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(100, {}),
-        ), patch(
-            "custom_components.roomba_plus.repairs.async_check_integration_health",
         ):
             sensor._async_health_tick(None)
 
@@ -1931,8 +1577,6 @@ class TestHealthChangeEvent:
         with patch(
             "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(40, {}),
-        ), patch(
-            "custom_components.roomba_plus.repairs.async_check_integration_health",
         ):
             sensor._async_health_tick(None)
 
@@ -1958,8 +1602,6 @@ class TestHealthChangeEvent:
         with patch(
             "custom_components.roomba_plus.sensor_diagnostics._compute_integration_health",
             return_value=(85, {}),  # still "healthy" band, minor jitter
-        ), patch(
-            "custom_components.roomba_plus.repairs.async_check_integration_health",
         ):
             sensor._async_health_tick(None)
 
@@ -1968,96 +1610,6 @@ class TestHealthChangeEvent:
         # genuine crossing reports an accurate previous_score.
         assert sensor._last_health_score == 85
 
-
-class TestIntegrationHealthRepairIssue:
-    """v2.9.0 (INTEG-HEALTH) — async_check_integration_health sustained-low
-    gating and recovery.
-    """
-
-    def setup_method(self):
-        # Module-level dict must not leak state between tests.
-        from custom_components.roomba_plus import repairs as repairs_mod
-        repairs_mod._health_low_since.clear()
-
-    def _patch_score(self, score: int):
-        return patch(
-            "custom_components.roomba_plus.sensor._compute_integration_health",
-            return_value=(score, {}),
-        )
-
-    def test_single_low_reading_does_not_fire_immediately(self):
-        """A single bad reading must not alarm the user — only a SUSTAINED
-        low score over INTEGRATION_HEALTH_SUSTAINED_MINUTES should."""
-        from custom_components.roomba_plus.repairs import async_check_integration_health
-
-        hass = MagicMock()
-        entry = MagicMock()
-        entry.entry_id = "e1"
-        with self._patch_score(30), \
-             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_integration_health(hass, entry)
-
-        mock_ir.async_create_issue.assert_not_called()
-
-    def test_fires_after_sustained_low_period(self):
-        from custom_components.roomba_plus.repairs import async_check_integration_health
-        from custom_components.roomba_plus import repairs as repairs_mod
-
-        hass = MagicMock()
-        entry = MagicMock()
-        entry.entry_id = "e2"
-
-        with self._patch_score(30), \
-             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_integration_health(hass, entry)
-            # Simulate 31 minutes having passed since the low reading began.
-            repairs_mod._health_low_since["e2"] -= 31 * 60
-            async_check_integration_health(hass, entry)
-
-        mock_ir.async_create_issue.assert_called_once()
-        kwargs = mock_ir.async_create_issue.call_args[1]
-        assert kwargs["translation_key"] == "integration_health"
-
-    def test_recovery_clears_issue_and_resets_timer(self):
-        from custom_components.roomba_plus.repairs import async_check_integration_health
-        from custom_components.roomba_plus import repairs as repairs_mod
-
-        hass = MagicMock()
-        entry = MagicMock()
-        entry.entry_id = "e3"
-
-        with self._patch_score(30), \
-             patch("custom_components.roomba_plus.repairs.ir"):
-            async_check_integration_health(hass, entry)
-        assert "e3" in repairs_mod._health_low_since
-
-        with self._patch_score(90), \
-             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_integration_health(hass, entry)
-
-        mock_ir.async_delete_issue.assert_called_once()
-        assert "e3" not in repairs_mod._health_low_since
-
-    def test_recovery_before_sustained_period_does_not_fire(self):
-        """Score dips low, then recovers within the 30-minute window —
-        must never have fired at all."""
-        from custom_components.roomba_plus.repairs import async_check_integration_health
-
-        hass = MagicMock()
-        entry = MagicMock()
-        entry.entry_id = "e4"
-
-        with self._patch_score(30), \
-             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_integration_health(hass, entry)
-        with self._patch_score(95), \
-             patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_integration_health(hass, entry)
-
-        mock_ir.async_create_issue.assert_not_called()
-
-
-# ── v2.8.3 — Binary sensor unit tests ─────────────────────────────────────────
 
 class TestRoombaCloudConnected:
     """WIFI-CLOUD-HEALTH (v2.8.3) — RoombaCloudConnected binary sensor."""
@@ -2100,7 +1652,6 @@ class TestRoombaFirmwareUpdated:
 
     def _make_sensor(self, last_fw=None, updated_at=None):
         from custom_components.roomba_plus.binary_sensor import RoombaFirmwareUpdated
-        import time as _t
         roomba = MagicMock()
         roomba.master_state = {"state": {"reported": {}}}
         entry = MagicMock()
@@ -2135,10 +1686,16 @@ class TestMapRetrainWorkflow:
 
     Tracks notReady&64 ("Smart Map updating") duration via repairs.py's
     in-memory _map_updating_since dict — same pattern as
-    _health_low_since (INTEG-HEALTH). Deliberately does NOT touch the
-    event bus: roomba_plus_map_retrain_started/completed already exist
-    (cloud pmapv_id-driven) and are what TRIGGER+ listens to — Triggers
-    and Repairs must not be redundant.
+    _health_low_since (INTEG-HEALTH).
+
+    v3.5.0 Repairs redesign: stage 2 (WARN threshold) now fires the
+    map_retrain_in_progress event instead of a Repair Issue — longer than a
+    typical retrain is worth a Logbook entry, not yet a must-act problem.
+    Stage 3 (STUCK threshold) remains a Repair Issue — genuinely stuck is
+    Gate-C actionable. roomba_plus_map_retrain_started/completed already
+    exist (cloud pmapv_id-driven) and are what TRIGGER+ listens to; this
+    tracks a different signal (the live notReady bit), so firing an event
+    at stage 2 doesn't duplicate that automation-facing signal.
     """
 
     def setup_method(self):
@@ -2157,6 +1714,7 @@ class TestMapRetrainWorkflow:
         entry = self._make_entry()
         hass = MagicMock()
         repairs_mod._map_updating_since[entry.entry_id] = 12345.0
+        repairs_mod._event_armed[f"{entry.entry_id}_map_retrain_in_progress"] = True
 
         with patch("custom_components.roomba_plus.repairs.ir.async_delete_issue") as mock_delete:
             async_check_map_retrain_workflow(hass, entry, False)
@@ -2165,6 +1723,7 @@ class TestMapRetrainWorkflow:
             hass, "roomba_plus", f"map_retrain_workflow_{entry.entry_id}"
         )
         assert entry.entry_id not in repairs_mod._map_updating_since
+        assert f"{entry.entry_id}_map_retrain_in_progress" not in repairs_mod._event_armed
 
     def test_just_started_no_issue_yet(self):
         """Stage 1 — map_updating just turned True. No issue fires
@@ -2182,7 +1741,9 @@ class TestMapRetrainWorkflow:
     def test_warn_stage_after_threshold(self):
         from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
         from custom_components.roomba_plus import repairs as repairs_mod
-        from custom_components.roomba_plus.const import MAP_RETRAIN_WARN_MINUTES
+        from custom_components.roomba_plus.const import (
+            EVENT_MAP_RETRAIN_IN_PROGRESS, MAP_RETRAIN_WARN_MINUTES,
+        )
 
         from homeassistant.util import dt as dt_util
         entry = self._make_entry()
@@ -2192,15 +1753,12 @@ class TestMapRetrainWorkflow:
             now - (MAP_RETRAIN_WARN_MINUTES + 1) * 60
         )
 
-        with patch("custom_components.roomba_plus.repairs.ir.async_create_issue") as mock_create:
-            async_check_map_retrain_workflow(hass, entry, True)
+        async_check_map_retrain_workflow(hass, entry, True)
 
-        mock_create.assert_called_once()
-        _, kwargs = mock_create.call_args
-        assert mock_create.call_args[0][2] == f"map_retrain_workflow_{entry.entry_id}"
-        from homeassistant.helpers import issue_registry as ir
-        assert kwargs["severity"] == ir.IssueSeverity.WARNING
-        assert kwargs["translation_key"] == "map_retrain_in_progress"
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_MAP_RETRAIN_IN_PROGRESS
+        assert data["minutes"] >= MAP_RETRAIN_WARN_MINUTES
 
     def test_stuck_stage_after_longer_threshold(self):
         from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
@@ -2224,9 +1782,10 @@ class TestMapRetrainWorkflow:
         assert kwargs["severity"] == ir.IssueSeverity.ERROR
         assert kwargs["translation_key"] == "map_retrain_stuck"
 
-    def test_does_not_fire_any_bus_event(self):
-        """Triggers and Repairs must not be redundant — this check must
-        never touch hass.bus, only the issue registry."""
+    def test_stuck_stage_does_not_fire_any_bus_event(self):
+        """v3.5.0: only the WARN stage (map_retrain_in_progress) fires an
+        event now — the STUCK stage remains a pure Repair Issue, since it's
+        Gate-C actionable (check the robot, consider a manual restart)."""
         from custom_components.roomba_plus.repairs import async_check_map_retrain_workflow
         from custom_components.roomba_plus import repairs as repairs_mod
         from custom_components.roomba_plus.const import MAP_RETRAIN_STUCK_MINUTES
@@ -2889,204 +2448,159 @@ class TestRobotHealthPlainStatus:
         assert rec is None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# L9-MAP — async_check_reloc_alert (v3.1.0)
-# ─────────────────────────────────────────────────────────────────────────────
+class TestFavoriteMultiCommandDefs:
+    """v3.5.0 FAVORITE-FIX (issue #9 follow-up)."""
 
-class TestRelocAlertRepairIssue:
-    """L9-MAP (v3.1.0) — async_check_reloc_alert fires/clears the Repair Issue."""
-
-    def _make_entry(self, rps):
-        entry = MagicMock()
-        entry.entry_id = "test_reloc_entry"
-        entry.runtime_data.robot_profile_store = rps
-        return entry
-
-    def test_fires_when_alert_triggered(self):
-        from custom_components.roomba_plus.repairs import async_check_reloc_alert
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        rps = RobotProfileStore()
-        for _ in range(100):
-            rps.update_reloc_baseline(1)
-        for _ in range(10):
-            rps.update_reloc_baseline(10)
-        entry = self._make_entry(rps)
-        hass = MagicMock()
+    @pytest.mark.asyncio
+    async def test_no_issue_for_single_commanddef(self):
+        from custom_components.roomba_plus.const import DOMAIN
+        hass = _make_hass()
         with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_reloc_alert(hass, entry)
-        mock_ir.async_create_issue.assert_called_once()
+            await async_check_favorite_multi_command(
+                hass, "fav1", "Vacuum Everywhere", 1
+            )
+            mock_ir.async_create_issue.assert_not_called()
+            mock_ir.async_delete_issue.assert_called_once_with(
+                hass, DOMAIN, "favorite_multi_commanddefs_fav1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_issue_for_zero_commanddefs(self):
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_favorite_multi_command(hass, "fav2", "Empty", 0)
+            mock_ir.async_create_issue.assert_not_called()
+            mock_ir.async_delete_issue.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_issue_fires_for_multiple_commanddefs(self):
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_favorite_multi_command(
+                hass, "fav3", "Mystery Routine", 3
+            )
+            mock_ir.async_create_issue.assert_called_once()
+            args, kwargs = mock_ir.async_create_issue.call_args
+            assert args[2] == "favorite_multi_commanddefs_fav3"
+            assert kwargs["translation_key"] == "favorite_multi_commanddefs"
+            assert kwargs["translation_placeholders"] == {
+                "name": "Mystery Routine",
+                "count": "3",
+            }
+            assert kwargs["is_fixable"] is False
+
+    @pytest.mark.asyncio
+    async def test_issue_cleared_when_favorite_edited_down(self):
+        from custom_components.roomba_plus.const import DOMAIN
+        hass = _make_hass()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_favorite_multi_command(hass, "fav4", "Was Broken", 2)
+            mock_ir.async_create_issue.assert_called_once()
+            mock_ir.reset_mock()
+            await async_check_favorite_multi_command(hass, "fav4", "Was Broken", 1)
+            mock_ir.async_create_issue.assert_not_called()
+            mock_ir.async_delete_issue.assert_called_once_with(
+                hass, DOMAIN, "favorite_multi_commanddefs_fav4"
+            )
+
+
+class TestCleanupRemovedRepairs:
+    """v3.5.0 Repairs redesign bug-hunt fix — async_cleanup_removed_repairs.
+
+    Unit tests elsewhere in this file mock issue_registry entirely, so they
+    can never catch this class of bug: a Repair Issue that was ACTIVE in a
+    user's real registry before upgrading, which nothing in the new code
+    would ever create OR delete again, left permanently stuck. These tests
+    exercise the actual filtering logic against a registry-shaped fake
+    (keyed the same way real IssueRegistry.issues is:
+    dict[(domain, issue_id), entry-with-translation_key]) rather than
+    mocking the whole thing away.
+    """
+
+    def _fake_registry(self, issues: dict):
+        """issues: {(domain, issue_id): translation_key}"""
+        reg = MagicMock()
+        reg.issues = {
+            key: MagicMock(translation_key=tk) for key, tk in issues.items()
+        }
+        return reg
+
+    @pytest.mark.asyncio
+    async def test_deletes_only_removed_translation_keys_for_our_domain(self):
+        from custom_components.roomba_plus.const import DOMAIN
+        from custom_components.roomba_plus.repairs import (
+            async_cleanup_removed_repairs,
+        )
+        hass = _make_hass()
+        reg = self._fake_registry({
+            (DOMAIN, "performance_degradation"): "performance_degradation",  # removed
+            (DOMAIN, "smberr_high_e1"): "smberr_high",  # removed
+            (DOMAIN, "stuck_hotspot_12_7"): "stuck_hotspot_detected",  # removed, dynamic id
+            (DOMAIN, "maintenance_due_e1"): "maintenance_due",  # survives, must NOT be touched
+            ("other_domain", "performance_degradation"): "performance_degradation",  # different domain, must NOT be touched
+        })
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            mock_ir.async_get.return_value = reg
+            removed_count = await async_cleanup_removed_repairs(hass)
+
+        assert removed_count == 3
+        deleted_ids = {
+            call.args[2] for call in mock_ir.async_delete_issue.call_args_list
+        }
+        assert deleted_ids == {
+            "performance_degradation", "smberr_high_e1", "stuck_hotspot_12_7",
+        }
+
+    @pytest.mark.asyncio
+    async def test_noop_when_nothing_stale(self):
+        from custom_components.roomba_plus.const import DOMAIN
+        from custom_components.roomba_plus.repairs import (
+            async_cleanup_removed_repairs,
+        )
+        hass = _make_hass()
+        reg = self._fake_registry({
+            (DOMAIN, "maintenance_due_e1"): "maintenance_due",
+            (DOMAIN, "accident_detected_e1"): "accident_detected",
+        })
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            mock_ir.async_get.return_value = reg
+            removed_count = await async_cleanup_removed_repairs(hass)
+
+        assert removed_count == 0
         mock_ir.async_delete_issue.assert_not_called()
 
-    def test_clears_when_not_triggered(self):
-        """Self-healing: when the alert is no longer active, the issue is deleted."""
-        from custom_components.roomba_plus.repairs import async_check_reloc_alert
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        rps = RobotProfileStore()
-        for _ in range(20):
-            rps.update_reloc_baseline(1)
-        entry = self._make_entry(rps)
-        hass = MagicMock()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_reloc_alert(hass, entry)
-        mock_ir.async_delete_issue.assert_called_once()
-        mock_ir.async_create_issue.assert_not_called()
-
-    def test_no_rps_clears_issue(self):
-        """robot_profile_store=None → treated as not-triggered, issue cleared."""
-        from custom_components.roomba_plus.repairs import async_check_reloc_alert
-        entry = self._make_entry(rps=None)
-        hass = MagicMock()
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            async_check_reloc_alert(hass, entry)
-        mock_ir.async_delete_issue.assert_called_once()
-
-
-class TestCoverageFrequency:
-    """v3.2.0 COVERAGE-FREQ — async_check_coverage_frequency."""
-
-    def _entry_with_health(self, health: dict):
-        entry = _make_entry()
-        ms = MagicMock()
-        ms.room_coverage_health.return_value = health
-        entry.runtime_data.mission_store = ms
-        return entry, ms
-
     @pytest.mark.asyncio
-    async def test_no_op_without_mission_store(self):
-        hass = _make_hass()
-        entry = _make_entry()
-        entry.runtime_data.mission_store = None
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_coverage_frequency(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_no_issue_when_healthy(self):
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({
-            "Kitchen": {"status": "healthy", "days_since_last": 3.0,
-                        "expected_interval_days": 7.0},
-        })
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_coverage_frequency(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-            mock_ir.async_delete_issue.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_no_issue_when_insufficient_data(self):
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({
-            "Kitchen": {"status": "insufficient_data", "days_since_last": 3.0,
-                        "expected_interval_days": None},
-        })
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_coverage_frequency(hass, entry)
-            mock_ir.async_create_issue.assert_not_called()
-            mock_ir.async_delete_issue.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_issue_fires_when_overdue(self):
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({
-            "Kitchen": {"status": "overdue", "days_since_last": 21.0,
-                        "expected_interval_days": 7.0},
-        })
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_coverage_frequency(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            args = mock_ir.async_create_issue.call_args
-            assert args[0][2] == "coverage_frequency_Kitchen"
-            assert args[1]["translation_placeholders"]["room"] == "Kitchen"
-            assert args[1]["translation_placeholders"]["days_since_last"] == "21.0"
-            assert args[1]["translation_placeholders"]["expected_interval_days"] == "7.0"
-
-    @pytest.mark.asyncio
-    async def test_multiple_rooms_independent(self):
-        """Kitchen overdue, Bedroom healthy — only Kitchen gets an issue."""
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({
-            "Kitchen": {"status": "overdue", "days_since_last": 21.0,
-                        "expected_interval_days": 7.0},
-            "Bedroom": {"status": "healthy", "days_since_last": 5.0,
-                        "expected_interval_days": 10.0},
-        })
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            await async_check_coverage_frequency(hass, entry)
-            mock_ir.async_create_issue.assert_called_once()
-            assert mock_ir.async_create_issue.call_args[0][2] == "coverage_frequency_Kitchen"
-
-    @pytest.mark.asyncio
-    async def test_orphaned_issue_deleted_when_room_renamed(self):
-        """v3.2.0 bug-hunt fix — if a room is renamed in the iRobot app,
-        room_coverage_health() will report under the NEW name from then
-        on; the OLD name's issue_id must not be left behind forever."""
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({
-            "Living Room": {"status": "healthy", "days_since_last": 3.0,
-                             "expected_interval_days": 7.0},
-        })
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            mock_ir.async_get.return_value.issues = {
-                ("roomba_plus", "coverage_frequency_Living Room"): MagicMock(),
-                ("roomba_plus", "coverage_frequency_Old Kitchen Name"): MagicMock(),
-            }
-            await async_check_coverage_frequency(hass, entry)
-            deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
-            assert "coverage_frequency_Old Kitchen Name" in deleted_ids
-
-    @pytest.mark.asyncio
-    async def test_cleanup_ignores_other_domains_and_issue_types(self):
-        hass = _make_hass()
-        entry, ms = self._entry_with_health({})
-        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
-            mock_ir.async_get.return_value.issues = {
-                ("roomba_plus", "mqtt_watchdog_test_entry"): MagicMock(),
-                ("some_other_integration", "coverage_frequency_Kitchen"): MagicMock(),
-            }
-            await async_check_coverage_frequency(hass, entry)
-            deleted_ids = [c.args[2] for c in mock_ir.async_delete_issue.call_args_list]
-            assert "mqtt_watchdog_test_entry" not in deleted_ids
-            assert "coverage_frequency_Kitchen" not in deleted_ids
-
-
-class TestDirtCorrelationIssue:
-    """v3.3.0 CROSS-CORR — Repair Issue at |r| > 0.5, self-deleting below."""
-
-    def _entry(self, results):
-        from custom_components.roomba_plus.robot_profile_store import (
-            RobotProfileStore,
-        )
-        entry = MagicMock()
-        entry.entry_id = "e1"
-        rps = RobotProfileStore()
-        rps.correlation_results = MagicMock(return_value=results)
-        entry.runtime_data.robot_profile_store = rps
-        return entry
-
-    @pytest.mark.asyncio
-    async def test_issue_created_above_threshold(self):
+    async def test_noop_on_empty_registry(self):
         from custom_components.roomba_plus.repairs import (
-            async_check_dirt_correlation,
+            async_cleanup_removed_repairs,
         )
-        hass = MagicMock()
-        hass.states.get.return_value = None
-        entry = self._entry({"sensor.humidity": {"r": 0.61, "n": 40}})
-        with patch("custom_components.roomba_plus.repairs.ir") as ir_m:
-            await async_check_dirt_correlation(hass, entry)
-        ir_m.async_create_issue.assert_called_once()
-        kwargs = ir_m.async_create_issue.call_args
-        assert kwargs[1]["translation_key"] == "dirt_correlation"
-        assert kwargs[1]["translation_placeholders"]["r"] == "+0.61"
-        assert kwargs[1]["translation_placeholders"]["direction"] == "more"
+        hass = _make_hass()
+        reg = self._fake_registry({})
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            mock_ir.async_get.return_value = reg
+            removed_count = await async_cleanup_removed_repairs(hass)
 
-    @pytest.mark.asyncio
-    async def test_issue_deleted_below_threshold(self):
+        assert removed_count == 0
+        mock_ir.async_delete_issue.assert_not_called()
+
+    def test_removed_keys_set_has_no_overlap_with_surviving_repairs(self):
+        """Guards against a future edit accidentally adding a still-used
+        translation_key to the removed set, which would make this cleanup
+        silently delete issues this version still actively creates."""
         from custom_components.roomba_plus.repairs import (
-            async_check_dirt_correlation,
+            _REMOVED_REPAIR_TRANSLATION_KEYS,
         )
-        hass = MagicMock()
-        entry = self._entry({"sensor.humidity": {"r": 0.45, "n": 40}})
-        with patch("custom_components.roomba_plus.repairs.ir") as ir_m:
-            await async_check_dirt_correlation(hass, entry)
-        ir_m.async_create_issue.assert_not_called()
-        ir_m.async_delete_issue.assert_called_once()
+        surviving = {
+            "accident_detected", "battery_contact_suspect", "dock_contact_health",
+            "maintenance_baselines_reset", "maintenance_due", "layout_change_detected",
+            "observed_zones_detected", "map_retrain_stuck", "favorite_multi_commanddefs",
+        }
+        assert not (_REMOVED_REPAIR_TRANSLATION_KEYS & surviving)
+
+    def test_removed_keys_count_matches_release_notes(self):
+        """20 translation_keys removed/converted in v3.5.0 (9 + 8 + 1 + 1 + 1
+        across the six stages) — a guard against silently dropping one."""
+        from custom_components.roomba_plus.repairs import (
+            _REMOVED_REPAIR_TRANSLATION_KEYS,
+        )
+        assert len(_REMOVED_REPAIR_TRANSLATION_KEYS) == 20

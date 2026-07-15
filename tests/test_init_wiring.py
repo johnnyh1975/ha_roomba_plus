@@ -414,6 +414,46 @@ class TestUpdateRobotProfileStoreMissionStats:
 
 
 
+class TestCleanupRemovedRepairsDispatched:
+    """v3.5.0 Repairs redesign bug-hunt fix — source guard for
+    async_cleanup_removed_repairs's dispatch.
+
+    _phase_finalize is too heavy to call directly in a unit test (real
+    platform forwarding, HTTP view registration, service registration) —
+    same reasoning as TestMqttStampCallbackRegisteredBeforePlatforms above.
+    This guards against the exact bug class this project has already found
+    twice before (v3.2.0 bug-hunt: repair checks built, tested standalone,
+    but never actually wired into anything the running integration calls):
+    confirms the cleanup call is actually present in _phase_finalize's
+    source, not just that async_cleanup_removed_repairs itself works when
+    called directly (TestCleanupRemovedRepairs in test_repairs.py already
+    covers that).
+    """
+
+    def test_cleanup_dispatched_from_phase_finalize(self):
+        from pathlib import Path
+        import custom_components.roomba_plus as pkg
+
+        src = (Path(pkg.__file__).parent / "__init__.py").read_text()
+        finalize_idx = src.find("async def _phase_finalize")
+        assert finalize_idx != -1, "_phase_finalize not found in __init__.py"
+
+        # Slice to just this function's body (up to the next top-level def)
+        next_def_idx = src.find("\nasync def ", finalize_idx + 1)
+        if next_def_idx == -1:
+            next_def_idx = src.find("\ndef ", finalize_idx + 1)
+        body = src[finalize_idx:next_def_idx if next_def_idx != -1 else None]
+
+        assert "async_cleanup_removed_repairs" in body, (
+            "_phase_finalize no longer dispatches "
+            "async_cleanup_removed_repairs — users upgrading from a "
+            "pre-v3.5.0 install would be left with permanently stuck "
+            "stale Repair Issues (see async_cleanup_removed_repairs's "
+            "own docstring in repairs.py for the full rationale)"
+        )
+        assert "hass.async_create_task" in body
+
+
 class TestMqttStampCallbackRegisteredBeforePlatforms:
     """v3.2.1 — source-order guard for the watchdog race fix.
 

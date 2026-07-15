@@ -147,10 +147,31 @@ class TestDescribeStuck:
         assert result["name"] == "Roomba+"
 
 
-class TestRegistersBothEvents:
-    def test_both_event_types_registered(self):
+class TestRegistersAllEvents:
+    def test_all_event_types_registered(self):
+        from custom_components.roomba_plus.const import (
+            EVENT_CANCELLATION_RECURRENCE,
+            EVENT_CLOUD_STALE,
+            EVENT_ERROR_RECURRENCE,
+            EVENT_MAP_DRIFT_DETECTED,
+            EVENT_MAP_RETRAIN_IN_PROGRESS,
+            EVENT_MISSION_ANOMALY,
+            EVENT_MIXED_SCHEDULE,
+            EVENT_SCHEDULE_SUBOPTIMAL,
+            EVENT_STUCK_PATTERN,
+        )
         described = _collect_describers()
         assert EVENT_MISSION_COMPLETED in described
         assert EVENT_MAINTENANCE_RESET in described
         assert EVENT_STUCK in described
-        assert len(described) == 3
+        # v3.5.0 Repairs redesign — signals demoted from Repair Issue to event
+        assert EVENT_ERROR_RECURRENCE in described
+        assert EVENT_CANCELLATION_RECURRENCE in described
+        assert EVENT_STUCK_PATTERN in described
+        assert EVENT_MISSION_ANOMALY in described
+        assert EVENT_MIXED_SCHEDULE in described
+        assert EVENT_SCHEDULE_SUBOPTIMAL in described
+        assert EVENT_MAP_DRIFT_DETECTED in described
+        assert EVENT_MAP_RETRAIN_IN_PROGRESS in described
+        assert EVENT_CLOUD_STALE in described
+        assert len(described) == 12

@@ -1730,36 +1730,10 @@ class TestCleaningPerformanceSensor:
         assert "trend" in attrs
         assert attrs["trend"] in ("improving", "stable", "declining", "unknown")
 
-    def test_f6a_check_not_rescheduled_when_trend_unchanged(self):
-        """B1/B2 regression: repeated reads must not re-schedule the F6a check.
-
-        extra_state_attributes can be evaluated many times per state write. The
-        side-effect (cache + repair-check task) was migrated here from the old
-        CloudRawSensor.native_value, so it must be idempotent: only the FIRST
-        change schedules a task; subsequent identical reads do not.
-        """
-        from unittest.mock import MagicMock
-        records = [
-            {"done": "done", "sqft": 300, "runM": 40, "startTime": 1700000000 - i * 86400}
-            for i in range(10)
-        ]
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=records)
-        # Real attribute (not MagicMock auto-attr) so equality comparison works
-        s._config_entry.runtime_data.cleaning_speed_trend_value = None
-        fake_hass = MagicMock()
-        fake_hass.is_running = True
-        # Close the coroutine the helper creates so it isn't left un-awaited
-        fake_hass.async_create_task.side_effect = lambda coro, **kw: coro.close()
-        s.hass = fake_hass
-
-        s.extra_state_attributes  # first read — value changes None → str
-        first_calls = fake_hass.async_create_task.call_count
-        s.extra_state_attributes  # second read — value unchanged
-        s.extra_state_attributes  # third read — value unchanged
-        second_calls = fake_hass.async_create_task.call_count
-
-        assert first_calls == 1, "first read should schedule exactly one F6a check"
-        assert second_calls == first_calls, "unchanged reads must not reschedule"
+    # test_f6a_check_not_rescheduled_when_trend_unchanged removed in v3.5.0:
+    # the performance_degradation Repair Issue it guarded was deleted (the
+    # cleaning_speed_trend sensor already exposes this signal). The sensor no
+    # longer schedules any repair-check side-effect from attribute reads.
 
 
 class TestCleaningAnalytics30dSensor:
@@ -4416,7 +4390,7 @@ class TestRelocalisationRateSensor:
         assert sensor.native_value is None
         attrs = sensor.extra_state_attributes
         assert attrs["baseline"] is None
-        assert attrs["alert"] is False
+        assert attrs["percentile_rank"] is None
 
     def test_not_ready_returns_none(self):
         """Baseline not yet established (< 15 missions) → native_value=None."""
@@ -4437,7 +4411,9 @@ class TestRelocalisationRateSensor:
         assert sensor.native_value == pytest.approx(2.0)
 
     def test_attributes_include_baseline_and_window(self):
-        """extra_state_attributes expose baseline, count, window, and alert state."""
+        """extra_state_attributes expose baseline, count, window, and
+        percentile_rank (v3.5.0 — replaces the old fixed-multiplier
+        alert)."""
         from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
         rps = RobotProfileStore()
         for _ in range(20):
@@ -4447,10 +4423,10 @@ class TestRelocalisationRateSensor:
         assert attrs["baseline"] == pytest.approx(1.0)
         assert attrs["baseline_mission_count"] == 20
         assert len(attrs["recent_window"]) == 10
-        assert attrs["alert"] is False
+        assert attrs["percentile_rank"] is not None
 
-    def test_alert_attribute_reflects_triggered_state(self):
-        """When an alert is active, extra_state_attributes reflects it."""
+    def test_percentile_rank_attribute_reflects_elevated_window(self):
+        """A sustained spike shows up as a high percentile_rank."""
         from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
         rps = RobotProfileStore()
         for _ in range(100):
@@ -4458,7 +4434,7 @@ class TestRelocalisationRateSensor:
         for _ in range(10):
             rps.update_reloc_baseline(10)
         sensor = _make_reloc_sensor(rps=rps)
-        assert sensor.extra_state_attributes["alert"] is True
+        assert sensor.extra_state_attributes["percentile_rank"] > 90
 
 
 class TestMopSensorSlugConsistency:
