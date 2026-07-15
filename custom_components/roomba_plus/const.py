@@ -93,6 +93,20 @@ EVENT_MAP_RETRAIN_COMPLETED: Final = f"{DOMAIN}_map_retrain_completed"
 EVENT_MAINTENANCE_RESET: Final = f"{DOMAIN}_maintenance_reset"
 EVENT_STUCK: Final = f"{DOMAIN}_stuck"  # v3.2.0 STUCK-CONTEXT
 
+# v3.5.0 Repairs redesign — moment-shaped signals demoted from persistent
+# Repair Issues to fire-once events (+ Logbook). Each fires only on the
+# transition into the condition, not on every re-check while it persists —
+# see _fire_once()/_disarm() in repairs.py.
+EVENT_ERROR_RECURRENCE: Final = f"{DOMAIN}_error_recurrence"
+EVENT_CANCELLATION_RECURRENCE: Final = f"{DOMAIN}_cancellation_recurrence"
+EVENT_STUCK_PATTERN: Final = f"{DOMAIN}_stuck_pattern"
+EVENT_MISSION_ANOMALY: Final = f"{DOMAIN}_mission_anomaly"
+EVENT_MIXED_SCHEDULE: Final = f"{DOMAIN}_mixed_schedule"
+EVENT_SCHEDULE_SUBOPTIMAL: Final = f"{DOMAIN}_schedule_suboptimal"
+EVENT_MAP_DRIFT_DETECTED: Final = f"{DOMAIN}_map_drift_detected"
+EVENT_MAP_RETRAIN_IN_PROGRESS: Final = f"{DOMAIN}_map_retrain_in_progress"
+EVENT_CLOUD_STALE: Final = f"{DOMAIN}_cloud_stale"
+
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
 # F11 — demand-based cleaning (DirtThresholdManager)
 CONF_DEMAND_CLEANING_ENABLED: Final = "demand_cleaning_enabled"
@@ -181,6 +195,8 @@ SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when
 SERVICE_CLEAN_OVERDUE_ROOMS: Final = "clean_overdue_rooms"  # v3.3.0 ROOM-SCHED
 SERVICE_AUTO_CLEAN_DIRTY_ROOMS: Final = "auto_clean_dirty_rooms"  # v3.3.0 SMART-ORDER
 SERVICE_EXPLAIN_MISSION: Final = "explain_mission"  # v3.2.0 ANOMALY-EXPLAIN
+SERVICE_CREATE_BACKUP: Final = "create_backup"  # v3.5.0 FULL-BACKUP
+SERVICE_RESTORE_BACKUP: Final = "restore_backup"  # v3.5.0 FULL-BACKUP
 
 # ── Roomba 980 hardware constants ─────────────────────────────────────────────
 ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width

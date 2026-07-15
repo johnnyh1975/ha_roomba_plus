@@ -20,10 +20,8 @@ from homeassistant.components.sensor import (
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers import issue_registry as ir
 
 from .const import (
-    DOMAIN,
     EVENT_HEALTH_CHANGE,
     INTEGRATION_HEALTH_TICK_SECONDS,
 )
@@ -250,16 +248,16 @@ class RoombaIntegrationHealthSensor(IRobotEntity, SensorEntity):
         if self._unsub_tick is not None:
             self._unsub_tick()
             self._unsub_tick = None
-        ir.async_delete_issue(
-            self.hass, DOMAIN, f"integration_health_{self._entry.entry_id}"
-        )
 
     @callback
     def _async_health_tick(self, _now: Any) -> None:
-        """Re-evaluate health on a timer and fire/clear the Repair Issue."""
-        from .repairs import async_check_integration_health
-        async_check_integration_health(self.hass, self._entry)
+        """Re-evaluate health on a timer and fire the health_change event.
 
+        The integration_health Repair Issue was removed in v3.5.0 (Repairs
+        redesign) — sustained low health is not a user-actionable problem in
+        the Gate-C sense, and the score is already exposed by this sensor. The
+        band-crossing event below remains for anyone automating on it.
+        """
         # v2.9.0 EVENT-BUS — band-crossing health_change event. First tick
         # only seeds _last_health_band (no prior state to compare against,
         # so no event fires on startup).

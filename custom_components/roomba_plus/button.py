@@ -188,6 +188,17 @@ async def async_setup_entry(
         favorites = data.cloud_coordinator.data.get("favorites", [])  # type: ignore[union-attr]
         for fav in favorites:
             entities.append(FavoriteButton(data.roomba, data.blid, config_entry, fav))
+            from .repairs import async_check_favorite_multi_command
+
+            command_defs = fav.get("commanddefs") or []
+            hass.async_create_task(
+                async_check_favorite_multi_command(
+                    hass,
+                    fav.get("favorite_id", ""),
+                    fav.get("name", fav.get("favorite_id", "")),
+                    len(command_defs),
+                )
+            )
 
     async_add_entities(entities)
 
@@ -620,16 +631,18 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
             return
 
         # commanddefs[0] is the primary command — mirrors roomba_rest980 behaviour.
-        # NOTE (ia74/roomba_rest980 issue #9): the official app's own data model
-        # (core.Favorite.mCommandDefs, confirmed identical in both the Classic
-        # and Prime APKs) allows more than one entry here. Neither app's native
-        # execution path (executeMissionForFavorite -> GenericGlobalDataService
-        # ::sendCommand) iterates over it before handing the whole Favorite
-        # object off to a deeper, unexported service layer — so it remains
-        # unconfirmed whether multi-entry favorites occur in practice and, if
-        # so, whether steps are meant to run sequentially. Until that's field-
-        # verified, we only ever act on entry 0 and make the drop visible
-        # instead of silently discarding any further steps.
+        # NOTE (ia74/roomba_rest980 issue #9, resolved v3.5.0): real APK sample
+        # data (favorites_json_data.json, 6 examples incl. multi-region
+        # favorites like "Vacuum Guest House") confirms the official app
+        # expresses multi-region cleaning via a single commanddefs entry's
+        # nested `regions` array, not via multiple commanddefs entries. Since
+        # `params` below already forwards every field of commanddefs[0]
+        # verbatim -- including `regions` -- ordinary multi-region favorites
+        # already work correctly and always have. A Favorite with 2+
+        # commanddefs entries remains unconfirmed territory (neither app's
+        # native execution path was confirmed to iterate over such entries);
+        # that case now raises a Repair Issue (see repairs.py,
+        # async_check_favorite_multi_command) instead of only a debug log.
         if len(command_defs) > 1:
             _LOGGER.warning(
                 "FavoriteButton '%s': favorite has %d commanddefs entries — "

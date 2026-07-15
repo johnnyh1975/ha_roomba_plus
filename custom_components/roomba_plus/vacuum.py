@@ -131,6 +131,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         self._cap_position: bool = (
             (self.vacuum_state.get("cap") or {}).get("pose") == 1
         )
+        # v3.5.0 — SEGMENT-DEBOUNCE (dixi83 field report): consecutive
+        # coordinator refreshes with a segment mismatch, used to debounce
+        # _handle_coordinator_update()'s call into HA's native remap flow.
+        # See that method for the full rationale.
+        self._segment_mismatch_streak: int = 0
 
     @property
     def suggested_object_id(self) -> str | None:
@@ -735,12 +740,34 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         """
         return bool(self.vacuum_state.get("twoPass", False))
 
+    # v3.5.0 — SEGMENT-DEBOUNCE (dixi83 field report): the number of
+    # consecutive coordinator refreshes a segment mismatch must persist
+    # before triggering HA's native "map vacuum segments to areas" remap
+    # flow. Mirrors this codebase's established window+hysteresis pattern
+    # (DRIFT-AUTO, MAP-RETRAIN-WF) for exactly the same reason: a single
+    # snapshot comparison fires on any one-refresh blip (a transient
+    # region-ID/pmap-ID inconsistency on iRobot's own cloud side, not a
+    # genuine map retrain), and the native remap flow is disruptive enough
+    # (a modal the user must act on) that it should only trigger for a
+    # change that actually sticks around.
+    _SEGMENT_MISMATCH_DEBOUNCE = 3
+
     def _handle_coordinator_update(self) -> None:
         """Standard HA coordinator callback — checks for segment changes.
 
         F-I15 change-detection: if the region set has changed since the user
         last mapped areas, raise a Repair Issue prompting re-mapping.
         Suppressed when last_seen_segments is None (never configured).
+
+        v3.5.0 SEGMENT-DEBOUNCE: requires the mismatch to persist across
+        _SEGMENT_MISMATCH_DEBOUNCE consecutive refreshes before actually
+        triggering the remap flow — see _segment_mismatch_streak above.
+        Previously fired on the very first mismatched refresh, which meant
+        any transient inconsistency in iRobot's own pmap_id/region_id
+        assignment (not a real retrain) reopened the same disruptive native
+        prompt repeatedly. A genuine retrain still triggers reliably; it
+        just needs a few consecutive confirmations first, not a fresh
+        rebuild the map from scratch.
         """
         # No super() call needed — IRobotEntity is not a CoordinatorEntity.
         # The listener is registered in async_added_to_hass; HA does not call
@@ -764,7 +791,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             if r.get("id")
         }
         if current_ids != {seg.id for seg in last_seen}:
-            self.async_create_segments_issue()
+            self._segment_mismatch_streak += 1
+            if self._segment_mismatch_streak >= self._SEGMENT_MISMATCH_DEBOUNCE:
+                self.async_create_segments_issue()
+        else:
+            self._segment_mismatch_streak = 0
 
     # ── Push updates ──────────────────────────────────────────────────────
 

@@ -267,14 +267,12 @@ class BlockingManager:
                     store.consecutive_skips,
                 )
                 # Persist immediately so the counter survives HA restarts.
+                # (The consecutive_skips Repair Issue was removed in v3.5.0 —
+                # the count is already exposed by the consecutive_clean_skips
+                # sensor; the store save below still feeds that sensor.)
                 self._hass.async_create_task(
                     store.async_save(self._hass, self._entry.entry_id),
                     name="roomba_plus_consecutive_skips_save",
-                )
-                from .repairs import async_check_consecutive_skips
-                self._hass.async_create_task(
-                    async_check_consecutive_skips(self._hass, self._entry),
-                    name="roomba_plus_consecutive_skips_check",
                 )
 
     async def _do_start(self, rooms: list[str] | None) -> None:

@@ -303,3 +303,52 @@ auto_clean_dirty_rooms:
           min: 1
           max: 20
           mode: box
+
+create_backup:
+  name: Create backup
+  description: >
+    Export every persisted store for this robot (missions, geometry, grid,
+    room segmentation, outline, robot profile, maintenance, trajectories,
+    freeze snapshot) into a single ZIP file under
+    <config>/roomba_plus_backups/. Use before migrating Home Assistant to
+    new hardware so learned state isn't lost.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    entity_id:
+      name: Entity
+      description: The Roomba vacuum entity to back up.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+restore_backup:
+  name: Restore backup
+  description: >
+    Restore every store in a backup ZIP created by create_backup. Takes
+    effect immediately — no Home Assistant restart required.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    entity_id:
+      name: Entity
+      description: The Roomba vacuum entity to restore state onto.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    path:
+      name: Backup file path
+      description: >
+        Full path to the backup ZIP file (e.g.
+        /config/roomba_plus_backups/roomba_plus_backup_....zip).
+      required: true
+      selector:
+        text:

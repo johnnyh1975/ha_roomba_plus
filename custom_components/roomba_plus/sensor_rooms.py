@@ -1200,9 +1200,14 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
     or None until reloc_baseline_ready (needs _RELOC_BASELINE_MIN_MISSIONS
     observations).
 
-    extra_state_attributes expose the underlying baseline and window for
-    troubleshooting and so a user/automation can see the comparison directly
-    rather than just trusting the sensor's verdict.
+    extra_state_attributes expose the underlying baseline, window, and
+    (v3.5.0) percentile_rank — where the current window sits in this
+    robot's own historical distribution, 0-100, with no fixed threshold
+    baked in. This replaces the old reloc_rate_elevated Repair Issue and
+    its fixed 3.0x multiplier (fragile against zero-inflated reLc data —
+    see RobotProfileStore.reloc_percentile_rank()'s docstring); the
+    integration no longer decides what counts as "elevated" for you —
+    automate on percentile_rank with whatever cutoff matters to you.
 
     Gate: SMART-tier only — mssnNavStats is confirmed present on i7+/s9+
     (lewis firmware) via field data (Thonno), absent on 980/900-series.
@@ -1247,11 +1252,11 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
                 "baseline": None,
                 "baseline_mission_count": 0,
                 "recent_window": [],
-                "alert": False,
+                "percentile_rank": None,
             }
         return {
             "baseline": round(rps.reloc_baseline, 2) if rps.reloc_baseline is not None else None,
             "baseline_mission_count": rps.reloc_mission_count,
             "recent_window": list(rps.recent_relocs),
-            "alert": rps.reloc_alert_triggered(),
+            "percentile_rank": rps.reloc_percentile_rank(),
         }

@@ -1479,16 +1479,10 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
         value = self.entity_description.value_fn(self)
 
-        # F6b — cache battery retention value to RoombaData for repair check
+        # F6b — cache battery retention value to RoombaData
         if key == "battery_capacity_retention":
             data = self._config_entry.runtime_data
             data.battery_retention_value = float(value) if value is not None else None
-            if hasattr(self.hass, "is_running") and self.hass.is_running:
-                from .repairs import async_check_battery_recharge
-                self.hass.async_create_task(
-                    async_check_battery_recharge(self.hass, self._config_entry),
-                    name="roomba_plus_f6b_battery_retention_check",
-                )
 
         # F6f — battery contact / bus-communication anomaly check, fed
         # directly from the same batPct value this sensor exposes (no

@@ -407,22 +407,8 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
         data = self._config_entry.runtime_data
         if key == "cleaning_speed_trend":
             data.cleaning_speed_trend_value = str(value) if value else None
-            # F6a — trigger performance degradation check on every trend update
-            if hasattr(self.hass, "is_running") and self.hass.is_running:
-                from .repairs import async_check_performance_degradation
-                self.hass.async_create_task(
-                    async_check_performance_degradation(self.hass, self._config_entry),
-                    name="roomba_plus_f6a_perf_check",
-                )
         elif key == "recent_recharge_fraction":
             data.recharge_fraction_value = float(value) if value is not None else None
-            # F6b — check battery/recharge correlation
-            if hasattr(self.hass, "is_running") and self.hass.is_running:
-                from .repairs import async_check_battery_recharge
-                self.hass.async_create_task(
-                    async_check_battery_recharge(self.hass, self._config_entry),
-                    name="roomba_plus_f6b_battery_check",
-                )
         elif key == "recent_dirt_density":
             # Update dirt_density_rising flag for F6a cause classification
             records = self._coordinator.raw_records
@@ -622,45 +608,30 @@ class _ConsolidatedCloudSensor(IRobotEntity, SensorEntity):
         )
 
     def _cache_and_check_f6a(self, trend_value: str | None) -> None:
-        """Cache cleaning_speed_trend_value; schedule F6a check only on change.
+        """Cache cleaning_speed_trend_value.
 
         B1/B2 (v3.0.0): migrated from the deactivated
         CloudRawSensor(key="cleaning_speed_trend").native_value side-effect.
-        extra_state_attributes may be evaluated multiple times per state write,
-        so the F6a performance-degradation check is scheduled only when the
-        cached trend actually changes — keeping repeated reads side-effect-free.
+        v3.5.0: the performance_degradation Repair Issue was removed (the
+        cleaning_speed_trend sensor already surfaces this signal), so this
+        now only maintains the cached value other code reads.
         """
         data = self._config_entry.runtime_data
-        changed = data.cleaning_speed_trend_value != trend_value
         data.cleaning_speed_trend_value = trend_value
-        if changed and hasattr(self.hass, "is_running") and self.hass.is_running:
-            from .repairs import async_check_performance_degradation
-            self.hass.async_create_task(
-                async_check_performance_degradation(self.hass, self._config_entry),
-                name="roomba_plus_f6a_perf_check",
-            )
 
     def _cache_and_check_f6b(
         self, recharge_value: float | None, dirt_rising: bool | None
     ) -> None:
-        """Cache recharge_fraction_value + dirt_density_rising; F6b check on change.
+        """Cache recharge_fraction_value + dirt_density_rising.
 
-        B1/B2 (v3.0.0): migrated from the deactivated CloudRawSensor side-effects
-        (keys "recent_recharge_fraction" and "recent_dirt_density"). The F6b
-        battery-recharge check is scheduled only when the recharge fraction
-        changes, avoiding duplicate tasks on repeated property reads.
+        v3.5.0: the battery_recharge_high Repair Issue was removed (the
+        mission_recharge_minutes sensor already surfaces this signal); this
+        now only maintains the cached values other code reads.
         """
         data = self._config_entry.runtime_data
-        changed = data.recharge_fraction_value != recharge_value
         data.recharge_fraction_value = recharge_value
         if dirt_rising is not None:
             data.dirt_density_rising = dirt_rising
-        if changed and hasattr(self.hass, "is_running") and self.hass.is_running:
-            from .repairs import async_check_battery_recharge
-            self.hass.async_create_task(
-                async_check_battery_recharge(self.hass, self._config_entry),
-                name="roomba_plus_f6b_battery_check",
-            )
 
 
 class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
@@ -1090,12 +1061,6 @@ class RoombaHealthScoreTrendSensor(IRobotEntity, SensorEntity):
         @callback
         def _on_coordinator_update() -> None:
             self.async_write_ha_state()
-            if hasattr(self.hass, "is_running") and self.hass.is_running:
-                from .repairs import async_check_health_trend_declining
-                self.hass.async_create_task(
-                    async_check_health_trend_declining(self.hass, self._config_entry),
-                    name="roomba_plus_l10_health_trend_check",
-                )
 
         self.async_on_remove(
             self._coordinator.async_add_listener(_on_coordinator_update)

@@ -1735,18 +1735,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         )
 
     async def _trigger_drift_issue_enriched(self, dx: float, dy: float) -> None:
-        """F6d -- fire the drift Repair Issue with bearing/magnitude enrichment."""
+        """F6d -- fire the map_drift_detected event with bearing/magnitude
+        enrichment. v3.5.0 Repairs redesign: demoted from Repair Issue to
+        event — DRIFT-AUTO's own self-healing design already treats this as
+        transient (see drift_recovered() below), which fits an event/
+        Logbook model better than a persistent, must-dismiss Repair."""
         from .repairs import async_enrich_drift_issue
         await async_enrich_drift_issue(self.hass, self._config_entry, dx=dx, dy=dy)
 
     async def _clear_drift_issue(self) -> None:
-        """v3.1.0 DRIFT-AUTO — self-healing: clear the issue once the recent
-        drift window's mean has dropped back under the recovery threshold.
-        No-op (HA tolerates deleting an issue that doesn't exist) when the
-        issue was never created in the first place.
+        """v3.1.0 DRIFT-AUTO — self-healing: re-arm the map_drift_detected
+        event once the recent drift window's mean has dropped back under
+        the recovery threshold, so the next fresh occurrence fires again.
         """
-        from homeassistant.components import repairs as ir
-        ir.async_delete_issue(self.hass, DOMAIN, "map_drift_detected")
+        from .repairs import _disarm
+        _disarm(self._config_entry.entry_id, "map_drift_detected")
 
     @staticmethod
     def _blank_image() -> bytes:

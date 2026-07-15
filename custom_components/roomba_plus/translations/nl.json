@@ -51,6 +51,18 @@
           "host": "The local IP address of the Roomba.",
           "password": "The robot password (hold HOME button to retrieve)."
         }
+      },
+      "reauth_confirm": {
+        "title": "Opnieuw verbinden met iRobot-cloud",
+        "description": "Roomba+ kon niet inloggen bij de iRobot-cloud voor \"{name}\" (huidig: {current_user}). Lokale MQTT-besturing blijft hoe dan ook werken — dit heeft alleen invloed op cloudfuncties (kamernamen, missiegeschiedenis, favorieten). Voer je huidige iRobot-app e-mail en wachtwoord in om opnieuw te verbinden.",
+        "data": {
+          "irobot_username": "iRobot e-mail",
+          "irobot_password": "iRobot-wachtwoord"
+        },
+        "data_description": {
+          "irobot_username": "Het e-mailadres waarmee je inlogt in de iRobot-app.",
+          "irobot_password": "Je huidige iRobot-app-wachtwoord."
+        }
       }
     },
     "error": {
@@ -890,85 +902,25 @@
       "title": "Looptijdteller mogelijk gereset",
       "description": "De teller is lager dan de baselines voor: {parts}. Reset alle verbruiksartikelen."
     },
-    "performance_degradation": {
-      "title": "Reinigingsprestaties nemen af",
-      "description": "Aanhoudende daling van snelheid (oorzaak: {cause}). Mogelijk versleten borstels, verstopt filter of veranderde vloer."
-    },
-    "battery_recharge_high": {
-      "title": "Frequent tussentijds laden",
-      "description": "Accucapaciteit onder 75 % met frequent tussentijds laden. Overweeg vervanging."
-    },
     "battery_contact_suspect": {
       "title": "Mogelijk contactprobleem accu/dock",
-      "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt."
-    },
-    "mixed_schedule": {
-      "title": "Concurrerende planningsbronnen",
-      "description": "{schedule_pct} % door HA en {app_pct} % door de app. Gebruik één bron."
+      "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt. {smberr_context}"
     },
     "accident_detected": {
       "title": "Mogelijk vloerongeluk",
       "description": "Hoog aantal vuildetecties in korte tijd. Controleer het gebied."
     },
-    "consecutive_skips": {
-      "title": "Robot sloeg {count} reinigingen over",
-      "description": "Blokkerende sensoren of aanwezigheidsplanning verhinderden {count} reinigingen. Controleer de configuratie."
-    },
-    "map_drift_detected": {
-      "title": "Smart Map-drift gedetecteerd",
-      "description": "De recente missies van de robot tonen verhoogde drift ten opzichte van de verwachte dockpositie (laatste: {magnitude_cm} cm, richting {bearing}°). Dit kan erop wijzen dat het dock is verplaatst of dat de robot moeite heeft met herlokaliseren. Laat hem opnieuw dokken en een nieuwe karteringsrit uitvoeren. Deze melding verdwijnt automatisch zodra de drift de komende missies weer normaal wordt."
-    },
-    "reloc_rate_elevated": {
-      "title": "Verhoogd herlokalisatiepercentage",
-      "description": "De robot heeft zich aanzienlijk vaker moeten herlokaliseren dan zijn eigen vastgestelde basislijn ({baseline} gemiddeld per missie). Dit kan wijzen op verslechtering van de Smart Map — overweeg de kaart te verwijderen en opnieuw te trainen als je ook \"Nieuwe ruimte gevonden\"-meldingen of onnauwkeurige kamertracking opmerkt. Deze melding verdwijnt automatisch zodra het percentage de komende missies weer normaal wordt."
-    },
     "observed_zones_detected": {
       "title": "Door robot gedetecteerde obstakels in cloudkaart",
       "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
     },
-    "error_recurrence": {
-      "title": "Terugkerende fout: {label}",
-      "description": "Fout {error_code} ({label}) is de afgelopen 30 dagen {count} keer opgetreden. Meest recent: fase {phase}, locatie {room}. Aanbevolen actie: {action}"
-    },
-    "cancellation_recurrence": {
-      "title": "Terugkerende annuleringen",
-      "description": "Missies zijn de afgelopen 30 dagen {count} keer geannuleerd ({by_user_count} door gebruiker/app, {other_count} anders). Controleer op planningsconflicten, ingrepen via de app, of of de robot handmatig wordt gestopt."
-    },
-    "schedule_suboptimal": {
-      "title": "Schedule may be missing high-dirt days",
-      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
-    },
-    "mission_anomaly": {
-      "title": "Unusual cleaning patterns detected",
-      "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
-    },
-    "stuck_pattern": {
-      "title": "Vastlooppatroon gedetecteerd",
-      "description": "Uw Roomba loopt het vaakst vast bij {room}, meestal {time}. Overweeg het gebied vrij te maken voor die schoonmaakbeurten of uw schema aan te passen."
-    },
-    "smberr_high": {
-      "title": "Veel SMBus-accufouten gedetecteerd",
-      "description": "De robot heeft {count} SMBus-communicatiefouten geregistreerd. Reinig de laadcontacten. Als de fouten aanhouden, moet de accu mogelijk worden vervangen."
-    },
     "dock_contact_health": {
       "title": "Dock contact health issue detected",
-      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
-    },
-    "cloud_stale": {
-      "title": "Cloudgegevens zijn verouderd",
-      "description": "Roomba+ heeft al {minutes} minuten geen succesvolle cloudupdate ontvangen. Controleer uw iRobot-inloggegevens en internetverbinding. Lokale MQTT-gegevens zijn nog steeds beschikbaar."
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
     },
     "mqtt_watchdog": {
       "title": "MQTT-verbinding robot verbroken tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: {cloud_hint}. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
-    },
-    "integration_health": {
-      "title": "Integratiegezondheid is verminderd",
-      "description": "De integratiegezondheidsscore van Roomba+ ligt al minstens 30 minuten onder 50 (huidige score: {score}/100). Dit combineert het aantal actieve Repair Issues, de leeftijd van het laatste MQTT-bericht en de actualiteit van het missiearchief. Controleer de attributen van de entiteit sensor.*_integration_health voor een uitsplitsing van welk signaal is beïnvloed, en bekijk andere actieve Repair Issues voor deze robot."
-    },
-    "map_retrain_in_progress": {
-      "title": "Smart Map-update duurt langer dan normaal",
-      "description": "De Smart Map van de robot wordt al minstens {minutes} minuten bijgewerkt. Een normale update is meestal sneller — dit kan gebeuren na een grote indelingswijziging. Nog geen actie nodig; dit verdwijnt automatisch zodra de update klaar is."
     },
     "map_retrain_stuck": {
       "title": "Smart Map-update lijkt vast te lopen",
@@ -990,29 +942,13 @@
       "title": "MQTT-verbinding van robot verloren tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: onbekend (dit veld is niet beschikbaar op deze firmware). Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     },
-    "health_trend_declining": {
-      "title": "Gezondheidsscore-trend verslechtert",
-      "description": "Roomba+ heeft vastgesteld dat de samengestelde gezondheidsscore al {days} opeenvolgende dagen onder de eigen vastgestelde basislijn van deze robot ligt. Dit kan wijzen op beginnende mechanische slijtage, navigatieproblemen of veranderende omgevingsomstandigheden — controleer de afzonderlijke signalen (batterijbehoud, navigatie-efficiëntie, reinigingssnelheid, missie-anomalieën, vastloop-percentage) voor de waarschijnlijke oorzaak."
-    },
-    "room_accessibility_low": {
-      "title": "{room}: lage toegankelijkheidsscore",
-      "description": "{room} behaalde een toegankelijkheidsscore van {score}/100, vanwege {reason}. Controleer deze kamer op obstakels, smalle doorgangen of meubels die het vermogen van de robot om effectief te reinigen kunnen beperken."
-    },
     "layout_change_detected": {
       "title": "Mogelijke indelingswijziging gedetecteerd",
       "description": "Een plek bij ({x_mm}, {y_mm}) werd lange tijd betrouwbaar gereinigd en is nu meerdere missies achter elkaar overgeslagen — een teken dat nieuw meubilair of een ander obstakel deze plek kan blokkeren. Controleer het gebied, of negeer als dit verwacht was."
     },
-    "stuck_hotspot_detected": {
-      "title": "Terugkerende vastloopplek gedetecteerd",
-      "description": "De robot is herhaaldelijk vastgelopen bij een cluster van {cell_count} cellen in {room} (peiling {bearing}° vanaf het dock, {stuck_count} vastloopgebeurtenissen daar geregistreerd, momenteel duidelijk slechter gedekt dan de omgeving). Controleer het gebied op een obstakel."
-    },
-    "coverage_frequency_overdue": {
-      "title": "{room} is mogelijk te lang niet gereinigd",
-      "description": "{room} is voor het laatst {days_since_last} dagen geleden gereinigd — merkbaar langer dan het ritme van ongeveer {expected_interval_days} dagen dat deze robot voor die kamer heeft vastgesteld op basis van zijn eigen reinigingsgeschiedenis. Controleer of het schema de kamer nog dekt, of de kamer onlangs ontoegankelijk was."
-    },
-    "dirt_correlation": {
-      "title": "Sterke vuilcorrelatie gedetecteerd",
-      "description": "De robot verzamelt aanzienlijk {direction} vuil wanneer {entity} hoog is (r={r}, 30+ missies). Het kan lonen het schoonmaakschema op dit patroon af te stemmen."
+    "favorite_multi_commanddefs": {
+      "title": "Favoriet heeft meerdere opdrachtstappen",
+      "description": "De favoriet “{name}” heeft {count} opdrachtstappen, maar alleen de eerste wordt naar de robot gestuurd — de rest wordt genegeerd. Dit is een zeldzame configuratie waarvan niet is bevestigd dat deze correct werkt."
     }
   },
   "device_automation": {
@@ -1087,6 +1023,14 @@
           "description": "Wait this many minutes after robot A docks before starting robot B."
         }
       }
+    },
+    "create_backup": {
+      "name": "Back-up maken",
+      "description": "Exporteert alle opgeslagen gegevens van deze robot naar één ZIP-bestand."
+    },
+    "restore_backup": {
+      "name": "Back-up herstellen",
+      "description": "Herstelt alle gegevens uit een back-up ZIP. Werkt direct, geen herstart nodig."
     }
   },
   "exceptions": {
@@ -1128,6 +1072,9 @@
     },
     "no_rooms_resolved": {
       "message": "Geen kamers om te reinigen — geef minstens één kamernaam op."
+    },
+    "backup_entity_not_found": {
+      "message": "De entiteit \"{entity_id}\" kon niet aan een Roomba+-robot worden gekoppeld. Controleer de entity-ID en probeer opnieuw."
     }
   },
   "selector": {

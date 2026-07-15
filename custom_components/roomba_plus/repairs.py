@@ -25,8 +25,14 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
-    INTEGRATION_HEALTH_LOW_THRESHOLD,
-    INTEGRATION_HEALTH_SUSTAINED_MINUTES,
+    EVENT_CANCELLATION_RECURRENCE,
+    EVENT_ERROR_RECURRENCE,
+    EVENT_MAP_DRIFT_DETECTED,
+    EVENT_MAP_RETRAIN_IN_PROGRESS,
+    EVENT_MISSION_ANOMALY,
+    EVENT_MIXED_SCHEDULE,
+    EVENT_SCHEDULE_SUBOPTIMAL,
+    EVENT_STUCK_PATTERN,
     MAINTENANCE_DUE_GRACE_DAYS,
     MAP_RETRAIN_STUCK_MINUTES,
     MAP_RETRAIN_WARN_MINUTES,
@@ -34,6 +40,33 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# v3.5.0 Repairs redesign — in-memory "already fired for this occurrence"
+# state, keyed by f"{entry_id}_{key}". Not persisted, matching the existing
+# _map_updating_since / _health_low_since pattern: a fresh HA restart simply
+# re-arms the edge detector, which is fine — worst case a genuinely ongoing
+# pattern fires once more shortly after restart, it never spams.
+_event_armed: dict[str, bool] = {}
+
+
+def _fire_once(hass: HomeAssistant, entry_id: str, key: str, event_type: str, data: dict) -> None:
+    """Fire event_type exactly once per sustained occurrence of `key`.
+
+    Repeated calls while the underlying condition remains true do not
+    re-fire — only the transition into "true" does. Pairs with _disarm(),
+    which the caller invokes when the condition is no longer true so the
+    next transition can fire again.
+    """
+    state_key = f"{entry_id}_{key}"
+    if _event_armed.get(state_key):
+        return
+    _event_armed[state_key] = True
+    hass.bus.async_fire(event_type, data)
+
+
+def _disarm(entry_id: str, key: str) -> None:
+    """Clear the fired-state for `key` so the next transition can fire again."""
+    _event_armed.pop(f"{entry_id}_{key}", None)
 
 
 async def async_create_fix_flow(
@@ -340,112 +373,6 @@ async def async_check_bbrun_reset(
 
 # ── F6 — Performance & Behavioral Repair Issues ───────────────────────────────
 
-async def async_check_performance_degradation(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """F6a — fire Repair Issue when cleaning speed declines for 3+ consecutive updates.
-
-    Reads cleaning_speed_trend from RoombaData and increments a counter stored
-    there.  Issue fires when counter reaches 3.  Suppressed 14 days after dismiss.
-    """
-    data = entry.runtime_data
-    trend = data.cleaning_speed_trend_value
-    dirt_rising = data.dirt_density_rising
-
-    if trend == "declining":
-        data.consecutive_declining_speed += 1
-    else:
-        data.consecutive_declining_speed = 0
-
-    # Cap counter at 10 to prevent unbounded growth and log spam after issue fires
-    data.consecutive_declining_speed = min(data.consecutive_declining_speed, 10)
-
-    if data.consecutive_declining_speed < 3:
-        return
-
-    store = data.maintenance_store
-    cause = "unknown"
-    if store:
-        from .const import CONF_BRUSH_HOURS, CONF_FILTER_HOURS
-        current_hr = (data.roomba_reported_state().get("bbrun") or {}).get("hr", 0)
-        brush_rem = store.brush_remaining(
-            current_hr,
-            entry.options.get(CONF_BRUSH_HOURS, 150),
-        )
-        filter_rem = store.filter_remaining(
-            current_hr,
-            entry.options.get(CONF_FILTER_HOURS, 150),
-        )
-        if brush_rem < 40:
-            cause = "brush_wear"
-        elif filter_rem < 20:
-            cause = "filter_clog"
-        elif dirt_rising:
-            cause = "environment_change"
-
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "performance_degradation",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="performance_degradation",
-        translation_placeholders={"cause": cause},
-    )
-    _LOGGER.warning(
-        "Roomba+: performance degradation detected (cause=%s, "
-        "declining for %d consecutive updates)",
-        cause, data.consecutive_declining_speed,
-    )
-
-
-async def async_check_health_trend_declining(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """v3.2.0 L10 — fire Repair Issue when the composite health score has
-    been below this robot's own self-calibrated baseline for 14+ days.
-
-    The "declining" judgment itself is self-calibrated (RobotProfileStore.
-    health_score_trend() compares against this robot's own learned mean/
-    stdev, not a fixed threshold — see its docstring). The 14-day count
-    here is a separate, fixed persistence debounce on top of that — same
-    pattern as async_check_performance_degradation's fixed 3-update
-    trigger — so a single noisy bad day doesn't fire an issue, only a
-    sustained decline does.
-
-    Auto-resolves (issue deleted) once the decline streak breaks, mirroring
-    async_check_observed_zones's dismiss-on-recovery pattern.
-    """
-    data = entry.runtime_data
-    rps = getattr(data, "robot_profile_store", None)
-    if rps is None:
-        return
-
-    declining_days = rps.health_score_declining_days()
-
-    if declining_days < 14:
-        ir.async_delete_issue(hass, DOMAIN, "health_trend_declining")
-        return
-
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "health_trend_declining",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="health_trend_declining",
-        translation_placeholders={"days": str(declining_days)},
-    )
-    _LOGGER.warning(
-        "Roomba+: health score trend declining for %d consecutive days",
-        declining_days,
-    )
-
-
 async def async_check_furniture_change(
     hass: HomeAssistant,
     entry: Any,
@@ -535,295 +462,6 @@ async def async_check_furniture_change(
         )
 
 
-# v3.2.0 STUCK-HOTSPOT — coverage_impact_pp at or below this counts as
-# "still meaningfully under-covered relative to its surroundings". Above
-# this, the cluster is treated as resolved even though its stuck_count
-# (a lifetime counter that never decreases — see async_check_stuck_hotspot's
-# docstring) still shows history. This threshold, not stuck_count, is
-# what "auto-resolves once GridStore fills back in" actually depends on.
-_STUCK_HOTSPOT_RESOLVED_IMPACT_PP = -10.0
-
-
-async def async_check_stuck_hotspot(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """v3.2.0 STUCK-HOTSPOT — one Repair Issue per stuck cell cluster from
-    GridStore.stuck_clusters().
-
-    Auto-resolve nuance worth calling out: self._stuck counts are a
-    lifetime counter that only ever increases (no decay, unlike the EMA
-    coverage weight) — so a cluster, once formed, would never naturally
-    disappear from stuck_clusters()'s output just because the obstacle
-    was removed. The actual "has this recovered" signal is
-    coverage_impact_pp: once the cluster's cells are being covered
-    roughly as well as their surroundings again (impact no longer
-    meaningfully negative), the issue is treated as resolved regardless
-    of the permanent stuck-count history.
-
-    Room name resolution (SMART-tier only) requires the pose-space ->
-    UMF-space transform BEFORE calling room_name_at() — mirrors
-    api_views.py's existing hazards-endpoint logic exactly (that endpoint
-    already does this same two-step conversion for stuck_events-sourced
-    hazards).
-    """
-    data = entry.runtime_data
-    gs = getattr(data, "grid_store", None)
-    if gs is None:
-        return
-
-    clusters = gs.stuck_clusters()
-
-    active_anchors = set()
-    for cluster in clusters:
-        anchor = cluster["cells"][0]
-        impact = cluster["coverage_impact_pp"]
-        resolved = impact is not None and impact > _STUCK_HOTSPOT_RESOLVED_IMPACT_PP
-        issue_id = f"stuck_hotspot_{anchor[0]}_{anchor[1]}"
-
-        if resolved:
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-            continue
-
-        active_anchors.add(anchor)
-
-        x_mm, y_mm = cluster["x_mm"], cluster["y_mm"]
-        from .grid_store import _bearing_deg
-        bearing = _bearing_deg(x_mm, y_mm)
-        room_name: str | None = None
-        aligner = getattr(data, "umf_aligner", None)
-        if aligner is not None and getattr(aligner, "aligned", False):
-            pt_umf = aligner.pose_to_umf(x_mm, y_mm)
-            if pt_umf:
-                room_name = aligner.room_name_at(*pt_umf)
-
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="stuck_hotspot_detected",
-            translation_placeholders={
-                "room": room_name or "an unnamed area",
-                "bearing": str(bearing),
-                "cell_count": str(len(cluster["cells"])),
-                "stuck_count": str(cluster["stuck_count"]),
-            },
-        )
-
-    # v3.2.0 bug-hunt fix — active_anchors was being built above but
-    # never actually used, leaving stale issues behind whenever a
-    # cluster's membership shifts (the anchor is cells[0], the smallest
-    # sorted cell — a newly-adjacent hotspot cell joining, or a cluster
-    # splitting, can change which cell that is). Enumerate this domain's
-    # existing stuck_hotspot_* issues directly from the registry and
-    # delete any whose anchor is no longer part of any current cluster.
-    reg = ir.async_get(hass)
-    for (issue_domain, issue_id), _issue in list(reg.issues.items()):
-        if issue_domain != DOMAIN or not issue_id.startswith("stuck_hotspot_"):
-            continue
-        anchor_str = issue_id[len("stuck_hotspot_"):]
-        parts = anchor_str.rsplit("_", 1)
-        if len(parts) != 2:
-            continue
-        try:
-            anchor = (int(parts[0]), int(parts[1]))
-        except ValueError:
-            continue
-        if anchor not in active_anchors:
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-
-async def async_check_coverage_frequency(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """v3.2.0 COVERAGE-FREQ — fire a Repair Issue per room whose
-    MissionStore.room_coverage_health() status is "overdue" (self-
-    calibrated against that room's OWN historical cleaning cadence, not a
-    fixed schedule — see room_coverage_health()'s docstring). One issue
-    per affected room, same per-room pattern as ROOM-ACCESS/STUCK-HOTSPOT.
-    Auto-resolves once the room's status is no longer "overdue".
-    """
-    data = entry.runtime_data
-    ms = getattr(data, "mission_store", None)
-    if ms is None:
-        return
-
-    now_iso = dt_util.now().isoformat()
-    health = ms.room_coverage_health(now_iso)
-
-    active_issue_ids = {f"coverage_frequency_{room}" for room in health}
-
-    for room, info in health.items():
-        issue_id = f"coverage_frequency_{room}"
-        if info.get("status") != "overdue":
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-            continue
-
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="coverage_frequency_overdue",
-            translation_placeholders={
-                "room": room,
-                "days_since_last": str(info["days_since_last"]),
-                "expected_interval_days": str(info["expected_interval_days"]),
-            },
-        )
-
-    # v3.2.0 bug-hunt fix — same orphaned-issue risk as STUCK-HOTSPOT's
-    # active_anchors cleanup, but room names (unlike numeric grid
-    # coordinates) can contain arbitrary characters, so reverse-parsing
-    # the issue_id back to a room name isn't reliable. Compares the full
-    # issue_id directly against active_issue_ids instead — if the user
-    # renames a room in the iRobot app, the OLD issue_id simply won't be
-    # in this set anymore and gets cleaned up, without needing to parse
-    # anything back out of it.
-    reg = ir.async_get(hass)
-    for (issue_domain, issue_id), _issue in list(reg.issues.items()):
-        if issue_domain != DOMAIN or not issue_id.startswith("coverage_frequency_"):
-            continue
-        if issue_id not in active_issue_ids:
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-
-async def async_check_room_accessibility(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """v3.2.0 ROOM-ACCESS — fire a Repair Issue per room scoring below 60.
-
-    One issue per affected room (issue_id includes the rid, so multiple
-    low-scoring rooms each get their own entry rather than one issue
-    trying to describe several rooms at once). Auto-resolves per room
-    once that room's score recovers — mirrors async_check_observed_zones's
-    dismiss-on-recovery pattern.
-
-    Deliberately does NOT fabricate the specific coordinates / %
-    improvement-estimate language from the original version-plan mockup
-    ("Frequent stuck events near (180, 230)... could improve coverage by
-    ~18%") — RobotProfileStore.room_accessibility_scores() doesn't compute
-    either of those numbers, and inventing plausible-looking specifics
-    that aren't actually derived from real data would be worse than a
-    plainer, honest description.
-    """
-    data = entry.runtime_data
-    aligner = getattr(data, "umf_aligner", None)
-    if aligner is None:
-        return
-    gs = getattr(data, "grid_store", None)
-    if gs is None:
-        return
-
-    polygons = aligner.room_polygons_umf
-    if not polygons:
-        return
-
-    from .mission_archive import MissionArchive
-    from .robot_profile_store import RobotProfileStore
-
-    coverage_by_room = gs.coverage_by_polygon(polygons)
-    stuck_by_room = gs.stuck_by_polygon(polygons)
-
-    time_by_room: dict[str, int] = {}
-    archive = getattr(data, "mission_archive", None)
-    if archive is not None:
-        for record in archive.all_derived_oldest_first():
-            visits = record.get("room_visits") or []
-            for rid, seconds in MissionArchive.time_per_room(visits).items():
-                time_by_room[rid] = time_by_room.get(rid, 0) + seconds
-    areas_m2 = aligner.room_areas_m2
-    time_per_area_by_room = {
-        rid: seconds / areas_m2[rid]
-        for rid, seconds in time_by_room.items()
-        if areas_m2.get(rid, 0) > 0
-    }
-
-    scores = RobotProfileStore.room_accessibility_scores(
-        coverage_by_room, stuck_by_room, time_per_area_by_room,
-    )
-
-    id_to_name = {
-        r["id"]: r["name"]
-        for r in (data.cloud_coordinator.regions or [])
-        if r.get("id") and r.get("name")
-    } if data.cloud_coordinator is not None else {}
-
-    _reason_text = {
-        "obstacle_density": "an elevated rate of stuck events relative to this robot's other rooms",
-        "narrow_passages": "taking noticeably longer per square metre than this robot's other rooms",
-        "coverage_gap": "consistently incomplete coverage",
-    }
-
-    for rid, room_polygon in polygons.items():
-        result = scores.get(rid)
-        issue_id = f"room_accessibility_{rid}"
-        if result is None or result.get("score") is None or result["score"] >= 60:
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-            continue
-
-        room_name = id_to_name.get(rid, rid)
-        reason = _reason_text.get(
-            result.get("limiting_factor"), "reduced accessibility"
-        )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="room_accessibility_low",
-            translation_placeholders={
-                "room": room_name,
-                "score": str(int(result["score"])),
-                "reason": reason,
-            },
-        )
-        _LOGGER.warning(
-            "Roomba+: %s accessibility score %d/100 (%s)",
-            room_name, int(result["score"]), result.get("limiting_factor"),
-        )
-
-
-async def async_check_battery_recharge(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """F6b — fire Repair Issue when recharge fraction is high and capacity is low."""
-    data = entry.runtime_data
-    recharge_pct = data.recharge_fraction_value
-    retention_pct = data.battery_retention_value
-
-    if recharge_pct is not None and recharge_pct > 15 \
-            and retention_pct is not None and retention_pct < 75:
-        data.consecutive_battery_warn += 1
-    else:
-        data.consecutive_battery_warn = 0
-
-    data.consecutive_battery_warn = min(data.consecutive_battery_warn, 10)
-
-    if data.consecutive_battery_warn < 3:
-        return
-
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "battery_recharge_high",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="battery_recharge_high",
-    )
-
-
 # F6f — battery contact / bus-communication anomaly thresholds.
 # Deliberately generous: both NiMH and Li-ion charge/discharge far slower
 # than these limits under any realistic scenario, so a reading that
@@ -848,13 +486,25 @@ async def async_check_battery_contact_issue(
        direction). No real battery changes charge state this fast — this
        is the BMS communication link dropping and recovering, not the
        battery itself. Debounced over _CONTACT_ANOMALY_DEBOUNCE consecutive
-       occurrences to avoid firing on one isolated MQTT glitch.
+       occurrences to avoid firing on one isolated MQTT glitch — UNLESS
+       (v3.5.0) bbchg.smberr is also elevated, in which case a single
+       occurrence is enough (see _smberr_elevated() below): corroborating
+       evidence from a second, independent field justifies acting sooner.
 
     2. The per-charge-cycle peak batPct declining over
        _CHARGE_PEAK_DECLINE_CYCLES consecutive charge cycles. Intermittent
        contact can reduce how much charge is actually transferred each
        cycle even when no single jump looks anomalous on its own — this
        catches the gradual version of the same underlying problem.
+
+    v3.5.0 Repairs redesign: the former standalone smberr_high Repair was
+    merged into this one (and into async_check_dock_health) rather than
+    just deleted — it was ~90% redundant with what these two already tell
+    the user (clean contacts / consider battery replacement), but the
+    signal itself is real corroborating evidence, so it now lowers this
+    check's debounce and appears as context in the fired issue's text
+    instead of firing its own separate issue for the same underlying
+    problem. The raw bbchg.smberr count remains visible in diagnostics.
 
     Works for any firmware variant (reads only batPct + cleanMissionStatus.
     phase, both universally present), unlike async_check_dock_health which
@@ -891,6 +541,17 @@ async def async_check_battery_contact_issue(
     data.last_batpct_value = batpct
     data.last_batpct_at = now
 
+    # v3.5.0 — smberr (former standalone smberr_high Repair, merged in
+    # rather than just deleted) as a genuine confidence input: corroborating
+    # BMS-communication-error evidence lowers the debounce needed for the
+    # jump signal from _CONTACT_ANOMALY_DEBOUNCE to 1 — a single implausible
+    # jump alongside an already-elevated SMBus error count is corroborated
+    # enough to act on immediately, rather than waiting for it to repeat.
+    # Does not affect the independent declining-peak-trend signal, which
+    # has its own, unrelated evidence bar.
+    smberr_elevated, smberr_count = _smberr_elevated(data)
+    effective_debounce = 1 if smberr_elevated else _CONTACT_ANOMALY_DEBOUNCE
+
     # ── Signal 2: declining peak-per-charge-cycle trend ─────────────────
     is_charging = phase == "charge"
     if is_charging:
@@ -913,8 +574,8 @@ async def async_check_battery_contact_issue(
 
     issue_id = f"battery_contact_suspect_{config_entry.entry_id}"
 
-    if data.consecutive_battery_contact_anomaly >= _CONTACT_ANOMALY_DEBOUNCE or declining_trend:
-        cause = "jump" if data.consecutive_battery_contact_anomaly >= _CONTACT_ANOMALY_DEBOUNCE else "declining_trend"
+    if data.consecutive_battery_contact_anomaly >= effective_debounce or declining_trend:
+        cause = "jump" if data.consecutive_battery_contact_anomaly >= effective_debounce else "declining_trend"
         ir.async_create_issue(
             hass,
             DOMAIN,
@@ -926,6 +587,14 @@ async def async_check_battery_contact_issue(
             translation_placeholders={
                 "cause": cause,
                 "recent_peaks": ", ".join(f"{p:.0f}%" for p in peaks),
+                # v3.5.0 — corroborating context from the former smberr_high
+                # Repair (merged in, not just deleted): empty string when
+                # smberr isn't elevated, so the translation can render this
+                # as an optional trailing clause.
+                "smberr_context": (
+                    f" (also: {smberr_count:,} SMBus errors observed, which "
+                    f"often correlates with this)" if smberr_elevated else ""
+                ),
             },
         )
     else:
@@ -936,7 +605,13 @@ async def async_check_mixed_schedule(
     hass: HomeAssistant,
     entry: Any,
 ) -> None:
-    """F6e — fire Repair Issue when both HA schedule and iRobot app starts detected."""
+    """F6e — fire mixed_schedule event when both HA schedule and iRobot app
+    starts detected.
+
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event — this is a
+    configuration observation, not something broken. Fires once per
+    sustained occurrence via _fire_once(); see its docstring.
+    """
     data = entry.runtime_data
     store = data.mission_store
     if store is None:
@@ -954,21 +629,17 @@ async def async_check_mixed_schedule(
     app_pct = app_count / total * 100
 
     if schedule_pct > 20 and app_pct > 20:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            "mixed_schedule",
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="mixed_schedule",
-            translation_placeholders={
-                "schedule_pct": str(round(schedule_pct)),
-                "app_pct": str(round(app_pct)),
+        _fire_once(
+            hass, entry.entry_id, "mixed_schedule", EVENT_MIXED_SCHEDULE,
+            {
+                "entry_id": entry.entry_id,
+                "name": entry.title,
+                "schedule_pct": round(schedule_pct),
+                "app_pct": round(app_pct),
             },
         )
     else:
-        ir.async_delete_issue(hass, DOMAIN, "mixed_schedule")
+        _disarm(entry.entry_id, "mixed_schedule")
 
 
 async def async_check_accident_detection(
@@ -1030,42 +701,21 @@ async def async_check_accident_detection(
         ir.async_delete_issue(hass, DOMAIN, "accident_detected")
 
 
-async def async_check_consecutive_skips(
-    hass: HomeAssistant,
-    entry: Any,
-) -> None:
-    """F6g — fire Repair Issue when cleaning has been skipped 3+ consecutive times."""
-    data = entry.runtime_data
-    store = data.maintenance_store
-    if store is None:
-        return
-
-    skips = store.consecutive_skips
-    if skips >= 3:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            "consecutive_skips",
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="consecutive_skips",
-            translation_placeholders={"count": str(skips)},
-        )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, "consecutive_skips")
-
-
 async def async_enrich_drift_issue(
     hass: HomeAssistant,
     entry: Any,
     dx: float,
     dy: float,
 ) -> None:
-    """F6d — enrich the existing drift Repair Issue with bearing and magnitude.
+    """F6d — fire the map_drift_detected event with bearing and magnitude.
 
-    Called by geometry_store when a new drift event is recorded.
-    Adds bearing (compass degrees), magnitude (cm), and trend to the issue data.
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event —
+    DRIFT-AUTO's own self-healing design already treats this as transient
+    (drift_recovered() re-arms it via _disarm(), see image.py), which fits
+    an event/Logbook model better than a persistent, must-dismiss Repair.
+
+    Called by geometry_store when a new drift event is recorded. Event
+    payload includes bearing (compass degrees) and magnitude (cm).
     """
     import math
     magnitude_cm = round(math.sqrt(dx ** 2 + dy ** 2) / 10, 1)  # mm → cm
@@ -1076,17 +726,13 @@ async def async_enrich_drift_issue(
         bearing_deg, magnitude_cm,
     )
 
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "map_drift_detected",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="map_drift_detected",
-        translation_placeholders={
-            "bearing": str(bearing_deg),
-            "magnitude_cm": str(magnitude_cm),
+    _fire_once(
+        hass, entry.entry_id, "map_drift_detected", EVENT_MAP_DRIFT_DETECTED,
+        {
+            "entry_id": entry.entry_id,
+            "name": entry.title,
+            "bearing": bearing_deg,
+            "magnitude_cm": magnitude_cm,
         },
     )
 
@@ -1136,14 +782,19 @@ async def async_check_error_recurrence(
     hass: HomeAssistant,
     entry: Any,
 ) -> None:
-    """F8b — fire Repair Issue when the same numeric error code recurs >=3 times in 30 days.
+    """F8b — fire error_recurrence event when the same numeric error code
+    recurs >=3 times in 30 days.
 
-    Issue body includes the error label, occurrence count, cleaning phase at the
-    most recent occurrence, room name from UmfAligner (when confidence ≥ 0.70),
-    and the recommended action from ERROR_CATALOGUE.
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event — a
+    recurring error is worth a Logbook entry and an automation hook, but
+    isn't itself something the user must dismiss or act on through the
+    Repairs UI (many of the 125 catalogued codes have no single fix action).
+    Event payload includes the error label, occurrence count, cleaning phase
+    at the most recent occurrence, room name from UmfAligner (when
+    confidence ≥ 0.70), and the recommended action from ERROR_CATALOGUE.
 
-    Auto-resolves: the issue is deleted when the recurrence count drops below 3
-    (e.g. after records age out of the 30-day window on the next check).
+    Fires once per sustained occurrence via _fire_once() — see its
+    docstring; re-arms once the recurrence count drops below 3.
 
     v2.8.2: prefer MissionArchive (ARC1) over the local MissionStore when
     available. Confirmed against live field data — a 3-week recurring
@@ -1199,7 +850,7 @@ async def async_check_error_recurrence(
 
     worst_code = max(error_counts, key=lambda c: error_counts[c], default=None)
     if worst_code is None or error_counts[worst_code] < 3:
-        ir.async_delete_issue(hass, DOMAIN, "error_recurrence")
+        _disarm(entry.entry_id, "error_recurrence")
         return
 
     catalogue_entry = get_localized_error_entry(worst_code, hass.config.language)
@@ -1229,21 +880,17 @@ async def async_check_error_recurrence(
             if rn:
                 room_name = rn
 
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "error_recurrence",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="error_recurrence",
-        translation_placeholders={
-            "error_code": str(worst_code),
-            "label":      label,
-            "count":      str(error_counts[worst_code]),
-            "phase":      phase_at_error,
-            "room":       room_name,
-            "action":     action,
+    _fire_once(
+        hass, entry.entry_id, "error_recurrence", EVENT_ERROR_RECURRENCE,
+        {
+            "entry_id": entry.entry_id,
+            "name": entry.title,
+            "error_code": worst_code,
+            "label": label,
+            "count": error_counts[worst_code],
+            "phase": phase_at_error,
+            "room": room_name,
+            "action": action,
         },
     )
 
@@ -1252,7 +899,15 @@ async def async_check_cancellation_recurrence(
     hass: HomeAssistant,
     entry: Any,
 ) -> None:
-    """v2.8.2 — fire Repair Issue when missions are repeatedly cancelled.
+    """v2.8.2 — fire cancellation_recurrence event when missions are
+    repeatedly cancelled.
+
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event. This is the
+    signal Gate 4 (spiegelt reines Nutzerverhalten) flags most clearly —
+    it's telling the user about their own already-known cancellations, not
+    a new actionable fact — so it no longer occupies the Repairs UI, but
+    remains available as an event for anyone who wants a Logbook trail or
+    an automation on it.
 
     Separate from async_check_error_recurrence because cancelled /
     cancelled_by_user results carry no numeric error_code at all — they were
@@ -1272,7 +927,8 @@ async def async_check_cancellation_recurrence(
     rationale (a cloud sync gap during exactly the trailing 30 days must
     not silently hide a real local cancellation pattern during that gap).
 
-    Auto-resolves below the 3-in-30-days threshold, same as error_recurrence.
+    Fires once per sustained occurrence via _fire_once() — re-arms below
+    the 3-in-30-days threshold, same as error_recurrence.
     """
     data = entry.runtime_data
     archive = getattr(data, "mission_archive", None)
@@ -1297,24 +953,21 @@ async def async_check_cancellation_recurrence(
 
     total = sum(counts.values())
     if total < 3:
-        ir.async_delete_issue(hass, DOMAIN, "cancellation_recurrence")
+        _disarm(entry.entry_id, "cancellation_recurrence")
         return
 
     by_user = counts.get("cancelled_by_user", 0)
     other   = counts.get("cancelled", 0)
 
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        "cancellation_recurrence",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="cancellation_recurrence",
-        translation_placeholders={
-            "count":         str(total),
-            "by_user_count": str(by_user),
-            "other_count":   str(other),
+    _fire_once(
+        hass, entry.entry_id, "cancellation_recurrence",
+        EVENT_CANCELLATION_RECURRENCE,
+        {
+            "entry_id": entry.entry_id,
+            "name": entry.title,
+            "count": total,
+            "by_user_count": by_user,
+            "other_count": other,
         },
     )
 
@@ -1323,10 +976,15 @@ async def async_check_schedule_optimisation(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
-    """F12c — raise a Repair Issue when high-dirt days lack a scheduled clean.
+    """F12c — fire schedule_suboptimal event when high-dirt days lack a
+    scheduled clean.
 
-    Fires when ≥ 2 consecutive weekdays have relative_to_baseline > 1.8
-    and no clean was recorded on those days by the schedule.
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event — a
+    scheduling nudge, not something broken.
+
+    Fires once per sustained occurrence via _fire_once() when ≥ 2
+    consecutive weekdays have relative_to_baseline > 1.8 and no clean was
+    recorded on those days by the schedule.
 
     Gate: PresenceManager active + cloud records + baseline established.
     """
@@ -1383,23 +1041,20 @@ async def async_check_schedule_optimisation(
             trigger_days = []
 
         if consecutive_high_no_clean >= MIN_CONSECUTIVE:
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                "schedule_suboptimal",
-                is_fixable=False,
-                is_persistent=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key="schedule_suboptimal",
-                translation_placeholders={
-                    "days": ", ".join(reversed(trigger_days[:MIN_CONSECUTIVE])),
-                    "threshold": str(THRESHOLD),
+            _fire_once(
+                hass, config_entry.entry_id, "schedule_suboptimal",
+                EVENT_SCHEDULE_SUBOPTIMAL,
+                {
+                    "entry_id": config_entry.entry_id,
+                    "name": config_entry.title,
+                    "days": list(reversed(trigger_days[:MIN_CONSECUTIVE])),
+                    "threshold": THRESHOLD,
                 },
             )
             return
 
-    # No issue — clear any stale one
-    ir.async_delete_issue(hass, DOMAIN, "schedule_suboptimal")
+    # No trigger — re-arm for the next occurrence
+    _disarm(config_entry.entry_id, "schedule_suboptimal")
 
 
 # ── L7 (v2.7.0) — Stuck pattern time-correlation ─────────────────────────────
@@ -1413,24 +1068,29 @@ async def async_check_stuck_pattern(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
-    """L7 — fire Repair Issue when a stuck cell has a dominant time pattern.
+    """L7 — fire stuck_pattern event when a stuck cell has a dominant time
+    pattern.
 
-    Fires when GridStore.stuck_pattern() identifies ≥1 cell where the robot
-    gets stuck more than 60% of the time in the same (weekday, hour) slot,
-    with ≥8 total stucks in that cell.
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event — a
+    recurring, time-correlated pattern, but "go look at roughly this time of
+    week" isn't Gate-C-concrete enough to be a persistent, must-dismiss
+    Repair; it's a useful moment to log and optionally automate on.
 
-    Issue is per config-entry so multi-robot households surface each robot
-    independently. Auto-clears when no pattern is detected.
+    Fires once per sustained occurrence via _fire_once() when
+    GridStore.stuck_pattern() identifies ≥1 cell where the robot gets stuck
+    more than 60% of the time in the same (weekday, hour) slot, with ≥8
+    total stucks in that cell. Event is per config-entry so multi-robot
+    households surface each robot independently.
     """
     data = config_entry.runtime_data
     gs = data.grid_store
     if gs is None:
-        ir.async_delete_issue(hass, DOMAIN, f"stuck_pattern_{config_entry.entry_id}")
+        _disarm(config_entry.entry_id, "stuck_pattern")
         return
 
     patterns = gs.stuck_pattern()
     if not patterns:
-        ir.async_delete_issue(hass, DOMAIN, f"stuck_pattern_{config_entry.entry_id}")
+        _disarm(config_entry.entry_id, "stuck_pattern")
         return
 
     # Find the cell with the most stuck events that has a pattern
@@ -1460,15 +1120,11 @@ async def async_check_stuck_pattern(
     else:
         time_desc = f"{weekday_name}s around {hour:02d}:00"
 
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        f"stuck_pattern_{config_entry.entry_id}",
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="stuck_pattern",
-        translation_placeholders={
+    _fire_once(
+        hass, config_entry.entry_id, "stuck_pattern", EVENT_STUCK_PATTERN,
+        {
+            "entry_id": config_entry.entry_id,
+            "name": config_entry.title,
             "room": room_name,
             "time": time_desc,
         },
@@ -1483,11 +1139,19 @@ async def async_check_mission_anomaly(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
 ) -> None:
-    """L3 — Fire or clear the mission_anomaly Repair Issue.
+    """L3 — fire mission_anomaly event when consecutive missions are
+    statistically anomalous.
 
-    Fires when the last 2 consecutive missions are statistically anomalous
-    (see MissionStore.consecutive_anomalous). Clears automatically once
-    missions return to normal.
+    v3.5.0 Repairs redesign: demoted from Repair Issue to event — this is a
+    per-mission judgment, episodic by nature (see MissionStore.
+    consecutive_anomalous), not an ongoing state with a meaningful "current
+    value". Pairs with the existing ANOMALY-EXPLAIN REST endpoint, which
+    already answers "why was this mission anomalous" on a per-mission_id
+    basis.
+
+    Fires once per sustained occurrence via _fire_once() when the last 2
+    consecutive missions are anomalous; re-arms once missions return to
+    normal.
     """
     data = config_entry.runtime_data
     if data.mission_store is None:
@@ -1500,73 +1164,41 @@ async def async_check_mission_anomaly(
     )
 
     if consecutive >= 2:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            f"mission_anomaly_{config_entry.entry_id}",
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="mission_anomaly",
-            translation_placeholders={"count": str(consecutive)},
+        _fire_once(
+            hass, config_entry.entry_id, "mission_anomaly", EVENT_MISSION_ANOMALY,
+            {
+                "entry_id": config_entry.entry_id,
+                "name": config_entry.title,
+                "count": consecutive,
+            },
         )
     else:
-        ir.async_delete_issue(
-            hass, DOMAIN, f"mission_anomaly_{config_entry.entry_id}"
-        )
+        _disarm(config_entry.entry_id, "mission_anomaly")
 
 
-async def async_check_smberr(
-    hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
-) -> None:
-    """SMBERR — Fire or clear the smberr_high Repair Issue.
+# v3.5.0 Repairs redesign — SMBERR (bbchg.smberr, SMBus communication error
+# count between main board and battery BMS chip) is no longer its own
+# Repair Issue; it now feeds as corroborating context into
+# async_check_dock_health and async_check_battery_contact_issue below,
+# since it's ~90% redundant with what those two already tell the user
+# (clean contacts / consider battery replacement). Threshold preserved
+# from the original repair — field-validated (June 2026):
+#   i7+ (7-year battery, nLithF=30): smberr=50 432  -> elevated
+#   i8+ (3.5-year battery, nLithF=0): smberr=0       -> not elevated
+_SMBERR_THRESHOLD = 10_000
 
-    bbchg.smberr counts SMBus communication errors between the main board and
-    the battery BMS chip. High counts correlate with dock contact degradation
-    or an aging battery pack. Threshold: >10 000 errors.
 
-    Confirmed field data (June 2026):
-      i7+ (7-year battery, nLithF=30): smberr=50 432  → issue fires
-      i8+ (3.5-year battery, nLithF=0): smberr=0      → no issue
-
-    Gate: bbchg.smberr key present (i/s-series and 9-series bbchg variants both
-    checked — 9-series bbchg has a different schema without smberr, so the key
-    presence check is the natural gate).
-    """
-    data = config_entry.runtime_data
-    vacuum_state = data.roomba_reported_state()  # v2.9.0 — was data.vacuum (AttributeError: no such attribute on RoombaData)
+def _smberr_elevated(data: Any) -> tuple[bool, int]:
+    """Read bbchg.smberr and report whether it's elevated, for use as
+    corroborating context in the two contact-related Repair Issues.
+    Returns (is_elevated, raw_count) — raw_count is 0 if the field is
+    absent (old firmware / 9-series without smberr)."""
+    vacuum_state = data.roomba_reported_state()
     bbchg = vacuum_state.get("bbchg", {}) or {}
-
     if "smberr" not in bbchg:
-        return  # Field absent — old firmware / 9-series without smberr
-
-    # Bug-hunt: bare value used directly in a numeric comparison below
-    # crashed with TypeError on a non-numeric firmware value (the same
-    # class of bug fixed for DOCK-HEALTH's nChatters/nKnockoffs/nAborts —
-    # this function predates that fix, v2.7.1, and was missed at the time).
-    smberr: int = _safe_int_repairs(bbchg.get("smberr"))
-    issue_id = f"smberr_high_{config_entry.entry_id}"
-    _SMBERR_THRESHOLD = 10_000
-
-    _LOGGER.debug(
-        "smberr check: smberr=%d (threshold=%d) for %s",
-        smberr, _SMBERR_THRESHOLD, config_entry.entry_id,
-    )
-
-    if smberr > _SMBERR_THRESHOLD:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="smberr_high",
-            translation_placeholders={"count": f"{smberr:,}"},
-        )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return False, 0
+    smberr = _safe_int_repairs(bbchg.get("smberr"))
+    return smberr > _SMBERR_THRESHOLD, smberr
 
 
 def _safe_int_repairs(val: Any, default: int = 0) -> int:
@@ -1607,8 +1239,17 @@ async def async_check_dock_health(
     affected metrics.  Auto-resolves when all counters drop below thresholds.
 
     Gate: at least one of the three fields must be present in bbchg.
-    This is distinct from smberr (SMBus errors) which indicates battery chip
-    communication faults rather than physical dock contact wear.
+
+    v3.5.0 Repairs redesign: the former standalone smberr_high Repair
+    (SMBus communication errors — battery chip comms faults, a related but
+    distinct symptom from physical dock contact wear) was merged into this
+    check rather than just deleted, the same way as into
+    async_check_battery_contact_issue: elevated smberr is corroborating
+    evidence, so it halves all three thresholds here (a milder individual
+    counter is enough to act on when a second, independent field already
+    points at contact/BMS trouble) and appears as context in the fired
+    issue's text. The raw bbchg.smberr count remains visible in
+    diagnostics.
     """
     data = config_entry.runtime_data
     vacuum_state = data.roomba_reported_state()  # v2.9.0 — was data.vacuum (AttributeError: no such attribute on RoombaData)
@@ -1630,15 +1271,19 @@ async def async_check_dock_health(
     aborts: int = _safe_int_repairs(bbchg.get("nAborts"))
     issue_id = f"dock_contact_health_{config_entry.entry_id}"
 
+    smberr_elevated, smberr_count = _smberr_elevated(data)
+    threshold_divisor = 2 if smberr_elevated else 1
+
     _LOGGER.debug(
-        "dock_health check: chatters=%d knockoffs=%d aborts=%d for %s",
-        chatters, knockoffs, aborts, config_entry.entry_id,
+        "dock_health check: chatters=%d knockoffs=%d aborts=%d "
+        "smberr_elevated=%s for %s",
+        chatters, knockoffs, aborts, smberr_elevated, config_entry.entry_id,
     )
 
     exceeded = (
-        chatters > _DOCK_CHATTERS_THRESHOLD
-        or knockoffs > _DOCK_KNOCKOFFS_THRESHOLD
-        or aborts > _DOCK_ABORTS_THRESHOLD
+        chatters > _DOCK_CHATTERS_THRESHOLD / threshold_divisor
+        or knockoffs > _DOCK_KNOCKOFFS_THRESHOLD / threshold_divisor
+        or aborts > _DOCK_ABORTS_THRESHOLD / threshold_divisor
     )
 
     if exceeded:
@@ -1654,6 +1299,14 @@ async def async_check_dock_health(
                 "chatters": str(chatters),
                 "knockoffs": str(knockoffs),
                 "aborts": str(aborts),
+                # v3.5.0 — corroborating context from the former smberr_high
+                # Repair (merged in, not just deleted); empty when smberr
+                # isn't elevated so the translation can render this as an
+                # optional trailing clause.
+                "smberr_context": (
+                    f" (also: {smberr_count:,} SMBus errors observed, which "
+                    f"often correlates with this)" if smberr_elevated else ""
+                ),
             },
         )
     else:
@@ -1667,28 +1320,68 @@ async def async_check_cloud_stale(
     config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     cloud_coordinator: Any,
 ) -> None:
-    """CLOUD-STALE (v2.8.3) — fire or clear the cloud_stale Repair Issue.
+    """CLOUD-STALE (v2.8.3) — fire cloud_stale event on sustained cloud
+    staleness, unless the cause is an auth failure.
 
-    Fires when the cloud coordinator has not had a successful refresh for
-    CLOUD_STALE_MINUTES (60 min) — i.e. at least two consecutive coordinator
-    intervals have failed.  Auto-resolves on the next successful refresh.
+    v3.5.0 Repairs redesign: split by cause, and demoted from Repair Issue
+    to event for the case that's left.
+      - Auth failure (401/403 -> AuthenticationError): the coordinator's own
+        _async_update_data()/_async_setup() already raise
+        ConfigEntryAuthFailed on this, which HA turns into its own native
+        reauth Repair Issue + guided flow automatically (see
+        cloud_coordinator.py). This check must NOT also fire for that case
+        — that would be two Repairs for one root cause, and HA's own is
+        both more correct (guided reauth) and Gate-C actionable in a way a
+        second, custom Repair wouldn't add anything to. Detected via
+        cloud_coordinator.last_update_success is False AND last_exception
+        is a ConfigEntryAuthFailed — see the bug-hunt note below for why
+        both conditions matter, not just the second one.
+      - Genuinely unreachable (network/cloud down, timeout): not something
+        the user can act on beyond waiting, and typically transient — no
+        longer a persistent, must-dismiss Repair; fires once per sustained
+        occurrence via _fire_once() instead (Logbook + optional automation
+        for anyone who wants to know).
+
+    Bug-hunt fix: DataUpdateCoordinator.last_exception is sticky — HA never
+    resets it to None on a later successful refresh (verified against HA's
+    own _async_refresh: the success path only touches last_update_success).
+    Checking last_exception alone would mean a single historical auth
+    failure, resolved via reauth days ago, permanently suppresses this
+    event for any later, unrelated genuine staleness. Gating on
+    last_update_success is False too (the coordinator's CURRENT refresh
+    cycle, not ever) fixes that: once a refresh succeeds again,
+    last_update_success flips back to True regardless of what
+    last_exception still holds, and this event resumes working normally.
 
     Called from _on_cloud_refresh_complete in __init__.py, which fires after
     every coordinator update regardless of success, so this check runs both
-    when updates succeed (to clear the issue) and when they fail (to raise it).
+    when updates succeed (to re-arm) and when they fail (to fire).
 
     Distinct from WIFI-CLOUD-HEALTH (robot-side cloud disconnect) — this
-    issue represents HA failing to fetch data, regardless of whether the robot
+    represents HA failing to fetch data, regardless of whether the robot
     itself can still reach iRobot servers.
     """
-    from .const import CLOUD_STALE_MINUTES
+    from homeassistant.exceptions import ConfigEntryAuthFailed
 
-    issue_id = f"cloud_stale_{config_entry.entry_id}"
+    from .const import CLOUD_STALE_MINUTES, EVENT_CLOUD_STALE
+
+    entry_id = config_entry.entry_id
+
+    if (
+        not getattr(cloud_coordinator, "last_update_success", True)
+        and isinstance(getattr(cloud_coordinator, "last_exception", None), ConfigEntryAuthFailed)
+    ):
+        # HA's own native reauth Repair already covers this root cause —
+        # and only while it's the coordinator's CURRENT failure state, not
+        # merely somewhere in its history (see bug-hunt note above).
+        _disarm(entry_id, "cloud_stale")
+        return
+
     last_success = getattr(cloud_coordinator, "last_success_time", None)
 
     if last_success is None:
         # No successful fetch yet in this HA session — not an error (startup).
-        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        _disarm(entry_id, "cloud_stale")
         return
 
     age_minutes = (dt_util.utcnow() - last_success).total_seconds() / 60.0
@@ -1696,81 +1389,19 @@ async def async_check_cloud_stale(
     if age_minutes > CLOUD_STALE_MINUTES:
         _LOGGER.warning(
             "Roomba+: cloud coordinator for %s has not refreshed successfully "
-            "for %.0f min (threshold %d min) — raising cloud_stale issue",
-            config_entry.entry_id, age_minutes, CLOUD_STALE_MINUTES,
+            "for %.0f min (threshold %d min) — firing cloud_stale event",
+            entry_id, age_minutes, CLOUD_STALE_MINUTES,
         )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="cloud_stale",
-            translation_placeholders={"minutes": str(int(age_minutes))},
+        _fire_once(
+            hass, entry_id, "cloud_stale", EVENT_CLOUD_STALE,
+            {
+                "entry_id": entry_id,
+                "name": config_entry.title,
+                "minutes": int(age_minutes),
+            },
         )
     else:
-        ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-
-# v2.9.0 (INTEG-HEALTH) — when the score has been below
-# INTEGRATION_HEALTH_LOW_THRESHOLD continuously since this timestamp, for at
-# least INTEGRATION_HEALTH_SUSTAINED_MINUTES, the Repair Issue fires. Not
-# persisted (matches RoombaMqttStale's in-memory _was_stale pattern) — a
-# fresh HA restart simply restarts the sustained-low timer, which is the
-# right behaviour: a brand new HA session hasn't actually observed 30
-# minutes of poor health yet, regardless of what happened before the
-# restart.
-_health_low_since: dict[str, float] = {}
-
-
-def async_check_integration_health(
-    hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
-) -> None:
-    """INTEG-HEALTH (v2.9.0) — fire or clear the integration_health Repair Issue.
-
-    Fires when _compute_integration_health()'s score has been continuously
-    below INTEGRATION_HEALTH_LOW_THRESHOLD (50) for at least
-    INTEGRATION_HEALTH_SUSTAINED_MINUTES (30 min). A single bad reading
-    (e.g. one momentarily-stale cloud refresh) should not alarm the user;
-    a sustained one should. Auto-resolves as soon as the score recovers,
-    even before the 30-minute window would have elapsed for a NEW low
-    period — the sustained timer only gates fresh alarms, not recovery.
-
-    Called from RoombaIntegrationHealthSensor's 60-second periodic tick.
-    """
-    from .sensor import _compute_integration_health
-
-    score, _ = _compute_integration_health(hass, config_entry)
-    issue_id = f"integration_health_{config_entry.entry_id}"
-    entry_id = config_entry.entry_id
-    now = dt_util.utcnow().timestamp()
-
-    if score < INTEGRATION_HEALTH_LOW_THRESHOLD:
-        low_since = _health_low_since.setdefault(entry_id, now)
-        sustained_minutes = (now - low_since) / 60.0
-        if sustained_minutes >= INTEGRATION_HEALTH_SUSTAINED_MINUTES:
-            _LOGGER.warning(
-                "Roomba+: integration_health for %s has been below %d for "
-                "%.0f min (threshold %d min) — raising integration_health "
-                "issue (score=%d)",
-                entry_id, INTEGRATION_HEALTH_LOW_THRESHOLD,
-                sustained_minutes, INTEGRATION_HEALTH_SUSTAINED_MINUTES, score,
-            )
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                issue_id,
-                is_fixable=False,
-                is_persistent=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key="integration_health",
-                translation_placeholders={"score": str(score)},
-            )
-    else:
-        _health_low_since.pop(entry_id, None)
-        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        _disarm(entry_id, "cloud_stale")
 
 
 # v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady&64 ("Smart
@@ -1785,29 +1416,32 @@ def async_check_map_retrain_workflow(
     config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     map_updating: bool,
 ) -> None:
-    """MAP-RETRAIN-WF (v2.9.0) — escalating Repair Issue while the robot's
-    Smart Map is updating (cleanMissionStatus.notReady & 64).
+    """MAP-RETRAIN-WF (v2.9.0) — escalating map-retrain-in-progress signal
+    while the robot's Smart Map is updating (cleanMissionStatus.notReady & 64).
 
     Three stages:
-      1. map_updating just turned True — no issue yet. Brief map updates
+      1. map_updating just turned True — no signal yet. Brief map updates
          (e.g. after a single piece of furniture moved) are normal and not
-         actionable; raising an issue immediately would just be noise.
-      2. Still set after MAP_RETRAIN_WARN_MINUTES — WARNING issue. Longer
-         than a typical retrain, worth the user's awareness but not urgent.
-      3. Still set after MAP_RETRAIN_STUCK_MINUTES — escalated to ERROR.
-         Genuinely stuck, not just slow.
+         actionable; raising anything immediately would just be noise.
+      2. Still set after MAP_RETRAIN_WARN_MINUTES — map_retrain_in_progress
+         event (v3.5.0 Repairs redesign: demoted from Repair Issue to
+         event — longer than a typical retrain is worth a Logbook entry,
+         but isn't yet a must-act problem).
+      3. Still set after MAP_RETRAIN_STUCK_MINUTES — escalated to a
+         map_retrain_stuck Repair Issue. Genuinely stuck, not just slow —
+         this stage remains a Repair since it's Gate-C actionable (check
+         the robot, consider a manual restart).
 
     Called from make_map_updating_callback() (callbacks.py) on every MQTT
     message — no separate timer needed, since the robot keeps sending
     regular state messages for as long as map_updating stays true.
 
-    Deliberately does NOT fire any EVENT-BUS event. roomba_plus_map_retrain_
-    started/completed already exist (cloud user_pmapv_id-driven, see
-    make_map_retrain_callback) and are what TRIGGER+'s map_retrain_started/
-    completed device triggers listen to — this Repair Issue tracks a
-    DIFFERENT signal (the live notReady bit) for a different purpose
-    (informing the user in the Repairs UI), and must not duplicate the same
-    automation-facing signal under a different mechanism.
+    Stage 2's event is distinct from roomba_plus_map_retrain_started/
+    completed (cloud user_pmapv_id-driven, see make_map_retrain_callback,
+    and what TRIGGER+'s device triggers listen to) — those fire once at the
+    true start/end of a retrain; this tracks a DIFFERENT signal (the live
+    notReady bit taking unusually long), so firing it isn't duplicating the
+    same automation-facing signal under a different mechanism.
     """
     issue_id = f"map_retrain_workflow_{config_entry.entry_id}"
     entry_id = config_entry.entry_id
@@ -1816,6 +1450,7 @@ def async_check_map_retrain_workflow(
     if not map_updating:
         _map_updating_since.pop(entry_id, None)
         ir.async_delete_issue(hass, DOMAIN, issue_id)
+        _disarm(entry_id, "map_retrain_in_progress")
         return
 
     updating_since = _map_updating_since.setdefault(entry_id, now)
@@ -1833,17 +1468,16 @@ def async_check_map_retrain_workflow(
             translation_placeholders={"minutes": str(int(elapsed_minutes))},
         )
     elif elapsed_minutes >= MAP_RETRAIN_WARN_MINUTES:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="map_retrain_in_progress",
-            translation_placeholders={"minutes": str(int(elapsed_minutes))},
+        _fire_once(
+            hass, entry_id, "map_retrain_in_progress",
+            EVENT_MAP_RETRAIN_IN_PROGRESS,
+            {
+                "entry_id": entry_id,
+                "name": config_entry.title,
+                "minutes": int(elapsed_minutes),
+            },
         )
-    # else: stage 1 (just started) — no issue yet, by design.
+    # else: stage 1 (just started) — no signal yet, by design.
 
 
 # v2.9.0 — wall-clock timestamp of when at least one consumable was FIRST
@@ -1907,72 +1541,39 @@ def async_check_maintenance_due(
     # else: within the grace period — no issue yet, by design.
 
 
-# ── L9-MAP (v3.1.0) ───────────────────────────────────────────────────────────
 
-def async_check_reloc_alert(hass: "HomeAssistant", config_entry: Any) -> None:
-    """L9-MAP (v3.1.0) — fire/clear a Repair Issue when the recent
-    relocalisation rate window significantly exceeds the robot's own
-    self-calibrated baseline.
-
-    Self-healing: re-evaluated after every cleaning mission (called from the
-    same point in callbacks.py that updates the reloc baseline), so the
-    issue clears automatically once the rate returns to normal — no manual
-    reconfirm needed, same pattern as DRIFT-AUTO's drift_recovered().
-
-    Conservative by design: _RELOC_ALERT_MULTIPLIER=3.0 in robot_profile_store.py
-    means this only fires on a genuinely large deviation from the robot's own
-    history, not minor day-to-day variance. Field data to properly calibrate
-    this multiplier is still limited (Thonno's i7+ has only shown reLc=0 so
-    far) — expect to revisit the threshold as more field reports come in.
-    """
-    data = config_entry.runtime_data
-    rps = data.robot_profile_store
-    issue_id = f"reloc_rate_elevated_{config_entry.entry_id}"
-
-    if rps is None or not rps.reloc_alert_triggered():
-        ir.async_delete_issue(hass, DOMAIN, issue_id)
-        return
-
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        issue_id,
-        is_fixable=False,
-        is_persistent=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="reloc_rate_elevated",
-        translation_placeholders={
-            "baseline": f"{rps.reloc_baseline:.1f}" if rps.reloc_baseline is not None else "?",
-        },
-    )
+# ── FAVORITE-FIX — multi-commanddef Favorites ─────────────────────────────────
 
 
-async def async_check_dirt_correlation(
-    hass: "HomeAssistant", config_entry: "RoombaConfigEntry"  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+async def async_check_favorite_multi_command(
+    hass: HomeAssistant,
+    fav_id: str,
+    fav_name: str,
+    command_def_count: int,
 ) -> None:
-    """v3.3.0 CROSS-CORR — Repair Issue when a strong correlation
-    (|r| > 0.5, n >= 30) between mission dirt and a configured external
-    sensor exists; self-deleting when it weakens (same self-healing
-    pattern as DRIFT-AUTO)."""
-    data = config_entry.runtime_data
-    rps = getattr(data, "robot_profile_store", None)
-    issue_id = f"dirt_correlation_{config_entry.entry_id}"
-    if rps is None:
-        return
-    strongest: tuple[str, float] | None = None
-    for eid, info in rps.correlation_results().items():
-        r = info.get("r")
-        if r is not None and abs(r) > 0.5:
-            if strongest is None or abs(r) > abs(strongest[1]):
-                strongest = (eid, r)
-    if strongest is None:
+    """Fire a Repair Issue when a Favorite has more than one commanddefs entry.
+
+    v3.5.0 FAVORITE-FIX (ia74/roomba_rest980 issue #9 follow-up). Real APK
+    sample data (favorites_json_data.json, 6 examples incl. multi-region
+    favorites) confirms the official app expresses multi-region cleaning via
+    a single commanddefs entry's nested `regions` array -- not via multiple
+    commanddefs entries. FavoriteButton.async_press() already forwards the
+    full commanddefs[0] payload (including `regions`) verbatim, so ordinary
+    multi-region favorites are unaffected by this check.
+
+    This issue exists only as a safety net for the case the sample data
+    didn't cover: a Favorite with 2+ commanddefs entries. Neither app's
+    native execution path was confirmed to iterate over such entries (see
+    the docstring in button.py), so if this ever fires, only the first
+    entry is actually sent -- the rest are silently ignored otherwise.
+    Non-fixable: there is no confirmed correct multi-entry behavior to
+    automate towards.
+    """
+    issue_id = f"favorite_multi_commanddefs_{fav_id}"
+    if command_def_count <= 1:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
         return
-    eid, r = strongest
-    state = hass.states.get(eid)
-    friendly = (
-        state.attributes.get("friendly_name") if state is not None else None
-    ) or eid
+
     ir.async_create_issue(
         hass,
         DOMAIN,
@@ -1980,10 +1581,66 @@ async def async_check_dirt_correlation(
         is_fixable=False,
         is_persistent=False,
         severity=ir.IssueSeverity.WARNING,
-        translation_key="dirt_correlation",
+        translation_key="favorite_multi_commanddefs",
         translation_placeholders={
-            "entity": str(friendly),
-            "r": f"{r:+.2f}",
-            "direction": "more" if r > 0 else "less",
+            "name": fav_name,
+            "count": str(command_def_count),
         },
     )
+
+
+# v3.5.0 Repairs redesign — bug-hunt finding (not caught by unit tests, which
+# mock issue_registry and never simulate a pre-existing registry state from a
+# prior version): HA's issue_registry has no automatic expiry. Any user who
+# had one of these Repair Issues ACTIVE at the moment they upgraded from a
+# pre-v3.5.0 install would otherwise be left with a permanently stuck,
+# never-cleared entry in Settings -> Repairs forever, since nothing in the
+# code creates OR deletes that issue_id anymore after this version.
+#
+# Filtered by translation_key rather than reconstructed issue_id on purpose:
+# several of these (stuck_hotspot_{cell}, room_accessibility_{room_id}) used
+# a dynamic, per-cluster/per-room issue_id that can't be reconstructed
+# without the exact historical cell/room identifiers — translation_key is
+# stable and was never per-instance, so it reliably matches every variant.
+_REMOVED_REPAIR_TRANSLATION_KEYS = frozenset({
+    # Stufe 1 — redundant with an existing sensor, or no concrete action
+    "performance_degradation", "health_trend_declining", "stuck_hotspot_detected",
+    "coverage_frequency_overdue", "room_accessibility_low", "battery_recharge_high",
+    "consecutive_skips", "integration_health", "dirt_correlation",
+    # Stufe 2 — demoted to events (roomba_plus_event bus, see logbook.py)
+    "error_recurrence", "cancellation_recurrence", "stuck_pattern",
+    "mission_anomaly", "mixed_schedule", "schedule_suboptimal",
+    "map_drift_detected", "map_retrain_in_progress",
+    # Stufe 3 — replaced by the relocalisation_rate sensor's percentile_rank
+    "reloc_rate_elevated",
+    # Stufe 4 — split (auth -> ConfigEntryAuthFailed, unreachable -> event)
+    "cloud_stale",
+    # Stufe 5 — merged into battery_contact_suspect / dock_contact_health
+    "smberr_high",
+})
+
+
+async def async_cleanup_removed_repairs(hass: HomeAssistant) -> int:
+    """One-time cleanup of stale Repair Issues from v3.5.0's Repairs redesign.
+
+    Safe to call on every startup — it's a no-op once the affected issues
+    are gone, and matching by translation_key means it can never touch an
+    issue this version still creates (none of the surviving translation_keys
+    appear in _REMOVED_REPAIR_TRANSLATION_KEYS). Returns the count removed,
+    for a one-line debug log at the call site.
+
+    Domain-wide by design, not scoped to one config entry: in a multi-robot
+    household, whichever robot's setup runs this first cleans up stale
+    issues for ALL robots, not just itself — harmless to call redundantly
+    from every robot's setup (deleting an already-deleted issue_id is a
+    no-op), and means cleanup happens promptly regardless of setup order.
+    """
+    registry = ir.async_get(hass)
+    to_remove = [
+        issue_id
+        for (domain, issue_id), entry in registry.issues.items()
+        if domain == DOMAIN and entry.translation_key in _REMOVED_REPAIR_TRANSLATION_KEYS
+    ]
+    for issue_id in to_remove:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+    return len(to_remove)

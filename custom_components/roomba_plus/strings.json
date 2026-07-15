@@ -51,6 +51,18 @@
           "host": "The local IP address of the Roomba.",
           "password": "The robot password (hold HOME button to retrieve)."
         }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect to iRobot cloud",
+        "description": "Roomba+ could not authenticate with the iRobot cloud for \"{name}\" (currently: {current_user}). Local MQTT control keeps working regardless — this only affects cloud features (room names, mission history, favorites). Enter your current iRobot app email and password to reconnect.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        },
+        "data_description": {
+          "irobot_username": "The email address used to log into the iRobot app.",
+          "irobot_password": "Your current iRobot app password."
+        }
       }
     },
     "error": {
@@ -892,85 +904,25 @@
       "title": "Robot runtime counter may have reset",
       "description": "The robot's bbrun.hr runtime counter is lower than the stored reset baselines for: {parts}. This usually means a firmware update silently reset the counter. Remaining-hours estimates for consumables are now unreliable. Reset all consumables using the Reset buttons."
     },
-    "performance_degradation": {
-      "title": "Cleaning performance declining",
-      "description": "Roomba+ has detected a sustained decline in cleaning speed over the last several missions (cause: {cause}). This may indicate worn brushes, a clogged filter, or significant changes in floor conditions. Check the device page for consumable status."
-    },
-    "battery_recharge_high": {
-      "title": "High mid-mission recharging with degraded battery",
-      "description": "Your robot is spending a significant proportion of cleaning time recharging mid-mission while battery capacity has dropped below 75% of its original value. Consider replacing the battery."
-    },
     "battery_contact_suspect": {
       "title": "Possible battery or dock contact problem",
-      "description": "Roomba+ detected evidence of a battery/dock contact or communication issue (cause: {cause}). Recent charge-cycle peak battery levels: {recent_peaks}. A sudden implausible jump in reported battery level, or a declining trend in how high it gets each charge, usually points to a loose or corroded contact rather than the battery itself — clean the contacts on the robot and dock before assuming the battery has failed."
-    },
-    "mixed_schedule": {
-      "title": "Competing schedule sources detected",
-      "description": "In the last 30 days, {schedule_pct}% of cleans were started by HA schedules and {app_pct}% by the iRobot app. Competing schedules can cause double-cleans and missed rooms. Manage scheduling from one place only."
+      "description": "Roomba+ detected evidence of a battery/dock contact or communication issue (cause: {cause}). Recent charge-cycle peak battery levels: {recent_peaks}.{smberr_context} A sudden implausible jump in reported battery level, or a declining trend in how high it gets each charge, usually points to a loose or corroded contact rather than the battery itself — clean the contacts on the robot and dock before assuming the battery has failed."
     },
     "accident_detected": {
       "title": "Possible floor accident detected",
       "description": "The last mission recorded an unusually high dirt event count in a very short runtime — a possible liquid spill or accident. Check the area before sending the robot back."
     },
-    "consecutive_skips": {
-      "title": "Robot skipped {count} consecutive cleans",
-      "description": "Blocking sensors or presence scheduling prevented {count} consecutive scheduled cleaning opportunities. Check your blocking sensor configuration or presence schedule — they may be too restrictive."
-    },
-    "map_drift_detected": {
-      "title": "Smart Map drift detected",
-      "description": "The robot's recent missions show elevated drift from its expected dock position (latest: {magnitude_cm} cm, bearing {bearing}°). This may indicate the dock was moved or the robot is having difficulty relocating. Re-dock and allow a fresh mapping run. This notice clears automatically once drift returns to normal over the next few missions."
-    },
-    "reloc_rate_elevated": {
-      "title": "Elevated relocalisation rate",
-      "description": "The robot has been relocalising significantly more often than its own established baseline ({baseline} per mission on average). This can indicate Smart Map degradation — consider deleting and re-training the map if you also notice \"New space found\" messages or inaccurate room tracking. This notice clears automatically once the rate returns to normal over the next few missions."
-    },
     "observed_zones_detected": {
       "title": "Robot-detected obstacles in cloud map",
       "description": "Your iRobot cloud map contains {zone_count} robot-detected obstacle zone(s). Run a few cleaning missions so Roomba+ can confirm these locally and build a more accurate obstacle map."
     },
-    "error_recurrence": {
-      "title": "Recurring error: {label}",
-      "description": "Error {error_code} ({label}) has occurred {count} time(s) in the last 30 days. Most recent: phase {phase}, location {room}. Recommended action: {action}"
-    },
-    "cancellation_recurrence": {
-      "title": "Recurring cancellations",
-      "description": "Missions have been cancelled {count} time(s) in the last 30 days ({by_user_count} by user/app, {other_count} other). Consider checking for schedule conflicts, app-side interventions, or whether the robot is being manually stopped."
-    },
-    "schedule_suboptimal": {
-      "title": "Schedule may be missing high-dirt days",
-      "description": "On {days}, dirt density was more than {threshold}× above the 30-day average and no clean was recorded. Consider adding a scheduled clean on those weekdays."
-    },
-    "mission_anomaly": {
-      "title": "Unusual cleaning patterns detected",
-      "description": "The last {count} missions showed abnormal patterns — the robot may be spending more time than usual covering less area, experiencing unusually long recharges, or encountering extreme dirt levels. Check for obstacles, worn brushes, or battery degradation."
-    },
-    "stuck_pattern": {
-      "title": "Stuck pattern detected",
-      "description": "Your Roomba gets stuck near {room} most often on {time}. Consider clearing the area before those cleans or adjusting your cleaning schedule."
-    },
-    "smberr_high": {
-      "title": "High battery SMBus errors detected",
-      "description": "The robot has logged {count} SMBus communication errors between the main board and the battery chip. This often indicates worn dock contacts or an aging battery.\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. If errors remain high after cleaning, the battery may need replacement."
-    },
     "dock_contact_health": {
       "title": "Dock contact health issue detected",
-      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
-    },
-    "cloud_stale": {
-      "title": "Cloud data is stale",
-      "description": "Roomba+ has not received a successful cloud update for {minutes} minutes. Check your iRobot account credentials and internet connection. Local MQTT data is still available."
+      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}{smberr_context}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     },
     "mqtt_watchdog": {
       "title": "Robot MQTT connection lost during mission",
       "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: {cloud_hint}. If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
-    },
-    "integration_health": {
-      "title": "Integration health is degraded",
-      "description": "Roomba+'s integration health score has been below 50 for at least 30 minutes (current score: {score}/100). This combines active Repair Issue count, MQTT message age, and mission archive freshness. Check the sensor.*_integration_health entity's attributes for a breakdown of which signal is affected, and review any other active Repair Issues for this robot."
-    },
-    "map_retrain_in_progress": {
-      "title": "Smart Map update taking longer than usual",
-      "description": "The robot's Smart Map has been updating for at least {minutes} minutes. A normal update is usually faster — this can happen after a large layout change. No action is needed yet; this will clear automatically once the update finishes."
     },
     "map_retrain_stuck": {
       "title": "Smart Map update appears stuck",
@@ -992,29 +944,13 @@
       "title": "Robot MQTT connection lost during mission",
       "description": "Roomba+ has not received any MQTT messages from the robot for {minutes} minutes while a cleaning mission was active. Last known phase before going silent: {last_phase}. Robot cloud connectivity: unknown (this field isn't available on this firmware). If the robot appears to be physically stuck or paused, this may not be a real network problem -- check the robot in person first."
     },
-    "health_trend_declining": {
-      "title": "Health score trend declining",
-      "description": "Roomba+ has detected the composite health score has been below this robot's own established baseline for {days} consecutive days. This may indicate developing mechanical wear, navigation issues, or environmental changes — check the individual health-score signals (battery retention, navigation efficiency, cleaning speed, mission anomalies, stuck rate) for the likely cause."
-    },
-    "room_accessibility_low": {
-      "title": "{room}: low accessibility score",
-      "description": "{room} scored {score}/100 for accessibility, due to {reason}. Check this room for obstacles, narrow passages, or furniture that may be limiting the robot's ability to clean it effectively."
-    },
     "layout_change_detected": {
       "title": "Possible layout change detected",
       "description": "A spot near ({x_mm}, {y_mm}) was reliably cleaned for a long stretch and has now been missed for several consecutive missions — a sign new furniture or another obstacle may be blocking it. Check the area, or dismiss if this was expected (e.g. a rug was added on purpose)."
     },
-    "stuck_hotspot_detected": {
-      "title": "Recurring stuck spot detected",
-      "description": "The robot has repeatedly gotten stuck near a {cell_count}-cell cluster in {room} (bearing {bearing}° from dock, {stuck_count} stuck events recorded there, currently covered noticeably worse than the surrounding area). Check the area for an obstacle — cords, a low gap, or something the robot keeps catching on."
-    },
-    "coverage_frequency_overdue": {
-      "title": "{room} may be overdue for cleaning",
-      "description": "{room} was last cleaned {days_since_last} days ago — noticeably longer than the roughly {expected_interval_days}-day rhythm this robot has established for that room based on its own cleaning history. Check whether the schedule still covers it, or whether the room has been inaccessible recently."
-    },
-    "dirt_correlation": {
-      "title": "Strong dirt correlation detected",
-      "description": "The robot collects significantly {direction} dirt when {entity} is high (r={r}, 30+ missions). Consider adjusting cleaning schedules around this pattern."
+    "favorite_multi_commanddefs": {
+      "title": "Favorite has multiple command steps",
+      "description": "The favorite \"{name}\" has {count} command steps, but only the first one is sent to the robot — the rest are ignored. This is a rare configuration that hasn't been confirmed to work correctly."
     }
   },
   "device_automation": {
@@ -1089,6 +1025,14 @@
           "description": "Wait this many minutes after robot A docks before starting robot B."
         }
       }
+    },
+    "create_backup": {
+      "name": "Create backup",
+      "description": "Export every persisted store for this robot into a single ZIP file."
+    },
+    "restore_backup": {
+      "name": "Restore backup",
+      "description": "Restore every store in a backup ZIP. Takes effect immediately, no restart required."
     }
   },
   "exceptions": {
@@ -1130,6 +1074,9 @@
     },
     "no_rooms_resolved": {
       "message": "No rooms to clean — provide at least one room name."
+    },
+    "backup_entity_not_found": {
+      "message": "The entity \"{entity_id}\" could not be resolved to a Roomba+ robot. Check the entity ID and try again."
     }
   },
   "selector": {

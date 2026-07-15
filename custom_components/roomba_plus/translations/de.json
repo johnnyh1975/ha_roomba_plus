@@ -51,6 +51,18 @@
           "host": "Die lokale IP-Adresse des Roomba.",
           "password": "Das Roboter-Passwort (HOME-Taste gedrückt halten zum Abrufen)."
         }
+      },
+      "reauth_confirm": {
+        "title": "Erneut mit der iRobot-Cloud verbinden",
+        "description": "Roomba+ konnte sich für „{name}“ nicht bei der iRobot-Cloud anmelden (aktuell: {current_user}). Die lokale MQTT-Steuerung funktioniert davon unabhängig weiter — betroffen sind nur Cloud-Funktionen (Raumnamen, Missionshistorie, Favoriten). E-Mail und Passwort der iRobot-App erneut eingeben, um die Verbindung wiederherzustellen.",
+        "data": {
+          "irobot_username": "iRobot-E-Mail",
+          "irobot_password": "iRobot-Passwort"
+        },
+        "data_description": {
+          "irobot_username": "Die E-Mail-Adresse für die Anmeldung in der iRobot-App.",
+          "irobot_password": "Dein aktuelles iRobot-App-Passwort."
+        }
       }
     },
     "error": {
@@ -890,85 +902,25 @@
       "title": "Roboter-Laufzeitzähler möglicherweise zurückgesetzt",
       "description": "Der bbrun.hr-Zähler ist niedriger als die gespeicherten Baselines für: {parts}. Verbrauchsmaterial-Stundenschätzungen sind unzuverlässig. Alle Verbrauchsmaterialien zurücksetzen."
     },
-    "performance_degradation": {
-      "title": "Reinigungsleistung sinkt",
-      "description": "Roomba+ hat einen anhaltenden Geschwindigkeitsrückgang erkannt (Ursache: {cause}). Mögliche Ursachen: verschlissene Bürsten, verstopfter Filter oder veränderte Bodenbedingungen."
-    },
-    "battery_recharge_high": {
-      "title": "Häufiges Zwischenladen bei schwachem Akku",
-      "description": "Der Roboter lädt häufig zwischen, während die Akkukapazität unter 75 % gesunken ist. Akkutausch empfohlen."
-    },
     "battery_contact_suspect": {
       "title": "Mögliches Batterie- oder Kontaktproblem",
-      "description": "Hinweis auf ein Akku-/Kontaktproblem erkannt (Ursache: {cause}). Letzte Ladezyklus-Höchstwerte: {recent_peaks}. Ein plötzlicher, unplausibler Sprung im Ladestand oder ein sinkender Höchstwert je Ladung deutet meist auf einen wackligen oder korrodierten Kontakt hin, nicht auf den Akku selbst — Kontakte an Roboter und Ladestation reinigen, bevor der Akku verdächtigt wird."
-    },
-    "mixed_schedule": {
-      "title": "Konkurrierende Zeitplanquellen erkannt",
-      "description": "{schedule_pct} % der Reinigungen wurden von HA und {app_pct} % von der iRobot-App gestartet. Nur eine Quelle verwenden."
+      "description": "Hinweis auf ein Akku-/Kontaktproblem erkannt (Ursache: {cause}). Letzte Ladezyklus-Höchstwerte: {recent_peaks}. Ein plötzlicher, unplausibler Sprung im Ladestand oder ein sinkender Höchstwert je Ladung deutet meist auf einen wackligen oder korrodierten Kontakt hin, nicht auf den Akku selbst — Kontakte an Roboter und Ladestation reinigen, bevor der Akku verdächtigt wird. {smberr_context}"
     },
     "accident_detected": {
       "title": "Möglicher Bodenunfall erkannt",
       "description": "Die letzte Reinigung zeigte ungewöhnlich viele Schmutzdetektionen in sehr kurzer Zeit. Bereich prüfen."
     },
-    "consecutive_skips": {
-      "title": "Roboter hat {count} Reinigungen in Folge übersprungen",
-      "description": "Blocking-Sensoren oder Anwesenheitsplanung haben {count} Reinigungstermine verhindert. Konfiguration überprüfen."
-    },
-    "map_drift_detected": {
-      "title": "Smart-Map-Drift erkannt",
-      "description": "Die letzten Missionen des Roboters zeigen erhöhten Drift von der erwarteten Dockposition (zuletzt: {magnitude_cm} cm, Richtung {bearing}°). Das kann darauf hindeuten, dass die Dockingstation verschoben wurde oder der Roboter Schwierigkeiten bei der Neulokalisierung hat. Erneut andocken und eine frische Kartierungsfahrt zulassen. Dieser Hinweis verschwindet automatisch, sobald sich der Drift in den nächsten Missionen wieder normalisiert."
-    },
-    "reloc_rate_elevated": {
-      "title": "Erhöhte Relokalisierungsrate",
-      "description": "Der Roboter musste sich deutlich häufiger neu lokalisieren als es seiner eigenen etablierten Baseline entspricht ({baseline} pro Mission im Schnitt). Das kann auf eine Verschlechterung der Smart Map hindeuten — erwäge die Karte zu löschen und neu zu trainieren, falls zusätzlich Meldungen wie \"Neuer Bereich gefunden\" auftreten oder die Raumverfolgung ungenau wird. Dieser Hinweis verschwindet automatisch, sobald sich die Rate in den nächsten Missionen wieder normalisiert."
-    },
     "observed_zones_detected": {
       "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
       "description": "Ihre iRobot-Cloud-Karte enthält {zone_count} roboter-erkannte Hinderniszone(n). Führen Sie einige Reinigungsmissionen durch, damit Roomba+ diese lokal bestätigen kann."
     },
-    "error_recurrence": {
-      "title": "Wiederkehrender Fehler: {label}",
-      "description": "Fehler {error_code} ({label}) ist in den letzten 30 Tagen {count} Mal aufgetreten. Zuletzt: Phase {phase}, Ort {room}. Empfohlene Maßnahme: {action}"
-    },
-    "cancellation_recurrence": {
-      "title": "Wiederkehrende Abbrüche",
-      "description": "Missionen wurden in den letzten 30 Tagen {count} Mal abgebrochen ({by_user_count} durch Nutzer/App, {other_count} anders). Prüfen Sie Zeitplankonflikte, Eingriffe über die App oder ob der Roboter manuell gestoppt wird."
-    },
-    "schedule_suboptimal": {
-      "title": "Zeitplan überdeckt möglicherweise nicht alle schmutzigen Tage",
-      "description": "An {days} war die Schmutzdichte mehr als {threshold}× über dem 30-Tage-Durchschnitt und keine Reinigung wurde aufgezeichnet. Erwäge, einen geplanten Reinigungsauftrag für diese Wochentage hinzuzufügen."
-    },
-    "mission_anomaly": {
-      "title": "Ungewöhnliche Reinigungsmuster erkannt",
-      "description": "Die letzten {count} Missionen zeigten abnormale Muster – der Roboter verbringt möglicherweise mehr Zeit als üblich mit weniger Fläche, hat ungewöhnlich lange Zwischenladungen oder trifft auf extreme Schmutzmengen. Prüfe auf Hindernisse, verschlissene Bürsten oder Akkuverschlechterung."
-    },
-    "stuck_pattern": {
-      "title": "Steckenbleib-Muster erkannt",
-      "description": "Ihr Roomba bleibt am häufigsten {time} in der Nähe von {room} stecken. Erwägen Sie, den Bereich vor diesen Reinigungen freizuräumen oder den Reinigungsplan anzupassen."
-    },
-    "smberr_high": {
-      "title": "Hohe Anzahl an SMBus-Akkufehlern erkannt",
-      "description": "Der Roboter hat {count} SMBus-Kommunikationsfehler zwischen der Hauptplatine und dem Akkuchip aufgezeichnet. Dies deutet oft auf verschlissene Ladekontakte oder einen alternden Akku hin.\n\n**Empfohlene Maßnahmen:**\n1. Reinigen Sie die Ladekontakte am Roboter und der Ladestation mit einem trockenen Tuch.\n2. Wenn die Fehler nach der Reinigung hoch bleiben, muss der Akku möglicherweise ersetzt werden."
-    },
     "dock_contact_health": {
       "title": "Problem mit Dock-Kontaktgesundheit erkannt",
-      "description": "Der Roboter meldet Dock-Kontaktprobleme:\n\n- Kontakt-Prellungen: {chatters}\n- Unbeabsichtigte Abdockungen: {knockoffs}\n- Ladeabbrüche: {aborts}\n\n**Empfohlene Maßnahmen:**\n1. Ladekontakte an Roboter und Dock mit einem trockenen Tuch reinigen.\n2. Sicherstellen dass die Dockingstation auf einem flachen, stabilen Untergrund steht.\n3. Bei vielen Abdockungen: Hindernisse in der Nähe der Station prüfen."
-    },
-    "cloud_stale": {
-      "title": "Cloud-Daten veraltet",
-      "description": "Roomba+ hat seit {minutes} Minuten kein erfolgreiche Cloud-Aktualisierung erhalten. Überprüfen Sie Ihre iRobot-Zugangsdaten und die Internetverbindung. Lokale MQTT-Daten sind weiterhin verfügbar."
+      "description": "Der Roboter meldet Dock-Kontaktprobleme:\n\n- Kontakt-Prellungen: {chatters}\n- Unbeabsichtigte Abdockungen: {knockoffs}\n- Ladeabbrüche: {aborts}\n\n**Empfohlene Maßnahmen:**\n1. Ladekontakte an Roboter und Dock mit einem trockenen Tuch reinigen.\n2. Sicherstellen dass die Dockingstation auf einem flachen, stabilen Untergrund steht.\n3. Bei vielen Abdockungen: Hindernisse in der Nähe der Station prüfen. {smberr_context}"
     },
     "mqtt_watchdog": {
       "title": "Roboter-MQTT-Verbindung während Mission verloren",
       "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: {cloud_hint}. Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
-    },
-    "integration_health": {
-      "title": "Integrationsgesundheit beeinträchtigt",
-      "description": "Der Integrationsgesundheits-Score von Roomba+ liegt seit mindestens 30 Minuten unter 50 (aktueller Wert: {score}/100). Dieser kombiniert die Anzahl aktiver Repair Issues, das Alter der letzten MQTT-Nachricht und die Frische des Missionsarchivs. Prüfen Sie die Attribute der Entity sensor.*_integration_health für eine Aufschlüsselung, welches Signal betroffen ist, und sehen Sie sich weitere aktive Repair Issues für diesen Roboter an."
-    },
-    "map_retrain_in_progress": {
-      "title": "Smart-Map-Update dauert länger als üblich",
-      "description": "Die Smart Map des Roboters wird seit mindestens {minutes} Minuten aktualisiert. Ein normales Update ist meist schneller — das kann nach einer größeren Layout-Änderung passieren. Noch keine Aktion nötig; verschwindet automatisch, sobald das Update fertig ist."
     },
     "map_retrain_stuck": {
       "title": "Smart-Map-Update scheint hängen zu bleiben",
@@ -990,29 +942,13 @@
       "title": "Roboter-MQTT-Verbindung während Mission verloren",
       "description": "Roomba+ hat seit {minutes} Minuten keine MQTT-Nachrichten vom Roboter erhalten, während eine Reinigungsmission aktiv war. Letzte bekannte Phase vor der Stille: {last_phase}. Cloud-Verbindung des Roboters: unbekannt (Feld fehlt auf dieser Firmware). Falls der Roboter physisch feststeckt oder pausiert ist, ist das möglicherweise kein echtes Netzwerkproblem -- prüfen Sie zuerst den Roboter selbst vor Ort."
     },
-    "health_trend_declining": {
-      "title": "Gesundheits-Score-Trend verschlechtert sich",
-      "description": "Roomba+ hat festgestellt, dass der zusammengesetzte Gesundheits-Score seit {days} aufeinanderfolgenden Tagen unter der eigenen etablierten Basislinie dieses Roboters liegt. Das kann auf beginnenden Verschleiß, Navigationsprobleme oder veränderte Umgebungsbedingungen hindeuten — prüfe die einzelnen Signale (Akku-Kapazität, Navigationseffizienz, Reinigungsgeschwindigkeit, Missionsanomalien, Steckenbleib-Rate) auf die wahrscheinliche Ursache."
-    },
-    "room_accessibility_low": {
-      "title": "{room}: niedriger Zugänglichkeits-Score",
-      "description": "{room} erreichte einen Zugänglichkeits-Score von {score}/100, aufgrund von {reason}. Prüfe diesen Raum auf Hindernisse, enge Durchgänge oder Möbel, die den Roboter beim effektiven Reinigen einschränken könnten."
-    },
     "layout_change_detected": {
       "title": "Mögliche Layout-Änderung erkannt",
       "description": "Eine Stelle bei ({x_mm}, {y_mm}) wurde lange zuverlässig gereinigt und wurde jetzt mehrere Missionen in Folge ausgelassen — ein Hinweis auf neue Möbel oder ein anderes Hindernis. Prüfe den Bereich, oder verwerfe die Meldung, falls das erwartet war (z. B. wurde absichtlich ein Teppich hinzugefügt)."
     },
-    "stuck_hotspot_detected": {
-      "title": "Wiederkehrende Stuck-Stelle erkannt",
-      "description": "Der Roboter ist wiederholt in der Nähe eines {cell_count}-Zellen-Clusters in {room} hängen geblieben (Peilung {bearing}° vom Dock, {stuck_count} dort verzeichnete Stuck-Ereignisse, aktuell merklich schlechter abgedeckt als die Umgebung). Prüfe den Bereich auf ein Hindernis — Kabel, einen niedrigen Spalt oder etwas, an dem der Roboter hängen bleibt."
-    },
-    "coverage_frequency_overdue": {
-      "title": "{room} könnte überfällig für eine Reinigung sein",
-      "description": "{room} wurde zuletzt vor {days_since_last} Tagen gereinigt — deutlich länger als der rund {expected_interval_days}-Tage-Rhythmus, den dieser Roboter für diesen Raum aus seiner eigenen Reinigungshistorie etabliert hat. Prüfe, ob der Zeitplan den Raum noch abdeckt, oder ob er zuletzt unzugänglich war."
-    },
-    "dirt_correlation": {
-      "title": "Starke Schmutz-Korrelation erkannt",
-      "description": "Der Roboter sammelt deutlich {direction} Schmutz, wenn {entity} hoch ist (r={r}, 30+ Missionen). Es kann sich lohnen, den Reinigungsplan an dieses Muster anzupassen."
+    "favorite_multi_commanddefs": {
+      "title": "Favorit hat mehrere Befehlsschritte",
+      "description": "Der Favorit „{name}“ hat {count} Befehlsschritte, aber nur der erste wird an den Roboter gesendet — die übrigen werden ignoriert. Das ist eine seltene Konfiguration, für die kein korrektes Verhalten bestätigt ist."
     }
   },
   "device_automation": {
@@ -1087,6 +1023,14 @@
     "smart_start": {
       "name": "Smart Start",
       "description": "Startet eine Reinigung mit Sperrsensor-Prüfungen."
+    },
+    "create_backup": {
+      "name": "Backup erstellen",
+      "description": "Exportiert alle gespeicherten Daten dieses Roboters in eine einzelne ZIP-Datei."
+    },
+    "restore_backup": {
+      "name": "Backup wiederherstellen",
+      "description": "Stellt alle Daten aus einer Backup-ZIP wieder her. Wirkt sofort, kein Neustart nötig."
     }
   },
   "exceptions": {
@@ -1128,6 +1072,9 @@
     },
     "no_rooms_resolved": {
       "message": "Keine Räume zum Reinigen — gib mindestens einen Raumnamen an."
+    },
+    "backup_entity_not_found": {
+      "message": "Die Entität „{entity_id}“ ließ sich keinem Roomba+-Roboter zuordnen. Entity-ID prüfen und erneut versuchen."
     }
   },
   "selector": {

@@ -2942,6 +2942,23 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     roomba = ctx.roomba
     cloud_coordinator = ctx.cloud_coordinator
 
+    # v3.5.0 Repairs redesign bug-hunt fix — clean up any Repair Issues left
+    # permanently stuck from a pre-v3.5.0 install (see
+    # async_cleanup_removed_repairs's docstring for the full rationale).
+    async def _cleanup_removed_repairs() -> None:
+        from .repairs import async_cleanup_removed_repairs
+        removed = await async_cleanup_removed_repairs(hass)
+        if removed:
+            _LOGGER.debug(
+                "Roomba+: cleaned up %d stale Repair Issue(s) from a "
+                "pre-v3.5.0 install for %s",
+                removed, config_entry.entry_id,
+            )
+    hass.async_create_task(
+        _cleanup_removed_repairs(),
+        name=f"roomba_plus_cleanup_removed_repairs_{config_entry.entry_id}",
+    )
+
     # ARC1 — one-time paginated back-fill as background task
     if (ctx.mission_archive is not None
             and cloud_coordinator is not None

@@ -15,16 +15,21 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import json
 import logging
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant.util import dt as dt_util
 
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 
 from .const import (
     ATTR_ORDERED,
@@ -48,6 +53,8 @@ from .const import (
     SERVICE_RESET_FILTER,
     SERVICE_RESET_PAD,
     SERVICE_SMART_START,
+    SERVICE_CREATE_BACKUP,
+    SERVICE_RESTORE_BACKUP,
 )
 from .models import MapCapability, RoombaConfigEntry, RoombaData
 
@@ -58,6 +65,27 @@ _LOGGER = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# v3.5.0 FULL-BACKUP — every per-robot Store this integration persists.
+# (runtime_data attribute name, HA Store storage-key prefix). All nine
+# stores share STORAGE_VERSION/_HA_STORE_VERSION == 1 today (verified
+# against each module directly) — hardcoded here rather than imported
+# per-module to keep this list a single, auditable source of truth
+# independent of any one store's internal naming (STORAGE_VERSION vs.
+# _HA_STORE_VERSION vary by module, the value doesn't).
+_BACKUP_STORE_VERSION = 1
+_BACKUP_STORES: tuple[tuple[str, str], ...] = (
+    ("mission_store", "roomba_plus_missions"),
+    ("geometry_store", "roomba_plus_geometry"),
+    ("grid_store", "roomba_plus_grid"),
+    ("room_seg_store", "roomba_plus_roomseg"),
+    ("outline_store", "roomba_plus_outline"),
+    ("robot_profile_store", "roomba_plus_robot_profile"),
+    ("maintenance_store", "roomba_plus_maintenance"),
+    ("trajectory_store", "roomba_plus_trajectories"),
+    ("freeze_snapshot_store", "roomba_plus_freeze"),
+)
+
 
 def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
     """Return user_pmapv_id for pmap_id from local MQTT state.
@@ -1241,6 +1269,30 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_EXPLAIN_MISSION)
 
+    # ── v3.5.0 FULL-BACKUP — create_backup / restore_backup ───────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_CREATE_BACKUP):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CREATE_BACKUP,
+            async_handle_create_backup,
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_id}),
+            supports_response=SupportsResponse.ONLY,
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CREATE_BACKUP)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESTORE_BACKUP):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESTORE_BACKUP,
+            async_handle_restore_backup,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Required("path"): cv.string,
+            }),
+            supports_response=SupportsResponse.ONLY,
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_RESTORE_BACKUP)
+
     # ── ADVANCE-ROOM-V2 (v2.8.0) — manual room-progress override ─────────────
     if not hass.services.has_service(DOMAIN, "advance_room"):
         hass.services.async_register(
@@ -1336,6 +1388,184 @@ async def async_handle_advance_room(call: ServiceCall) -> None:
             )
 
 
+# ── FULL-BACKUP (v3.5.0) — create_backup / restore_backup ────────────────────
+
+
+def _resolve_config_entry_from_entity(
+    hass: HomeAssistant, entity_id: str, service_name: str
+) -> Any:
+    """Resolve a config entry from an entity_id, raising ServiceValidationError
+    with a clear, translatable message on any failure along the way."""
+    ent_reg = er.async_get(hass)
+    entry_reg = ent_reg.async_get(entity_id)
+    if entry_reg is None or entry_reg.config_entry_id is None:
+        raise ServiceValidationError(
+            f"{service_name}: entity not found or not a Roomba+ entity: {entity_id}",
+            translation_domain=DOMAIN,
+            translation_key="backup_entity_not_found",
+            translation_placeholders={"entity_id": entity_id},
+        )
+    config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    if config_entry is None:
+        raise ServiceValidationError(
+            f"{service_name}: config entry not found for {entity_id}",
+            translation_domain=DOMAIN,
+            translation_key="backup_entity_not_found",
+            translation_placeholders={"entity_id": entity_id},
+        )
+    return config_entry
+
+
+def _write_backup_zip(
+    backup_dir: str, filename: str, manifest: dict, payloads: dict[str, dict]
+) -> str:
+    """Blocking: write the manifest + one JSON per store into a ZIP.
+
+    Runs in the executor — file I/O and zipfile compression are both
+    blocking calls and must never touch the event loop directly.
+    """
+    Path(backup_dir).mkdir(parents=True, exist_ok=True)
+    zip_path = str(Path(backup_dir) / filename)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+        for prefix, data in payloads.items():
+            zf.writestr(f"{prefix}.json", json.dumps(data, indent=2))
+    return zip_path
+
+
+def _read_backup_zip(zip_path: str) -> tuple[dict, dict[str, dict]]:
+    """Blocking: read manifest + all store payloads back out of a ZIP."""
+    if not Path(zip_path).is_file():
+        raise HomeAssistantError(f"Backup file not found: {zip_path}")
+    payloads: dict[str, dict] = {}
+    manifest: dict = {}
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = set(zf.namelist())
+            if "manifest.json" not in names:
+                raise HomeAssistantError(
+                    f"Not a valid Roomba+ backup (missing manifest.json): {zip_path}"
+                )
+            manifest = json.loads(zf.read("manifest.json"))
+            for _attr, prefix in _BACKUP_STORES:
+                member = f"{prefix}.json"
+                if member in names:
+                    payloads[prefix] = json.loads(zf.read(member))
+    except zipfile.BadZipFile as exc:
+        raise HomeAssistantError(
+            f"Backup file is corrupt or not a ZIP: {zip_path}"
+        ) from exc
+    return manifest, payloads
+
+
+async def async_handle_create_backup(
+    hass: HomeAssistant, call: ServiceCall
+) -> dict[str, Any]:
+    """Handle roomba_plus.create_backup.
+
+    Concrete use case: migrating Home Assistant to new hardware without
+    losing learned state (GridStore coverage history, RoomSegStore room
+    identities, RobotProfileStore L-series learning, ...). Writes one ZIP
+    per call containing every persisted Store for the target robot.
+
+    v3.5.0 FULL-BACKUP. Unlike the read-only GET /backup REST view (v2.4,
+    F15 — JSON only, deliberately excludes maintenance data since that
+    endpoint's use case was cross-robot data export), this service's use
+    case is explicitly the *same* physical robot on a new HA install — so
+    maintenance timestamps (filter/brush/pad reset times) legitimately
+    belong to this robot and are included here.
+    """
+    entity_id: str = call.data["entity_id"]
+    config_entry = _resolve_config_entry_from_entity(hass, entity_id, "create_backup")
+    data = config_entry.runtime_data
+    entry_id = config_entry.entry_id
+
+    payloads: dict[str, dict] = {}
+    included: list[str] = []
+    excluded: list[str] = []
+    for attr, prefix in _BACKUP_STORES:
+        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        raw = await store.async_load()
+        if raw is None:
+            excluded.append(attr)
+            continue
+        payloads[prefix] = raw
+        included.append(attr)
+
+    manifest = {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "robot": {
+            "blid": getattr(data, "blid", None),
+            "entry_id": entry_id,
+            "map_capability": (
+                data.map_capability.value
+                if getattr(data, "map_capability", None) is not None
+                else None
+            ),
+        },
+        "included_stores": included,
+        "excluded_stores_no_data": excluded,
+    }
+
+    backup_dir = hass.config.path("roomba_plus_backups")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"roomba_plus_backup_{entry_id}_{ts}.zip"
+
+    zip_path = await hass.async_add_executor_job(
+        _write_backup_zip, backup_dir, filename, manifest, payloads
+    )
+    _LOGGER.info(
+        "create_backup: wrote %s (%d stores included, %d had no data)",
+        zip_path, len(included), len(excluded),
+    )
+    return {
+        "path": zip_path,
+        "included_stores": included,
+        "excluded_stores_no_data": excluded,
+    }
+
+
+async def async_handle_restore_backup(
+    hass: HomeAssistant, call: ServiceCall
+) -> dict[str, Any]:
+    """Handle roomba_plus.restore_backup.
+
+    Writes each store's payload back to its HA Store file, then reloads
+    every live store instance already held on config_entry.runtime_data so
+    the running integration picks up the restored state immediately — no
+    Home Assistant restart required.
+    """
+    entity_id: str = call.data["entity_id"]
+    path: str = call.data["path"]
+    config_entry = _resolve_config_entry_from_entity(hass, entity_id, "restore_backup")
+    data = config_entry.runtime_data
+    entry_id = config_entry.entry_id
+
+    manifest, payloads = await hass.async_add_executor_job(_read_backup_zip, path)
+
+    restored: list[str] = []
+    for attr, prefix in _BACKUP_STORES:
+        if prefix not in payloads:
+            continue
+        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        await store.async_save(payloads[prefix])
+        live_store = getattr(data, attr, None)
+        if live_store is not None:
+            await live_store.async_load(hass, entry_id)
+        restored.append(attr)
+
+    _LOGGER.info(
+        "restore_backup: restored %d/%d stores from %s (exported_at=%s)",
+        len(restored), len(_BACKUP_STORES), path,
+        manifest.get("exported_at", "unknown"),
+    )
+    return {
+        "restored_stores": restored,
+        "manifest": manifest,
+    }
+
+
 def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
     for svc in (
@@ -1354,6 +1584,8 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "reset_robot_profile",
         "advance_room",
         SERVICE_EXPLAIN_MISSION,
+        SERVICE_CREATE_BACKUP,
+        SERVICE_RESTORE_BACKUP,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)

@@ -24,7 +24,21 @@ from collections.abc import Callable
 from homeassistant.components.logbook import LOGBOOK_ENTRY_MESSAGE, LOGBOOK_ENTRY_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED, EVENT_STUCK
+from .const import (
+    DOMAIN,
+    EVENT_CANCELLATION_RECURRENCE,
+    EVENT_CLOUD_STALE,
+    EVENT_ERROR_RECURRENCE,
+    EVENT_MAINTENANCE_RESET,
+    EVENT_MAP_DRIFT_DETECTED,
+    EVENT_MAP_RETRAIN_IN_PROGRESS,
+    EVENT_MISSION_ANOMALY,
+    EVENT_MISSION_COMPLETED,
+    EVENT_MIXED_SCHEDULE,
+    EVENT_SCHEDULE_SUBOPTIMAL,
+    EVENT_STUCK,
+    EVENT_STUCK_PATTERN,
+)
 
 # Human-readable component names for the maintenance_reset message.
 _COMPONENT_LABELS: dict[str, str] = {
@@ -123,6 +137,110 @@ def async_describe_events(
             LOGBOOK_ENTRY_MESSAGE: message,
         }
 
+    # v3.5.0 Repairs redesign — describers for signals demoted from
+    # persistent Repair Issues to fire-once events. Each mirrors the wording
+    # its former translation_key used, so anyone who saw the Repair before
+    # sees the same substance in the Logbook now.
+
+    @callback
+    def describe_error_recurrence(event: Event) -> dict[str, str]:
+        data = event.data
+        message = (
+            f"recurring error: {data.get('label')} "
+            f"({data.get('count')} times in 30 days)"
+        )
+        room = data.get("room")
+        if room and room != "unknown location":
+            message += f" — {room}"
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: message,
+        }
+
+    @callback
+    def describe_cancellation_recurrence(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"cancelled {data.get('count')} times in 30 days"
+            ),
+        }
+
+    @callback
+    def describe_stuck_pattern(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"repeatedly gets stuck {data.get('time')} "
+                f"— {data.get('room')}"
+            ),
+        }
+
+    @callback
+    def describe_mission_anomaly(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"{data.get('count')} consecutive unusual missions"
+            ),
+        }
+
+    @callback
+    def describe_mixed_schedule(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"mixed schedule detected ({data.get('schedule_pct')}% "
+                f"scheduled, {data.get('app_pct')}% app-started)"
+            ),
+        }
+
+    @callback
+    def describe_schedule_suboptimal(event: Event) -> dict[str, str]:
+        data = event.data
+        days = data.get("days") or []
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"high-dirt days without a scheduled clean: {', '.join(days)}"
+            ),
+        }
+
+    @callback
+    def describe_map_drift_detected(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"map drift detected — {data.get('magnitude_cm')} cm "
+                f"at {data.get('bearing')}°"
+            ),
+        }
+
+    @callback
+    def describe_map_retrain_in_progress(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"Smart Map still updating after {data.get('minutes')} min"
+            ),
+        }
+
+    @callback
+    def describe_cloud_stale(event: Event) -> dict[str, str]:
+        data = event.data
+        return {
+            LOGBOOK_ENTRY_NAME: data.get("name") or "Roomba+",
+            LOGBOOK_ENTRY_MESSAGE: (
+                f"cloud data hasn't refreshed in {data.get('minutes')} min"
+            ),
+        }
+
     async_describe_event(
         DOMAIN, EVENT_MISSION_COMPLETED, describe_mission_completed
     )
@@ -131,4 +249,31 @@ def async_describe_events(
     )
     async_describe_event(
         DOMAIN, EVENT_STUCK, describe_stuck
+    )
+    async_describe_event(
+        DOMAIN, EVENT_ERROR_RECURRENCE, describe_error_recurrence
+    )
+    async_describe_event(
+        DOMAIN, EVENT_CANCELLATION_RECURRENCE, describe_cancellation_recurrence
+    )
+    async_describe_event(
+        DOMAIN, EVENT_STUCK_PATTERN, describe_stuck_pattern
+    )
+    async_describe_event(
+        DOMAIN, EVENT_MISSION_ANOMALY, describe_mission_anomaly
+    )
+    async_describe_event(
+        DOMAIN, EVENT_MIXED_SCHEDULE, describe_mixed_schedule
+    )
+    async_describe_event(
+        DOMAIN, EVENT_SCHEDULE_SUBOPTIMAL, describe_schedule_suboptimal
+    )
+    async_describe_event(
+        DOMAIN, EVENT_MAP_DRIFT_DETECTED, describe_map_drift_detected
+    )
+    async_describe_event(
+        DOMAIN, EVENT_MAP_RETRAIN_IN_PROGRESS, describe_map_retrain_in_progress
+    )
+    async_describe_event(
+        DOMAIN, EVENT_CLOUD_STALE, describe_cloud_stale
     )

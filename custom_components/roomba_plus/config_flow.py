@@ -510,6 +510,78 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    # ── Reauth flow (v3.5.0) ───────────────────────────────────────────────────
+    #
+    # Bug-hunt fix, config_flow.py review: cloud_coordinator.py's
+    # _async_setup()/_async_update_data() already raise ConfigEntryAuthFailed
+    # on a bad cloud login (pre-dates v3.5.0) — which calls
+    # config_entry.async_start_reauth(), which starts THIS flow at
+    # async_step_reauth. That method didn't exist anywhere in this file, so
+    # every auth failure since that mechanism was added would have silently
+    # gone nowhere: no guided flow, just a config entry stuck in an error
+    # state with no path back for the user except removing and re-adding the
+    # whole integration. v3.5.0's cloud_stale split (repairs.py) explicitly
+    # relies on this native reauth flow instead of a custom Repair Issue for
+    # the auth-failure case — so this was the missing other half of that fix.
+    #
+    # Reuses the same validate-before-save pattern already established for
+    # cloud credentials elsewhere in this file (async_step_cloud_credentials
+    # above, and RoombaPlusOptionsFlow's version) rather than introducing a
+    # third, slightly different implementation of the same check.
+
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Entry point HA calls when ConfigEntryAuthFailed is raised.
+
+        entry_data is the failing entry's current data — nothing to do
+        with it here beyond routing to the actual form, since
+        async_step_reauth_confirm reads the live entry via
+        self._get_reauth_entry() instead of this snapshot.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Collect and validate new iRobot cloud credentials, then save
+        and reload the existing entry — never creates a new one."""
+        errors: dict[str, str] = {}
+        reauth_entry = self._get_reauth_entry()
+        current_user = reauth_entry.data.get(CONF_IROBOT_USERNAME, "")
+
+        if user_input is not None:
+            username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
+            password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+            api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+            try:
+                await api.authenticate()
+            except AuthenticationError:
+                errors["base"] = "invalid_cloud_credentials"
+            except CloudApiError:
+                errors["base"] = "cannot_connect"
+            else:
+                new_data = dict(reauth_entry.data)
+                new_data[CONF_IROBOT_USERNAME] = username
+                new_data[CONF_IROBOT_PASSWORD] = password
+                return self.async_update_reload_and_abort(
+                    reauth_entry, data=new_data,
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({
+                vol.Required(CONF_IROBOT_USERNAME, default=current_user): str,
+                vol.Required(CONF_IROBOT_PASSWORD): str,
+            }),
+            errors=errors,
+            description_placeholders={
+                "name": reauth_entry.data.get(CONF_BLID, ""),
+                "current_user": current_user or "not configured",
+            },
+        )
+
 class RoombaPlusOptionsFlow(OptionsFlow):
     """Handle Roomba+ options (connection settings)."""
 

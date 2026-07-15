@@ -58,14 +58,22 @@ _COVERAGE_BASELINE_MIN_MISSIONS = 20
 # which is influenced by furniture rearrangement, cleaning mode, etc.) so
 # fewer observations are needed for a stable personal baseline.
 _RELOC_BASELINE_MIN_MISSIONS = 15
-# Trigger threshold: current window mean must exceed baseline by this
-# multiple before the Repair Issue fires. 3x is deliberately conservative —
-# field data so far (Thonno's i7+, 2 missions) shows reLc=0 in both, so we
-# have no confirmed "bad" reading to calibrate against; a high multiplier
-# avoids false positives until more field data narrows this down.
-_RELOC_ALERT_MULTIPLIER = 3.0
+# v3.5.0 Repairs redesign — reloc_alert_triggered()'s fixed 3.0x multiplier
+# is gone: reLc is zero-inflated (many robots show reLc=0 for their entire
+# history, e.g. Thonno's i7+), and a fixed multiplier against a near-zero
+# baseline either never fires or hair-triggers on the very first nonzero
+# reading. Replaced by reloc_percentile_rank() — ranks the current window
+# against this robot's OWN historical distribution (see _RELOC_HISTORY_LEN
+# below), no fixed threshold anywhere. This is also why the check moved
+# from a Repair Issue to a plain sensor attribute: percentile rank is
+# information for the user to threshold themselves, not a judgment call
+# this integration should make on their behalf.
 # Recent-window size for the trigger check, mirrors DRIFT-AUTO's pattern.
 _RELOC_WINDOW = 10
+# Bounded longer-run history for reloc_percentile_rank()'s reference
+# distribution. ~2-3 months of missions at typical usage — long enough for
+# a meaningful percentile, bounded so storage never grows unbounded.
+_RELOC_HISTORY_LEN = 60
 
 # v3.1.0 L9-BATTERY — minimum estCap observations before the noise-floor
 # (standard deviation) baseline is trusted. Field data (Thonno's i7+, 8
@@ -245,9 +253,14 @@ class RobotProfileStore:
     # has mssnNavStats present, e.g. 600/900-series robots lack it entirely).
     # recent_relocs: bounded window of the most recent reLc values, used to
     # detect a CURRENT elevated rate vs. the established personal baseline.
+    # reloc_history: v3.5.0 — bounded longer-run history of per-mission reLc
+    # values, used for reloc_percentile_rank() (see below). Separate from
+    # recent_relocs (the short "current" window) — this is the reference
+    # distribution the current window gets ranked against.
     reloc_baseline: float | None = None
     reloc_mission_count: int = 0
     recent_relocs: list[int] = field(default_factory=list)
+    reloc_history: list[int] = field(default_factory=list)
 
     # v3.1.0 L9-BATTERY — self-calibrating estCap noise-floor baseline.
     # Welford's online algorithm for numerically stable running mean/variance
@@ -361,6 +374,8 @@ class RobotProfileStore:
             self.reloc_mission_count = int(data.get("reloc_mission_count", 0))
             raw_relocs = data.get("recent_relocs", [])
             self.recent_relocs = [int(v) for v in raw_relocs][-_RELOC_WINDOW:]
+            raw_history = data.get("reloc_history", [])
+            self.reloc_history = [int(v) for v in raw_history][-_RELOC_HISTORY_LEN:]
 
             # v3.1.0 L9-BATTERY — estCap noise-floor baseline
             enm = data.get("estcap_noise_mean")
@@ -417,6 +432,7 @@ class RobotProfileStore:
             "reloc_baseline": self.reloc_baseline,
             "reloc_mission_count": self.reloc_mission_count,
             "recent_relocs": self.recent_relocs,
+            "reloc_history": self.reloc_history,
             "estcap_noise_mean": self.estcap_noise_mean,
             "estcap_noise_m2": self.estcap_noise_m2,
             "estcap_noise_count": self.estcap_noise_count,
@@ -452,6 +468,7 @@ class RobotProfileStore:
         self.reloc_baseline = None
         self.reloc_mission_count = 0
         self.recent_relocs = []
+        self.reloc_history = []
         self.estcap_noise_mean = None
         self.estcap_noise_m2 = 0.0
         self.estcap_noise_count = 0
@@ -558,7 +575,9 @@ class RobotProfileStore:
 
     def update_reloc_baseline(self, relocs: int) -> None:
         """v3.1.0 L9-MAP — update the personal relocalisation-rate baseline
-        with a new mission's reLc count, and push it into the recent window.
+        with a new mission's reLc count, push it into the recent window,
+        and append it to the longer-run history used by
+        reloc_percentile_rank().
 
         Mirrors update_coverage_baseline()'s running-mean approach (same
         reasoning: stable signal, EMA would over-weight early outliers).
@@ -578,6 +597,9 @@ class RobotProfileStore:
         self.recent_relocs.append(relocs)
         self.recent_relocs = self.recent_relocs[-_RELOC_WINDOW:]
 
+        self.reloc_history.append(relocs)
+        self.reloc_history = self.reloc_history[-_RELOC_HISTORY_LEN:]
+
         _LOGGER.debug(
             "RobotProfileStore: reloc baseline → %.3f (n=%d), window=%s",
             self.reloc_baseline, self.reloc_mission_count, self.recent_relocs,
@@ -586,36 +608,50 @@ class RobotProfileStore:
     @property
     def reloc_baseline_ready(self) -> bool:
         """True once enough missions have contributed to reloc_baseline to
-        trust it for the alert comparison."""
+        trust it for display."""
         return (
             self.reloc_baseline is not None
             and self.reloc_mission_count >= _RELOC_BASELINE_MIN_MISSIONS
         )
 
-    def reloc_alert_triggered(self) -> bool:
-        """v3.1.0 L9-MAP — True when the recent window's mean relocalisation
-        rate significantly exceeds the robot's own established baseline.
+    def reloc_percentile_rank(self) -> float | None:
+        """v3.5.0 — where the current recent-window mean sits within this
+        robot's OWN historical reLc distribution, as a 0-100 percentile.
 
-        Requires reloc_baseline_ready (enough history to trust the baseline)
-        AND enough recent samples in the window to trust the current reading.
-        A baseline of 0.0 (robot has never relocalised) is treated specially:
-        any non-zero recent activity at all is flagged, since the multiplier
-        check (0 * 3.0 = 0) would otherwise never trigger no matter how bad
-        things get.
+        Self-calibrating with no fixed threshold anywhere (replaces the old
+        reloc_alert_triggered()'s fixed 3.0x multiplier, which either never
+        fired or hair-triggered depending on how close the personal baseline
+        sat to zero — reLc is zero-inflated, so a fixed multiplier against
+        a near-zero baseline was never a stable comparison). Ties are
+        handled via mean-rank ((count strictly below + half the ties) /
+        total): on a robot whose history is mostly zero, a current reading
+        of 0 lands around the 50th percentile — a typical reading — rather
+        than misleadingly showing as either extreme.
+
+        Returns None until enough history has accumulated
+        (_RELOC_BASELINE_MIN_MISSIONS missions) to make a percentile rank
+        meaningful. This is deliberately just a number, not a verdict — the
+        integration doesn't decide what counts as "elevated" for you;
+        automate on this value with whatever threshold matters to you.
+
+        Known limitation, worth being upfront about: this is a rank
+        statistic, so it reflects whether the current window is unusual
+        for this robot, not by how much. Two differently-sized sustained
+        increases that produce the same window shape (e.g. the same
+        _RELOC_WINDOW-length run of uniform values against the same older
+        baseline) can rank identically — rank statistics discard magnitude
+        by design. If per-mission raw reLc values ever need to be compared
+        by size rather than rank, reloc_history itself is available
+        directly for that; this method intentionally answers "is this
+        typical for this robot" rather than "how far off is this".
         """
-        if not self.reloc_baseline_ready:
-            return False
-        if len(self.recent_relocs) < _RELOC_WINDOW:
-            return False
-        recent_mean = sum(self.recent_relocs) / len(self.recent_relocs)
-        # Near-zero baseline (not just exactly 0.0 — a long quiet history with
-        # a single early outlier can leave it at e.g. 0.009) needs the same
-        # special handling: multiplying a tiny baseline by _RELOC_ALERT_MULTIPLIER
-        # still yields a near-zero threshold that wouldn't meaningfully gate
-        # anything, so treat "effectively zero" the same as exactly zero.
-        if self.reloc_baseline < 0.05:
-            return recent_mean > 0.0
-        return recent_mean > self.reloc_baseline * _RELOC_ALERT_MULTIPLIER
+        if len(self.reloc_history) < _RELOC_BASELINE_MIN_MISSIONS or not self.recent_relocs:
+            return None
+        current = sum(self.recent_relocs) / len(self.recent_relocs)
+        less = sum(1 for v in self.reloc_history if v < current)
+        equal = sum(1 for v in self.reloc_history if v == current)
+        total = len(self.reloc_history)
+        return round((less + 0.5 * equal) / total * 100, 1)
 
     def update_estcap_noise(self, estcap_delta: float) -> None:
         """v3.1.0 L9-BATTERY — feed one estCap-vs-previous-reading delta into

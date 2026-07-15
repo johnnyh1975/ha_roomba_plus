@@ -405,8 +405,12 @@ async def async_record_mission(
             if relocs is not None:
                 rps.update_reloc_baseline(relocs)
                 await rps.async_save(hass, entry.entry_id)
-                from .repairs import async_check_reloc_alert
-                async_check_reloc_alert(hass, entry)
+                # v3.5.0 Repairs redesign — the reloc_rate_elevated Repair
+                # Issue was removed; RoombaRelocalisationRateSensor now
+                # exposes percentile_rank directly (see
+                # RobotProfileStore.reloc_percentile_rank()), computed
+                # fresh from update_reloc_baseline() above whenever the
+                # sensor is read — no separate check call needed here.
 
         # v3.1.0 L9-BATTERY — record this mission's estCap observation into
         # the noise-floor baseline. Same had_cleaning_phase gate as above —
@@ -2218,56 +2222,24 @@ def make_cloud_refresh_callback(
                 ),
                 name="roomba_plus_gs_smart_coverage",
             )
-        # v3.2.0 bug-hunt fix — the following four checks (ROOM-ACCESS,
-        # FURNITURE, STUCK-HOTSPOT, COVERAGE-FREQ) were built and tested
-        # as standalone functions but never actually dispatched from
-        # anywhere in the running integration — the tests call them
-        # directly, which passed, but nothing in production ever would
-        # have. Found via a systematic post-release check for exactly
-        # this "function exists, never called" pattern (the same class of
-        # bug independently found twice earlier this session in
-        # pre-existing code). This is the correct hook: same
-        # cloud-refresh cadence L10's async_check_health_trend_declining
-        # already uses via its sensor's coordinator listener, and the
-        # same dispatch pattern every other repairs.py check on this
-        # callback already follows.
-        if (
-            config_entry.runtime_data.umf_aligner is not None
-            and config_entry.runtime_data.grid_store is not None
-        ):
-            from .repairs import async_check_room_accessibility
-            hass.async_create_task(
-                async_check_room_accessibility(hass, config_entry),
-                name="roomba_plus_room_accessibility_check",
-            )
+        # FURNITURE (layout-change) check dispatched on cloud-refresh
+        # cadence. The former ROOM-ACCESS, STUCK-HOTSPOT, COVERAGE-FREQ
+        # and CROSS-CORR checks were removed in v3.5.0 (Repairs redesign):
+        # ROOM-ACCESS/STUCK-HOTSPOT data is already exposed via the
+        # ?format=hazards endpoint + map, COVERAGE-FREQ was a derivable
+        # nudge, and CROSS-CORR is already surfaced by the
+        # dirt_weather_correlation sensor.
         if config_entry.runtime_data.grid_store is not None:
             from .repairs import async_check_furniture_change
             hass.async_create_task(
                 async_check_furniture_change(hass, config_entry),
                 name="roomba_plus_furniture_change_check",
             )
-            from .repairs import async_check_stuck_hotspot
-            hass.async_create_task(
-                async_check_stuck_hotspot(hass, config_entry),
-                name="roomba_plus_stuck_hotspot_check",
-            )
-        if config_entry.runtime_data.mission_store is not None:
-            from .repairs import async_check_coverage_frequency
-            hass.async_create_task(
-                async_check_coverage_frequency(hass, config_entry),
-                name="roomba_plus_coverage_frequency_check",
-            )
-            # v3.3.0 CROSS-CORR — correlation Repair Issue (self-healing)
-            from .repairs import async_check_dirt_correlation
-            hass.async_create_task(
-                async_check_dirt_correlation(hass, config_entry),
-                name="roomba_plus_dirt_correlation_check",
-            )
-        from .repairs import async_check_smberr
-        hass.async_create_task(
-            async_check_smberr(hass, config_entry),
-            name="roomba_plus_smberr_check",
-        )
+        # v3.5.0 Repairs redesign — the standalone smberr_high Repair was
+        # removed; its signal now feeds as corroborating context into
+        # dock_contact_health and battery_contact_suspect (see
+        # async_check_dock_health / async_check_battery_contact_issue) —
+        # the raw bbchg.smberr count still appears in diagnostics.
         from .repairs import async_check_dock_health
         hass.async_create_task(
             async_check_dock_health(hass, config_entry),
