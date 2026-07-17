@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 import re
+import uuid
 from unittest.mock import MagicMock
 from unittest.mock import patch
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -35,6 +36,11 @@ _ep = sys.modules.get('homeassistant.helpers.entity_platform')
 
 def _make_entry(mission_store=None, maintenance_store=None):
     entry = MagicMock()
+    # v3.5.1 bug-hunt fix — see TestErrorRecurrence._entry's comment further
+    # down for the full explanation (module-level _event_armed state in
+    # repairs.py can leak between tests if entry_id is left to MagicMock's
+    # default object-identity representation).
+    entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
     data = MagicMock()
     data.mission_store = mission_store or MissionStore()
     data.maintenance_store = maintenance_store or MaintenanceStore()
@@ -611,6 +617,224 @@ class TestDriftEnrichment:
         assert data["magnitude_cm"] == 50.0
 
 
+class TestMissionAnomalyEvent:
+    """v3.5.1 bug-hunt fix — async_check_mission_anomaly had zero tests
+    anywhere in this suite, before or after its v3.5.0 Repair-to-event
+    conversion. Found while investigating a real CI failure in a sibling
+    _fire_once-based check (TestErrorRecurrenceArchivePreferred) — the
+    same investigation surfaced that this function, and stuck_pattern/
+    schedule_optimisation below, were never directly tested at all."""
+
+    def _entry(self, consecutive_anomalous=0, mission_store=True):
+        entry = MagicMock()
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
+        if mission_store:
+            entry.runtime_data.mission_store.consecutive_anomalous = consecutive_anomalous
+        else:
+            entry.runtime_data.mission_store = None
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_no_event_below_threshold(self):
+        from custom_components.roomba_plus.repairs import async_check_mission_anomaly
+        hass = MagicMock()
+        entry = self._entry(consecutive_anomalous=1)
+        await async_check_mission_anomaly(hass, entry)
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_at_two_consecutive_anomalies(self):
+        from custom_components.roomba_plus.const import EVENT_MISSION_ANOMALY
+        from custom_components.roomba_plus.repairs import async_check_mission_anomaly
+        hass = MagicMock()
+        entry = self._entry(consecutive_anomalous=2)
+        await async_check_mission_anomaly(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_MISSION_ANOMALY
+        assert data["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_no_mission_store_no_crash(self):
+        from custom_components.roomba_plus.repairs import async_check_mission_anomaly
+        hass = MagicMock()
+        entry = self._entry(mission_store=False)
+        await async_check_mission_anomaly(hass, entry)  # must not raise
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rearms_when_anomalies_stop(self):
+        """A robot back to normal must be able to fire again on a later,
+        separate anomaly streak — not stay permanently suppressed."""
+        from custom_components.roomba_plus.const import EVENT_MISSION_ANOMALY
+        from custom_components.roomba_plus.repairs import async_check_mission_anomaly
+        hass = MagicMock()
+        entry = self._entry(consecutive_anomalous=2)
+        await async_check_mission_anomaly(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+
+        entry.runtime_data.mission_store.consecutive_anomalous = 0
+        await async_check_mission_anomaly(hass, entry)
+        hass.bus.async_fire.assert_called_once()  # still just the one call
+
+        entry.runtime_data.mission_store.consecutive_anomalous = 2
+        await async_check_mission_anomaly(hass, entry)
+        assert hass.bus.async_fire.call_count == 2
+        event_type, _data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_MISSION_ANOMALY
+
+
+class TestStuckPatternEvent:
+    """v3.5.1 bug-hunt fix — async_check_stuck_pattern had zero tests. See
+    TestMissionAnomalyEvent's docstring for how this was found."""
+
+    def _entry(self, grid_store=None, aligner=None):
+        entry = MagicMock()
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
+        entry.title = "Test Robot"
+        entry.runtime_data.grid_store = grid_store
+        entry.runtime_data.umf_aligner = aligner
+        return entry
+
+    def _grid_store(self, patterns: dict, counts: dict):
+        """patterns: {cell: (weekday, hour)}, counts: {cell: stuck_count}"""
+        gs = MagicMock()
+        gs.stuck_pattern.return_value = patterns
+        gs.stuck_count.side_effect = lambda cell: counts.get(cell, 0)
+        return gs
+
+    @pytest.mark.asyncio
+    async def test_no_grid_store_no_crash(self):
+        from custom_components.roomba_plus.repairs import async_check_stuck_pattern
+        hass = MagicMock()
+        entry = self._entry(grid_store=None)
+        await async_check_stuck_pattern(hass, entry)  # must not raise
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_event_when_no_pattern_found(self):
+        from custom_components.roomba_plus.repairs import async_check_stuck_pattern
+        hass = MagicMock()
+        gs = self._grid_store(patterns={}, counts={})
+        entry = self._entry(grid_store=gs)
+        await async_check_stuck_pattern(hass, entry)
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_with_worst_cell_and_time_description(self):
+        from custom_components.roomba_plus.const import EVENT_STUCK_PATTERN
+        from custom_components.roomba_plus.repairs import async_check_stuck_pattern
+        hass = MagicMock()
+        # Two candidate cells; (5, 10) has more stucks, should be chosen.
+        gs = self._grid_store(
+            patterns={(1, 1): (0, 9), (5, 10): (2, 14)},  # Wed 14:00 -> afternoon
+            counts={(1, 1): 8, (5, 10): 20},
+        )
+        entry = self._entry(grid_store=gs, aligner=None)
+        await async_check_stuck_pattern(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_STUCK_PATTERN
+        assert "Wednesday" in data["time"]
+        assert "afternoon" in data["time"]
+        assert data["room"] == "an unknown location"
+
+    @pytest.mark.asyncio
+    async def test_room_name_resolved_from_aligned_aligner(self):
+        from custom_components.roomba_plus.repairs import async_check_stuck_pattern
+        hass = MagicMock()
+        gs = self._grid_store(patterns={(3, 3): (0, 8)}, counts={(3, 3): 10})
+        aligner = MagicMock()
+        aligner.aligned = True
+        aligner.pose_to_umf.return_value = (1.0, 2.0)
+        aligner.room_name_at.return_value = "Kitchen"
+        entry = self._entry(grid_store=gs, aligner=aligner)
+        await async_check_stuck_pattern(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["room"] == "Kitchen"
+
+
+class TestScheduleOptimisationEvent:
+    """v3.5.1 bug-hunt fix — async_check_schedule_optimisation had zero
+    tests. See TestMissionAnomalyEvent's docstring for how this was found."""
+
+    def _entry(self, daily_density=None, completed_days=None,
+               presence_manager=True, has_cloud=True):
+        entry = MagicMock()
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
+        entry.title = "Test Robot"
+        rd = entry.runtime_data
+        rd.presence_manager = MagicMock() if presence_manager else None
+        rd.has_cloud = has_cloud
+        rd.cloud_coordinator.daily_dirt_density = daily_density or {}
+        # query_by_day() returns dict[date, DaySummary] — real date objects
+        # as keys, not ISO strings (verified against mission_store.py).
+        from datetime import date as _date
+        by_day = {}
+        for day_iso in (completed_days or []):
+            summary = MagicMock()
+            summary.completed = 1
+            by_day[_date.fromisoformat(day_iso)] = summary
+        rd.mission_store.query_by_day.return_value = by_day
+        return entry
+
+    def _recent_days(self, n):
+        from datetime import timedelta
+        from homeassistant.util import dt as dt_util
+        today = dt_util.now().date()
+        return [(today - timedelta(days=i)).isoformat() for i in range(1, n + 1)]
+
+    @pytest.mark.asyncio
+    async def test_no_presence_manager_no_crash(self):
+        from custom_components.roomba_plus.repairs import async_check_schedule_optimisation
+        hass = MagicMock()
+        entry = self._entry(presence_manager=False)
+        await async_check_schedule_optimisation(hass, entry)  # must not raise
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_event_below_five_density_samples(self):
+        from custom_components.roomba_plus.repairs import async_check_schedule_optimisation
+        hass = MagicMock()
+        days = self._recent_days(3)
+        density = {d: 5.0 for d in days}  # only 3 samples, need >= 5
+        entry = self._entry(daily_density=density)
+        await async_check_schedule_optimisation(hass, entry)
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_on_two_consecutive_high_dirt_uncleaned_days(self):
+        from custom_components.roomba_plus.const import EVENT_SCHEDULE_SUBOPTIMAL
+        from custom_components.roomba_plus.repairs import async_check_schedule_optimisation
+        hass = MagicMock()
+        days = self._recent_days(10)
+        # Baseline days (median ~1.0), then two very high, uncleaned days
+        # at the front (most recent) of the window.
+        density = {d: 1.0 for d in days}
+        density[days[0]] = 5.0  # relative = 5.0, well over 1.8 threshold
+        density[days[1]] = 5.0
+        entry = self._entry(daily_density=density, completed_days=[])
+        await async_check_schedule_optimisation(hass, entry)
+        hass.bus.async_fire.assert_called_once()
+        event_type, data = hass.bus.async_fire.call_args[0]
+        assert event_type == EVENT_SCHEDULE_SUBOPTIMAL
+        assert len(data["days"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_event_when_high_dirt_days_were_cleaned(self):
+        """A high-dirt day that WAS cleaned must not count toward the
+        trigger — the whole point is 'high dirt AND no clean'."""
+        from custom_components.roomba_plus.repairs import async_check_schedule_optimisation
+        hass = MagicMock()
+        days = self._recent_days(10)
+        density = {d: 1.0 for d in days}
+        density[days[0]] = 5.0
+        density[days[1]] = 5.0
+        entry = self._entry(daily_density=density, completed_days=[days[0], days[1]])
+        await async_check_schedule_optimisation(hass, entry)
+        hass.bus.async_fire.assert_not_called()
+
+
 class TestStuckRecovery:
     def test_stuck_and_resumed_result_value(self):
         """stuck_and_resumed is a valid result string."""
@@ -670,6 +894,16 @@ class TestErrorRecurrence:
 
     def _entry(self, ms, aligner=None, archive=None):
         entry = MagicMock()
+        # v3.5.1 bug-hunt fix (real CI failure): entry_id must be an
+        # explicit, per-call-unique string, not left to MagicMock's default
+        # object-identity representation. _event_armed (repairs.py) is
+        # module-level state keyed by f"{entry_id}_{key}" that persists for
+        # the whole test session — if two different tests' MagicMock
+        # instances happen to get the same memory address after garbage
+        # collection (environment/GC-timing dependent, confirmed to differ
+        # between local runs and CI), their entry_id string reprs collide,
+        # and one test's fired state silently suppresses another's.
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
         entry.runtime_data.mission_store   = ms
         entry.runtime_data.umf_aligner     = aligner
         # v2.8.2: must be explicit. entry is a bare MagicMock, so an unset
@@ -792,6 +1026,10 @@ class TestErrorRecurrenceArchivePreferred:
 
     def _entry(self, ms=None, archive=None, aligner=None):
         entry = MagicMock()
+        # v3.5.1 bug-hunt fix — see TestErrorRecurrence._entry's comment for
+        # the full explanation. This is the exact class/test a real CI run
+        # caught this in (test_archive_used_when_it_has_records).
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
         entry.runtime_data.mission_store   = ms
         entry.runtime_data.mission_archive = archive
         entry.runtime_data.umf_aligner     = aligner
@@ -885,6 +1123,8 @@ class TestCancellationRecurrence:
 
     def _entry(self, ms=None, archive=None):
         entry = MagicMock()
+        # v3.5.1 bug-hunt fix — see TestErrorRecurrence._entry's comment.
+        entry.entry_id = f"test_entry_{uuid.uuid4().hex}"
         entry.runtime_data.mission_store   = ms
         entry.runtime_data.mission_archive = archive
         return entry
@@ -1251,7 +1491,7 @@ class TestCloudStaleEvent:
 
     def _make_entry(self):
         entry = MagicMock()
-        entry.entry_id = "test_entry_cloud_stale"
+        entry.entry_id = f"test_entry_cloud_stale_{uuid.uuid4().hex}"
         return entry
 
     @pytest.mark.asyncio
@@ -1702,9 +1942,13 @@ class TestMapRetrainWorkflow:
         from custom_components.roomba_plus import repairs as repairs_mod
         repairs_mod._map_updating_since.clear()
 
-    def _make_entry(self, entry_id="test_map_entry"):
+    def _make_entry(self, entry_id=None):
         entry = MagicMock()
-        entry.entry_id = entry_id
+        # v3.5.1 bug-hunt fix — see TestErrorRecurrence._entry's comment.
+        # map_retrain_in_progress also uses _fire_once/_event_armed, so this
+        # class has the same latent cross-test leakage risk a real CI run
+        # caught elsewhere, even though no test here currently fails from it.
+        entry.entry_id = entry_id or f"test_map_entry_{uuid.uuid4().hex}"
         return entry
 
     def test_not_updating_clears_issue_and_state(self):
