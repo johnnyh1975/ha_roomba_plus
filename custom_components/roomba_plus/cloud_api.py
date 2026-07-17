@@ -57,6 +57,37 @@ class AuthenticationError(CloudApiError):
     """Authentication failed — bad credentials or rate-limited."""
 
 
+def _raise_clear_ssl_error(exc: "aiohttp.ClientSSLError") -> None:
+    """Re-raise an aiohttp SSL/certificate failure as a CloudApiError with a
+    clear, actionable message instead of letting the raw aiohttp exception
+    bubble up as an opaque "unknown error occurred".
+
+    v3.5.0 bug-hunt fix, from a real-world report (wecoyote5): iRobot's own
+    disc-prod.iot.irobotapi.com TLS certificate briefly expired on their
+    end (confirmed by the reporter checking the cert directly in a
+    browser) — not a bug in this integration, and not something a user can
+    fix locally. Every network call in this module now surfaces that
+    distinction clearly rather than a bare stack trace, so a user hitting
+    this doesn't need to dig through the log to learn it's external and
+    self-resolving.
+
+    Deliberately does NOT offer any way to skip/ignore certificate
+    verification — that would remove protection against
+    man-in-the-middle attacks for every future connection this
+    integration ever makes, to work around a problem that is both
+    temporary (resolves once iRobot renews their certificate) and outside
+    this integration's control either way.
+    """
+    raise CloudApiError(
+        "Could not verify iRobot's cloud server certificate. This is "
+        "almost always a temporary problem on iRobot's servers (an "
+        "expired or currently-renewing TLS certificate), not something "
+        "wrong with your Home Assistant setup — it should resolve on its "
+        "own within a few hours. Local vacuum control is unaffected "
+        "either way."
+    ) from exc
+
+
 # ── AWS SigV4 ─────────────────────────────────────────────────────────────────
 
 class _AWSSignatureV4:
@@ -194,10 +225,13 @@ class IrobotCloudApi:
         )
 
     async def _discover(self) -> dict[str, Any]:
-        async with self._session.get(_discovery_url(self._country_code)) as resp:
-            if resp.status != 200:
-                raise CloudApiError(f"Endpoint discovery failed: {resp.status}")
-            data = await resp.json()
+        try:
+            async with self._session.get(_discovery_url(self._country_code)) as resp:
+                if resp.status != 200:
+                    raise CloudApiError(f"Endpoint discovery failed: {resp.status}")
+                data = await resp.json()
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
         self._deployment = data["deployments"][data["current_deployment"]]
         return data
 
@@ -221,12 +255,15 @@ class IrobotCloudApi:
             "Content-Type": "application/x-www-form-urlencoded",
             "User-Agent": _USER_AGENT_APP,
         }
-        async with self._session.post(
-            f"{base}login",
-            headers=headers,
-            data=urllib.parse.urlencode(payload),
-        ) as resp:
-            text = await resp.text()
+        try:
+            async with self._session.post(
+                f"{base}login",
+                headers=headers,
+                data=urllib.parse.urlencode(payload),
+            ) as resp:
+                text = await resp.text()
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
 
         try:
             result = json.loads(text)
@@ -262,12 +299,15 @@ class IrobotCloudApi:
             },
             "skip_ownership_check": "0",
         }
-        async with self._session.post(
-            f"{self._deployment['httpBase']}/v2/login",
-            headers={"Content-Type": "application/json"},
-            json=payload,
-        ) as resp:
-            text = await resp.text()
+        try:
+            async with self._session.post(
+                f"{self._deployment['httpBase']}/v2/login",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            ) as resp:
+                text = await resp.text()
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
 
         try:
             result = json.loads(text)
@@ -328,21 +368,24 @@ class IrobotCloudApi:
         if params:
             final_url = f"{url}?{urllib.parse.urlencode(params)}"
 
-        async with self._session.get(final_url, headers=headers) as resp:
-            if resp.status == 403 and _retry:
-                _LOGGER.debug("iRobot cloud: 403 — reauthenticating")
-                await self.authenticate()
-                return await self._aws_get(url, params, _retry=False)
-            if resp.status != 200:
-                raise CloudApiError(f"Cloud request failed ({resp.status}): {url}")
-            try:
-                return await resp.json()
-            except aiohttp.ContentTypeError as exc:
-                # v3.3.0 REVIEW-REMAINDER — a 200 with a non-JSON body
-                # (proxy/CDN error page) must surface as the typed
-                # CloudApiError so the coordinator's F-RB-4 grace period
-                # applies, not as an untyped ClientError.
-                raise CloudApiError(f"Non-JSON cloud response: {url}") from exc
+        try:
+            async with self._session.get(final_url, headers=headers) as resp:
+                if resp.status == 403 and _retry:
+                    _LOGGER.debug("iRobot cloud: 403 — reauthenticating")
+                    await self.authenticate()
+                    return await self._aws_get(url, params, _retry=False)
+                if resp.status != 200:
+                    raise CloudApiError(f"Cloud request failed ({resp.status}): {url}")
+                try:
+                    return await resp.json()
+                except aiohttp.ContentTypeError as exc:
+                    # v3.3.0 REVIEW-REMAINDER — a 200 with a non-JSON body
+                    # (proxy/CDN error page) must surface as the typed
+                    # CloudApiError so the coordinator's F-RB-4 grace period
+                    # applies, not as an untyped ClientError.
+                    raise CloudApiError(f"Non-JSON cloud response: {url}") from exc
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
 
     # ── Public data endpoints ─────────────────────────────────────────────────
 

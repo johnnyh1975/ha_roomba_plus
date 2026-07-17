@@ -1892,13 +1892,65 @@ async def _async_bootstrap_umf_aligner(
 ) -> None:
     """GS-SMART-UMF — align without local pose data using cloud traversal evidence.
 
+    Two scenarios, both handled here:
+      1. No aligner exists yet — the initial construction in __init__.py
+         found no points2d/regions at setup time. Attempt to build one now
+         from whatever cloud_coordinator.umf_data/regions currently has,
+         since a later refresh may have more data than was available at
+         startup — this is the actual rescue path the function's name and
+         docstring describe.
+      2. An aligner exists but isn't aligned yet — refine it in place using
+         cloud traversal evidence (unchanged from before).
+
     Moved from __init__.py to callbacks.py (SETUP-SPLIT Teil B, v3.0.0).
+
+    Bug-hunt fix (v3.5.1, mdarocha field report — i3+ with sparse/early-stage
+    UMF data): the call site used to require umf_aligner is not None before
+    ever scheduling this task at all — backwards from this function's own
+    purpose, since scenario 1 above (no aligner yet) is exactly the
+    situation this bootstrap exists to rescue. A robot whose initial UMF
+    response lacked points2d/regions would never get a working aligner from
+    ANY code path, ever, no matter how much cloud data accumulated
+    afterward. That gate is now removed at the call site (see
+    make_cloud_refresh_callback below); this function handles aligner is
+    None itself instead of bailing out immediately.
     """
     data = entry.runtime_data
     aligner = data.umf_aligner
     gs = data.geometry_store
 
-    if aligner is None or aligner.aligned:
+    if aligner is None:
+        if gs is None:
+            return
+        points2d = coordinator.umf_data.get("points2d")
+        umf_regions = coordinator.umf_data.get("regions") or []
+        regions = umf_regions or coordinator.regions
+        if not points2d or not regions:
+            _LOGGER.debug(
+                "GS-SMART-UMF: still no points2d/regions for %s — nothing "
+                "to bootstrap yet, will check again next refresh.",
+                entry.data.get(CONF_BLID, "unknown"),
+            )
+            return
+        from .umf_aligner import UmfAligner
+        aligner = UmfAligner(
+            points2d=points2d,
+            regions=regions,
+            geometry_store=gs,
+            pmap_version_id=coordinator.umf_data.get("version_id", ""),
+        )
+        conf = await hass.async_add_executor_job(aligner.align)
+        data.umf_aligner = aligner
+        _LOGGER.info(
+            "GS-SMART-UMF: constructed aligner for %s (points2d/regions "
+            "were missing at setup, now available) — confidence=%.2f "
+            "aligned=%s",
+            entry.data.get(CONF_BLID, "unknown"), conf, aligner.aligned,
+        )
+        if aligner.aligned:
+            return  # good enough already — skip the traversal-evidence path below
+
+    if aligner.aligned:
         return
     if gs is not None and sum(
         1 for m in gs.door_markers if m.mission_count >= 2
@@ -2203,12 +2255,14 @@ def make_cloud_refresh_callback(
                 name="roomba_plus_l7_stuck_pattern_check",
             )
         # v3.4.0 GS-SMART-COVERAGE — must run BEFORE the GridStore-reading
-        # checks below (ROOM-ACCESS, FURNITURE, STUCK-HOTSPOT) so a mission
-        # backfilled from the cloud in THIS refresh cycle is already
-        # reflected when those checks run, not only from the next cycle
-        # onward. Gate mirrors GS-SMART-UMF's bootstrap gate further below
-        # (map_capability == SMART + umf_aligner present) plus grid_store;
-        # the function itself no-ops cleanly if the aligner isn't aligned
+        # FURNITURE check below so a mission backfilled from the cloud in
+        # THIS refresh cycle is already reflected when that check runs, not
+        # only from the next cycle onward. umf_aligner is required here
+        # (unlike GS-SMART-UMF's bootstrap gate further below, fixed in
+        # v3.5.1 to no longer require it) because this function actually
+        # needs a working aligner to transform poses — it has no bootstrap
+        # path of its own, so there's nothing useful it can do without one.
+        # The function itself no-ops cleanly if the aligner isn't aligned
         # yet or there's nothing new to backfill.
         from .models import MapCapability
         if (
@@ -2246,10 +2300,15 @@ def make_cloud_refresh_callback(
             name="roomba_plus_dock_health_check",
         )
         from .models import MapCapability
-        if (
-            config_entry.runtime_data.map_capability == MapCapability.SMART
-            and config_entry.runtime_data.umf_aligner is not None
-        ):
+        if config_entry.runtime_data.map_capability == MapCapability.SMART:
+            # v3.5.1 bug-hunt fix (mdarocha field report): this used to also
+            # require umf_aligner is not None, which meant a robot whose
+            # initial UMF response lacked points2d/regions at setup would
+            # NEVER get this task scheduled at all, ever — backwards from
+            # this bootstrap's whole purpose (see
+            # _async_bootstrap_umf_aligner's docstring). The function itself
+            # now handles constructing a fresh aligner when one doesn't
+            # exist yet, so this only needs to gate on map_capability.
             hass.async_create_task(
                 _async_bootstrap_umf_aligner(hass, config_entry, cloud_coordinator),
                 name="roomba_plus_gs_smart_umf_bootstrap",
