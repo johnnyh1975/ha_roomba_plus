@@ -13,6 +13,7 @@ import sys
 import os
 import types
 import asyncio
+import aiohttp
 import pytest
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -231,6 +232,85 @@ class TestIrobotCloudApiAuth:
         await api._login_irobot("uid", "sig", "ts")
         assert "blid123" in api.robots
         assert api._credentials["AccessKeyId"] == "AKIA_TEST"
+
+
+class TestSslCertificateErrorHandling:
+    """v3.5.0 bug-hunt fix, from a real-world report (wecoyote5): iRobot's
+    own disc-prod.iot.irobotapi.com TLS certificate briefly expired on
+    their end. Without _raise_clear_ssl_error(), the raw aiohttp exception
+    bubbled all the way up as an opaque "unknown error occurred" instead of
+    a CloudApiError explaining it's external and self-resolving.
+    """
+
+    def _ssl_error(self):
+        return aiohttp.ClientSSLError(None, OSError("certificate has expired"))
+
+    @pytest.mark.asyncio
+    async def test_discover_translates_ssl_error(self):
+        session = MagicMock()
+        session.get = MagicMock(side_effect=self._ssl_error())
+        api = IrobotCloudApi("user@test.com", "pass123", session)
+
+        with pytest.raises(CloudApiError) as excinfo:
+            await api._discover()
+
+        assert "certificate" in str(excinfo.value).lower()
+        assert "temporary" in str(excinfo.value).lower()
+        assert isinstance(excinfo.value.__cause__, aiohttp.ClientSSLError)
+
+    @pytest.mark.asyncio
+    async def test_login_gigya_translates_ssl_error(self):
+        session = MagicMock()
+        session.post = MagicMock(side_effect=self._ssl_error())
+        api = IrobotCloudApi("user@test.com", "pass123", session)
+
+        with pytest.raises(CloudApiError) as excinfo:
+            await api._login_gigya(
+                {"datacenter_domain": "eu1.gigya.com"}, "api_key_123"
+            )
+
+        assert "certificate" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_login_irobot_translates_ssl_error(self):
+        session = MagicMock()
+        session.post = MagicMock(side_effect=self._ssl_error())
+        api = IrobotCloudApi("user@test.com", "pass123", session)
+        api._deployment = {"httpBase": "https://base.example.com"}
+
+        with pytest.raises(CloudApiError) as excinfo:
+            await api._login_irobot("uid", "sig", "ts")
+
+        assert "certificate" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_aws_get_translates_ssl_error(self):
+        session = MagicMock()
+        session.get = MagicMock(side_effect=self._ssl_error())
+        api = IrobotCloudApi("user@test.com", "pass123", session)
+        api._credentials = {
+            "AccessKeyId": "AKIA", "SecretKey": "SECRET",
+            "SessionToken": "TOKEN", "CognitoId": "us-east-1:abc",
+        }
+
+        with pytest.raises(CloudApiError) as excinfo:
+            await api._aws_get("https://auth.example.com/v1/robots")
+
+        assert "certificate" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_non_ssl_connection_errors_are_not_swallowed(self):
+        """A plain (non-SSL) connection error must still propagate as
+        whatever it normally would — this fix is scoped to SSL/certificate
+        failures specifically, not a blanket catch-all."""
+        session = MagicMock()
+        session.get = MagicMock(
+            side_effect=aiohttp.ClientConnectorError(None, OSError("Connection refused"))
+        )
+        api = IrobotCloudApi("user@test.com", "pass123", session)
+
+        with pytest.raises(aiohttp.ClientConnectorError):
+            await api._discover()
 
 
 class TestIrobotCloudApiEndpoints:

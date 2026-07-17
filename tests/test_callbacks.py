@@ -2443,6 +2443,76 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         ):
             assert gone not in dispatched
 
+    def test_bootstrap_dispatched_even_when_aligner_is_none(self):
+        """v3.5.1 bug-hunt fix (mdarocha field report): the bootstrap task
+        must be scheduled when map_capability is SMART EVEN IF umf_aligner
+        is None — that's exactly the scenario this bootstrap exists to
+        rescue. Before this fix, requiring umf_aligner is not None at the
+        call site meant this task was NEVER scheduled for a robot whose
+        initial UMF response lacked points2d/regions at setup, no matter
+        how much cloud data accumulated afterward."""
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+        from custom_components.roomba_plus.models import MapCapability
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = MagicMock()
+        rd.umf_aligner = None  # the scenario the old gate wrongly excluded
+        rd.map_capability = MapCapability.SMART
+        rd.robot_profile_store = MagicMock()
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        dispatched = [
+            call.kwargs.get("name") for call in hass.async_create_task.call_args_list
+        ]
+        assert "roomba_plus_gs_smart_umf_bootstrap" in dispatched
+
+    def test_bootstrap_not_dispatched_when_not_smart_tier(self):
+        """Correctly still gated on map_capability — an EPHEMERAL robot has
+        no UMF concept at all, so this must not fire regardless of
+        umf_aligner's value."""
+        from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
+        from custom_components.roomba_plus.models import MapCapability
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.entry_id = "test_entry"
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(
+            corrected=0, enriched=0,
+        )
+        rd.dirt_threshold_manager = None
+        rd.grid_store = MagicMock()
+        rd.umf_aligner = None
+        rd.map_capability = MapCapability.EPHEMERAL
+        rd.robot_profile_store = MagicMock()
+
+        cloud_coordinator = MagicMock()
+        cloud_coordinator.last_update_success = True
+        cloud_coordinator.umf_data = {}
+
+        callback_fn = make_cloud_refresh_callback(hass, config_entry, cloud_coordinator)
+        callback_fn()
+
+        dispatched = [
+            call.kwargs.get("name") for call in hass.async_create_task.call_args_list
+        ]
+        assert "roomba_plus_gs_smart_umf_bootstrap" not in dispatched
+
     def test_grid_store_dependent_checks_not_dispatched_without_grid_store(self):
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
 
@@ -2620,6 +2690,134 @@ class TestL5CorrelationFinalizeGlue:
 # ─────────────────────────────────────────────────────────────────────────────
 # v3.4.0 GS-SMART-COVERAGE
 # ─────────────────────────────────────────────────────────────────────────────
+
+class TestBootstrapUmfAlignerConstructsWhenMissing:
+    """v3.5.1 bug-hunt fix (mdarocha field report) — direct tests for
+    _async_bootstrap_umf_aligner's new aligner-is-None handling. Zero
+    tests existed for this function before this fix — exactly matching
+    the pattern this project has caught before (a function built and
+    unit-tested for the case it already handled, never tested for the
+    scenario it was actually meant to rescue).
+    """
+
+    def _entry(self, umf_aligner=None, grid_store=None, geometry_store=None):
+        entry = MagicMock()
+        entry.data = {"blid": "TEST_BLID"}
+        rd = entry.runtime_data
+        rd.umf_aligner = umf_aligner
+        rd.geometry_store = geometry_store if geometry_store is not None else MagicMock()
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_constructs_aligner_when_none_and_data_now_available(self):
+        """The actual fix: aligner is None, but points2d/regions ARE now
+        present in cloud_coordinator.umf_data (e.g. a later refresh has
+        more UMF data than was available at initial setup) — a fresh
+        aligner gets constructed and stored, not silently skipped."""
+        from custom_components.roomba_plus.callbacks import _async_bootstrap_umf_aligner
+
+        entry = self._entry(umf_aligner=None)
+        coordinator = MagicMock()
+        coordinator.umf_data = {
+            "points2d": [[0.0, 0.0], [1.0, 1.0]],
+            "regions": [{"id": "r1", "name": "Kitchen"}],
+            "version_id": "v1",
+        }
+        coordinator.regions = []
+        coordinator.last_update_success = True
+
+        mock_aligner_instance = MagicMock()
+        mock_aligner_instance.aligned = True
+        mock_aligner_instance.align = MagicMock(return_value=0.9)
+
+        with patch(
+            "custom_components.roomba_plus.umf_aligner.UmfAligner",
+            return_value=mock_aligner_instance,
+        ) as mock_cls:
+            await _async_bootstrap_umf_aligner(_make_hass(), entry, coordinator)
+
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["points2d"] == coordinator.umf_data["points2d"]
+        assert call_kwargs["regions"] == coordinator.umf_data["regions"]
+        # The constructed aligner must actually be stored, not discarded.
+        assert entry.runtime_data.umf_aligner is mock_aligner_instance
+
+    @pytest.mark.asyncio
+    async def test_returns_cleanly_when_still_no_data_available(self):
+        """If points2d/regions are STILL missing, this must not crash and
+        must not construct anything — just wait for the next refresh."""
+        from custom_components.roomba_plus.callbacks import _async_bootstrap_umf_aligner
+
+        entry = self._entry(umf_aligner=None)
+        coordinator = MagicMock()
+        coordinator.umf_data = {}  # still nothing
+        coordinator.regions = []
+        coordinator.last_update_success = True
+
+        with patch(
+            "custom_components.roomba_plus.umf_aligner.UmfAligner"
+        ) as mock_cls:
+            await _async_bootstrap_umf_aligner(_make_hass(), entry, coordinator)
+
+        mock_cls.assert_not_called()
+        assert entry.runtime_data.umf_aligner is None
+
+    @pytest.mark.asyncio
+    async def test_returns_cleanly_when_no_geometry_store(self):
+        """Can't construct an aligner without a geometry_store to attach
+        it to — must bail out safely, not crash."""
+        from custom_components.roomba_plus.callbacks import _async_bootstrap_umf_aligner
+
+        entry = self._entry(umf_aligner=None, geometry_store=None)
+        entry.runtime_data.geometry_store = None
+        coordinator = MagicMock()
+        coordinator.umf_data = {
+            "points2d": [[0.0, 0.0]], "regions": [{"id": "r1"}],
+        }
+
+        with patch(
+            "custom_components.roomba_plus.umf_aligner.UmfAligner"
+        ) as mock_cls:
+            await _async_bootstrap_umf_aligner(_make_hass(), entry, coordinator)
+
+        mock_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_through_to_traversal_refinement_if_still_unaligned(self):
+        """If the freshly-constructed aligner isn't confidently aligned yet,
+        this must continue into the existing traversal-evidence refinement
+        path below, not stop early — the whole point is to try harder, not
+        settle for a low-confidence result when better data is available."""
+        from custom_components.roomba_plus.callbacks import _async_bootstrap_umf_aligner
+
+        entry = self._entry(umf_aligner=None)
+        coordinator = MagicMock()
+        coordinator.umf_data = {
+            "points2d": [[0.0, 0.0]], "regions": [{"id": "r1"}], "version_id": "v1",
+        }
+        coordinator.regions = []
+        coordinator.last_update_success = True
+        coordinator.raw_records = []
+
+        mock_aligner_instance = MagicMock()
+        mock_aligner_instance.aligned = False  # low confidence -> should continue
+        mock_aligner_instance.align = MagicMock(return_value=0.2)
+        mock_aligner_instance._door_candidates = ["x"]  # skip the re-align-first branch
+
+        with patch(
+            "custom_components.roomba_plus.umf_aligner.UmfAligner",
+            return_value=mock_aligner_instance,
+        ), patch(
+            "custom_components.roomba_plus.callbacks._extract_traversal_umf_positions",
+            return_value=[],  # no traversal evidence either -> clean early return
+        ) as mock_extract:
+            await _async_bootstrap_umf_aligner(_make_hass(), entry, coordinator)
+
+        # Reached the refinement path (proven by _extract_traversal_umf_positions
+        # actually being called) instead of stopping right after construction.
+        mock_extract.assert_called_once()
+
 
 class TestGsCoverageHookDispatch:
     """Gate on the cloud-refresh hook: dispatched only when
