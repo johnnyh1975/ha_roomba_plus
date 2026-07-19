@@ -91,7 +91,7 @@ pytest-asyncio==0.24.0
 pytest-cov==6.0.0
 pytest-github-actions-annotate-failures==0.2.0
 pytest-homeassistant-custom-component==0.13.205
-pytest-picked==0.5.0
+pytest-picked==0.5.1
 pytest-socket==0.7.0
 pytest-sugar==1.0.0
 pytest-timeout==2.3.1
