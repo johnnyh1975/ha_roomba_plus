@@ -43,6 +43,24 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Tag: ${TAG} -> Version: ${VERSION}"
 
+          # BUG FOUND (this session, before ever tagging v4.0.0a0 --
+          # the first alpha-suffixed tag this repo would ever have
+          # produced): the previous prerelease check
+          # (contains(tag,'b') || contains(tag,'rc')) never recognized
+          # "a" (alpha) at all -- a tag like v4.0.0a0 would have been
+          # published as a normal "Latest release", not a pre-release,
+          # directly contradicting the intent of tagging it as alpha.
+          # Matched here with a precise regex (a lowercase letter
+          # immediately after the patch number, then digits -- e.g.
+          # "a0", "b1", "rc2") rather than a blunt substring check, to
+          # avoid any accidental match against an unrelated character
+          # in a future tag format.
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Validate manifest.json version matches tag
         run: |
           MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('custom_components/roomba_plus/manifest.json'))['version'])")
@@ -72,6 +90,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-test-frozen.txt
+
+      # NEW (this session): see the identical comment in validate.yml and the
+      # comment next to roombapy in requirements-test-frozen.txt for the full
+      # reasoning -- roombapy-prime's paho-mqtt>=2.0 requirement is
+      # unsatisfiable alongside pytest-homeassistant-custom-component's
+      # hard paho-mqtt==1.6.1 pin, verified safe to bypass with --no-deps
+      # since PrimeMqttClient is mocked throughout this project's tests.
+      - name: Install roombapy-prime (--no-deps, see comment above)
+        run: |
+          pip install --no-deps "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6"
 
       - name: Run full test suite (release gate — must pass before packaging)
         run: |
@@ -169,7 +197,7 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           body_path: ${{ steps.notes.outputs.found == 'true' && steps.notes.outputs.path || '' }}
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.tag, 'b') || contains(steps.version.outputs.tag, 'rc') }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           files: |
             ha_roomba_plus.zip
             ha_roomba_plus-${{ steps.version.outputs.tag }}-full.zip

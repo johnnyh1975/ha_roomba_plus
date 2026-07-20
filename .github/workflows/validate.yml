@@ -64,6 +64,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-test-frozen.txt
 
+      # NEW (this session): installed separately from requirements-test-frozen.txt,
+      # deliberately with --no-deps. roombapy-prime's own declared dependency
+      # (paho-mqtt>=2.0,<3.0) is unsatisfiable alongside
+      # pytest-homeassistant-custom-component's hard paho-mqtt==1.6.1 pin (no
+      # newer phahc release exists) -- see the comment next to roombapy in
+      # requirements-test-frozen.txt for the full reasoning and the verification
+      # that this is genuinely safe (not a workaround masking a real
+      # incompatibility): with paho-mqtt forced to 1.6.1, the full test suite
+      # still passes, since PrimeMqttClient is mocked throughout and never
+      # actually constructed against a real paho-mqtt installation in tests.
+      # --no-deps is safe specifically because roombapy-prime's OTHER
+      # dependencies (aiohttp, certifi) are already satisfied by
+      # requirements-test-frozen.txt itself.
+      - name: Install roombapy-prime (--no-deps, see comment above)
+        run: |
+          pip install --no-deps "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6"
+
       - name: Run full test suite with coverage
         run: |
           python -m pytest tests/ --cov=custom_components/roomba_plus \
