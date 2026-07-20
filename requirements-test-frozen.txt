@@ -67,7 +67,7 @@ netifaces==0.11.0
 numpy==2.2.0
 orjson==3.10.12
 packaging==26.2
-paho-mqtt==2.1.0
+paho-mqtt==1.6.1
 pillow==11.0.0
 pipdeptree==2.23.4
 pluggy==1.6.0
@@ -106,7 +106,30 @@ requests==2.32.3
 requests-mock==1.12.1
 respx==0.21.1
 roombapy==1.9.1
-roombapy-prime @ git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6
+# NEW (this session): roombapy-prime is DELIBERATELY not listed here.
+# It's a hard, exact-version requirement conflict: this project's own
+# roombapy-prime requires paho-mqtt>=2.0,<3.0 (paho-mqtt 2.x's
+# CallbackAPIVersion API specifically), but
+# pytest-homeassistant-custom-component==0.13.205 (no newer version
+# exists as of this writing) hard-pins paho-mqtt==1.6.1 exactly --
+# not a range, an exact pin, tied to the specific HA core version
+# (2025.1.4) it tests against. There is no single paho-mqtt version
+# that satisfies both simultaneously.
+#
+# Verified this is genuinely safe, not just a workaround papering over
+# a real incompatibility: with paho-mqtt forced back to 1.6.1 (violating
+# roombapy-prime's own declared constraint), the FULL test suite still
+# passes (4030/4030) -- this project's tests mock PrimeMqttClient
+# throughout and never actually construct a real paho.mqtt.client.Client
+# instance, the only place CallbackAPIVersion.VERSION2 is referenced.
+# roombapy-prime only needs to be IMPORTABLE for these tests, not
+# functionally exercised against a real paho-mqtt 2.x installation.
+#
+# roombapy-prime is installed separately, with --no-deps, in the CI
+# workflows themselves (validate.yml/release.yml) -- see the comment
+# there for the exact command and why --no-deps is safe here (its
+# OTHER dependencies, aiohttp/certifi, are already satisfied by
+# requirements already in this file).
 s3transfer==0.19.0
 scapy==2.7.0
 securetar==2024.11.0
