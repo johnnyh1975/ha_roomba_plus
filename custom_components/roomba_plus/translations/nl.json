@@ -63,6 +63,39 @@
           "irobot_username": "Het e-mailadres waarmee je inlogt in de iRobot-app.",
           "irobot_password": "Je huidige iRobot-app-wachtwoord."
         }
+      },
+      "prime_account": {
+        "title": "Log in met je iRobot-account",
+        "description": "Voor nieuwere modellen zonder lokale installatie (bijv. Combo/V4-generatie robots). Voer je iRobot-app-e-mailadres en wachtwoord in — hiermee worden ook eventuele Classic-robots op hetzelfde account gevonden, die je daarna via je lokale netwerk kunt voltooien.",
+        "data": {
+          "irobot_username": "iRobot e-mail",
+          "irobot_password": "iRobot wachtwoord"
+        },
+        "data_description": {
+          "irobot_username": "Het e-mailadres waarmee je inlogt op de iRobot-app.",
+          "irobot_password": "Je wachtwoord van de iRobot-app."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Kies een robot",
+        "description": "Robots gevonden op dit account. Kies er één om in te stellen — voeg extra robots toe door deze installatie opnieuw te starten.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Lokaal netwerkadres",
+        "description": "Kon {name} niet automatisch vinden op je lokale netwerk. Voer het lokale IP-adres in — de inloggegevens die al via je iRobot-account zijn bevestigd, worden hergebruikt.",
+        "data": {
+          "host": "IP-adres"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Cloudfuncties voor {name}",
+        "description": "Wil je de inloggegevens van je iRobot-account ook voor deze robot behouden, om kamernamen, missiegeschiedenis en favorieten uit de cloud te lezen? Alle opdrachten blijven hoe dan ook lokaal via MQTT verlopen.",
+        "data": {
+          "enable_cloud_analytics": "Cloudfuncties voor deze robot inschakelen"
+        }
       }
     },
     "error": {
@@ -71,14 +104,18 @@
       "unknown": "Onverwachte fout. Bekijk de Home Assistant-logboeken voor meer informatie.",
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
-      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord."
+      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
+      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd.",
       "not_irobot_device": "Het gevonden apparaat is geen iRobot-apparaat.",
       "short_blid": "Er is al een configuratiestroom actief voor deze robot.",
       "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken.",
-      "reconfigure_successful": "Connection settings updated successfully."
+      "reconfigure_successful": "Connection settings updated successfully.",
+      "no_new_robots_found": "Geen nieuwe robots gevonden op dit iRobot-account — alle robots zijn al ingesteld.",
+      "prime_classic_password_missing": "Het wachtwoord van deze robot was niet opgenomen in het antwoord van het iRobot-account. Probeer deze in plaats daarvan handmatig toe te voegen."
     }
   },
   "options": {
@@ -218,7 +255,9 @@
       "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
       "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw.",
       "no_valid_ids": "Geen geldige invoer gevonden. Gebruik het formaat id=Naam, één per regel.",
-      "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw."
+      "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw.",
+      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -658,6 +697,12 @@
       },
       "dirt_weather_correlation": {
         "name": "Vuilcorrelatie"
+      },
+      "prime_mission_event": {
+        "name": "Missiegebeurtenis"
+      },
+      "prime_connection_health": {
+        "name": "Verbindingsstatus"
       }
     },
     "binary_sensor": {
@@ -1075,6 +1120,12 @@
     },
     "backup_entity_not_found": {
       "message": "De entiteit \"{entity_id}\" kon niet aan een Roomba+-robot worden gekoppeld. Controleer de entity-ID en probeer opnieuw."
+    },
+    "cloud_credentials_invalid": {
+      "message": "De iRobot-cloudgegevens zijn ongeldig: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "De iRobot-cloud is tijdelijk niet beschikbaar: {error}"
     }
   },
   "selector": {

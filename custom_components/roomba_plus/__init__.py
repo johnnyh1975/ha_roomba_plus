@@ -41,6 +41,7 @@ from .callbacks import (
 from .const import (
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
+    CONF_CONNECTION_TYPE,
     CONF_CONTINUOUS,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
@@ -85,9 +86,21 @@ from .map_renderer import (
     ROBOT_DIAMETER_MM_ISJ_SERIES,
     ROBOT_DIAMETER_MM_DEFAULT,
 )
-from .models import MapCapability, RoombaConfigEntry, RoombaData
+from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
+from .prime_coordinator import PrimeCoordinator
+
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from roombapy_prime import (
+    AuthConnectionError,
+    AuthCredentialsError,
+    AuthError,
+    AuthRateLimitedError,
+    AuthSSLError,
+    AuthTimeoutError,
+    PrimeFactory,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -2351,6 +2364,17 @@ async def _async_seed_l3_from_archive(
 # async_setup_entry so they can be passed cleanly between named phase functions.
 
 
+def _connection_type(config_entry: RoombaConfigEntry) -> ConnectionType:
+    """Reads ConnectionType from config_entry.data.
+
+    Defaults to LOCAL_PUSH for every entry that predates this field --
+    which, until V4/Prime onboarding exists in config_flow.py, is every
+    entry that currently exists. No migration needed: additive field
+    with a backward-compatible default, not a breaking schema change."""
+    raw = config_entry.data.get(CONF_CONNECTION_TYPE, ConnectionType.LOCAL_PUSH.value)
+    return ConnectionType(raw)
+
+
 @dataclasses.dataclass
 class _SetupContext:
     """Mutable accumulator for async_setup_entry phase functions.
@@ -3077,7 +3101,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
     SETUP-SPLIT Teil A (v3.0.0) — pure orchestrator: delegates all work to
     named phase functions that each populate a shared _SetupContext.
 
-    Phase summary:
+    NEW (V4/Prime): CLOUD_ONLY entries take an entirely separate path
+    (_async_setup_entry_prime()), not the phase pipeline below -- see
+    ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md for why (the phase functions
+    have deep assumptions about a real, disconnectable local roomba
+    object at many points beyond just RoombaData).
+
+    Phase summary (LOCAL_PUSH only):
         1. _phase_connect    — options migration, Roomba creation, MQTT connection
         2. _phase_spatial    — map capability detection, spatial stores
         3. _phase_data       — mission/maintenance stores, L3 state, managers
@@ -3085,6 +3115,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
         5. _build_runtime_data — assemble and assign RoombaData
         6. _phase_finalize   — background tasks, platforms, REST views, callbacks
     """
+    if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
+        return await _async_setup_entry_prime(hass, config_entry)
+
     ctx = _SetupContext(hass=hass, config_entry=config_entry)
 
     if not await _phase_connect(ctx):
@@ -3106,10 +3139,96 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
     return True
 
 
+async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
+    """Entirely separate setup path for CLOUD_ONLY (V4/Prime) entries.
+
+    v4.0.0a0 MVP scope: cloud login, MQTT connect, PrimeCoordinator
+    running, vacuum entity (start/pause/stop/dock/locate -- see
+    vacuum.py's CLOUD_ONLY branches). Forwards only PRIME_PLATFORMS
+    (currently just Platform.VACUUM) -- a connectivity/error sensor is
+    planned but not yet built (sensor.py has no CLOUD_ONLY awareness at
+    all), see ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md's
+    Implementierungs-Checkliste.
+    """
+    blid = config_entry.data[CONF_BLID]
+    username = config_entry.data[CONF_IROBOT_USERNAME]
+    password = config_entry.data[CONF_IROBOT_PASSWORD]
+    country_code = (hass.config.country or "US").upper()
+    session = async_get_clientsession(hass)
+
+    try:
+        prime_robot = await PrimeFactory.create_prime_robot(
+            session, username, password, country_code,
+            blid=blid, auto_refresh=True,
+        )
+    except AuthCredentialsError as exc:
+        raise exceptions.ConfigEntryAuthFailed(
+            f"V4/Prime cloud login rejected for {blid}: {exc}"
+        ) from exc
+    except (
+        AuthRateLimitedError,
+        AuthSSLError,
+        AuthConnectionError,
+        AuthTimeoutError,
+        AuthError,
+    ) as exc:
+        raise exceptions.ConfigEntryNotReady(
+            f"Could not log in to V4/Prime cloud for {blid}: {exc}"
+        ) from exc
+
+    coordinator = PrimeCoordinator(hass, config_entry, blid, prime_robot)
+    # async_start() itself raises ConfigEntryNotReady on a connect-level
+    # failure (ShadowSSLError/ShadowConnectionError/ShadowError) -- login
+    # already succeeded above, so only connection-level issues remain
+    # possible here. See PrimeCoordinator.async_start()'s own docstring.
+    await coordinator.async_start()
+
+    config_entry.runtime_data = RoombaData(
+        blid=blid,
+        roomba=None,
+        connection_type=ConnectionType.CLOUD_ONLY,
+        prime_robot=prime_robot,
+        prime_coordinator=coordinator,
+    )
+
+    async def _async_disconnect_on_stop(event: Any) -> None:
+        await prime_robot.disconnect()
+
+    config_entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_disconnect_on_stop)
+    )
+
+    from .const import PRIME_PLATFORMS
+    await hass.config_entries.async_forward_entry_setups(config_entry, PRIME_PLATFORMS)
+
+    _LOGGER.info(
+        "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid
+    )
+    return True
+
+
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> bool:
-    """Unload a config entry and disconnect from the Roomba."""
+    """Unload a config entry and disconnect from the Roomba.
+
+    NEW (V4/Prime): CLOUD_ONLY entries take a short, separate path --
+    no local platforms list gating on map_capability, no mission-timer/
+    blocking-manager/presence-manager cleanup (none of those exist for
+    a CLOUD_ONLY entry, see _async_setup_entry_prime()) -- just
+    unloading PRIME_PLATFORMS and disconnecting the PrimeRobot.
+    """
+    if config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
+        from .const import PRIME_PLATFORMS
+        unload_ok = await hass.config_entries.async_unload_platforms(
+            config_entry, PRIME_PLATFORMS
+        )
+        if unload_ok:
+            prime_robot = config_entry.runtime_data.prime_robot
+            if prime_robot is not None:
+                await prime_robot.disconnect()
+        return unload_ok
+
     data = config_entry.runtime_data
     platforms = list(LOCAL_PLATFORMS)
     if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
@@ -3222,7 +3341,7 @@ async def async_disconnect_or_timeout(
 
 # ── State helpers (used across all platforms) ─────────────────────────────────
 
-def roomba_reported_state(roomba: Roomba) -> dict[str, Any]:
+def roomba_reported_state(roomba: Roomba | None) -> dict[str, Any]:
     """Return the 'reported' sub-dict from master_state.
 
     Uses ``or {}`` rather than a dict default so that an explicit JSON null
@@ -3230,7 +3349,16 @@ def roomba_reported_state(roomba: Roomba) -> dict[str, Any]:
     is coerced to an empty dict instead of raising AttributeError. A dict
     default (``.get("state", {})``) only guards against a *missing* key, not a
     present-but-null value.
+
+    NEW (V4/Prime): roomba is None for CLOUD_ONLY entries -- returns {}
+    rather than crashing, same reasoning as RoombaData.roomba_reported_state()
+    (models.py): honest "no data available", not a fabricated guess. Every
+    one of this function's 59+ call sites across the integration goes
+    through here, so this single guard is what keeps all of them safe for
+    a Prime entity without touching each call site individually.
     """
+    if roomba is None:
+        return {}
     return (roomba.master_state.get("state") or {}).get("reported") or {}
 
 

@@ -63,6 +63,39 @@
           "irobot_username": "L'indirizzo email usato per accedere all'app iRobot.",
           "irobot_password": "La tua password attuale dell'app iRobot."
         }
+      },
+      "prime_account": {
+        "title": "Accedi con il tuo account iRobot",
+        "description": "Per i modelli più recenti senza configurazione locale (es. robot Combo/generazione V4). Inserisci la tua email e password dell'app iRobot — questo trova anche eventuali robot Classic sullo stesso account, completabili in seguito tramite la tua rete locale.",
+        "data": {
+          "irobot_username": "Email iRobot",
+          "irobot_password": "Password iRobot"
+        },
+        "data_description": {
+          "irobot_username": "L'indirizzo email usato per accedere all'app iRobot.",
+          "irobot_password": "La password dell'app iRobot."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Scegli un robot",
+        "description": "Robot trovati su questo account. Scegline uno da configurare — aggiungi altri robot riavviando questa configurazione.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Indirizzo di rete locale",
+        "description": "Impossibile trovare {name} automaticamente sulla tua rete locale. Inserisci il suo indirizzo IP locale — le credenziali già confermate tramite il tuo account iRobot verranno riutilizzate.",
+        "data": {
+          "host": "Indirizzo IP"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Funzioni cloud per {name}",
+        "description": "Mantenere le credenziali del tuo account iRobot anche per questo robot, per abilitare nomi delle stanze, cronologia missioni e preferiti letti dal cloud? Tutti i comandi continueranno comunque a essere eseguiti localmente tramite MQTT.",
+        "data": {
+          "enable_cloud_analytics": "Abilita le funzioni cloud per questo robot"
+        }
       }
     },
     "error": {
@@ -71,14 +104,18 @@
       "unknown": "Errore imprevisto. Controlla i log di Home Assistant per i dettagli.",
       "cloud_auth_failed": "Autenticazione cloud non riuscita. Controlla email e password iRobot.",
       "cloud_unavailable": "Impossibile raggiungere il cloud iRobot. Controlla la connessione Internet e riprova.",
-      "invalid_cloud_credentials": "Autenticazione cloud non riuscita. Controlla e-mail e password iRobot."
+      "invalid_cloud_credentials": "Autenticazione cloud non riuscita. Controlla e-mail e password iRobot.",
+      "cloud_rate_limited": "L'accesso al cloud iRobot è temporaneamente limitato. Chiudi l'app iRobot sul telefono e riprova.",
+      "cloud_ssl_certificate_error": "Impossibile verificare il certificato del server cloud iRobot. Si tratta quasi sempre di un problema temporaneo lato iRobot — riprova tra qualche ora."
     },
     "abort": {
       "already_configured": "Questo robot è già configurato.",
       "not_irobot_device": "Il dispositivo rilevato non è un dispositivo iRobot.",
       "short_blid": "È già in corso un flusso di configurazione per questo robot.",
       "cannot_connect": "Impossibile raggiungere il robot all'indirizzo specificato.",
-      "reconfigure_successful": "Connection settings updated successfully."
+      "reconfigure_successful": "Connection settings updated successfully.",
+      "no_new_robots_found": "Nessun nuovo robot trovato su questo account iRobot — tutti i robot sono già configurati.",
+      "prime_classic_password_missing": "La password di questo robot non era inclusa nella risposta dell'account iRobot. Prova invece ad aggiungerlo manualmente."
     }
   },
   "options": {
@@ -218,7 +255,9 @@
       "invalid_cloud_credentials": "Autenticazione cloud non riuscita. Controlla e-mail e password iRobot.",
       "cannot_connect": "Impossibile connettersi. Controlla la connessione internet e riprova.",
       "no_valid_ids": "Nessuna voce valida trovata. Usa il formato id=Nome, una per riga.",
-      "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova."
+      "pmap_not_resolved": "Impossibile risolvere l'ID mappa. Assicurati che il robot sia in base e connesso, poi riprova.",
+      "cloud_rate_limited": "L'accesso al cloud iRobot è temporaneamente limitato. Chiudi l'app iRobot sul telefono e riprova.",
+      "cloud_ssl_certificate_error": "Impossibile verificare il certificato del server cloud iRobot. Si tratta quasi sempre di un problema temporaneo lato iRobot — riprova tra qualche ora."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -658,6 +697,12 @@
       },
       "dirt_weather_correlation": {
         "name": "Correlazione sporco"
+      },
+      "prime_mission_event": {
+        "name": "Evento missione"
+      },
+      "prime_connection_health": {
+        "name": "Stato della connessione"
       }
     },
     "binary_sensor": {
@@ -1075,6 +1120,12 @@
     },
     "backup_entity_not_found": {
       "message": "L'entità \"{entity_id}\" non è stata associata a nessun robot Roomba+. Controlla l'ID e riprova."
+    },
+    "cloud_credentials_invalid": {
+      "message": "Le credenziali del cloud iRobot non sono valide: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "Il cloud iRobot non è temporaneamente disponibile: {error}"
     }
   },
   "selector": {

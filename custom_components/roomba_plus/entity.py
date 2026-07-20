@@ -195,10 +195,20 @@ class IRobotEntity(Entity):
         Critically: updating _attr_device_info alone is NOT enough to rename
         the device — HA only reads DeviceInfo on the first registry write.
         Subsequent renames must go through dr.async_update_device() directly.
+
+        BUG FOUND (bug-hunt round, V4/Prime): self.vacuum is None for a
+        CLOUD_ONLY entity -- this method is called unconditionally by HA
+        for every entity built on IRobotEntity, so a Prime vacuum entity
+        crashed immediately on being added to Home Assistant (AttributeError
+        on None.register_on_message_callback), the very first time HA's own
+        entity lifecycle touched it. Guarded below; the vacuum_state refresh
+        is skipped too since roomba_reported_state(None) would just
+        re-derive the same {} __init__ already set.
         """
-        self.vacuum.register_on_message_callback(self.on_message)
-        # Refresh snapshot — full state available now
-        self.vacuum_state = roomba_reported_state(self.vacuum)
+        if self.vacuum is not None:
+            self.vacuum.register_on_message_callback(self.on_message)
+            # Refresh snapshot — full state available now
+            self.vacuum_state = roomba_reported_state(self.vacuum)
         # Patch DeviceInfo and the live DeviceRegistry entry
         await self._async_update_device_name()
         # Force a state write so sensors don't show 'unavailable' on first render

@@ -60,11 +60,12 @@ from .const import (
     OVERLAP_STANDARD,
     CONF_FLOOR,
     DOMAIN,
+    MISSION_EVENT_TYPE_TO_ACTIVITY,
     PHASE_TO_ACTIVITY,
     SQFT_TO_M2,
 )
 from .entity import IRobotEntity
-from .models import MapCapability, RoombaConfigEntry
+from .models import ConnectionType, MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -126,6 +127,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         """Initialise with roombapy Roomba object and BLID."""
         super().__init__(roomba, blid)
         self._config_entry = config_entry
+        # NEW (V4/Prime): read connection type / prime_robot from
+        # runtime_data when available. Defaults (LOCAL_PUSH/None)
+        # preserve exact existing behavior for any caller that
+        # constructs an entity without a config_entry (some existing
+        # unit tests do this directly).
+        if config_entry is not None:
+            self._connection_type = config_entry.runtime_data.connection_type
+            self._prime_robot = config_entry.runtime_data.prime_robot
+        else:
+            self._connection_type = ConnectionType.LOCAL_PUSH
+            self._prime_robot = None
         # Vacuum is the primary entity — its unique_id IS the device identifier.
         self._attr_unique_id = self.robot_unique_id
         self._cap_position: bool = (
@@ -151,19 +163,30 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── HA lifecycle ──────────────────────────────────────────────────────────
 
     async def async_added_to_hass(self) -> None:
-        """Extend parent setup to register cloud coordinator listener.
+        """Extend parent setup to register cloud/prime coordinator listeners.
 
         F-I15 (v2.4.0): IRobotVacuum is not a CoordinatorEntity, so the HA
         framework does not call _handle_coordinator_update automatically.
         We register manually so segment change-detection fires after each
         cloud refresh (map retrain → async_create_segments_issue).
-        """
+
+        NEW (V4/Prime): same manual-registration pattern for
+        prime_coordinator -- pushes a new MissionTimelineReport on every
+        real mission event, which should re-render activity/
+        extra_state_attributes. A separate, much simpler callback
+        (_handle_prime_coordinator_update) than the cloud one above --
+        just a state re-render, no segment-mismatch logic applies here."""
         await super().async_added_to_hass()
         if self._config_entry is not None:
             cc = self._config_entry.runtime_data.cloud_coordinator
             if cc is not None:
                 self.async_on_remove(
                     cc.async_add_listener(self._handle_coordinator_update)
+                )
+            pc = self._config_entry.runtime_data.prime_coordinator
+            if pc is not None:
+                self.async_on_remove(
+                    pc.async_add_listener(self._handle_prime_coordinator_update)
                 )
 
     # ── Feature flags ────────────────────────────────────────────────────────
@@ -197,7 +220,35 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     @property
     def activity(self) -> VacuumActivity:
-        """Map the current cleanMissionStatus phase to a VacuumActivity."""
+        """Map the current cleanMissionStatus phase to a VacuumActivity.
+
+        NEW (V4/Prime): for CLOUD_ONLY entries, derives activity from
+        the latest mission/timeline/report event type instead -- see
+        MISSION_EVENT_TYPE_TO_ACTIVITY's own docstring (const.py) for
+        the confidence breakdown per event type. Falls back to IDLE if
+        no coordinator data exists yet, or the event type isn't in the
+        known set -- deliberately NOT the classic path's ERROR fallback
+        below: an unrecognized mission-timeline event type here is far
+        more likely to be one of the several known-but-not-yet-mapped
+        types (see MissionTimelineEvent's 20 sub-event types) than a
+        genuine fault, unlike the classic phase map, where an
+        unrecognized phase really would be unexpected. Still NOT a
+        complete state facade -- battery level / a direct docked
+        boolean (RobotStatusV2) remain unconfirmed; this only
+        approximates activity from mission events.
+        """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = (
+                self._config_entry.runtime_data.prime_coordinator
+                if self._config_entry is not None else None
+            )
+            report = coordinator.data if coordinator is not None else None
+            if report is None or not report.event:
+                return VacuumActivity.IDLE
+            return MISSION_EVENT_TYPE_TO_ACTIVITY.get(
+                report.event[0].event_type, VacuumActivity.IDLE
+            )
+
         status = self.vacuum_state.get("cleanMissionStatus") or {}
         # Default to "none" so a missing/sparse cleanMissionStatus (cycle absent
         # → None) is treated as "no active cycle". Without this, `None != "none"`
@@ -229,11 +280,20 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         All values are JSON-serialisable primitives.
         Datetime objects are converted to ISO-8601 strings.
+
+        BUG FOUND (bug-hunt round, V4/Prime): self.vacuum.current_state/
+        error_code/error_message crashed for a CLOUD_ONLY entity
+        (self.vacuum is None) -- and unlike async_added_to_hass() (called
+        once at setup), this property is evaluated on every state write,
+        so this would have crashed immediately and repeatedly, not just
+        once. "status"/error attrs are None for CLOUD_ONLY -- honest "no
+        data available" (no master_state-shaped translation exists yet,
+        see RobotStatusV2 blocker), not a fabricated guess.
         """
         state = self.vacuum_state
         attrs: dict[str, Any] = {
             ATTR_SOFTWARE_VERSION: state.get("softwareVer"),
-            "status": self.vacuum.current_state,
+            "status": self.vacuum.current_state if self.vacuum is not None else None,
         }
 
         # Cleaning progress (only while actively cleaning)
@@ -243,7 +303,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             attrs[ATTR_CLEANED_AREA] = cleaned_area
 
         # Error info
-        if self.vacuum.error_code:
+        if self.vacuum is not None and self.vacuum.error_code:
             attrs[ATTR_ERROR] = self.vacuum.error_message
             attrs[ATTR_ERROR_CODE] = self.vacuum.error_code
 
@@ -372,6 +432,34 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                     attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
                     attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
 
+        # NEW (V4/Prime). Informational room/mission-progress attributes
+        # from the confirmed mission/timeline/report channel -- see
+        # activity's own docstring and PrimeCoordinator's module
+        # docstring for the full evidence trail. Deliberately does NOT
+        # attempt battery level or a docked boolean (RobotStatusV2
+        # remains unconfirmed) -- only what this specific channel
+        # actually confirms. Reuses the SAME "mission_id" key the
+        # classic path above already populates (from a different
+        # source) rather than inventing a parallel name, since it's the
+        # same real-world concept either way.
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = (
+                self._config_entry.runtime_data.prime_coordinator
+                if self._config_entry is not None else None
+            )
+            report = coordinator.data if coordinator is not None else None
+            if report is not None:
+                attrs["mission_id"] = report.mission_id
+                if report.event:
+                    current = report.event[0]
+                    attrs["mission_event_type"] = current.event_type
+                    room = current.room or current.travel
+                    if room is not None:
+                        attrs["current_room_id"] = room.region_id
+                    if current.room is not None:
+                        attrs["current_room_area"] = current.room.area
+                        attrs["current_room_pass_count"] = current.room.pass_count
+
         return attrs
 
     def _get_cleaning_status(
@@ -399,7 +487,19 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── Commands ──────────────────────────────────────────────────────────
 
     async def async_start(self) -> None:
-        """Start or resume cleaning."""
+        """Start or resume cleaning.
+
+        NEW (V4/Prime): always sends "start" -- self.activity isn't
+        reliable yet for Prime (no master_state-shaped translation
+        exists, see ConnectionType's docstring / the RobotStatusV2
+        blocker in ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md), so trying
+        to detect PAUSED first the way the classic path does would
+        never resolve correctly. send_simple_command() is confirmed
+        live-working (roombapy-prime README's confidence table).
+        """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.send_simple_command("start")
+            return
         if self.activity == VacuumActivity.PAUSED:
             await self.hass.async_add_executor_job(
                 self.vacuum.send_command, "resume"
@@ -411,10 +511,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum cleaner."""
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.send_simple_command("stop")
+            return
         await self.hass.async_add_executor_job(self.vacuum.send_command, "stop")
 
     async def async_pause(self) -> None:
         """Pause the cleaning cycle."""
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.send_simple_command("pause")
+            return
         await self.hass.async_add_executor_job(self.vacuum.send_command, "pause")
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
@@ -424,7 +530,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         sending dock. If the pause is not confirmed in time, sends stop first
         so the robot is in a defined state before the dock command.
         When already docked or idle: sends dock directly (no-op on robot side).
+
+        NEW (V4/Prime): sends "dock" directly, skipping the pause-then-
+        wait dance above entirely -- self.activity isn't reliable for
+        Prime yet (same reasoning as async_start()), so waiting for it
+        to report PAUSED would never resolve, only ever hit the 10 s
+        timeout every time.
         """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.send_simple_command("dock")
+            return
         if self.activity == VacuumActivity.CLEANING:
             await self.async_pause()
             for _ in range(10):
@@ -440,7 +555,22 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         await self.hass.async_add_executor_job(self.vacuum.send_command, "dock")
 
     async def async_locate(self, **kwargs: Any) -> None:
-        """Play a sound to locate the robot."""
+        """Play a sound to locate the robot.
+
+        NEW (V4/Prime): uses poll_echo_value() -- a dedicated REST
+        endpoint for exactly this "find my robot" feature (CONFIRMED
+        from base_roomba_config.json + native SetRoombaEchoAwsIotSerializer
+        analysis, per roombapy-prime's own docstring) -- rather than
+        send_simple_command("find"), which is NOT part of the
+        confirmed-live verb subset (only start/pause/stop/resume/dock
+        are, per roombapy-prime's README confidence table). Both are
+        similarly unconfirmed against a live device for this specific
+        action; poll_echo_value() is the better-reasoned choice since
+        it's a dedicated, purpose-built endpoint for this exact feature.
+        """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.poll_echo_value()
+            return
         await self.hass.async_add_executor_job(self.vacuum.send_command, "find")
 
     async def async_send_command(
@@ -453,7 +583,22 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         Supports region cleaning via extended params:
             command="start", params={"regions": [...], "pmap_id": "..."}
+
+        NEW (V4/Prime): not supported yet for CLOUD_ONLY entries -- raises
+        a clear ServiceValidationError rather than crashing on
+        self.vacuum being None. Region-aware commands specifically are
+        explicitly out of v4.0.0a0's scope (send_simple_command() has
+        no known way to specify regions/zones at all -- see its
+        docstring in roombapy-prime), and even a plain passthrough
+        command has no confirmed-safe generic path the way
+        send_simple_command()'s narrow, tested verb set does.
         """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            raise ServiceValidationError(
+                "send_command is not yet supported for V4/Prime robots -- "
+                "use the standard vacuum actions (start/pause/stop/"
+                "return_to_base/locate) instead."
+            )
         _LOGGER.debug("send_command %s params=%s", command, params)
 
         if command == "start" and isinstance(params, dict) and "regions" in params:
@@ -796,6 +941,15 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.async_create_segments_issue()
         else:
             self._segment_mismatch_streak = 0
+
+    def _handle_prime_coordinator_update(self) -> None:
+        """NEW (V4/Prime). Registered as prime_coordinator's listener in
+        async_added_to_hass() -- fires on every new MissionTimelineReport
+        (a real mission event pushed via mission/timeline/report). Unlike
+        _handle_coordinator_update() above, no segment-mismatch logic
+        applies here; this just needs to re-render activity/
+        extra_state_attributes against the newly-arrived report."""
+        self.schedule_update_ha_state()
 
     # ── Push updates ──────────────────────────────────────────────────────
 

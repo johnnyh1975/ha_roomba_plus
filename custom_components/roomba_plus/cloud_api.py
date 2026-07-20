@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
-from json.decoder import JSONDecodeError
 import logging
 import urllib.parse
 import uuid
@@ -28,6 +26,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+
+from roombapy_prime import (
+    AuthConnectionError as _PrimeConnectionError,
+    AuthCredentialsError as _PrimeCredentialsError,
+    AuthError as _PrimeAuthError,
+    AuthRateLimitedError as _PrimeRateLimitedError,
+    AuthSSLError as _PrimeSSLError,
+    AuthTimeoutError as _PrimeTimeoutError,
+    login as _prime_login,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +53,6 @@ def _discovery_url(country_code: str) -> str:
 # Backward-compatible name used by existing tests (v1.8.3+: parameterised by country_code)
 DISCOVERY_URL: str = _discovery_url("US")
 
-_USER_AGENT_APP = "iRobot/7.16.2.140449 CFNetwork/1568.100.1.2.1 Darwin/24.0.0"
 _USER_AGENT_AWS = "aws-sdk-iOS/2.27.6 iOS/18.0.1 en_US"
 
 
@@ -54,7 +61,41 @@ class CloudApiError(Exception):
 
 
 class AuthenticationError(CloudApiError):
-    """Authentication failed — bad credentials or rate-limited."""
+    """The login attempt itself was rejected -- wrong username/password.
+
+    NOT raised for rate-limiting (see RateLimitedError) or malformed/
+    incomplete server responses (those stay a plain CloudApiError --
+    re-entering the same, correct credentials wouldn't fix a malformed
+    response, so telling the user to check their password would be
+    misleading). Mirrors roombapy-prime's AuthCredentialsError, since
+    v3.6.0 (login consolidation) -- see authenticate()'s docstring."""
+
+
+class RateLimitedError(CloudApiError):
+    """iRobot's backend rejected the login due to too many active app
+    sessions/tokens (the "mqtt slot" case) -- distinct from
+    AuthenticationError since the fix is "close the iRobot app and try
+    again", not "check your password". Mirrors roombapy-prime's
+    AuthRateLimitedError, since v3.6.0."""
+
+
+class SSLCertificateError(CloudApiError):
+    """TLS/certificate verification failure -- see
+    _raise_clear_ssl_error(). Confidently "not your fault, temporary":
+    a cert failure is unambiguous, unlike CloudConnectionError below."""
+
+
+class CloudConnectionError(CloudApiError):
+    """Could not establish a connection at all (DNS failure, connection
+    refused, network unreachable). Deliberately does NOT claim to know
+    whether this is iRobot's fault or the caller's own network -- that
+    confidence isn't justified here, unlike SSLCertificateError.
+    Mirrors roombapy-prime's AuthConnectionError, since v3.6.0."""
+
+
+class CloudTimeoutError(CloudApiError):
+    """Request was sent but no response came back in time. Mirrors
+    roombapy-prime's AuthTimeoutError, since v3.6.0."""
 
 
 def _raise_clear_ssl_error(exc: "aiohttp.ClientSSLError") -> None:
@@ -78,7 +119,7 @@ def _raise_clear_ssl_error(exc: "aiohttp.ClientSSLError") -> None:
     temporary (resolves once iRobot renews their certificate) and outside
     this integration's control either way.
     """
-    raise CloudApiError(
+    raise SSLCertificateError(
         "Could not verify iRobot's cloud server certificate. This is "
         "almost always a temporary problem on iRobot's servers (an "
         "expired or currently-renewing TLS certificate), not something "
@@ -202,7 +243,6 @@ class IrobotCloudApi:
         self._country_code = country_code
 
         self._app_id = str(uuid.uuid4())
-        self._device_id = str(uuid.uuid4())
 
         # Filled by authenticate()
         self._deployment: dict[str, Any] = {}
@@ -212,133 +252,62 @@ class IrobotCloudApi:
     # ── Auth ──────────────────────────────────────────────────────────────────
 
     async def authenticate(self) -> None:
-        """Run the full Gigya → iRobot auth flow. Stores credentials in-place."""
-        endpoints = await self._discover()
-        gigya_key = endpoints["gigya"]["api_key"]
-        uid, sig, ts = await self._login_gigya(endpoints["gigya"], gigya_key)
-        await self._login_irobot(uid, sig, ts)
+        """Run the full Gigya → iRobot auth flow via roombapy-prime's
+        shared login() (roombapy_prime.auth). Stores credentials in-place.
+
+        CONSOLIDATED (v3.6.0): previously this method ran its own
+        Gigya/discovery/login HTTP handling (~150 lines, since removed).
+        roombapy-prime's login() implements the exact same flow --
+        confirmed identical endpoint-for-endpoint, payload-for-payload,
+        since it was originally carried over FROM this file -- so this
+        removes a maintained duplicate rather than changing behavior.
+
+        Catches roombapy-prime's typed exception subclasses and maps
+        each to this module's own vocabulary, so existing callers
+        (config_flow.py, cloud_coordinator.py) keep working against
+        CloudApiError/AuthenticationError/etc. without needing to know
+        anything about roombapy-prime directly -- that mapping is this
+        method's job, not theirs.
+        """
+        try:
+            result = await _prime_login(
+                self._session, self._username, self._password, self._country_code,
+                app_id=f"IOS-{self._app_id}",
+            )
+        except _PrimeCredentialsError as exc:
+            raise AuthenticationError(str(exc)) from exc
+        except _PrimeRateLimitedError as exc:
+            raise RateLimitedError(str(exc)) from exc
+        except _PrimeSSLError as exc:
+            raise SSLCertificateError(str(exc)) from exc
+        except _PrimeConnectionError as exc:
+            raise CloudConnectionError(str(exc)) from exc
+        except _PrimeTimeoutError as exc:
+            raise CloudTimeoutError(str(exc)) from exc
+        except _PrimeAuthError as exc:
+            # Any other AuthError (malformed/incomplete response, discovery
+            # response missing an expected field, etc.) -- deliberately
+            # NOT AuthenticationError: re-entering the same, correct
+            # credentials would not fix a malformed server response, so
+            # telling the user to check their password here would be
+            # misleading.
+            raise CloudApiError(str(exc)) from exc
+
+        self._deployment = result.deployment
+        self._credentials = {
+            "CognitoId": result.credentials.cognito_id,
+            "AccessKeyId": result.credentials.access_key_id,
+            "SecretKey": result.credentials.secret_key,
+            "SessionToken": result.credentials.session_token,
+        }
+        self.robots = result.raw.get("robots", {})
+
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
         _LOGGER.debug(
             "iRobot cloud: robots dict — keys=%s  first_robot=%s",
             sorted(self.robots.keys()),
             next(iter(self.robots.values()), {}),
         )
-
-    async def _discover(self) -> dict[str, Any]:
-        try:
-            async with self._session.get(_discovery_url(self._country_code)) as resp:
-                if resp.status != 200:
-                    raise CloudApiError(f"Endpoint discovery failed: {resp.status}")
-                data = await resp.json()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-        self._deployment = data["deployments"][data["current_deployment"]]
-        return data
-
-    async def _login_gigya(
-        self, gigya_cfg: dict, api_key: str
-    ) -> tuple[str, str, str]:
-        base = f"https://accounts.{gigya_cfg['datacenter_domain']}/accounts."
-        payload = {
-            "loginMode": "standard",
-            "loginID": self._username,
-            "password": self._password,
-            "include": "profile,data,emails,subscriptions,preferences,",
-            "includeUserInfo": "true",
-            "targetEnv": "mobile",
-            "source": "showScreenSet",
-            "sdk": "ios_swift_1.3.0",
-            "sessionExpiration": "-2",
-            "apikey": api_key,
-        }
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _USER_AGENT_APP,
-        }
-        try:
-            async with self._session.post(
-                f"{base}login",
-                headers=headers,
-                data=urllib.parse.urlencode(payload),
-            ) as resp:
-                text = await resp.text()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-
-        try:
-            result = json.loads(text)
-        except JSONDecodeError as exc:
-            raise AuthenticationError(f"Invalid Gigya response: {text[:200]}") from exc
-
-        if result.get("errorCode", 0) != 0:
-            raise AuthenticationError(f"Gigya login failed: {result.get('errorMessage', result)}")
-
-        for key in ("UID", "UIDSignature", "signatureTimestamp"):
-            if key not in result:
-                raise AuthenticationError(f"Missing '{key}' in Gigya response")
-
-        return result["UID"], result["UIDSignature"], result["signatureTimestamp"]
-
-    async def _login_irobot(self, uid: str, uid_sig: str, sig_ts: str) -> None:
-        payload = {
-            "app_id": f"IOS-{self._app_id}",
-            "app_info": {
-                "device_id": f"IOS-{self._device_id}",
-                "device_name": "iPhone",
-                "language": "en_US",
-                "version": "7.16.2",
-            },
-            "assume_robot_ownership": "0",
-            "authorizer_params": {"devices_per_token": 5},
-            "gigya": {"signature": uid_sig, "timestamp": sig_ts, "uid": uid},
-            "multiple_authorizer_token_support": True,
-            "push_info": {
-                "platform": "APNS",
-                "push_token": "eb6ce9172e5fde9fe4c9a2a945b35709f73fb8014eb7449d944c6c89eeb472fb",
-                "supported_push_types": ["cr", "cse", "bf", "ae", "pm", "te", "dt"],
-            },
-            "skip_ownership_check": "0",
-        }
-        try:
-            async with self._session.post(
-                f"{self._deployment['httpBase']}/v2/login",
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            ) as resp:
-                text = await resp.text()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-
-        try:
-            result = json.loads(text)
-        except JSONDecodeError as exc:
-            raise AuthenticationError(f"Invalid iRobot login response: {text[:200]}") from exc
-
-        if result.get("errorCode"):
-            msg = result.get("errorMessage") or str(result)
-            if "mqtt slot" in msg.lower():
-                msg = (
-                    "Cloud auth rate-limited. Close the iRobot app and try again. "
-                    f"({msg})"
-                )
-            raise AuthenticationError(msg)
-
-        if "credentials" not in result:
-            raise AuthenticationError(f"No credentials in iRobot login response: {result}")
-
-        # v3.3.0 REVIEW-REMAINDER — validate the four keys _signed_get
-        # depends on AT the gate, so a degraded response raises a clean
-        # AuthenticationError here instead of a bare KeyError later
-        # (same validate-at-the-gate lesson as the import endpoint).
-        creds = result["credentials"]
-        for key in ("CognitoId", "AccessKeyId", "SecretKey", "SessionToken"):
-            if key not in creds:
-                raise AuthenticationError(
-                    f"Missing '{key}' in iRobot credentials response"
-                )
-
-        self._credentials = creds
-        self.robots = result.get("robots", {})
 
     # ── Authenticated requests ─────────────────────────────────────────────────
 

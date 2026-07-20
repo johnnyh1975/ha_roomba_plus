@@ -55,7 +55,8 @@ from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT faca
 
 from . import roomba_reported_state
 from .const import CONF_CORRELATION_ENTITIES
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
+from .sensor_prime import PrimeConnectionHealthSensor, PrimeMissionEventSensor
 
 from .sensor_core import (
     RoombaSensor,
@@ -160,10 +161,25 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up all applicable sensors for this Roomba."""
+    data = config_entry.runtime_data
+
+    # NEW (this session): CLOUD_ONLY (V4/Prime) branch -- deliberately
+    # separate from the classic path below, not routed through
+    # SENSORS/RoombaSensor (see sensor_prime.py's own module docstring
+    # for why). Returns early; none of the classic-specific code below
+    # (roomba_reported_state(), SENSORS filter_fn list, cloud-history/
+    # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
+    # a different coordinator entirely) applies to a CLOUD_ONLY entry.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        async_add_entities([
+            PrimeMissionEventSensor(data.blid, config_entry),
+            PrimeConnectionHealthSensor(data.blid, config_entry),
+        ])
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
-    data = config_entry.runtime_data
 
     entities: list = [
         RoombaSensor(roomba, blid, description, config_entry)

@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
     from roombapy import Roomba
+    from roombapy_prime import PrimeRobot
     from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
     from .const import RobotProfile
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from .freeze_snapshot_store import FreezeSnapshotStore        # v3.2.1
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
     from .mission_timer_store import MissionTimerStore        # v2.6 MP1
+    from .prime_coordinator import PrimeCoordinator            # V4/Prime
 
 
 class MapCapability(Enum):
@@ -48,12 +50,49 @@ class MapCapability(Enum):
     SMART = "smart"
 
 
+class ConnectionType(Enum):
+    """How this config entry talks to its robot.
+
+    NEW (V4/Prime prep, July 2026). Orthogonal to MapCapability, which
+    describes map/room richness independent of transport. See
+    ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md for the full architecture
+    context.
+
+    UPDATE: now referenced by RoombaData (below) -- roomba is Optional
+    for exactly this reason (a CLOUD_ONLY entry has no local Roomba
+    object at all). CLOUD_ONLY entries take an entirely separate setup/
+    unload path (_async_setup_entry_prime() in __init__.py) rather than
+    threading through the existing 4-phase LOCAL_PUSH pipeline, which
+    has deep assumptions about a real, disconnectable local roomba
+    object at many points beyond just RoombaData itself.
+
+    LOCAL_PUSH: existing — roombapy, local MQTT (blid+password+IP).
+    CLOUD_ONLY: NEW — roombapy-prime, V4/Prime. No local channel exists.
+    """
+
+    LOCAL_PUSH = "local_push"
+    CLOUD_ONLY = "cloud_only"
+
+
 @dataclass
 class RoombaData:
     """Runtime data stored in config_entry.runtime_data."""
 
-    roomba: Roomba
     blid: str
+    # NEW (V4/Prime): Optional, not required -- a CLOUD_ONLY entry has no
+    # local Roomba object at all. Moved ahead of `blid` in declaration
+    # order for exactly this reason (dataclass fields without a default
+    # can't follow one that has a default; blid has none and applies to
+    # both connection types, roomba now has a default and doesn't apply
+    # to both).
+    roomba: Roomba | None = None
+    # NEW (V4/Prime): defaults to LOCAL_PUSH so every existing entry
+    # (which predates this field entirely) is treated exactly as before.
+    connection_type: ConnectionType = ConnectionType.LOCAL_PUSH
+    # NEW (V4/Prime): populated only for CLOUD_ONLY entries, by
+    # _async_setup_entry_prime() in __init__.py.
+    prime_robot: "PrimeRobot | None" = None
+    prime_coordinator: "PrimeCoordinator | None" = None
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None
@@ -169,7 +208,16 @@ class RoombaData:
         ``or {}`` coerces an explicit null (``{"state": null}``) from a sparse
         MQTT frame to an empty dict; a dict default would only guard a missing
         key, not a present-but-null value.
+
+        NEW (V4/Prime): self.roomba is None for CLOUD_ONLY entries -- returns
+        {} rather than crashing. Honest, not fabricated: there is currently
+        no master_state-shaped translation for V4/Prime data at all (see
+        ConnectionType's docstring) -- any code path that ends up calling
+        this for a CLOUD_ONLY entry should get "no data available", not a
+        guess.
         """
+        if self.roomba is None:
+            return {}
         return (self.roomba.master_state.get("state") or {}).get("reported") or {}
 
     @property

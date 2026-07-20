@@ -31,7 +31,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
-from .const import SQFT_TO_M2
+from .const import DOMAIN, SQFT_TO_M2
 
 if TYPE_CHECKING:
     from .mission_store import MissionStore
@@ -393,7 +393,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.api.authenticate()
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
-                f"iRobot cloud credentials are invalid: {exc}"
+                f"iRobot cloud credentials are invalid: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_credentials_invalid",
+                translation_placeholders={"error": str(exc)},
             ) from exc
         except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
             # v3.3.0 REVIEW-REMAINDER — transient network errors
@@ -402,7 +405,22 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # exactly the transient class the F-RB-4 grace period below
             # was built for.
             # Transient — let HA retry via ConfigEntryNotReady pathway
-            raise UpdateFailed(f"iRobot cloud setup failed: {exc}") from exc
+            #
+            # NEW (this session): translation_key added for consistency/
+            # future-proofing, but currently INERT for UpdateFailed --
+            # verified against homeassistant.helpers.update_coordinator's
+            # actual source: it stores self.last_exception = err and
+            # never reads translation_key/translation_domain anywhere.
+            # No consumer renders this today. Kept anyway since the raw
+            # f-string fallback is unaffected either way, and this is
+            # where the fine-grained CloudApiError subclasses (SSL/
+            # connection/timeout/rate-limited) actually surface.
+            raise UpdateFailed(
+                f"iRobot cloud setup failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_temporarily_unavailable",
+                translation_placeholders={"error": str(exc)},
+            ) from exc
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch current cloud data for this robot."""
@@ -434,7 +452,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     result["automations"] = {}
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
-                f"iRobot cloud authentication failed: {exc}"
+                f"iRobot cloud authentication failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_credentials_invalid",
+                translation_placeholders={"error": str(exc)},
             ) from exc
         except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
             # v3.3.0 REVIEW-REMAINDER — transient network errors
@@ -455,7 +476,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.blid, exc,
                 )
                 return self.data
-            raise UpdateFailed(f"iRobot cloud update failed: {exc}") from exc
+            raise UpdateFailed(
+                f"iRobot cloud update failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_temporarily_unavailable",
+                translation_placeholders={"error": str(exc)},
+            ) from exc
 
         # F-RB-4 — stamp last success time for future failure-suppression checks.
         self._last_success_time = datetime.now(UTC)

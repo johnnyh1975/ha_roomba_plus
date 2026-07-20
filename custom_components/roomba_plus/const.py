@@ -33,6 +33,15 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.TODO,
 ]
 
+# NEW (V4/Prime, v4.0.0a0 MVP scope): deliberately just VACUUM for now.
+# A connectivity/error sensor is planned (see
+# NEW (this session): sensor.py now has a dedicated CLOUD_ONLY branch
+# (sensor_prime.py) -- no longer "not-yet-built".
+PRIME_PLATFORMS: Final[list[Platform]] = [
+    Platform.VACUUM,
+    Platform.SENSOR,
+]
+
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)
 CONF_IROBOT_USERNAME: Final = "irobot_username"
 CONF_IROBOT_PASSWORD: Final = "irobot_password"
@@ -49,6 +58,12 @@ CONF_BLID: Final = "blid"
 CONF_CONTINUOUS: Final = "continuous"
 CONF_DELAY: Final = "delay"
 CONF_CERT: Final = "certificate"
+
+# NEW (V4/Prime): stores ConnectionType.value ("local_push"/"cloud_only") in
+# config_entry.data. Absent on every entry that predates this field --
+# _connection_type() in __init__.py defaults to LOCAL_PUSH for exactly that
+# reason, so no migration is needed for existing entries.
+CONF_CONNECTION_TYPE: Final = "connection_type"
 
 # Options keys (Phase 2+)
 CONF_MAP_ENABLED: Final = "map_enabled"
@@ -317,8 +332,23 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
 # field tester in this project currently owns — not typos or noise. Kept
 # separate from ROBOT_PROFILES so an unmatched-but-known prefix can be
 # logged distinctly from a truly unrecognised one (see get_robot_profile()).
+#
+# V4-SKU-VERIFY (July 2026) — "g" added separately: the first, and so far
+# only, confirmed V4/Prime-generation SKU prefix, from two independent real
+# accounts (chairstacker, jadestar1864 — both a Roomba 405 Combo, SKU
+# G185020, different households). NOT the same thing as the pre-existing "c"
+# prefix above: "c" comes from the Classic app's own config file and predates
+# any V4/Prime work in this project — whether it refers to the same physical
+# product family as "g" is not established, so the two are kept distinct
+# rather than merged on the assumption they mean the same "Combo". No
+# ROBOT_PROFILES entry for "g" yet — no real battery/maintenance-interval
+# field data has been collected for this SKU, only login/state confirmation
+# via roombapy-prime (see roombapy-prime's CHANGELOG v0.1.2a0/fifty-sixth
+# gap-analysis addendum). Building one from guessed numbers would repeat
+# exactly the kind of silent wrong-data mistake this project's own RF0
+# battery work has been careful to avoid elsewhere.
 _KNOWN_IROBOT_SKU_PREFIXES: Final[frozenset[str]] = frozenset(
-    "6 e r a c i j m p q s t y".split()
+    "6 e r a c i j m p q s t y g".split()
 )
 
 
@@ -403,6 +433,52 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
     "run": VacuumActivity.CLEANING,
     "stop": VacuumActivity.IDLE,
     "stuck": VacuumActivity.ERROR,
+}
+
+# NEW (V4/Prime). Maps confirmed mission/timeline/report event_type
+# strings (roombapy_prime.models.MissionTimelineEvent.event_type) to a
+# VacuumActivity. Confidence varies per entry -- see
+# ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md and
+# PrimeCoordinator's own module docstring for the full evidence trail:
+#
+#   - start/reloc/travel/room: confirmed LIVE on mission/timeline/report
+#     itself (chairstacker, roombapy-prime v0.1.11a5).
+#   - pause/fin: ALSO confirmed LIVE (chairstacker, second capture, this
+#     session) -- "pause" fires when send_simple_command("stop") is
+#     sent (our "stop" command produces a timeline event_type of
+#     "pause", not "stop" -- there is no confirmed "stop" event_type at
+#     all so far). "fin" fires once the mission fully concludes,
+#     observed here right after stop-then-dock. "fin" is mapped to
+#     IDLE, not DOCKED -- it marks the mission/report as concluded, not
+#     confirmed physical arrival at the dock (dock was commanded right
+#     before it, but travel time back to base isn't captured by this
+#     event on its own).
+#   - traversal/zone/charge/evac/padWash: confirmed only via the
+#     HISTORICAL get_mission_history() endpoint (a separate, earlier
+#     real capture) -- same event schema (see MissionTimelineReport's
+#     own docstring for that cross-confirmation), but not yet
+#     independently observed on THIS live push channel specifically.
+#   - error: never observed in any real capture so far, included
+#     defensively since MissionTimelineEvent has a dedicated ErrorEvent
+#     sub-field.
+#
+# "evac" -> RETURNING (not DOCKED) and "padWash" -> DOCKED deliberately
+# mirror/extend PHASE_TO_ACTIVITY's own existing evac reasoning above:
+# self-emptying bases can evac MID-mission, not only at the very end,
+# so it is NOT reliably "docked" the way charge/padWash are.
+MISSION_EVENT_TYPE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
+    "start": VacuumActivity.CLEANING,
+    "reloc": VacuumActivity.CLEANING,
+    "travel": VacuumActivity.CLEANING,
+    "room": VacuumActivity.CLEANING,
+    "traversal": VacuumActivity.CLEANING,
+    "zone": VacuumActivity.CLEANING,
+    "pause": VacuumActivity.PAUSED,
+    "charge": VacuumActivity.DOCKED,
+    "evac": VacuumActivity.RETURNING,
+    "padWash": VacuumActivity.DOCKED,
+    "fin": VacuumActivity.IDLE,
+    "error": VacuumActivity.ERROR,
 }
 
 # v2.3.0 — Phases used by image.py (pose handling) and vacuum.py (live CR4 source).

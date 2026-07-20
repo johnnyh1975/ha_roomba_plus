@@ -26,7 +26,13 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
-from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
+from .cloud_api import (
+    AuthenticationError,
+    CloudApiError,
+    IrobotCloudApi,
+    RateLimitedError,
+    SSLCertificateError,
+)
 from .const import (
     CONF_CORRELATION_ENTITIES,
     CONF_ROOM_SCHEDULE,
@@ -38,6 +44,7 @@ from .const import (
     CONF_BLOCKING_SENSORS,
     CONF_BLOCKING_TIMEOUT_MIN,
     CONF_CLEAN_DELAY_MIN,
+    CONF_CONNECTION_TYPE,
     CONF_CONTINUOUS,
     CONF_DEMAND_CLEANING_ENABLED,
     CONF_DEMAND_MULTIPLIER,
@@ -68,7 +75,7 @@ from .const import (
     has_smart_map,
 )
 from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
-from .models import MapCapability, RoombaConfigEntry
+from .models import ConnectionType, MapCapability, RoombaConfigEntry
 from .room_seg_store import RoomSegStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +93,25 @@ AUTH_HELP_URL_VALUE = (
 )
 
 DEFAULT_OPTIONS = {CONF_CONTINUOUS: DEFAULT_CONTINUOUS, CONF_DELAY: DEFAULT_DELAY}
+
+# NEW (V4/Prime onboarding). Distinct from `None` (which already means
+# "Add manually" in async_step_user()'s dropdown) -- a third sentinel for
+# "set up via iRobot cloud account instead".
+_CLOUD_ACCOUNT_SENTINEL = "__cloud_account__"
+
+
+def _is_prime_sku(sku: str | None) -> bool:
+    """True for V4/Prime-generation SKUs.
+
+    Only "g" (G185020, Roomba Plus/Combo 405) is actually confirmed live
+    -- see ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md's "Bestätigte Fakten"
+    table and const.py's own V4-SKU-VERIFY comment next to
+    _KNOWN_IROBOT_SKU_PREFIXES. Prefix check (not exact match), for
+    consistency with that same set's own convention -- at the cost of
+    treating any OTHER, as-yet-unconfirmed "g"-prefixed SKU as Prime
+    too, rather than only the one specific SKU actually tested.
+    """
+    return bool(sku) and sku[0].lower() == "g"
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
@@ -205,6 +231,12 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         self.host: str | None = None
         self.discovered_robots: dict[str, RoombaInfo] = {}
         self._pending_config: dict[str, Any] = {}
+        # NEW (V4/Prime onboarding): populated by async_step_prime_account(),
+        # consumed by async_step_prime_robot_picker() and beyond.
+        self._prime_account_username: str = ""
+        self._prime_account_password: str = ""
+        self._prime_account_robots: dict[str, Any] = {}
+        self._prime_selected_blid: str | None = None
 
     @staticmethod
     @callback
@@ -268,14 +300,25 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle the initial UI step.
 
-        Shows discovered robots (if any) or falls through to manual entry.
+        Shows discovered robots (if any), "Add manually", and — NEW
+        (V4/Prime) — "Set up with my iRobot account", always visible
+        regardless of local scan results.
+
+        BUG FIX (this session): previously, zero discovered local
+        devices fell straight through to async_step_manual() -- a dead
+        end for a V4/Prime-only owner, since their robot never appears
+        via local broadcast at all (no local channel exists). The
+        cloud-account option is now shown unconditionally, not just
+        appended to the dropdown when local devices happen to exist.
         """
         if user_input is not None:
-            if not user_input.get(CONF_HOST):
+            chosen = user_input.get(CONF_HOST)
+            if chosen == _CLOUD_ACCOUNT_SENTINEL:
+                return await self.async_step_prime_account()
+            if not chosen:
                 return await self.async_step_manual()
-
-            if user_input[CONF_HOST] in self.discovered_robots:
-                self.host = user_input[CONF_HOST]
+            if chosen in self.discovered_robots:
+                self.host = chosen
                 return await self._async_start_link()
 
         already_configured = self._async_current_ids(False)
@@ -295,16 +338,17 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             return await self._async_start_link()
 
-        if not self.discovered_robots:
-            return await self.async_step_manual()
-
         hosts: dict[str | None, str] = {
             **{
                 device.ip: f"{device.robot_name} ({device.ip})"
                 for device in devices
                 if device.blid not in already_configured
             },
-            None: "Add manually",
+            None: "Add manually (I know my robot's local IP)",
+            _CLOUD_ACCOUNT_SENTINEL: (
+                "Set up with my iRobot account (for newer models with no "
+                "local setup, e.g. Combo)"
+            ),
         }
 
         return self.async_show_form(
@@ -348,6 +392,236 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(self.blid, raise_on_progress=False)
         self._abort_if_unique_id_configured()
         return await self.async_step_link()
+
+    # ── V4/Prime cloud-account onboarding ────────────────────────────────────
+    #
+    # Reached from async_step_user()'s "Set up with my iRobot account" option
+    # -- for owners whose robot has no local channel at all (V4/Prime). The
+    # SAME login also discovers any Classic robots on the account, which are
+    # completed via the existing local-network path below (blid+password
+    # already known from this login, only the local IP still needs
+    # resolving) rather than shown only informationally.
+
+    async def async_step_prime_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Cloud account login.
+
+        Reuses the existing IrobotCloudApi wrapper (same login/error-
+        translation already used by async_step_cloud_credentials)
+        rather than calling roombapy-prime directly: api.robots already
+        contains sku/password per robot (LoginResult.raw's own "robots"
+        dict), everything async_step_prime_robot_picker() needs.
+        """
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
+            password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
+            if not username or not password:
+                # Unlike async_step_cloud_credentials (where both fields
+                # are genuinely optional -- "leave empty to skip cloud
+                # features"), this step has no valid skip path: cloud
+                # login is the entire point of it. Bug-hunt round found
+                # this silently reshowed the form with no explanation on
+                # a blank submission -- voluptuous's Required only
+                # enforces the KEY being present, not the value being
+                # non-empty, so this path is reachable in practice.
+                errors["base"] = "invalid_cloud_credentials"
+            elif username and password:
+                from homeassistant.helpers.aiohttp_client import async_get_clientsession
+                country_code = (self.hass.config.country or "US").upper()
+                api = IrobotCloudApi(
+                    username, password, async_get_clientsession(self.hass),
+                    country_code=country_code,
+                )
+                try:
+                    await api.authenticate()
+                except AuthenticationError:
+                    errors["base"] = "invalid_cloud_credentials"
+                except RateLimitedError:
+                    errors["base"] = "cloud_rate_limited"
+                except SSLCertificateError:
+                    errors["base"] = "cloud_ssl_certificate_error"
+                except CloudApiError:
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._prime_account_username = username
+                    self._prime_account_password = password
+                    self._prime_account_robots = api.robots
+                    return await self.async_step_prime_robot_picker()
+
+        return self.async_show_form(
+            step_id="prime_account",
+            data_schema=vol.Schema({
+                vol.Required(CONF_IROBOT_USERNAME, default=""): str,
+                vol.Required(CONF_IROBOT_PASSWORD, default=""): str,
+            }),
+            errors=errors,
+        )
+
+    async def async_step_prime_robot_picker(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Splits the account's robots into V4/Prime (ready to set up
+        directly) and Classic (completed via the existing local
+        network, see async_step_prime_classic_ip()) by SKU. Already-
+        configured blids are filtered out.
+
+        One robot per flow run, matching async_step_user()'s own local-
+        discovery dropdown convention -- add additional robots via a
+        second "Add integration" run, rather than inventing a new
+        multi-add mechanism that doesn't exist anywhere else in this
+        integration.
+        """
+        already_configured = self._async_current_ids(False)
+        candidates = {
+            blid: info
+            for blid, info in self._prime_account_robots.items()
+            if blid not in already_configured
+        }
+
+        if not candidates:
+            return self.async_abort(reason="no_new_robots_found")
+
+        if user_input is not None:
+            self._prime_selected_blid = user_input[CONF_BLID]
+            # Defensive: candidates is recomputed fresh on every call from
+            # _async_current_ids() -- if another flow completed for this
+            # exact blid in the window between showing this form and
+            # submitting it (unlikely, but not impossible), it would no
+            # longer be in candidates here. Abort cleanly rather than a
+            # raw KeyError.
+            info = candidates.get(self._prime_selected_blid)
+            if info is None:
+                return self.async_abort(reason="already_configured")
+            if _is_prime_sku(info.get("sku")):
+                return await self._async_create_prime_entry(self._prime_selected_blid, info)
+            return await self.async_step_prime_classic_ip()
+
+        choices = {
+            blid: (
+                f"{info.get('name') or blid} — "
+                f"{'V4/Prime' if _is_prime_sku(info.get('sku')) else 'Classic'} "
+                f"({info.get('sku') or '?'})"
+            )
+            for blid, info in candidates.items()
+        }
+        return self.async_show_form(
+            step_id="prime_robot_picker",
+            data_schema=vol.Schema({vol.Required(CONF_BLID): vol.In(choices)}),
+        )
+
+    async def _async_create_prime_entry(
+        self, blid: str, info: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Creates a CLOUD_ONLY config entry directly -- login already
+        succeeded in async_step_prime_account(), no further
+        connectivity check needed here. Any actual connection-level
+        failure (MQTT unreachable etc.) surfaces at real setup time via
+        PrimeCoordinator.async_start()'s own ConfigEntryNotReady
+        mapping, not here.
+        """
+        await self.async_set_unique_id(blid, raise_on_progress=False)
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(
+            title=info.get("name") or blid,
+            data={
+                CONF_CONNECTION_TYPE: ConnectionType.CLOUD_ONLY.value,
+                CONF_BLID: blid,
+                CONF_IROBOT_USERNAME: self._prime_account_username,
+                CONF_IROBOT_PASSWORD: self._prime_account_password,
+            },
+        )
+
+    async def async_step_prime_classic_ip(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Classic robot found via cloud login -- blid+password already
+        known (the account's raw robot entry), only the local IP is
+        still missing. Tries the existing local-network scan first,
+        matched by blid; if not found (robot offline, or broadcast
+        discovery unreliable), asks for the IP manually instead of
+        failing outright -- blid+password are already known either way,
+        unlike the manual/link path which needs the physical
+        push-button dance specifically because it does NOT know the
+        password yet.
+        """
+        assert self._prime_selected_blid is not None
+        blid = self._prime_selected_blid
+        info = self._prime_account_robots[blid]
+        password = info.get("password")
+        errors: dict[str, str] = {}
+
+        await self.async_set_unique_id(blid, raise_on_progress=False)
+        self._abort_if_unique_id_configured()
+
+        if not password:
+            # Defensive -- should always be present for a real robot
+            # entry, but fail loudly rather than silently proceeding
+            # with a None password that would just fail to connect.
+            return self.async_abort(reason="prime_classic_password_missing")
+
+        if user_input is not None:
+            host = user_input[CONF_HOST]
+        else:
+            devices = await _async_discover_roombas(self.hass, None)
+            matched = next((d for d in devices if d.blid == blid), None)
+            if matched is None:
+                return self.async_show_form(
+                    step_id="prime_classic_ip",
+                    data_schema=vol.Schema({vol.Required(CONF_HOST): str}),
+                    description_placeholders={CONF_NAME: info.get("name") or blid},
+                )
+            host = matched.ip
+
+        config = {
+            CONF_HOST: host,
+            CONF_BLID: blid,
+            CONF_PASSWORD: password,
+            **DEFAULT_OPTIONS,
+        }
+        try:
+            result = await validate_input(self.hass, config)
+        except CannotConnect:
+            errors["base"] = "cannot_connect"
+            return self.async_show_form(
+                step_id="prime_classic_ip",
+                data_schema=vol.Schema({vol.Required(CONF_HOST, default=host): str}),
+                errors=errors,
+                description_placeholders={CONF_NAME: info.get("name") or blid},
+            )
+
+        self.blid = blid
+        self.name = result[CONF_NAME]
+        self._pending_config = config
+        return await self.async_step_prime_classic_analytics()
+
+    async def async_step_prime_classic_analytics(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Classic robot found+completed via cloud login -- offers to
+        also keep these same cloud credentials for the existing
+        cloud_coordinator enrichment feature (SMART-tier only), instead
+        of making the user re-enter them via the separate
+        async_step_cloud_credentials step right afterward. Default:
+        enabled -- the credentials are already validated and in memory
+        either way; the only real question is whether to persist them.
+        """
+        if user_input is not None:
+            config = dict(self._pending_config)
+            if user_input.get("enable_cloud_analytics", True):
+                config[CONF_IROBOT_USERNAME] = self._prime_account_username
+                config[CONF_IROBOT_PASSWORD] = self._prime_account_password
+            return self.async_create_entry(title=self.name, data=config)
+
+        return self.async_show_form(
+            step_id="prime_classic_analytics",
+            data_schema=vol.Schema({
+                vol.Optional("enable_cloud_analytics", default=True): bool,
+            }),
+            description_placeholders={CONF_NAME: self.name or self.blid},
+        )
 
     async def async_step_link(
         self, user_input: dict[str, Any] | None = None
@@ -435,11 +709,19 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             if username and password:
                 # Validate credentials before storing
                 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+                country_code = (self.hass.config.country or "US").upper()
+                api = IrobotCloudApi(
+                    username, password, async_get_clientsession(self.hass),
+                    country_code=country_code,
+                )
                 try:
                     await api.authenticate()
                 except AuthenticationError:
                     errors["base"] = "invalid_cloud_credentials"
+                except RateLimitedError:
+                    errors["base"] = "cloud_rate_limited"
+                except SSLCertificateError:
+                    errors["base"] = "cloud_ssl_certificate_error"
                 except CloudApiError:
                     errors["base"] = "cannot_connect"
                 else:
@@ -554,11 +836,19 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
             password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
-            api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+            country_code = (self.hass.config.country or "US").upper()
+            api = IrobotCloudApi(
+                username, password, async_get_clientsession(self.hass),
+                country_code=country_code,
+            )
             try:
                 await api.authenticate()
             except AuthenticationError:
                 errors["base"] = "invalid_cloud_credentials"
+            except RateLimitedError:
+                errors["base"] = "cloud_rate_limited"
+            except SSLCertificateError:
+                errors["base"] = "cloud_ssl_certificate_error"
             except CloudApiError:
                 errors["base"] = "cannot_connect"
             else:
@@ -1471,11 +1761,21 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         if username and password:
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
-            api = IrobotCloudApi(username, password, async_get_clientsession(self.hass))
+            country_code = (self.hass.config.country or "US").upper()
+            api = IrobotCloudApi(
+                username, password, async_get_clientsession(self.hass),
+                country_code=country_code,
+            )
             try:
                 await api.authenticate()
             except AuthenticationError:
                 self._cloud_cred_errors = {"base": "invalid_cloud_credentials"}
+                return await self.async_step_cloud_credentials()
+            except RateLimitedError:
+                self._cloud_cred_errors = {"base": "cloud_rate_limited"}
+                return await self.async_step_cloud_credentials()
+            except SSLCertificateError:
+                self._cloud_cred_errors = {"base": "cloud_ssl_certificate_error"}
                 return await self.async_step_cloud_credentials()
             except CloudApiError:
                 self._cloud_cred_errors = {"base": "cannot_connect"}

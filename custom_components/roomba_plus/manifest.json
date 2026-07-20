@@ -37,12 +37,14 @@
   "issue_tracker": "https://github.com/johnnyh1975/ha_roomba_plus/issues",
   "loggers": [
     "paho_mqtt",
-    "roombapy"
+    "roombapy",
+    "roombapy_prime"
   ],
   "requirements": [
-    "roombapy==1.9.1"
+    "roombapy==1.9.1",
+    "roombapy-prime @ git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6"
   ],
-  "version": "3.5.1",
+  "version": "4.0.0a0",
   "zeroconf": [
     {
       "name": "irobot-*",
