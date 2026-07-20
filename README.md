@@ -11,6 +11,8 @@
 
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
+> 🔬 **New (v4.0.0a0, alpha):** initial support for iRobot's newer, cloud-only "Prime" robots (Combo/Plus 400-series and similar) — these don't speak the local MQTT protocol everything below is built on, so this is a genuinely separate, less mature path. See [V4/Prime support (alpha) →](#v4prime-support-alpha) before assuming everything on this page applies to your robot.
+
 **Why Roomba+?**
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
@@ -27,6 +29,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - [What you get](#what-you-get)
 - [Feature status](#feature-status)
 - [Supported hardware & capability matrix](#supported-hardware--capability-matrix)
+- [V4/Prime support (alpha)](#v4prime-support-alpha)
 - [Known limitations](#known-limitations)
 - [Installation](#installation)
 - [Getting started](#getting-started)
@@ -72,6 +75,7 @@ deliberately not built:
 | Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](RELEASE_NOTES_v3.4.3.md))* |
 | Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
 | Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
+| V4/Prime support — cloud-only robots (400-series) *(v4.0.0a0)* | 🔬 Alpha — see [V4/Prime support (alpha)](#v4prime-support-alpha) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
 | Room shape / door-position export | 🔲 Backlog, not yet scheduled |
 | Voice commands ("clean the kitchen", etc.) | ❌ Evaluated, not pursued — see [Known limitations](#known-limitations) |
@@ -90,6 +94,7 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 | **s-series** | s9+ | ✅ **S9+** |
 | **j-series** | j7, j7+ | ✅ **j-series** |
 | **Braava** | m6 | ✅ **Braava jet m6** |
+| **V4/Prime** *(alpha, v4.0.0a0)* | Combo/Plus 400-series | ✅ multiple field testers — see below |
 
 **What works on your robot** — the fast answer to the most common setup question:
 
@@ -111,6 +116,43 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 
 **Capability tiers, in plain terms:** 600-series = bump-and-run (no map, no room targeting). 900-series = VSLAM ephemeral map with automatic zone detection and cloud history. i/s/j-series and Braava = persistent Smart Map with named rooms, favourites, and the full room-intelligence feature set.
 
+V4/Prime robots are architecturally different enough (cloud-only, no local MQTT at all) that they're **not** part of the table above — see the next section for what they actually support today.
+
+---
+
+## V4/Prime support (alpha)
+
+iRobot's newer-generation robots (Combo/Plus 400-series and similar, on the "Prime" cloud
+protocol) don't speak the local MQTT protocol every other feature on this page is built on —
+they're cloud-only. Support for them was added in **v4.0.0a0** as a genuinely separate code
+path, not an extension of the existing one, using the companion
+[roombapy-prime](https://github.com/johnnyh1975/roombapy-prime) library.
+
+**This is a real alpha, not a preview label on finished work.** It's been tested against
+multiple real robots on separate accounts and works for what it does — but the feature set is
+deliberately narrower than everything described above, and one piece (battery/docked status)
+is still unconfirmed and not exposed at all yet. If your V4/Prime robot is central to your
+setup today, you may want to wait for a later alpha.
+
+**What works right now:**
+- Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
+  robots on the same account are set up automatically alongside any Prime ones
+- Start, pause, stop, dock, locate
+- Live activity (cleaning/paused/docked/returning/idle), derived from the robot's real-time
+  mission stream — plus current room, area, and pass-count as attributes when available
+- Two diagnostic sensors: current mission event, and connection health
+
+**What's not there yet:**
+- Battery percentage or a direct docked/charging boolean — see this release's own notes for
+  why, and what's already been tried
+- Region/zone cleaning (gives a clear "not yet supported" message rather than doing nothing)
+- Everything else on this page that depends on local MQTT or the cloud room/map data model
+  Classic robots use — maps, room intelligence, mission history, maintenance tracking, and
+  more are simply a different, not-yet-built facade for V4/Prime robots specifically
+
+Full detail, architecture, and the evidence trail behind every confirmed piece of the
+protocol: [Release notes →](release-notes/v4.0.0a0.md)
+
 ---
 
 ## Known limitations
@@ -120,6 +162,8 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+- **V4/Prime robots don't have battery/docked status yet** — still unconfirmed on the wire even after several live tests; see [V4/Prime support (alpha)](#v4prime-support-alpha) above.
+- **V4/Prime + Classic robots on the same Home Assistant instance simultaneously** — each is independently confirmed working, but running both types at once hasn't been specifically tested.
 
 ---
 
@@ -143,6 +187,11 @@ Copy `custom_components/roomba_plus/` into your HA `config/` directory, then res
 2. Roomba is discovered automatically via DHCP/Zeroconf — or enter the IP manually
 3. Hold the **HOME** button on the robot for ~2 seconds until it plays tones
 4. *(Smart Map robots, optional)* Enter your iRobot app email and password to enable cloud features
+
+> **V4/Prime robots** (Combo/Plus 400-series, alpha — see [above](#v4prime-support-alpha)): pick
+> "sign in with your iRobot cloud account" instead of the discovery flow above — there's nothing
+> to discover locally for these, they're cloud-only. Classic robots on the same account are set
+> up automatically alongside any Prime ones found.
 
 > **Note:** Roomba+ and the built-in Core Roomba integration cannot run simultaneously — they share the same local MQTT connection. Remove the Core integration first.
 
