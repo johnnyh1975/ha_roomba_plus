@@ -1607,27 +1607,33 @@ class TestReviewRemainderErrorPaths:
     @pytest.mark.asyncio
     async def test_login_rejects_incomplete_credentials(self):
         """Fix B: missing CognitoId (or any of the four signing keys) must
-        raise AuthenticationError at login, not KeyError at first request."""
-        from unittest.mock import MagicMock, AsyncMock
+        raise at login, not KeyError at first request. The actual gate
+        logic now lives in roombapy-prime (see its own
+        test_login_irobot_missing_single_credential_key_raises) --
+        this test's job since the v3.6.0 login consolidation is only to
+        confirm this module correctly propagates that failure.
+
+        DELIBERATE BEHAVIOR CHANGE (v3.6.0): previously expected
+        AuthenticationError here -- same bucket as "your password is
+        wrong". That was misleading: a malformed/incomplete server
+        response isn't fixed by re-entering the same, correct
+        credentials. Now expects the generic CloudApiError instead,
+        matching roombapy-prime's own categorization (this gate raises
+        plain AuthError there, not AuthCredentialsError)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
         from custom_components.roomba_plus.cloud_api import (
-            AuthenticationError, IrobotCloudApi,
+            AuthenticationError, CloudApiError, IrobotCloudApi,
         )
-        api = IrobotCloudApi.__new__(IrobotCloudApi)
-        api._deployment = {"httpBase": "https://api.example"}
-        api._app_id = "app"
-        api._device_id = "dev"
-        resp = MagicMock()
-        resp.text = AsyncMock(return_value=(
-            '{"credentials": {"AccessKeyId": "AK", "SecretKey": "SK", '
-            '"SessionToken": "ST"}, "robots": {}}'
-        ))
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=resp)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        api._session = MagicMock()
-        api._session.post = MagicMock(return_value=ctx)
-        with pytest.raises(AuthenticationError, match="CognitoId"):
-            await api._login_irobot("uid", "sig", "ts")
+        from roombapy_prime import AuthError as PrimeAuthError
+
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeAuthError("Missing 'CognitoId' in iRobot credentials response")),
+        ):
+            with pytest.raises(CloudApiError, match="CognitoId") as excinfo:
+                await api.authenticate()
+            assert not isinstance(excinfo.value, AuthenticationError)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

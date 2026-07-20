@@ -21,7 +21,7 @@ from custom_components.roomba_plus.vacuum import BraavaJet
 from custom_components.roomba_plus.vacuum import IRobotVacuum
 from custom_components.roomba_plus.vacuum import RoombaVacuum
 from custom_components.roomba_plus.vacuum import RoombaVacuumCarpetBoost
-from custom_components.roomba_plus.models import MapCapability
+from custom_components.roomba_plus.models import ConnectionType, MapCapability
 from homeassistant.components.vacuum import VacuumEntityFeature
 from homeassistant.exceptions import ServiceValidationError
 import asyncio
@@ -111,6 +111,11 @@ def _make_vacuum_entity(state: dict | None = None, runtime_data=None):
     v._config_entry = entry
     v._cap_position = False
     v._segment_mismatch_streak = 0
+    # NEW (V4/Prime): defaults match __init__'s own LOCAL_PUSH defaults --
+    # every existing test using this bypass-construction helper predates
+    # ConnectionType and implicitly assumes classic/local behavior.
+    v._connection_type = ConnectionType.LOCAL_PUSH
+    v._prime_robot = None
     return v
 
 
@@ -1162,3 +1167,288 @@ class TestNullRegressionExplicitNulls:
         b = object.__new__(BraavaJet)
         b.vacuum_state = {"rankOverlap": OVERLAP_STANDARD, "padWetness": None}
         assert b.fan_speed is None  # must not raise
+
+
+# =========================================================================
+# CLOUD_ONLY (V4/Prime) vacuum action branches (this session).
+# =========================================================================
+
+
+def _make_prime_vacuum_entity() -> IRobotVacuum:
+    """Build a bare IRobotVacuum wired for CLOUD_ONLY -- roomba=None,
+    vacuum_state={} (no master_state-shaped translation exists yet, see
+    RobotStatusV2 blocker), self._prime_robot an AsyncMock so command
+    calls can be asserted on directly."""
+    v = object.__new__(IRobotVacuum)
+    v.vacuum = None
+    v.vacuum_state = {}
+    v._config_entry = MagicMock()
+    v._cap_position = False
+    v._segment_mismatch_streak = 0
+    v._connection_type = ConnectionType.CLOUD_ONLY
+    v._prime_robot = MagicMock()
+    v._prime_robot.send_simple_command = AsyncMock()
+    v._prime_robot.poll_echo_value = AsyncMock()
+    return v
+
+
+class TestCloudOnlyVacuumActions:
+    """v4.0.0a0 MVP: start/pause/stop/dock/locate via roombapy-prime,
+    never touching self.vacuum (None for CLOUD_ONLY) or
+    self.hass.async_add_executor_job at all."""
+
+    @pytest.mark.asyncio
+    async def test_async_added_to_hass_does_not_crash(self):
+        """Regression test for a real bug found in the bug-hunt round:
+        async_added_to_hass() is called unconditionally by HA for every
+        entity -- it called self.vacuum.register_on_message_callback()
+        with no guard, crashing immediately for a CLOUD_ONLY entity
+        (self.vacuum is None) the very first time HA's own entity
+        lifecycle touched it."""
+        v = _make_prime_vacuum_entity()
+        v.hass = MagicMock()
+        with patch.object(v, "_async_update_device_name", new=AsyncMock()):
+            with patch.object(v, "schedule_update_ha_state"):
+                await v.async_added_to_hass()  # must not raise
+
+    def test_extra_state_attributes_does_not_crash(self):
+        """Regression test for a second real bug in the same round: this
+        property reads self.vacuum.current_state/error_code/error_message
+        unconditionally -- worse than async_added_to_hass() since HA
+        evaluates this on every single state write, not just once at
+        setup."""
+        v = _make_prime_vacuum_entity()
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["status"] is None
+        assert "error" not in attrs
+        assert "error_code" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_start_always_sends_start_command(self):
+        """NEW (V4/Prime): unlike the classic path, never checks
+        self.activity for PAUSED first -- that property isn't reliable
+        yet for Prime (empty vacuum_state, no RobotStatusV2 translation)."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_start()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_stop_sends_stop_command(self):
+        v = _make_prime_vacuum_entity()
+
+        await v.async_stop()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("stop")
+
+    @pytest.mark.asyncio
+    async def test_pause_sends_pause_command(self):
+        v = _make_prime_vacuum_entity()
+
+        await v.async_pause()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("pause")
+
+    @pytest.mark.asyncio
+    async def test_return_to_base_sends_dock_directly(self):
+        """NEW (V4/Prime): sends "dock" immediately, skipping the
+        pause-then-wait-for-confirmation dance the classic path does --
+        self.activity would never report PAUSED for Prime, so that
+        loop would only ever hit its 10s timeout."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_return_to_base()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+    @pytest.mark.asyncio
+    async def test_locate_uses_poll_echo_value_not_send_simple_command(self):
+        """NEW (V4/Prime): uses the dedicated poll_echo_value() REST
+        endpoint, NOT send_simple_command("find") -- "find" is not part
+        of the confirmed-live verb subset, unlike start/pause/stop/dock."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_locate()
+
+        v._prime_robot.poll_echo_value.assert_awaited_once()
+        v._prime_robot.send_simple_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_command_raises_service_validation_error(self):
+        """NEW (V4/Prime): not supported yet -- must raise a clear error
+        rather than crashing on self.vacuum being None."""
+        v = _make_prime_vacuum_entity()
+
+        with pytest.raises(ServiceValidationError, match="not yet supported"):
+            await v.async_send_command("start", params={"regions": ["10"]})
+
+        v._prime_robot.send_simple_command.assert_not_called()
+
+
+class TestLocalPushVacuumActionsUnaffected:
+    """Regression guard: the classic LOCAL_PUSH path (the default
+    ConnectionType) must be completely unaffected by the CLOUD_ONLY
+    branches added above -- these exercise the actual action methods
+    directly, which no test in this file did before this session."""
+
+    def _make_local_entity(self) -> IRobotVacuum:
+        v = _make_vacuum_entity()
+        v.hass = MagicMock()
+        v.hass.async_add_executor_job = AsyncMock()
+        v.vacuum.send_command = MagicMock()
+        return v
+
+    @pytest.mark.asyncio
+    async def test_start_uses_executor_job_with_roomba_send_command(self):
+        v = self._make_local_entity()
+
+        await v.async_start()
+
+        v.hass.async_add_executor_job.assert_awaited_once_with(
+            v.vacuum.send_command, "start"
+        )
+
+    @pytest.mark.asyncio
+    async def test_locate_uses_executor_job_with_find_command(self):
+        v = self._make_local_entity()
+
+        await v.async_locate()
+
+        v.hass.async_add_executor_job.assert_awaited_once_with(
+            v.vacuum.send_command, "find"
+        )
+
+
+# =========================================================================
+# CLOUD_ONLY activity/extra_state_attributes derived from PrimeCoordinator
+# (this session) -- see PrimeCoordinator's own module docstring and
+# MISSION_EVENT_TYPE_TO_ACTIVITY's docstring (const.py) for the full
+# evidence trail and per-event-type confidence breakdown.
+# =========================================================================
+
+
+def _make_mission_timeline_report(event_type: str, **event_kwargs):
+    from roombapy_prime.models import MissionTimelineEvent, MissionTimelineReport
+
+    event_data = {"type": event_type, "ts": 1, **event_kwargs}
+    return MissionTimelineReport(
+        mission_id="m1", event=[MissionTimelineEvent.from_json(event_data)],
+    )
+
+
+class TestCloudOnlyActivityFromMissionTimeline:
+    @pytest.mark.parametrize(
+        "event_type,expected",
+        [
+            ("start", "cleaning"),
+            ("reloc", "cleaning"),
+            ("travel", "cleaning"),
+            ("room", "cleaning"),
+            ("traversal", "cleaning"),
+            ("zone", "cleaning"),
+            ("pause", "paused"),
+            ("charge", "docked"),
+            ("evac", "returning"),
+            ("padWash", "docked"),
+            ("fin", "idle"),
+            ("error", "error"),
+        ],
+    )
+    def test_activity_maps_confirmed_event_types(self, event_type, expected):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(event_type)
+
+        assert v.activity == VacuumActivity(expected)
+
+    def test_activity_falls_back_to_idle_for_unknown_event_type(self):
+        """Deliberately IDLE, not ERROR, for an unrecognized type here --
+        unlike the classic phase-map path, an unmapped mission-timeline
+        event type is far more likely to be one of the several
+        known-but-not-yet-mapped MissionTimelineEvent sub-types than a
+        genuine fault."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report("waypoint")
+
+        assert v.activity == VacuumActivity.IDLE
+
+    def test_activity_falls_back_to_idle_when_no_coordinator_data_yet(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = None
+
+        assert v.activity == VacuumActivity.IDLE
+
+
+class TestCloudOnlyExtraStateAttributesFromMissionTimeline:
+    def test_room_event_populates_room_attributes(self):
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(
+            "room", room={"rid": "11", "area": 354, "passCount": 0},
+        )
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["mission_id"] == "m1"
+        assert attrs["mission_event_type"] == "room"
+        assert attrs["current_room_id"] == "11"
+        assert attrs["current_room_area"] == 354
+        assert attrs["current_room_pass_count"] == 0
+
+    def test_travel_event_populates_room_id_only(self):
+        """TravelEvent has no area/pass_count -- only RoomEvent does."""
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(
+            "travel", travel={"dest": "room", "rid": "11"},
+        )
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["current_room_id"] == "11"
+        assert "current_room_area" not in attrs
+
+    def test_start_event_has_no_room_id(self):
+        """The "start" event carries no nested room/travel sub-object at
+        all -- must not crash, must simply omit current_room_id."""
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report("start")
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["mission_event_type"] == "start"
+        assert "current_room_id" not in attrs
+
+    def test_no_coordinator_data_yet_does_not_crash(self):
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = None
+
+        attrs = v.extra_state_attributes
+
+        assert "mission_event_type" not in attrs
+
+
+class TestPrimeCoordinatorListenerRegistration:
+    @pytest.mark.asyncio
+    async def test_async_added_to_hass_registers_prime_coordinator_listener(self):
+        v = _make_prime_vacuum_entity()
+        v.hass = MagicMock()
+        v._config_entry.runtime_data.cloud_coordinator = None
+        pc = v._config_entry.runtime_data.prime_coordinator
+        with patch.object(v, "_async_update_device_name", new=AsyncMock()):
+            with patch.object(v, "schedule_update_ha_state"):
+                await v.async_added_to_hass()
+
+        pc.async_add_listener.assert_called_once_with(v._handle_prime_coordinator_update)
+
+    def test_handle_prime_coordinator_update_schedules_state_update(self):
+        v = _make_prime_vacuum_entity()
+        with patch.object(v, "schedule_update_ha_state") as mock_schedule:
+            v._handle_prime_coordinator_update()
+        mock_schedule.assert_called_once()

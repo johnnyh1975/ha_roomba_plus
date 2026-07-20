@@ -106,6 +106,7 @@ requests==2.32.3
 requests-mock==1.12.1
 respx==0.21.1
 roombapy==1.9.1
+roombapy-prime @ git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6
 s3transfer==0.19.0
 scapy==2.7.0
 securetar==2024.11.0

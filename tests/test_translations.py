@@ -24,6 +24,7 @@ _TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt", "pl"]
 _SOURCE_FILES = [
     _ROOT / "services.py",
     _ROOT / "vacuum.py",
+    _ROOT / "cloud_coordinator.py",
 ]
 TRANS_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus" / "translations"
 ASCII_KEY_RE = re.compile(r'^[a-z0-9_]+$')

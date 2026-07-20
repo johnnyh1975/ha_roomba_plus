@@ -22,7 +22,21 @@ from custom_components.roomba_plus.cloud_api import _AWSSignatureV4
 from custom_components.roomba_plus.cloud_api import IrobotCloudApi
 from custom_components.roomba_plus.cloud_api import AuthenticationError
 from custom_components.roomba_plus.cloud_api import CloudApiError
+from custom_components.roomba_plus.cloud_api import CloudConnectionError
+from custom_components.roomba_plus.cloud_api import CloudTimeoutError
+from custom_components.roomba_plus.cloud_api import RateLimitedError
+from custom_components.roomba_plus.cloud_api import SSLCertificateError
 from custom_components.roomba_plus.cloud_api import DISCOVERY_URL
+from roombapy_prime import (
+    AuthConnectionError as PrimeConnectionError,
+    AuthCredentialsError as PrimeCredentialsError,
+    AuthError as PrimeAuthError,
+    AuthRateLimitedError as PrimeRateLimitedError,
+    AuthSSLError as PrimeSSLError,
+    AuthTimeoutError as PrimeTimeoutError,
+    LoginResult,
+)
+from roombapy_prime.auth import CloudCredentials
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -70,6 +84,26 @@ _GOOD_DATA = {
     "automations": {},
     "umf": {},
 }
+
+
+def _fake_login_result(robots: dict | None = None) -> LoginResult:
+    """Builds a real roombapy_prime.LoginResult (not an ad-hoc fake) for
+    mocking authenticate()'s call to _prime_login() -- since roombapy-
+    prime is now a real dependency, using its own types here is more
+    representative than inventing a parallel fake shape."""
+    return LoginResult(
+        mqtt_endpoint="mqtt.example.invalid",
+        http_base="https://irobot.example.com",
+        http_base_auth="https://auth.irobot.example.com",
+        credentials=CloudCredentials(
+            access_key_id="AKIA_TEST", secret_key="SECRET",
+            session_token="SESSION", cognito_id="us-east-1:some-cognito-id",
+        ),
+        robots={},
+        connection_tokens=[],
+        raw={"robots": robots if robots is not None else {"blid123": {"name": "My Roomba"}}},
+        deployment=DISCOVERY_RESPONSE["deployments"]["prod"],
+    )
 
 
 def _make_resp(status: int = 200, json_data=None, text_data: str | None = None):
@@ -163,154 +197,167 @@ class TestAWSSignatureV4:
 
 
 class TestIrobotCloudApiAuth:
-    """Tests for the authentication flow."""
+    """Tests for the authentication flow.
+
+    CONSOLIDATED (v3.6.0): authenticate() now delegates to roombapy-
+    prime's login() instead of this class's own (now removed)
+    _discover()/_login_gigya()/_login_irobot(). These tests mock
+    _prime_login (the module-level import in cloud_api.py) rather
+    than the old private methods."""
 
     def _api(self, session):
         return IrobotCloudApi("user@test.com", "pass123", session)
 
     @pytest.mark.asyncio
-    async def test_authenticate_calls_discovery(self):
-        session = _make_session(json_data=DISCOVERY_RESPONSE)
-        session.post = MagicMock(side_effect=[
-            _make_resp(json_data=GIGYA_OK, text_data="{}"),
-            _make_resp(json_data=IROBOT_LOGIN_OK, text_data="{}"),
-        ])
-        session.get = MagicMock(side_effect=[
-            _make_resp(json_data=DISCOVERY_RESPONSE),
-        ])
-        api = self._api(session)
+    async def test_authenticate_calls_prime_login_and_populates_state(self):
+        api = self._api(MagicMock())
 
-        # Patch _login_gigya and _login_irobot to avoid real HTTP in unit test
-        api._discovery_done = False
-        with patch.object(api, "_login_gigya", new=AsyncMock(return_value=("uid", "sig", "ts"))):
-            with patch.object(api, "_login_irobot", new=AsyncMock()):
-                await api.authenticate()
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(return_value=_fake_login_result()),
+        ) as mock_login:
+            await api.authenticate()
 
-        # _discover must have been called
-        assert api._deployment  # set by _discover
+        mock_login.assert_awaited_once()
+        assert api._deployment == DISCOVERY_RESPONSE["deployments"]["prod"]
+        assert api._credentials["AccessKeyId"] == "AKIA_TEST"
+        assert api._credentials["CognitoId"] == "us-east-1:some-cognito-id"
+        assert "blid123" in api.robots
 
     @pytest.mark.asyncio
     async def test_gigya_error_raises_authentication_error(self):
-        error_resp = {"errorCode": 400, "errorMessage": "Invalid credentials"}
-        import json as _json
-        session = MagicMock()
-        session.get = MagicMock(return_value=_make_resp(json_data=DISCOVERY_RESPONSE))
-        session.post = MagicMock(return_value=_make_resp(
-            text_data=_json.dumps(error_resp),
-            json_data=error_resp,
-        ))
-        api = self._api(session)
-        api._deployment = DISCOVERY_RESPONSE["deployments"]["prod"]
-        api._deployment["gigya"] = DISCOVERY_RESPONSE["gigya"]
+        """Wrong username/password (PrimeCredentialsError) must map to
+        this module's own AuthenticationError -- the type existing
+        callers (config_flow.py/cloud_coordinator.py) already catch."""
+        api = self._api(MagicMock())
 
-        import json
-        with pytest.raises(AuthenticationError, match="Gigya login failed"):
-            await api._login_gigya(DISCOVERY_RESPONSE["gigya"], "KEY")
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeCredentialsError("Gigya login failed: Invalid login")),
+        ):
+            with pytest.raises(AuthenticationError, match="Gigya login failed"):
+                await api.authenticate()
 
     @pytest.mark.asyncio
-    async def test_irobot_login_missing_credentials_raises(self):
-        import json
-        bad_resp = {"robots": {}}  # no 'credentials' key
+    async def test_malformed_response_raises_cloud_api_error_not_authentication_error(self):
+        """DELIBERATE BEHAVIOR CHANGE (v3.6.0): a malformed/incomplete
+        server response (e.g. missing a credentials field) previously
+        raised AuthenticationError here -- same bucket as "your
+        password is wrong". That was misleading: re-entering the same,
+        correct credentials would not fix a malformed response. Now
+        maps to the generic CloudApiError instead, matching
+        roombapy-prime's own categorization (plain AuthError, not
+        AuthCredentialsError, for this case)."""
         api = self._api(MagicMock())
-        api._deployment = DISCOVERY_RESPONSE["deployments"]["prod"]
-        session_post = _make_resp(json_data=bad_resp, text_data=json.dumps(bad_resp))
-        api._session = MagicMock()
-        api._session.post = MagicMock(return_value=session_post)
 
-        with pytest.raises(AuthenticationError, match="No credentials"):
-            await api._login_irobot("uid", "sig", "ts")
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeAuthError("No credentials in iRobot login response")),
+        ):
+            with pytest.raises(CloudApiError, match="No credentials") as excinfo:
+                await api.authenticate()
+            assert not isinstance(excinfo.value, AuthenticationError)
 
     @pytest.mark.asyncio
     async def test_robots_populated_after_auth(self):
-        import json
         api = self._api(MagicMock())
-        api._deployment = DISCOVERY_RESPONSE["deployments"]["prod"]
-        ok_resp = _make_resp(json_data=IROBOT_LOGIN_OK, text_data=json.dumps(IROBOT_LOGIN_OK))
-        api._session = MagicMock()
-        api._session.post = MagicMock(return_value=ok_resp)
 
-        await api._login_irobot("uid", "sig", "ts")
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(return_value=_fake_login_result()),
+        ):
+            await api.authenticate()
+
         assert "blid123" in api.robots
         assert api._credentials["AccessKeyId"] == "AKIA_TEST"
 
 
-class TestSslCertificateErrorHandling:
-    """v3.5.0 bug-hunt fix, from a real-world report (wecoyote5): iRobot's
-    own disc-prod.iot.irobotapi.com TLS certificate briefly expired on
-    their end. Without _raise_clear_ssl_error(), the raw aiohttp exception
-    bubbled all the way up as an opaque "unknown error occurred" instead of
-    a CloudApiError explaining it's external and self-resolving.
-    """
-
-    def _ssl_error(self):
-        return aiohttp.ClientSSLError(None, OSError("certificate has expired"))
+class TestCloudApiErrorTranslation:
+    """v3.5.0 bug-hunt fix (SSL clarity, from a real-world report,
+    wecoyote5), now consolidated onto roombapy-prime's own typed
+    exceptions (v3.6.0) -- see CHANGELOG. Each of roombapy-prime's
+    Auth*Error subclasses must map to this module's matching
+    CloudApiError subclass, so config_flow.py/cloud_coordinator.py can
+    branch on exception type for translation keys without ever knowing
+    roombapy-prime exists."""
 
     @pytest.mark.asyncio
-    async def test_discover_translates_ssl_error(self):
-        session = MagicMock()
-        session.get = MagicMock(side_effect=self._ssl_error())
-        api = IrobotCloudApi("user@test.com", "pass123", session)
+    async def test_authenticate_translates_ssl_error(self):
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
 
-        with pytest.raises(CloudApiError) as excinfo:
-            await api._discover()
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeSSLError("Could not verify iRobot's cloud server certificate. Temporary.")),
+        ):
+            with pytest.raises(SSLCertificateError) as excinfo:
+                await api.authenticate()
 
         assert "certificate" in str(excinfo.value).lower()
         assert "temporary" in str(excinfo.value).lower()
-        assert isinstance(excinfo.value.__cause__, aiohttp.ClientSSLError)
 
     @pytest.mark.asyncio
-    async def test_login_gigya_translates_ssl_error(self):
-        session = MagicMock()
-        session.post = MagicMock(side_effect=self._ssl_error())
-        api = IrobotCloudApi("user@test.com", "pass123", session)
+    async def test_authenticate_translates_connection_error(self):
+        """Replaces the old test_non_ssl_connection_errors_are_not_swallowed:
+        previously a non-SSL ClientConnectorError propagated raw and
+        unwrapped from this module's own _discover(). Now roombapy-prime
+        itself wraps it into AuthConnectionError, which this module maps
+        to CloudConnectionError -- no longer raw and unwrapped, that gap
+        is what roombapy-prime v0.1.11a3 closed."""
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
 
-        with pytest.raises(CloudApiError) as excinfo:
-            await api._login_gigya(
-                {"datacenter_domain": "eu1.gigya.com"}, "api_key_123"
-            )
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeConnectionError("Could not connect to iRobot's cloud servers.")),
+        ):
+            with pytest.raises(CloudConnectionError) as excinfo:
+                await api.authenticate()
 
-        assert "certificate" in str(excinfo.value).lower()
+        assert "connect" in str(excinfo.value).lower()
 
     @pytest.mark.asyncio
-    async def test_login_irobot_translates_ssl_error(self):
-        session = MagicMock()
-        session.post = MagicMock(side_effect=self._ssl_error())
-        api = IrobotCloudApi("user@test.com", "pass123", session)
-        api._deployment = {"httpBase": "https://base.example.com"}
+    async def test_authenticate_translates_timeout_error(self):
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
 
-        with pytest.raises(CloudApiError) as excinfo:
-            await api._login_irobot("uid", "sig", "ts")
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeTimeoutError("iRobot's cloud servers took too long to respond.")),
+        ):
+            with pytest.raises(CloudTimeoutError) as excinfo:
+                await api.authenticate()
 
-        assert "certificate" in str(excinfo.value).lower()
+        assert "too long" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_authenticate_translates_rate_limited_error(self):
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
+
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeRateLimitedError("Cloud auth rate-limited. Close the iRobot app.")),
+        ):
+            with pytest.raises(RateLimitedError) as excinfo:
+                await api.authenticate()
+
+        assert "rate-limited" in str(excinfo.value).lower()
 
     @pytest.mark.asyncio
     async def test_aws_get_translates_ssl_error(self):
+        """_aws_get() is untouched by the login consolidation -- its own
+        SSL handling (for ongoing REST calls, not login) still uses
+        _raise_clear_ssl_error() directly, now upgraded to raise
+        SSLCertificateError instead of a plain CloudApiError."""
         session = MagicMock()
-        session.get = MagicMock(side_effect=self._ssl_error())
+        session.get = MagicMock(side_effect=aiohttp.ClientSSLError(None, OSError("certificate has expired")))
         api = IrobotCloudApi("user@test.com", "pass123", session)
         api._credentials = {
             "AccessKeyId": "AKIA", "SecretKey": "SECRET",
             "SessionToken": "TOKEN", "CognitoId": "us-east-1:abc",
         }
 
-        with pytest.raises(CloudApiError) as excinfo:
+        with pytest.raises(SSLCertificateError) as excinfo:
             await api._aws_get("https://auth.example.com/v1/robots")
 
         assert "certificate" in str(excinfo.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_non_ssl_connection_errors_are_not_swallowed(self):
-        """A plain (non-SSL) connection error must still propagate as
-        whatever it normally would — this fix is scoped to SSL/certificate
-        failures specifically, not a blanket catch-all."""
-        session = MagicMock()
-        session.get = MagicMock(
-            side_effect=aiohttp.ClientConnectorError(None, OSError("Connection refused"))
-        )
-        api = IrobotCloudApi("user@test.com", "pass123", session)
-
-        with pytest.raises(aiohttp.ClientConnectorError):
-            await api._discover()
 
 
 class TestIrobotCloudApiEndpoints:

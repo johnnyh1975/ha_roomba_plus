@@ -519,6 +519,23 @@ class TestGetRobotProfile:
             "known iRobot product family" in r.message for r in caplog.records
         )
 
+    def test_v4_prime_sku_prefix_known_but_unprofiled(self, caplog):
+        """'G185020' — the real, confirmed SKU for both live V4/Prime test
+        accounts (chairstacker, jadestar1864 — Roomba 405 Combo) — is a
+        known family via the 'g' prefix (added alongside V4 onboarding
+        prep), same 'known but no RobotProfile yet' treatment as 'c'
+        above. No RobotProfile entry exists for it — no real battery/
+        maintenance field data has been collected for this SKU, only
+        login/state confirmation via roombapy-prime."""
+        from custom_components.roomba_plus.const import get_robot_profile
+        import logging
+        with caplog.at_level(logging.INFO, logger="custom_components.roomba_plus.const"):
+            profile = get_robot_profile("G185020")
+        assert profile is None
+        assert any(
+            "known iRobot product family" in r.message for r in caplog.records
+        )
+
     def test_truly_unrecognised_prefix_logs_debug_not_info(self, caplog):
         from custom_components.roomba_plus.const import get_robot_profile
         import logging
