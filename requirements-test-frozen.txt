@@ -67,7 +67,7 @@ netifaces==0.11.0
 numpy==2.2.0
 orjson==3.10.12
 packaging==26.2
-paho-mqtt==1.6.1
+paho-mqtt==2.1.0
 pillow==11.0.0
 pipdeptree==2.23.4
 pluggy==1.6.0

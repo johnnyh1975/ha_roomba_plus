@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_PATH = ROOT / "custom_components" / "roomba_plus" / "manifest.json"
 README_PATH = ROOT / "README.md"
 
-BADGE_PATTERN = re.compile(r"!\[Version\]\(https://img\.shields\.io/badge/Version-([\d.]+)-brightgreen\.svg\)")
+BADGE_PATTERN = re.compile(r"!\[Version\]\(https://img\.shields\.io/badge/Version-([\d.]+[a-z]?\d*)-brightgreen\.svg\)")
 
 
 def main() -> int:
