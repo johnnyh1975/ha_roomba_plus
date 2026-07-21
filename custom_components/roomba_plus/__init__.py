@@ -90,6 +90,7 @@ from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
 from .prime_coordinator import PrimeCoordinator
+from ._prime_login_bridge import pop_pending_login
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from roombapy_prime import (
@@ -3149,6 +3150,17 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     planned but not yet built (sensor.py has no CLOUD_ONLY awareness at
     all), see ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md's
     Implementierungs-Checkliste.
+
+    NEW (this session, prompted by a real "onboarding is slow" field
+    report): the very first time this runs for a freshly-created entry,
+    HA calls it essentially immediately after config_flow finishes --
+    which already ran a full login to validate credentials and list
+    robots. Checks _prime_login_bridge for a still-fresh, single-use
+    LoginResult from that same login before doing its own; on every
+    later restart (no config flow involved, or the bridge missed for
+    any reason) this is simply None and login proceeds exactly as
+    before. See _prime_login_bridge.py's own docstring for the full
+    reasoning and deliberately narrow risk profile.
     """
     blid = config_entry.data[CONF_BLID]
     username = config_entry.data[CONF_IROBOT_USERNAME]
@@ -3156,10 +3168,21 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     country_code = (hass.config.country or "US").upper()
     session = async_get_clientsession(hass)
 
+    # NEW (this session, prompted by a real "onboarding is slow" field
+    # report): if config_flow just ran a validation login for this exact
+    # blid moments ago, reuse it instead of running the full Gigya+
+    # iRobot chain a second time. Single-use (removed on read whether or
+    # not it turns out to still be fresh) and short-TTL -- see
+    # _prime_login_bridge.py's own docstring for the full reasoning. On
+    # every later HA restart (no config flow involved), this simply
+    # returns None and the login below proceeds exactly as it always
+    # did before this existed.
+    cached_login_result = pop_pending_login(blid)
+
     try:
         prime_robot = await PrimeFactory.create_prime_robot(
             session, username, password, country_code,
-            blid=blid, auto_refresh=True,
+            blid=blid, auto_refresh=True, login_result=cached_login_result,
         )
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(

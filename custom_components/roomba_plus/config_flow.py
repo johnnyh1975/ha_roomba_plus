@@ -9,6 +9,7 @@ from typing import Any
 from roombapy import RoombaFactory, RoombaInfo
 from roombapy.discovery import RoombaDiscovery
 from roombapy.getpassword import RoombaPassword
+from roombapy_prime import LoginResult
 import voluptuous as vol
 from homeassistant.helpers.selector import (
     EntitySelector as SelectorEntitySelector,
@@ -26,6 +27,7 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
+from ._prime_login_bridge import store_pending_login
 from .cloud_api import (
     AuthenticationError,
     CloudApiError,
@@ -237,6 +239,14 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         self._prime_account_password: str = ""
         self._prime_account_robots: dict[str, Any] = {}
         self._prime_selected_blid: str | None = None
+        # NEW (this session, prompted by a real "onboarding is slow" field
+        # report): the LoginResult from this same validation login, handed
+        # to _async_create_prime_entry() -> _prime_login_bridge so the
+        # immediate first async_setup_entry() call can skip a fully
+        # redundant second login. See _prime_login_bridge.py's own
+        # docstring for the full reasoning and the deliberately narrow
+        # risk profile (in-memory, single-use, short TTL).
+        self._prime_account_login_result: LoginResult | None = None
 
     @staticmethod
     @callback
@@ -449,6 +459,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._prime_account_username = username
                     self._prime_account_password = password
                     self._prime_account_robots = api.robots
+                    self._prime_account_login_result = api.login_result
                     return await self.async_step_prime_robot_picker()
 
         return self.async_show_form(
@@ -521,9 +532,26 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         failure (MQTT unreachable etc.) surfaces at real setup time via
         PrimeCoordinator.async_start()'s own ConfigEntryNotReady
         mapping, not here.
+
+        NEW (this session, prompted by a real "onboarding is slow"
+        field report): also hands the LoginResult from that same
+        validation login to _prime_login_bridge, keyed by blid. HA
+        calls async_setup_entry() for this entry essentially
+        immediately after this method returns -- see
+        _async_setup_entry_prime() in __init__.py, which checks this
+        bridge before doing its own (otherwise fully redundant) login.
+        Single-use, short TTL, in-memory only -- see the bridge
+        module's own docstring for the full reasoning and risk
+        profile. If _prime_account_login_result is somehow None here
+        (shouldn't happen -- it's set in the same step that produced
+        this entry's robots list -- but defensive rather than assumed),
+        simply nothing gets stored and the setup step does its own
+        fresh login exactly as it always did before this existed.
         """
         await self.async_set_unique_id(blid, raise_on_progress=False)
         self._abort_if_unique_id_configured()
+        if self._prime_account_login_result is not None:
+            store_pending_login(blid, self._prime_account_login_result)
         return self.async_create_entry(
             title=info.get("name") or blid,
             data={

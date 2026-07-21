@@ -34,6 +34,7 @@ from roombapy_prime import (
     AuthRateLimitedError as _PrimeRateLimitedError,
     AuthSSLError as _PrimeSSLError,
     AuthTimeoutError as _PrimeTimeoutError,
+    LoginResult,
     login as _prime_login,
 )
 
@@ -248,6 +249,7 @@ class IrobotCloudApi:
         self._deployment: dict[str, Any] = {}
         self._credentials: dict[str, Any] = {}
         self.robots: dict[str, Any] = {}   # blid → robot_info
+        self.login_result: LoginResult | None = None
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -301,6 +303,18 @@ class IrobotCloudApi:
             "SessionToken": result.credentials.session_token,
         }
         self.robots = result.raw.get("robots", {})
+        # NEW (this session, prompted by a real "onboarding is slow" field
+        # report): the full LoginResult object, kept alongside the
+        # already-extracted pieces above rather than discarded. Lets a
+        # caller (config_flow.py, specifically) hand this exact result to
+        # PrimeFactory.create_prime_robot()'s new login_result= parameter
+        # moments later during the same onboarding run, instead of
+        # triggering a second, fully redundant Gigya+iRobot login chain.
+        # See config_flow.py's _async_create_prime_entry() and
+        # __init__.py's _async_setup_entry_prime() for the actual
+        # bridging logic -- this attribute only makes the data available,
+        # it doesn't do any caching itself.
+        self.login_result = result
 
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
         _LOGGER.debug(

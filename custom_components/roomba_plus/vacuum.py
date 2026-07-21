@@ -557,7 +557,34 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     async def async_locate(self, **kwargs: Any) -> None:
         """Play a sound to locate the robot.
 
-        NEW (V4/Prime): uses poll_echo_value() -- a dedicated REST
+        BUG CONFIRMED (chairstacker, v4.0.0a0 field test): this does
+        NOT actually make the robot chime, even though the equivalent
+        action works fine from the real app. The REST-based approach
+        below was always the better-reasoned of two unconfirmed
+        guesses, not a confirmed-working implementation -- now
+        confirmed NOT working.
+
+        SECOND HYPOTHESIS -- ALSO DISPROVEN (chairstacker, real device
+        test): the app's own command config names this feature's
+        underlying command "SetEchoCommand" -- a shadow WRITE, not a
+        REST POST, so roombapy-prime's
+        PrimeRobot.trigger_echo_via_shadow() was tried as an
+        alternative -- writing to the "echo" field of the named
+        "rw-constatus" shadow. The write itself succeeded (a genuine,
+        accepted shadow update/delta came back), but the robot did NOT
+        chime, and "locate" from the real app worked fine on the same
+        device immediately after. See trigger_echo_via_shadow()'s own
+        docstring in roombapy-prime for the full result. Not wired in
+        here, and shouldn't be -- it doesn't work either.
+
+        STILL UNRESOLVED as of this writing: the actual mechanism the
+        real app uses for this feature. Both of this project's own
+        best-reasoned guesses have now been tried against a real
+        device and failed -- this needs either further native-app
+        analysis or a different investigative approach entirely, not
+        another guess in the same style.
+
+        OLD (V4/Prime): uses poll_echo_value() -- a dedicated REST
         endpoint for exactly this "find my robot" feature (CONFIRMED
         from base_roomba_config.json + native SetRoombaEchoAwsIotSerializer
         analysis, per roombapy-prime's own docstring) -- rather than
@@ -565,8 +592,10 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         confirmed-live verb subset (only start/pause/stop/resume/dock
         are, per roombapy-prime's README confidence table). Both are
         similarly unconfirmed against a live device for this specific
-        action; poll_echo_value() is the better-reasoned choice since
-        it's a dedicated, purpose-built endpoint for this exact feature.
+        action; poll_echo_value() was the better-reasoned choice since
+        it's a dedicated, purpose-built endpoint for this exact feature
+        -- but "better-reasoned" wasn't "confirmed", and it turned out
+        wrong.
         """
         if self._connection_type is ConnectionType.CLOUD_ONLY:
             await self._prime_robot.poll_echo_value()
