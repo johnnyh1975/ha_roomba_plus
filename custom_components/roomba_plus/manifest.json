@@ -42,9 +42,9 @@
   ],
   "requirements": [
     "roombapy==1.9.1",
-    "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a12"
+    "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a13"
   ],
-  "version": "4.0.0a1",
+  "version": "4.0.0a2",
   "zeroconf": [
     {
       "name": "irobot-*",

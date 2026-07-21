@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 import logging
-from typing import Any
+from typing import Any, Final
 
 from roombapy import RoombaFactory, RoombaInfo
 from roombapy.discovery import RoombaDiscovery
@@ -102,18 +102,29 @@ DEFAULT_OPTIONS = {CONF_CONTINUOUS: DEFAULT_CONTINUOUS, CONF_DELAY: DEFAULT_DELA
 _CLOUD_ACCOUNT_SENTINEL = "__cloud_account__"
 
 
-def _is_prime_sku(sku: str | None) -> bool:
-    """True for V4/Prime-generation SKUs.
+# V4/Prime-generation SKU prefixes, confirmed live one at a time as field
+# reports come in -- NOT a guess at the full V4/Prime product lineup, just
+# the prefixes actually confirmed so far:
+#   "g" - Roomba Plus 405 Combo (SKU G185020) - chairstacker, jadestar1864
+#   "n" - Roomba Plus 505 Combo (SKU N185240) - darealgugu (GitHub issue
+#         report: cloud login correctly listed the robot, but with no
+#         recognized prefix it fell through to Classic's local-network
+#         completion step, which can never succeed for a cloud-only
+#         device). Model confirmed via public retailer/certification
+#         listings for N185240, not just inferred from the SKU pattern --
+#         same "Combo" product family as "g" above, one generation newer.
+_PRIME_SKU_PREFIXES: Final[frozenset[str]] = frozenset("g n".split())
 
-    Only "g" (G185020, Roomba Plus/Combo 405) is actually confirmed live
-    -- see ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md's "Bestätigte Fakten"
-    table and const.py's own V4-SKU-VERIFY comment next to
-    _KNOWN_IROBOT_SKU_PREFIXES. Prefix check (not exact match), for
-    consistency with that same set's own convention -- at the cost of
-    treating any OTHER, as-yet-unconfirmed "g"-prefixed SKU as Prime
-    too, rather than only the one specific SKU actually tested.
+
+def _is_prime_sku(sku: str | None) -> bool:
+    """True for V4/Prime-generation SKUs -- see _PRIME_SKU_PREFIXES above
+    for exactly which prefixes are confirmed and why. Prefix check (not
+    exact match), for consistency with const.py's own
+    _KNOWN_IROBOT_SKU_PREFIXES convention -- at the cost of treating any
+    OTHER, as-yet-unconfirmed SKU sharing a known prefix's first letter as
+    Prime too, rather than only the specific SKUs actually tested.
     """
-    return bool(sku) and sku[0].lower() == "g"
+    return bool(sku) and sku[0].lower() in _PRIME_SKU_PREFIXES
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
