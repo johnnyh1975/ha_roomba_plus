@@ -61,6 +61,12 @@ class TestIsPrimeSku:
     def test_lowercase_g_prefix_is_prime(self):
         assert _is_prime_sku("g185020") is True
 
+    def test_n_prefix_is_prime(self):
+        """NEW (darealgugu, GitHub issue): N185240 (Roomba Plus 505
+        Combo) was wrongly falling through to Classic's local-network
+        completion, which can never succeed for a cloud-only device."""
+        assert _is_prime_sku("N185240") is True
+
     def test_i_prefix_is_classic(self):
         assert _is_prime_sku("i755840") is False
 
