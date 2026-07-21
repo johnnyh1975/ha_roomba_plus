@@ -50,6 +50,7 @@ def _make_flow() -> RoombaPlusConfigFlow:
     flow._prime_account_password = ""
     flow._prime_account_robots = {}
     flow._prime_selected_blid = None
+    flow._prime_account_login_result = None
     return flow
 
 
