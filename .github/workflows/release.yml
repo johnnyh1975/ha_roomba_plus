@@ -99,7 +99,7 @@ jobs:
       # since PrimeMqttClient is mocked throughout this project's tests.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a6"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a15"
 
       - name: Run full test suite (release gate — must pass before packaging)
         run: |
