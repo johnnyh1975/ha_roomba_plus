@@ -1238,3 +1238,88 @@ class TestBinStatusNullRegression:
         from custom_components.roomba_plus.binary_sensor import RoombaBinPresentStatus
         entity = self._entity(RoombaBinPresentStatus, {"bin": None})
         assert entity.is_on is True   # defaults to "present" when unknown
+
+
+# ── V4/Prime bin/tank presence ──────────────────────────────────────────────
+
+def _make_prime_status_entry(ro_currentstate: dict | None = None) -> MagicMock:
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"ro-currentstate": ro_currentstate} if ro_currentstate is not None else None
+    )
+    return config_entry
+
+
+class TestPrimeBinPresentSensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """Uses chairstacker's own real captured value, not a
+        placeholder -- bin.present was True."""
+        from custom_components.roomba_plus.binary_sensor import PrimeBinPresentSensor
+
+        config_entry = _make_prime_status_entry({"bin": {"present": True}})
+        sensor = PrimeBinPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+    def test_is_on_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeBinPresentSensor
+
+        config_entry = _make_prime_status_entry()
+        sensor = PrimeBinPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is None
+
+
+class TestPrimeTankPresentSensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """Uses chairstacker's own real captured value -- tankPresent
+        was True, confirmed a plain boolean (distinct from any
+        numeric tank-level field, which doesn't appear in the real
+        payload at all)."""
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        config_entry = _make_prime_status_entry({"tankPresent": True})
+        sensor = PrimeTankPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+
+class TestPrimeRobotConnectivitySensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """CONFIRMED bool (parallel native-analysis track, Ghidra
+        decompilation of the app's own constructor signature) --
+        not guessed."""
+        from custom_components.roomba_plus.binary_sensor import PrimeRobotConnectivitySensor
+
+        config_entry = _make_prime_status_entry({"connected": True})
+        config_entry.runtime_data.prime_status_coordinator.data = {"rw-constatus": {"connected": True}}
+        sensor = PrimeRobotConnectivitySensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+
+class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
+    @pytest.mark.asyncio
+    async def test_adds_all_three_prime_binary_sensors(self):
+        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeBinPresentSensor,
+            PrimeRobotConnectivitySensor,
+            PrimeTankPresentSensor,
+        )
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        created = []
+
+        def sync_add(entities, **kw):
+            created.extend(entities)
+
+        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        assert len(created) == 3
+        assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeRobotConnectivitySensor) for e in created)

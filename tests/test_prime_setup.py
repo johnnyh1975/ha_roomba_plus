@@ -98,6 +98,15 @@ class TestAsyncSetupEntryPrime:
         hass, config_entry = _make_hass_and_entry()
         fake_prime_robot = MagicMock()
         fake_prime_robot.connect = AsyncMock()
+        fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+
+        async def _empty_named_shadows_updates():
+            return
+            yield  # pragma: no cover -- makes this an async generator
+
+        fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
 
         with patch(
             "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
@@ -120,6 +129,7 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.connection_type is ConnectionType.CLOUD_ONLY
         assert runtime_data.prime_robot is fake_prime_robot
         assert runtime_data.prime_coordinator is not None
+        assert runtime_data.prime_status_coordinator is not None
         fake_prime_robot.connect.assert_awaited_once()
 
     @pytest.mark.asyncio

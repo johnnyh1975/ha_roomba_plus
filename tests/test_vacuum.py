@@ -1265,16 +1265,17 @@ class TestCloudOnlyVacuumActions:
         v._prime_robot.send_simple_command.assert_awaited_once_with("dock")
 
     @pytest.mark.asyncio
-    async def test_locate_uses_poll_echo_value_not_send_simple_command(self):
-        """NEW (V4/Prime): uses the dedicated poll_echo_value() REST
-        endpoint, NOT send_simple_command("find") -- "find" is not part
-        of the confirmed-live verb subset, unlike start/pause/stop/dock."""
+    async def test_locate_uses_send_simple_command_find_confirmed_working(self):
+        """RESOLVED (jayjay, real device test): send_simple_command("find")
+        is CONFIRMED WORKING -- a genuine, audible chime with no robot
+        movement. poll_echo_value() (the earlier hypothesis) was tried
+        first and confirmed NOT working."""
         v = _make_prime_vacuum_entity()
 
         await v.async_locate()
 
-        v._prime_robot.poll_echo_value.assert_awaited_once()
-        v._prime_robot.send_simple_command.assert_not_called()
+        v._prime_robot.send_simple_command.assert_awaited_once_with("find")
+        v._prime_robot.poll_echo_value.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_send_command_raises_service_validation_error(self):

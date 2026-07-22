@@ -318,3 +318,49 @@ class TestSwitchSetupGating:
         added = self._setup({"gentle": False})
         assert len(added) == 1
         assert isinstance(added[0], GentleModeSwitch)
+
+
+class TestPrimeCarpetBoostSwitch:
+    """PrimeCarpetBoostSwitch: reads/writes RobotSettings.carpet_boost
+    via the named shadow "rw-settings" -- a genuinely different data
+    source and write mechanism from every other switch in this file
+    (those all use roomba.set_preference() over local MQTT)."""
+
+    def _make(self, rw_settings: dict | None) -> "PrimeCarpetBoostSwitch":
+        from custom_components.roomba_plus.switch import PrimeCarpetBoostSwitch
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_status_coordinator.data = (
+            {"rw-settings": rw_settings} if rw_settings is not None else None
+        )
+        config_entry.runtime_data.prime_robot = MagicMock()
+        config_entry.runtime_data.prime_robot.set_setting = AsyncMock()
+        with patch(
+            "custom_components.roomba_plus.switch.IRobotEntity.__init__", return_value=None
+        ), patch(
+            "custom_components.roomba_plus.entity.IRobotEntity.robot_unique_id",
+            new_callable=lambda: property(lambda self: "uid"),
+        ):
+            switch = PrimeCarpetBoostSwitch("BLID123", config_entry)
+        switch._config_entry = config_entry
+        return switch
+
+    def test_is_on_reflects_real_captured_value(self):
+        switch = self._make({"carpetBoost": True})
+        assert switch.is_on is True
+
+    def test_is_on_none_when_no_coordinator_data_yet(self):
+        switch = self._make(None)
+        assert switch.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turn_on_calls_set_setting_with_carpet_boost_true(self):
+        switch = self._make({"carpetBoost": False})
+        await switch.async_turn_on()
+        switch._prime_robot.set_setting.assert_awaited_once_with("carpetBoost", True)
+
+    @pytest.mark.asyncio
+    async def test_turn_off_calls_set_setting_with_carpet_boost_false(self):
+        switch = self._make({"carpetBoost": True})
+        await switch.async_turn_off()
+        switch._prime_robot.set_setting.assert_awaited_once_with("carpetBoost", False)

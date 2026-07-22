@@ -2088,3 +2088,30 @@ class TestNullRegressionExplicitNulls:
             {"state": {"reported": {"cleanMissionStatus": status}}}
         )  # `or 0` fallback path — must not raise
         assert entity._last_phase == "run"
+
+
+class TestPrimeMapImage:
+    """NEW (V4/Prime live map) -- minimal coverage of the core
+    behavior, not an exhaustive suite: async_image() returns the
+    cached PNG once a live map update has been processed, and falls
+    back to a valid blank image before the first one arrives."""
+
+    def _entity(self):
+        from custom_components.roomba_plus.image import PrimeMapImage
+        entity = object.__new__(PrimeMapImage)
+        entity._png_bytes = None
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_async_image_returns_blank_before_first_update(self):
+        entity = self._entity()
+        result = await entity.async_image()
+        assert result is not None
+        assert result.startswith(b"\x89PNG")
+
+    @pytest.mark.asyncio
+    async def test_async_image_returns_cached_png_after_update(self):
+        entity = self._entity()
+        entity._png_bytes = b"fake-png-bytes"
+        result = await entity.async_image()
+        assert result == b"fake-png-bytes"

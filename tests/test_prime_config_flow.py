@@ -67,6 +67,17 @@ class TestIsPrimeSku:
         completion, which can never succeed for a cloud-only device."""
         assert _is_prime_sku("N185240") is True
 
+    def test_r_prefix_disambiguated_by_full_pattern_not_letter_alone(self):
+        """CRITICAL (this session, SkuUtils.java decompilation): "R" is
+        used by BOTH generations -- a single-letter check would have
+        misclassified real Classic robots (including this project's own
+        chairstacker test unit, a Roomba 980) as Prime. The 3-character
+        prefix (letter + 2 digits) is what actually disambiguates this,
+        not the letter alone."""
+        assert _is_prime_sku("R980020") is False  # Classic: Roomba 980
+        assert _is_prime_sku("R111840") is False  # Classic: Atlantis/100-series
+        assert _is_prime_sku("R285020") is True  # Prime: EnhancedComboNextPlus
+
     def test_i_prefix_is_classic(self):
         assert _is_prime_sku("i755840") is False
 

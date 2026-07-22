@@ -10,9 +10,73 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.roomba_plus.sensor_prime import (
+    PrimeBatterySensor,
     PrimeConnectionHealthSensor,
+    PrimeDetectedPadSensor,
+    PrimeDockStatusSensor,
     PrimeMissionEventSensor,
+    PrimePadDryStatusSensor,
+    PrimePadWashStatusSensor,
+    PrimeRuntimeHoursSensor,
+    PrimeSuctionLevelSensor,
+    _dock_state_label,
 )
+
+
+def _make_settings_config_entry(rw_settings: dict | None = None) -> MagicMock:
+    """For the RobotSettings-backed sensors (suction_level) -- a
+    separate named shadow (rw-settings) from the CurrentStateShadow-
+    backed sensors above."""
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"rw-settings": rw_settings} if rw_settings is not None else None
+    )
+    return config_entry
+
+
+def _make_status_config_entry(ro_currentstate: dict | None = None) -> MagicMock:
+    """For the CurrentStateShadow-backed sensors (battery/detected_pad/
+    runtime_hours) -- a separate coordinator attribute
+    (prime_status_coordinator) from PrimeMissionEventSensor's own
+    prime_coordinator, see prime_coordinator.py's own docstring for why."""
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"ro-currentstate": ro_currentstate} if ro_currentstate is not None else None
+    )
+    return config_entry
+
+
+class TestPrimeBatterySensor:
+    def test_native_value_none_when_no_coordinator_data_yet(self):
+        config_entry = _make_status_config_entry()
+        sensor = PrimeBatterySensor("BLID123", config_entry)
+
+        assert sensor.native_value is None
+
+    def test_native_value_reflects_real_captured_bat_pct(self):
+        """Uses chairstacker's own real captured value (72), not an
+        arbitrary placeholder."""
+        config_entry = _make_status_config_entry({"batPct": 72})
+        sensor = PrimeBatterySensor("BLID123", config_entry)
+
+        assert sensor.native_value == 72
+
+
+class TestPrimeDetectedPadSensor:
+    def test_native_value_reflects_real_captured_value(self):
+        config_entry = _make_status_config_entry({"detectedPad": "padPlate"})
+        sensor = PrimeDetectedPadSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "padPlate"
+
+
+class TestPrimeRuntimeHoursSensor:
+    def test_native_value_and_minutes_attribute(self):
+        config_entry = _make_status_config_entry({"runtimeStats": {"hr": 44, "min": 44}})
+        sensor = PrimeRuntimeHoursSensor("BLID123", config_entry)
+
+        assert sensor.native_value == 44
+        assert sensor.extra_state_attributes == {"minutes": 44}
 
 
 def _make_mission_timeline_report(event_type: str, **event_kwargs):
@@ -139,9 +203,19 @@ class TestAsyncSetupEntryCloudOnlyBranch:
     completely different data source for a CLOUD_ONLY entry."""
 
     @pytest.mark.asyncio
-    async def test_adds_exactly_the_two_prime_sensors(self):
+    async def test_adds_all_ten_prime_sensors(self):
         from custom_components.roomba_plus import sensor as sensor_mod
         from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeBatterySensor,
+            PrimeDetectedPadSensor,
+            PrimeDockStatusSensor,
+            PrimeFirmwareVersionSensor,
+            PrimePadDryStatusSensor,
+            PrimePadWashStatusSensor,
+            PrimeRuntimeHoursSensor,
+            PrimeSuctionLevelSensor,
+        )
 
         entry = MagicMock()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
@@ -153,6 +227,71 @@ class TestAsyncSetupEntryCloudOnlyBranch:
 
         await sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
 
-        assert len(created) == 2
+        assert len(created) == 10
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
+        assert any(isinstance(e, PrimeBatterySensor) for e in created)
+        assert any(isinstance(e, PrimeDetectedPadSensor) for e in created)
+        assert any(isinstance(e, PrimeRuntimeHoursSensor) for e in created)
+        assert any(isinstance(e, PrimeFirmwareVersionSensor) for e in created)
+        assert any(isinstance(e, PrimeDockStatusSensor) for e in created)
+        assert any(isinstance(e, PrimePadWashStatusSensor) for e in created)
+        assert any(isinstance(e, PrimePadDryStatusSensor) for e in created)
+        assert any(isinstance(e, PrimeSuctionLevelSensor) for e in created)
+
+
+class TestDockStateLabel:
+    def test_confirmed_real_captured_values(self):
+        """Uses chairstacker's own real captured values (301/601/701),
+        confirming the dock/pad-wash/pad-dry status labels resolve to
+        the real, named DockState members, not just bare numbers."""
+        assert _dock_state_label(301) == "Dock ready"
+        assert _dock_state_label(601) == "Pad wash okay"
+        assert _dock_state_label(701) == "Pad dry okay"
+
+    def test_unrecognized_value_does_not_crash(self):
+        """DockState has 86 confirmed values -- an out-of-range value
+        (a server-side addition this library doesn't know about yet)
+        must degrade gracefully, not raise."""
+        assert _dock_state_label(99999) == "Unknown (99999)"
+
+    def test_none_returns_none(self):
+        assert _dock_state_label(None) is None
+
+
+class TestPrimeDockStatusSensor:
+    def test_native_value_reflects_real_captured_value(self):
+        config_entry = _make_status_config_entry({"dock": {"state": 301}})
+        sensor = PrimeDockStatusSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "Dock ready"
+
+
+class TestPrimePadWashStatusSensor:
+    def test_native_value_reflects_real_captured_value(self):
+        config_entry = _make_status_config_entry({"dock": {"pwState": 601}})
+        sensor = PrimePadWashStatusSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "Pad wash okay"
+
+
+class TestPrimePadDryStatusSensor:
+    def test_native_value_reflects_real_captured_value(self):
+        config_entry = _make_status_config_entry({"dock": {"pdState": 701}})
+        sensor = PrimePadDryStatusSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "Pad dry okay"
+
+
+class TestPrimeSuctionLevelSensor:
+    def test_native_value_none_when_no_coordinator_data_yet(self):
+        config_entry = _make_settings_config_entry()
+        sensor = PrimeSuctionLevelSensor("BLID123", config_entry)
+
+        assert sensor.native_value is None
+
+    def test_native_value_resolves_confirmed_enum_member(self):
+        config_entry = _make_settings_config_entry({"suctionLevel": 3})
+        sensor = PrimeSuctionLevelSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "high"
