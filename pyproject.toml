@@ -1,27 +1,78 @@
-[tool.ruff]
-# Only the code paths this project actually lints in CI. Tests are
-# intentionally excluded here — they have their own, much noisier set of
-# patterns (fixtures, mocks) that would need a separate pass to evaluate
-# properly; scope was Pyflakes parity for custom_components/roomba_plus,
-# not a project-wide lint rollout.
-include = ["custom_components/roomba_plus/*.py"]
+[project]
+name = "roombapy-prime"
+version = "0.1.11a15"
+description = "Cloud client for iRobot 'Prime'/V4-generation robots (Draft, unverified against real V4 hardware)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Typing :: Typed",
+]
+dependencies = [
+    "aiohttp>=3.9",
+    "paho-mqtt>=2.0,<3.0",
+    "certifi",
+]
+
+[project.urls]
+Homepage = "https://github.com/johnnyh1975/roombapy-prime"
+Repository = "https://github.com/johnnyh1975/roombapy-prime"
+Issues = "https://github.com/johnnyh1975/roombapy-prime/issues"
+Changelog = "https://github.com/johnnyh1975/roombapy-prime/blob/main/CHANGELOG.md"
+
+[project.scripts]
+roombapy-prime-validate = "roombapy_prime.diagnostics:main"
+roombapy-prime-verify-commands = "roombapy_prime.verify_mission_commands:main"
+roombapy-prime-verify-map-edit = "roombapy_prime.verify_map_edit:main"
+roombapy-prime-verify-mission-timeline = "roombapy_prime.verify_mission_timeline:main"
+roombapy-prime-verify-named-shadows = "roombapy_prime.verify_named_shadows:main"
+roombapy-prime-verify-region-commands = "roombapy_prime.verify_region_commands:main"
+roombapy-prime-verify-schedule-write = "roombapy_prime.verify_schedule_write:main"
+roombapy-prime-verify-favorite-write = "roombapy_prime.verify_favorite_write:main"
+roombapy-prime-verify-virtual-wall-write = "roombapy_prime.verify_virtual_wall_write:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+]
+map = [
+    "Pillow>=10.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+roombapy_prime = ["py.typed"]
 
 [tool.ruff.lint]
-# F = Pyflakes rule family — deliberately the ONLY rule set enabled.
-# This matches exactly what the project's manual pyflakes checks already
-# covered (session: v3.4.2 cleanup + CI review), so switching tooling
-# doesn't silently expand scope. Formatting (ruff format / style rules
-# like E-series) is explicitly out of scope — see the CI job comment for
-# why: a project-wide style pass is a separate, much bigger decision the
-# maintainer hasn't made yet, not something to bundle in here.
-select = ["F"]
-
-# No per-file or blanket ignores here, deliberately: every current
-# exception (sensor.py's ~58 deliberate SENSOR-SPLIT facade re-exports,
-# and 19 TYPE_CHECKING forward-reference false positives across
-# dirt_threshold_manager.py / map_renderer.py / mission_map.py /
-# models.py / repairs.py) is annotated inline with `# noqa: F401` /
-# `# noqa: F821` and a one-line reason, right at the specific line it
-# applies to — not hidden in this config file. A new genuinely-unused
-# import or variable anywhere else has nothing to suppress it and will
-# be caught.
+# F = pyflakes (undefined names, unused imports)
+# B = flake8-bugbear (real Python footguns: mutable default args,
+#     closures over loop variables, etc.) -- zero findings when first
+#     tried, kept anyway since a clean result costs nothing to keep
+#     enabled and guards against future regressions in this category
+# C4 = flake8-comprehensions (unnecessary list()/dict() wrapping, etc.)
+#      -- also zero findings, same reasoning as B
+# UP = pyupgrade (outdated syntax patterns for the supported Python
+#      range) -- 58 real findings when first tried (all verified safe
+#      and fixed): unnecessary quoted type annotations now that
+#      `from __future__ import annotations` is used everywhere,
+#      timezone.utc -> datetime.UTC, Callable import path, and
+#      (str, Enum) -> StrEnum for all 24 enum classes -- the StrEnum
+#      change was checked for actual behavioral difference (str()/
+#      f-string formatting differs between the two) before applying,
+#      not just accepted on ruff's recommendation alone: no code here
+#      relied on str()/f-string formatting of these enums, and
+#      json.dumps() output is identical either way.
+select = ["F", "B", "C4", "UP"]
