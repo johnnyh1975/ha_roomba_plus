@@ -42,7 +42,7 @@ from .const import (
     is_mop,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 PARALLEL_UPDATES = 0
 
@@ -55,8 +55,25 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up binary sensors for this Roomba."""
-    roomba = config_entry.runtime_data.roomba
-    blid = config_entry.runtime_data.blid
+    data = config_entry.runtime_data
+
+    # NEW (V4/Prime): separate path -- battery/bin/tank presence comes
+    # from PrimeStatusCoordinator's named-shadow data (CurrentStateShadow),
+    # not roomba_reported_state()'s Classic shape. See sensor_prime.py's
+    # own module docstring for why this project keeps CLOUD_ONLY entities
+    # deliberately separate from the Classic SENSORS/RoombaSensor-style
+    # machinery rather than threading branches through it.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        if data.prime_status_coordinator is not None:
+            async_add_entities([
+                PrimeBinPresentSensor(data.blid, config_entry),
+                PrimeTankPresentSensor(data.blid, config_entry),
+                PrimeRobotConnectivitySensor(data.blid, config_entry),
+            ])
+        return
+
+    roomba = data.roomba
+    blid = data.blid
     state = roomba_reported_state(roomba)
 
     entities: list[IRobotEntity] = []
@@ -1191,3 +1208,137 @@ class RoombaLayoutChangeDetected(IRobotEntity, BinarySensorEntity):
             "candidate_count": len(candidates),
         }
 
+
+
+class _PrimeStatusSensorBase(IRobotEntity):
+    """Shared base for V4/Prime binary sensors reading from
+    PrimeStatusCoordinator's named-shadow data (see prime_coordinator.py's
+    own docstring). Not itself a full entity -- concrete subclasses mix
+    this in alongside BinarySensorEntity."""
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        self._config_entry = config_entry
+
+    @property
+    def _current_state(self) -> Any:
+        """Parses CurrentStateShadow from the coordinator's raw
+        ro-currentstate data, or None if not seeded/available yet."""
+        from roombapy_prime.models import CurrentStateShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-currentstate")
+        if raw is None:
+            return None
+        return CurrentStateShadow.from_json(raw)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """V4/Prime equivalent of RoombaBinPresentStatus above -- same
+    entity_description/device_class/translation_key, so it presents
+    identically regardless of connection type. Reads
+    CurrentStateShadow.bin.present (confirmed live, chairstacker) --
+    matching the same "present": true structure as roomba_reported_state()'s
+    own "bin" dict, just from a different transport."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="bin_present",
+        name="Bin present",
+        translation_key="bin_present",
+    )
+    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_bin_present"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None or state.bin is None:
+            return None
+        return state.bin.present
+
+
+class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """V4/Prime equivalent of RoombaMopTankPresentStatus above -- same
+    entity_description/device_class/translation_key. Reads
+    CurrentStateShadow.tank_present directly (confirmed live,
+    chairstacker: a plain boolean, genuinely distinct from any numeric
+    tank-fill-level field -- see that field's own docstring)."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="mop_tank_present",
+        name="Mop tank present",
+        translation_key="mop_tank_present",
+    )
+    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None:
+            return None
+        return state.tank_present
+
+
+class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):
+    """The robot's OWN reported connection to the AWS IoT broker --
+    read from the named shadow "rw-constatus" (ConnectionStatusShadow),
+    confirmed live (chairstacker) with a real bool value via Ghidra
+    decompilation of the app's own constructor signature.
+
+    Deliberately distinct from PrimeConnectionHealthSensor
+    (sensor_prime.py): that one reflects THIS integration's own
+    connection to the robot (this library's watch_mission_timeline()
+    health); this one reflects the ROBOT's own self-reported
+    connectivity, from a completely different data source
+    (PrimeStatusCoordinator's rw-constatus, not PrimeCoordinator's
+    mission timeline). The two could legitimately disagree -- e.g. if
+    our own connection is fine but the robot itself has briefly lost
+    its own link to AWS IoT, or vice versa."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="connected",
+        name="Connected",
+        translation_key="connected",
+    )
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_connected"
+
+    @property
+    def is_on(self) -> bool | None:
+        from roombapy_prime.models import ConnectionStatusShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("rw-constatus")
+        if raw is None:
+            return None
+        return ConnectionStatusShadow.from_json(raw).connected
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))

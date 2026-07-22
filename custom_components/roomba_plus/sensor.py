@@ -56,7 +56,18 @@ from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT faca
 from . import roomba_reported_state
 from .const import CONF_CORRELATION_ENTITIES
 from .models import ConnectionType, RoombaConfigEntry
-from .sensor_prime import PrimeConnectionHealthSensor, PrimeMissionEventSensor
+from .sensor_prime import (
+    PrimeBatterySensor,
+    PrimeConnectionHealthSensor,
+    PrimeDetectedPadSensor,
+    PrimeDockStatusSensor,
+    PrimeFirmwareVersionSensor,
+    PrimeMissionEventSensor,
+    PrimePadDryStatusSensor,
+    PrimePadWashStatusSensor,
+    PrimeRuntimeHoursSensor,
+    PrimeSuctionLevelSensor,
+)
 
 from .sensor_core import (
     RoombaSensor,
@@ -174,6 +185,14 @@ async def async_setup_entry(
         async_add_entities([
             PrimeMissionEventSensor(data.blid, config_entry),
             PrimeConnectionHealthSensor(data.blid, config_entry),
+            PrimeBatterySensor(data.blid, config_entry),
+            PrimeDetectedPadSensor(data.blid, config_entry),
+            PrimeRuntimeHoursSensor(data.blid, config_entry),
+            PrimeFirmwareVersionSensor(data.blid, config_entry),
+            PrimeDockStatusSensor(data.blid, config_entry),
+            PrimePadWashStatusSensor(data.blid, config_entry),
+            PrimePadDryStatusSensor(data.blid, config_entry),
+            PrimeSuctionLevelSensor(data.blid, config_entry),
         ])
         return
 

@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Stan połączenia"
+      },
+      "prime_detected_pad": {
+        "name": "Wykryta nakładka"
+      },
+      "prime_runtime_hours": {
+        "name": "Łączny czas pracy"
+      },
+      "prime_firmware_version": {
+        "name": "Wersja oprogramowania układowego"
+      },
+      "prime_dock_status": {
+        "name": "Stan doku"
+      },
+      "prime_pad_wash_status": {
+        "name": "Stan prania nakładki"
+      },
+      "prime_pad_dry_status": {
+        "name": "Stan suszenia nakładki"
+      },
+      "prime_suction_level": {
+        "name": "Poziom ssania",
+        "state": {
+          "invalid": "Nieprawidłowy",
+          "low": "Niski",
+          "medium": "Średni",
+          "high": "Wysoki",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Ustawienie – Tryb delikatny"
+      },
+      "prime_carpet_boost": {
+        "name": "Ustawienie – Wzmocnienie na dywanie"
       }
     },
     "select": {

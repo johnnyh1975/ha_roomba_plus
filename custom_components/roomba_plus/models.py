@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from .freeze_snapshot_store import FreezeSnapshotStore        # v3.2.1
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
     from .mission_timer_store import MissionTimerStore        # v2.6 MP1
-    from .prime_coordinator import PrimeCoordinator            # V4/Prime
+    from .prime_coordinator import PrimeCoordinator, PrimeStatusCoordinator  # V4/Prime
 
 
 class MapCapability(Enum):
@@ -93,6 +93,7 @@ class RoombaData:
     # _async_setup_entry_prime() in __init__.py.
     prime_robot: "PrimeRobot | None" = None
     prime_coordinator: "PrimeCoordinator | None" = None
+    prime_status_coordinator: "PrimeStatusCoordinator | None" = None
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None

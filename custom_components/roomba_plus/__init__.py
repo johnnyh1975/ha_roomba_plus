@@ -89,7 +89,7 @@ from .map_renderer import (
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
-from .prime_coordinator import PrimeCoordinator
+from .prime_coordinator import PrimeCoordinator, PrimeStatusCoordinator
 from ._prime_login_bridge import pop_pending_login
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -3206,12 +3206,21 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # possible here. See PrimeCoordinator.async_start()'s own docstring.
     await coordinator.async_start()
 
+    # NEW: battery/dock/bin/tank/pad status, from the eight named
+    # shadows (a SEPARATE coordinator from the mission-timeline one
+    # above -- see PrimeStatusCoordinator's own docstring for why).
+    # Reuses the same, already-connected prime_robot -- does not open
+    # a second MQTT connection.
+    status_coordinator = PrimeStatusCoordinator(hass, config_entry, blid, prime_robot)
+    await status_coordinator.async_start()
+
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
         connection_type=ConnectionType.CLOUD_ONLY,
         prime_robot=prime_robot,
         prime_coordinator=coordinator,
+        prime_status_coordinator=status_coordinator,
     )
 
     async def _async_disconnect_on_stop(event: Any) -> None:

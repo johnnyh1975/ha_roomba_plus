@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Estado de la conexión"
+      },
+      "prime_detected_pad": {
+        "name": "Almohadilla detectada"
+      },
+      "prime_runtime_hours": {
+        "name": "Tiempo de funcionamiento total"
+      },
+      "prime_firmware_version": {
+        "name": "Versión del firmware"
+      },
+      "prime_dock_status": {
+        "name": "Estado de la base"
+      },
+      "prime_pad_wash_status": {
+        "name": "Estado de lavado de la almohadilla"
+      },
+      "prime_pad_dry_status": {
+        "name": "Estado de secado de la almohadilla"
+      },
+      "prime_suction_level": {
+        "name": "Nivel de succión",
+        "state": {
+          "invalid": "Inválido",
+          "low": "Baja",
+          "medium": "Media",
+          "high": "Alta",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Ajuste – Modo suave"
+      },
+      "prime_carpet_boost": {
+        "name": "Ajuste – Refuerzo para alfombras"
       }
     },
     "select": {

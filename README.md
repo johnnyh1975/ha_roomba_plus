@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -137,21 +137,40 @@ setup today, you may want to wait for a later alpha.
 **What works right now:**
 - Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
   robots on the same account are set up automatically alongside any Prime ones
-- Start, pause, stop, dock, locate
+- Start, pause, stop, dock
+- **Locate ("find my robot")** — confirmed working, produces a genuine, audible chime with no
+  robot movement. Two earlier mechanisms were tried against real devices and confirmed not
+  working before this one was found to be the correct one
 - Live activity (cleaning/paused/docked/returning/idle), derived from the robot's real-time
   mission stream — plus current room, area, and pass-count as attributes when available
+- Live cleaning map — an occupancy-grid image, updated as the robot cleans (no pose trail or
+  room-outline overlay yet, unlike the Classic map entity)
+- Battery percentage, bin present, mop tank present, detected pad, lifetime runtime hours,
+  firmware version, and the robot's own reported connectivity to AWS IoT —
+  real, live-confirmed values, not placeholders (see the latest release notes for the evidence
+  trail). Live-updating via a push subscription that itself isn't confirmed live-tested yet —
+  seeded with a real value at startup either way, so this works even if the push side turns out
+  not to (see PrimeStatusCoordinator's own docstring)
+- Dock, pad-wash, and pad-dry status — human-readable labels from a fully confirmed, 86-value
+  enum (mostly error states; not translated into all 8 languages given how rarely most of them
+  actually appear). Configured suction level (a genuine device_class=ENUM sensor, 5 confirmed
+  values, translated)
+- Carpet boost switch — reads and writes the account's real "boost suction when carpet is
+  detected" setting. The write mechanism itself is confirmed to work (the same one already
+  confirmed for other shadow writes), but whether toggling it actually changes the robot's real
+  behavior isn't confirmed yet the way start/stop/dock/find are
 - Two diagnostic sensors: current mission event, and connection health
 
 **What's not there yet:**
-- Battery percentage or a direct docked/charging boolean — see this release's own notes for
-  why, and what's already been tried
+- A direct docked/charging boolean — charging state is available (in the mission-event sensor's
+  underlying data), but not yet surfaced as its own dedicated on/off sensor
 - Region/zone cleaning (gives a clear "not yet supported" message rather than doing nothing)
 - Everything else on this page that depends on local MQTT or the cloud room/map data model
-  Classic robots use — maps, room intelligence, mission history, maintenance tracking, and
-  more are simply a different, not-yet-built facade for V4/Prime robots specifically
+  Classic robots use — room intelligence, mission history, maintenance tracking, and more are
+  simply a different, not-yet-built facade for V4/Prime robots specifically
 
 Full detail, architecture, and the evidence trail behind every confirmed piece of the
-protocol: [Release notes →](release-notes/v4.0.0a0.md)
+protocol: [Release notes →](release-notes/)
 
 ---
 

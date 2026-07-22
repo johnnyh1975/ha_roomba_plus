@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "État de la connexion"
+      },
+      "prime_detected_pad": {
+        "name": "Tampon détecté"
+      },
+      "prime_runtime_hours": {
+        "name": "Durée de fonctionnement totale"
+      },
+      "prime_firmware_version": {
+        "name": "Version du micrologiciel"
+      },
+      "prime_dock_status": {
+        "name": "État de la base"
+      },
+      "prime_pad_wash_status": {
+        "name": "État de lavage du tampon"
+      },
+      "prime_pad_dry_status": {
+        "name": "État de séchage du tampon"
+      },
+      "prime_suction_level": {
+        "name": "Niveau d'aspiration",
+        "state": {
+          "invalid": "Invalide",
+          "low": "Faible",
+          "medium": "Moyen",
+          "high": "Élevé",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Réglage – Mode doux"
+      },
+      "prime_carpet_boost": {
+        "name": "Réglage – Boost tapis"
       }
     },
     "select": {

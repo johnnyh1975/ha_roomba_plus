@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Verbindungsstatus"
+      },
+      "prime_detected_pad": {
+        "name": "Erkannter Wischpad"
+      },
+      "prime_runtime_hours": {
+        "name": "Lebenslaufzeit"
+      },
+      "prime_firmware_version": {
+        "name": "Firmware-Version"
+      },
+      "prime_dock_status": {
+        "name": "Dockstatus"
+      },
+      "prime_pad_wash_status": {
+        "name": "Wischpad-Waschstatus"
+      },
+      "prime_pad_dry_status": {
+        "name": "Wischpad-Trocknungsstatus"
+      },
+      "prime_suction_level": {
+        "name": "Saugstärke",
+        "state": {
+          "invalid": "Ungültig",
+          "low": "Niedrig",
+          "medium": "Mittel",
+          "high": "Hoch",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Einstellung – Sanfter Modus"
+      },
+      "prime_carpet_boost": {
+        "name": "Einstellung – Teppich-Boost"
       }
     },
     "select": {

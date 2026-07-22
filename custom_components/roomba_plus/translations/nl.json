@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Verbindingsstatus"
+      },
+      "prime_detected_pad": {
+        "name": "Gedetecteerde pad"
+      },
+      "prime_runtime_hours": {
+        "name": "Levensduur bedrijfstijd"
+      },
+      "prime_firmware_version": {
+        "name": "Firmwareversie"
+      },
+      "prime_dock_status": {
+        "name": "Dockstatus"
+      },
+      "prime_pad_wash_status": {
+        "name": "Pad-wasstatus"
+      },
+      "prime_pad_dry_status": {
+        "name": "Pad-droogstatus"
+      },
+      "prime_suction_level": {
+        "name": "Zuigkracht",
+        "state": {
+          "invalid": "Ongeldig",
+          "low": "Laag",
+          "medium": "Gemiddeld",
+          "high": "Hoog",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Instelling – Zachte modus"
+      },
+      "prime_carpet_boost": {
+        "name": "Instelling – Tapijtboost"
       }
     },
     "select": {

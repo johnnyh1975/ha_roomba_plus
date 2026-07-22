@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Stato della connessione"
+      },
+      "prime_detected_pad": {
+        "name": "Panno rilevato"
+      },
+      "prime_runtime_hours": {
+        "name": "Tempo di funzionamento totale"
+      },
+      "prime_firmware_version": {
+        "name": "Versione firmware"
+      },
+      "prime_dock_status": {
+        "name": "Stato della base"
+      },
+      "prime_pad_wash_status": {
+        "name": "Stato lavaggio panno"
+      },
+      "prime_pad_dry_status": {
+        "name": "Stato asciugatura panno"
+      },
+      "prime_suction_level": {
+        "name": "Livello di aspirazione",
+        "state": {
+          "invalid": "Non valido",
+          "low": "Basso",
+          "medium": "Medio",
+          "high": "Alto",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Impostazione – Modalità delicata"
+      },
+      "prime_carpet_boost": {
+        "name": "Impostazione – Boost tappeti"
       }
     },
     "select": {

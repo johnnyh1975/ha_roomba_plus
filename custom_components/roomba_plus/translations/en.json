@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Connection health"
+      },
+      "prime_detected_pad": {
+        "name": "Detected pad"
+      },
+      "prime_runtime_hours": {
+        "name": "Lifetime runtime"
+      },
+      "prime_firmware_version": {
+        "name": "Firmware version"
+      },
+      "prime_dock_status": {
+        "name": "Dock status"
+      },
+      "prime_pad_wash_status": {
+        "name": "Pad wash status"
+      },
+      "prime_pad_dry_status": {
+        "name": "Pad dry status"
+      },
+      "prime_suction_level": {
+        "name": "Suction level",
+        "state": {
+          "invalid": "Invalid",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Setting – Gentle mode"
+      },
+      "prime_carpet_boost": {
+        "name": "Setting – Carpet boost"
       }
     },
     "select": {

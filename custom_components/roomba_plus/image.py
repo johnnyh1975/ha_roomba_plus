@@ -41,6 +41,7 @@ from typing import Any
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -62,7 +63,7 @@ from .const import (
 from .entity import IRobotEntity
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
-from .models import MapCapability, RoombaConfigEntry
+from .models import ConnectionType, MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -144,6 +145,19 @@ async def async_setup_entry(
 ) -> None:
     """Set up map image entities — only if robot reports pose data."""
     data = config_entry.runtime_data
+
+    # NEW (V4/Prime): entirely separate path -- CLOUD_ONLY entries have no
+    # roombapy Roomba object, no MapCapability tier, and their live map
+    # comes from a completely different source (watch_live_map()'s
+    # MapUpdateMessage, downloaded + decoded via decode_rawmap_to_png()),
+    # not local MQTT pose data. Deliberately its own class rather than
+    # threading CLOUD_ONLY branches through the Classic-oriented
+    # RoombaMapImage below, which is built around pose points, mission
+    # tracking, and dock-anchor correction that don't apply here at all.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        if data.prime_robot is not None:
+            async_add_entities([PrimeMapImage(prime_robot=data.prime_robot, blid=data.blid, config_entry=config_entry)])
+        return
 
     if data.map_capability == MapCapability.NONE:
         _LOGGER.debug("Roomba+ image: skipped — no pose capability")
@@ -291,6 +305,89 @@ def _interpolate_and_correct_segment(
         weight = i / (n - 1)
         out.append(_apply_dock_correction(p, dx * weight, dy * weight, rotation_rad * weight))
     return out
+
+
+class PrimeMapImage(IRobotEntity, ImageEntity):
+    """Live cleaning map for V4/Prime (CLOUD_ONLY) robots.
+
+    Deliberately minimal, separate from RoombaMapImage below: this
+    consumes an entirely different data source (roombapy-prime's
+    watch_live_map(), a cloud MQTT topic, not local pose messages) and
+    needs none of RoombaMapImage's mission-tracking/dock-anchor/
+    coverage-overlay machinery, since the "rawmap" occupancy grid IS
+    the map directly -- there's no separate pose-trail to render on
+    top of it (yet; see decode_rawmap_to_png()'s own docstring for
+    the confirmed evidence trail behind this format and
+    models/livemap.py's MapUpdateMessage for why no new download/
+    parsing code was needed to consume this live feed).
+
+    A MapUpdateMessage carries a presigned URL (livemap_url_raw), not
+    the image bytes directly -- one extra download step per update,
+    same pattern already used for the REST-fetched map bundle.
+    """
+
+    _attr_translation_key = "map"
+    _attr_entity_category = None
+    _attr_content_type = "image/png"
+
+    def __init__(self, prime_robot: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        self._cache = None
+        self.access_tokens: collections.deque = collections.deque([], 2)
+        self._prime_robot = prime_robot
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_map"
+        self._png_bytes: bytes | None = None
+        self._watch_task: asyncio.Task[None] | None = None
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        self.async_update_token()
+        self._watch_task = asyncio.create_task(self._async_watch_live_map())
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+
+    async def _async_watch_live_map(self) -> None:
+        """Runs for the entity's lifetime -- watch_live_map() itself
+        reconnects transparently across drops (same reconnect-hardened
+        _watch_topic() engine as watch_mission_timeline(), see
+        prime_coordinator.py's own docstring), so this loop only needs
+        to react to messages, not to handle connection loss itself."""
+        from roombapy_prime.models.livemap import MapUpdateMessage, decode_rawmap_to_png
+
+        session = async_get_clientsession(self.hass)
+        try:
+            async for message in self._prime_robot.watch_live_map():
+                if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
+                    continue
+                try:
+                    async with session.get(message.livemap_url_raw) as resp:
+                        raw_bytes = await resp.read()
+                    png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("roomba_plus: failed to decode live map update for %s", self._blid)
+                    continue
+                self._png_bytes = png_bytes
+                self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+                self.async_write_ha_state()
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("roomba_plus: watch_live_map() for %s ended unexpectedly", self._blid)
+
+    async def async_image(self) -> bytes | None:
+        return self._png_bytes or self._blank_image()
+
+    @staticmethod
+    def _blank_image() -> bytes:
+        from PIL import Image
+        img = Image.new("RGBA", (200, 200), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
 
 
 class RoombaMapImage(IRobotEntity, ImageEntity):

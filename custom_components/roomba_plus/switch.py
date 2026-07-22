@@ -13,14 +13,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -32,8 +32,20 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up switch entities."""
-    roomba = config_entry.runtime_data.roomba
-    blid = config_entry.runtime_data.blid
+    data = config_entry.runtime_data
+
+    # NEW (V4/Prime): separate path, same reasoning as binary_sensor.py's
+    # own CLOUD_ONLY branch -- Prime data comes from PrimeStatusCoordinator's
+    # named-shadow data, not roomba_reported_state()'s Classic shape.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        if data.prime_status_coordinator is not None:
+            async_add_entities([
+                PrimeCarpetBoostSwitch(data.blid, config_entry),
+            ])
+        return
+
+    roomba = data.roomba
+    blid = data.blid
     state = roomba_reported_state(roomba)
 
     entities: list[IRobotEntity] = []
@@ -320,3 +332,67 @@ class GentleModeSwitch(IRobotEntity, SwitchEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "gentle" in new_state
+
+
+class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
+    """V4/Prime carpet boost toggle -- reads/writes RobotSettings.carpet_boost
+    (wire key "carpetBoost") on the named shadow "rw-settings", via
+    roombapy-prime's own set_setting()/PrimeStatusCoordinator.
+
+    carpet_boost is a real, sensor-driven, real-time "boost suction
+    when the robot detects carpet" feature (confirmed via iRobot's own
+    public product documentation) -- NOT a three-way Auto/Performance/
+    Eco selector (that concept, CarpetBoostSettings, is confirmed dead
+    code in the app itself -- see that enum's own docstring in
+    roombapy-prime's models/mission_control.py). This switch only
+    toggles the feature on/off; the robot's own sensors decide when to
+    actually apply the boost.
+
+    WRITE MECHANISM CONFIRMED, EFFECT NOT YET CONFIRMED: the generic
+    shadow-write this relies on (set_setting(), the same mechanism
+    trigger_echo_via_shadow() already confirmed works at the transport
+    level) is known to produce a real, accepted response -- but whether
+    toggling THIS specific field actually changes the robot's real
+    carpet-boost behavior hasn't been confirmed the way locate's own
+    working mechanism eventually was. Treat a successful toggle here as
+    "the write went through", not yet as "confirmed working" the way
+    start/stop/dock/find are."""
+
+    entity_description = SwitchEntityDescription(
+        key="prime_carpet_boost",
+        translation_key="prime_carpet_boost",
+    )
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_carpet_boost"
+
+    @property
+    def _prime_robot(self):
+        return self._config_entry.runtime_data.prime_robot
+
+    @property
+    def is_on(self) -> bool | None:
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("rw-settings")
+        if raw is None:
+            return None
+        from roombapy_prime.models import RobotSettings
+
+        return RobotSettings.from_json(raw).carpet_boost
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._prime_robot.set_setting("carpetBoost", True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._prime_robot.set_setting("carpetBoost", False)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))

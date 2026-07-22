@@ -102,29 +102,53 @@ DEFAULT_OPTIONS = {CONF_CONTINUOUS: DEFAULT_CONTINUOUS, CONF_DELAY: DEFAULT_DELA
 _CLOUD_ACCOUNT_SENTINEL = "__cloud_account__"
 
 
-# V4/Prime-generation SKU prefixes, confirmed live one at a time as field
-# reports come in -- NOT a guess at the full V4/Prime product lineup, just
-# the prefixes actually confirmed so far:
-#   "g" - Roomba Plus 405 Combo (SKU G185020) - chairstacker, jadestar1864
-#   "n" - Roomba Plus 505 Combo (SKU N185240) - darealgugu (GitHub issue
-#         report: cloud login correctly listed the robot, but with no
-#         recognized prefix it fell through to Classic's local-network
-#         completion step, which can never succeed for a cloud-only
-#         device). Model confirmed via public retailer/certification
-#         listings for N185240, not just inferred from the SKU pattern --
-#         same "Combo" product family as "g" above, one generation newer.
-_PRIME_SKU_PREFIXES: Final[frozenset[str]] = frozenset("g n".split())
+# V4/Prime-generation SKU prefixes -- CORRECTED (this session, parallel
+# native-analysis track, decompiled com/irobot/core/SkuUtils.java): the
+# earlier single-LETTER check below (just "g"/"n") was genuinely unsafe,
+# not just incomplete. SkuUtils.java's own platform table shows "R" and
+# "Q" are each used by BOTH generations -- R285020 (Prime,
+# EnhancedComboNextPlus) vs. R980020 (Classic, Roomba 980 -- this
+# project's own chairstacker test unit) and R111840 (Classic, Atlantis/
+# 100-series); Q352020/Q012020 (Prime) vs. "q" already listed as a
+# known-but-unconfirmed CLASSIC prefix in const.py's own
+# _KNOWN_IROBOT_SKU_PREFIXES. A single-letter check would have
+# eventually misclassified a real Classic robot as Prime -- a worse
+# failure mode than the original bug (silent cloud-only setup for a
+# local-network-capable device, vs. the original bug's loud, reportable
+# "not found on network" error).
+#
+# Fixed: match on the first THREE characters (letter + 2 digits), which
+# SkuUtils.java's own table confirms disambiguates every case above
+# (R28 vs. R98/R11, etc.). Confirmed platforms, from SkuUtils.java's own
+# table plus two real field devices whose specific SKU wasn't the exact
+# one shown there (G185020/N185240 -- SkuUtils.java's table gives one
+# representative/default SKU per platform, e.g.
+# DEFAULT_ESSENTIAL_COMBO_NEXT_SKU = "G185020", not every regional/bundle
+# variant, so a field-confirmed real SKU can differ slightly from the
+# table's own example for the same platform):
+#   G18 - EssentialComboNext (G185020) - chairstacker, jadestar1864
+#   N18 - real field SKU N185240 (Roomba Plus 505 Combo) - darealgugu
+#         (GitHub issue) -- SkuUtils.java's own table shows N28
+#         (EnhancedComboPlus) as N's reference SKU, not N18 specifically,
+#         consistent with the "one example per platform" caveat above.
+#   Everything else below is from SkuUtils.java's own table directly,
+#   not yet confirmed by an actual field device: G28
+#   (EssentialComboNextPlus), Q35 (Essential), Y35 (EssentialCombo),
+#   Y41 (EssentialComboPlus), L12 (EssentialComboMini), K15 (Enhanced),
+#   N28 (EnhancedComboPlus), R28 (EnhancedComboNextPlus), X18
+#   (MaxCombo), X28 (MaxComboPlus), F15 (MiniCombo), Q01
+#   (CongoVacuum), Y01 (CongoCombo).
+_PRIME_SKU_PREFIXES: Final[frozenset[str]] = frozenset(
+    "G18 G28 N18 N28 Q35 Q01 Y35 Y41 Y01 L12 K15 R28 X18 X28 F15".split()
+)
 
 
 def _is_prime_sku(sku: str | None) -> bool:
-    """True for V4/Prime-generation SKUs -- see _PRIME_SKU_PREFIXES above
-    for exactly which prefixes are confirmed and why. Prefix check (not
-    exact match), for consistency with const.py's own
-    _KNOWN_IROBOT_SKU_PREFIXES convention -- at the cost of treating any
-    OTHER, as-yet-unconfirmed SKU sharing a known prefix's first letter as
-    Prime too, rather than only the specific SKUs actually tested.
+    """True for V4/Prime-generation SKUs -- see _PRIME_SKU_PREFIXES
+    above for exactly which prefixes are confirmed and why a 3-character
+    (letter + 2 digits) prefix is used rather than the letter alone.
     """
-    return bool(sku) and sku[0].lower() in _PRIME_SKU_PREFIXES
+    return bool(sku) and sku[:3].upper() in _PRIME_SKU_PREFIXES
 
 
 # ── Input validation ──────────────────────────────────────────────────────────

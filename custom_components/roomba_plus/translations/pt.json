@@ -703,6 +703,34 @@
       },
       "prime_connection_health": {
         "name": "Estado da conexão"
+      },
+      "prime_detected_pad": {
+        "name": "Almofada detectada"
+      },
+      "prime_runtime_hours": {
+        "name": "Tempo de funcionamento total"
+      },
+      "prime_firmware_version": {
+        "name": "Versão do firmware"
+      },
+      "prime_dock_status": {
+        "name": "Estado da base"
+      },
+      "prime_pad_wash_status": {
+        "name": "Estado de lavagem da almofada"
+      },
+      "prime_pad_dry_status": {
+        "name": "Estado de secagem da almofada"
+      },
+      "prime_suction_level": {
+        "name": "Nível de sucção",
+        "state": {
+          "invalid": "Inválido",
+          "low": "Baixo",
+          "medium": "Médio",
+          "high": "Alto",
+          "turbo": "Turbo"
+        }
       }
     },
     "binary_sensor": {
@@ -843,6 +871,9 @@
       },
       "gentle_mode": {
         "name": "Definição – Modo suave"
+      },
+      "prime_carpet_boost": {
+        "name": "Configuração – Reforço para tapetes"
       }
     },
     "select": {
