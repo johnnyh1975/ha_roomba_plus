@@ -79,7 +79,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a15"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a17"
 
       - name: Run full test suite with coverage
         run: |
