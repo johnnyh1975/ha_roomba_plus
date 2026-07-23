@@ -40,6 +40,7 @@ exactly that data, not folded into this one.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Final
 
@@ -131,21 +132,83 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         watch_mission_timeline() itself reconnects transparently across
         connection drops, with its own exponential backoff (see
         roombapy-prime v0.1.11a3+) -- this loop only forwards whatever
-        it yields; it does not need its own reconnect/retry logic on
-        top. If it ever DOES raise (not expected in normal operation,
-        since watch_mission_timeline() is designed to retry forever
-        internally), that's a genuinely unexpected failure -- logged,
-        and surfaced to entities via async_set_update_error() rather
-        than left as silently stale data.
-        """
-        try:
-            async for delta in self.prime_robot.watch_mission_timeline():
-                self.async_set_updated_data(MissionTimelineReport.from_json(delta.payload))
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.exception(
-                "roomba_plus: V4/Prime watch_mission_timeline() for %s ended unexpectedly", self.blid
-            )
-            self.async_set_update_error(exc)
+        it yields; it does not itself need reconnect/retry logic for a
+        plain connection drop.
+
+        DEFENSIVE OUTER RETRY LOOP (added alongside the same fix in
+        PrimeStatusCoordinator._async_watch_status_updates() -- a real
+        field report, chairstacker, showed the vacuum entity's own
+        activity stuck on "Cleaning" long after the robot had actually
+        finished and returned to dock, at the same time and likely the
+        same underlying cause as that other coordinator's own sensors
+        going stale/Unknown. This method previously had the exact same
+        gap: a single unexpected exception (even though
+        watch_mission_timeline() is "designed to retry forever
+        internally" per its own docstring) would end this task
+        PERMANENTLY for the rest of the session, silently freezing
+        activity/extra_state_attributes at whatever the last-received
+        event happened to be -- exactly matching what was reported.
+        Now degrades to "retry after a short delay" instead -- for
+        BOTH an exception AND the generator simply ending on its own
+        (also anomalous: watch_mission_timeline() is meant to run
+        forever, so either case gets the same backoff-and-retry
+        treatment, never an immediate, undelayed re-call)."""
+        backoff = 5.0
+        while True:
+            try:
+                async for delta in self.prime_robot.watch_mission_timeline():
+                    self.async_set_updated_data(MissionTimelineReport.from_json(delta.payload))
+                    backoff = 5.0  # a live update means things are healthy again
+                _LOGGER.warning(
+                    "roomba_plus: V4/Prime watch_mission_timeline() for %s ended without "
+                    "an exception (unexpected -- it's meant to run forever) -- retrying in %.0fs",
+                    self.blid, backoff,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.exception(
+                    "roomba_plus: V4/Prime watch_mission_timeline() for %s ended "
+                    "unexpectedly -- retrying in %.0fs (this is the coordinator's own "
+                    "outer safety net; the library itself already retries connection "
+                    "drops internally, so reaching this suggests something else went wrong)",
+                    self.blid, backoff,
+                )
+                self.async_set_update_error(exc)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)
+
+
+def _deep_merge_reported(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """CONFIRMED NECESSARY (real field report, chairstacker, with
+    screenshots showing the exact failure): AWS IoT Device Shadow's
+    own "update/accepted" messages echo back ONLY the fields that
+    were actually part of that specific update -- NOT the shadow's
+    full current reported state (well-documented AWS behavior, and
+    directly confirmed by this exact bug: starting a mission caused
+    "ro-currentstate" to receive a small update, presumably just its
+    own mission-status sub-fields, and every OTHER already-known
+    ro-currentstate field -- detected_pad, dock, runtime_stats, and
+    more -- simultaneously went to Unknown; meanwhile rw-settings,
+    which received no update at all during that window, correctly
+    kept showing its real, seeded value throughout, proving the
+    connection/push mechanism itself was fine the whole time).
+
+    A plain dict replacement (this function's own predecessor) treats
+    each update as if it were the complete state, discarding every
+    previously-known field the new update doesn't happen to mention.
+    This merges recursively instead -- new keys/values are added or
+    overwritten at whatever depth they appear at, but any existing
+    key NOT present in the new update is preserved untouched, at
+    every level of nesting (not just the shadow's own top level)."""
+    result = dict(existing)
+    for key, new_value in new.items():
+        existing_value = result.get(key)
+        if isinstance(existing_value, dict) and isinstance(new_value, dict):
+            result[key] = _deep_merge_reported(existing_value, new_value)
+        else:
+            result[key] = new_value
+    return result
 
 
 class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -276,26 +339,63 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """Runs for the lifetime of the config entry. Parses each
         incoming response's own .topic to determine which named shadow
         it belongs to (the wildcard resolves to the real shadow name
-        in the actual message), and merges just that shadow's new
-        reported data into self.data -- every other shadow's
-        already-known data is left untouched."""
-        try:
-            async for response in self.prime_robot.watch_named_shadows_updates():
-                shadow_name = None
-                for name in self.NAMED_SHADOWS:
-                    if response.topic.endswith(f"/shadow/name/{name}/update/accepted"):
-                        shadow_name = name
-                        break
-                if shadow_name is None:
-                    continue
-                reported = (response.payload or {}).get("state", {}).get("reported", {})
-                if not reported:
-                    continue
-                updated = dict(self.data or {})
-                updated[shadow_name] = reported
-                self.async_set_updated_data(updated)
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.exception(
-                "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended unexpectedly", self.blid
-            )
-            self.async_set_update_error(exc)
+        in the actual message), and RECURSIVELY merges just the fields
+        present in that update into the shadow's own already-known
+        data (see _deep_merge_reported()'s own docstring for why a
+        plain replace was a real, confirmed bug) -- every other
+        shadow, and every field within THIS shadow not mentioned in
+        the update, is left untouched.
+
+        DEFENSIVE OUTER RETRY LOOP (added after a real field report --
+        chairstacker: sensors got stuck reporting stale/Unknown values
+        after some activity, and only a full HA restart -- not just
+        reloading the integration -- fixed it): roombapy-prime's own
+        watch_named_shadows_updates() already reconnects transparently
+        across connection drops with unbounded retries (see its own
+        docstring) -- a plain connection drop should never reach here
+        at all. This outer loop exists as a second, coordinator-level
+        safety net for anything ELSE that could end the inner
+        generator unexpectedly (a bug in this method's own parsing
+        below, an edge case the library's reconnect logic doesn't
+        cover, etc.) -- so a single unexpected error degrades to
+        "retry after a short delay" rather than "this coordinator is
+        now permanently dead until Home Assistant itself restarts".
+        Exact root cause of the original field report not confirmed
+        from this fix alone -- this is a resilience improvement
+        regardless of what specifically caused it."""
+        backoff = 5.0
+        while True:
+            try:
+                async for response in self.prime_robot.watch_named_shadows_updates():
+                    shadow_name = None
+                    for name in self.NAMED_SHADOWS:
+                        if response.topic.endswith(f"/shadow/name/{name}/update/accepted"):
+                            shadow_name = name
+                            break
+                    if shadow_name is None:
+                        continue
+                    reported = (response.payload or {}).get("state", {}).get("reported", {})
+                    if not reported:
+                        continue
+                    updated = dict(self.data or {})
+                    updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
+                    self.async_set_updated_data(updated)
+                    backoff = 5.0  # a live update means things are healthy again
+                _LOGGER.warning(
+                    "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended without "
+                    "an exception (unexpected -- it's meant to run forever) -- retrying in %.0fs",
+                    self.blid, backoff,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.exception(
+                    "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended "
+                    "unexpectedly -- retrying in %.0fs (this is the coordinator's own outer "
+                    "safety net; the library itself already retries connection drops "
+                    "internally, so reaching this suggests something else went wrong)",
+                    self.blid, backoff,
+                )
+                self.async_set_update_error(exc)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)

@@ -355,6 +355,33 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         via local broadcast at all (no local channel exists). The
         cloud-account option is now shown unconditionally, not just
         appended to the dropdown when local devices happen to exist.
+
+        REAL FIELD BUG FOUND AND FIXED (this session, chairstacker,
+        with screenshots): V4/Prime robots DO still respond to the
+        same local UDP discovery broadcast Classic robots use, even
+        though they cannot actually be set up or controlled that way
+        -- roombapy's own RoombaInfo.sku field is exactly what's
+        needed to tell them apart (see _is_prime_sku() above), but
+        this step wasn't using it at all. Two real consequences this
+        fixes:
+
+        1. A Prime device used to appear in the "Select robot" dropdown
+           the same as a Classic one, showing its name and IP -- an
+           entirely plausible-looking but non-functional choice.
+           Picking it led into the local-link flow, which cannot work
+           for this generation of robot at all. Now filtered out of
+           the dropdown entirely -- the "Set up with my iRobot
+           account" option (already labeled as being for exactly this
+           case) remains the only way to add one.
+        2. WORSE: if a Prime robot triggers a genuine HA-native zeroconf/
+           DHCP discovery (self.host gets pre-set before this step even
+           runs), the OLD code took a fast path straight into the
+           local-link flow with no form shown at all -- the user never
+           even got a choice, unlike the dropdown case above. Now
+           redirects straight to the cloud-account flow instead in
+           that specific case, since the SKU already confirms which
+           path is actually needed -- no reason to show a form asking
+           again when the answer is already known.
         """
         if user_input is not None:
             chosen = user_input.get(CONF_HOST)
@@ -373,7 +400,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             self.discovered_robots = {
                 device.ip: device
                 for device in devices
-                if device.blid not in already_configured
+                if device.blid not in already_configured and not _is_prime_sku(device.sku)
             }
 
         if self.host and self.host in self.discovered_robots:
@@ -383,11 +410,24 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             return await self._async_start_link()
 
+        # A Prime device reached this step with self.host already set
+        # (a genuine zeroconf/DHCP discovery, not a manual "Add
+        # Integration" click) -- discovered_robots above deliberately
+        # excludes it, so the check right above this comment won't
+        # fast-path it, but it's still real and still needs somewhere
+        # to go. Send it straight to the cloud-account flow rather
+        # than falling through to a form -- the SKU already answered
+        # the question the form would otherwise be asking.
+        if self.host and devices:
+            matching = next((d for d in devices if d.ip == self.host), None)
+            if matching is not None and _is_prime_sku(matching.sku):
+                return await self.async_step_prime_account()
+
         hosts: dict[str | None, str] = {
             **{
                 device.ip: f"{device.robot_name} ({device.ip})"
                 for device in devices
-                if device.blid not in already_configured
+                if device.blid not in already_configured and not _is_prime_sku(device.sku)
             },
             None: "Add manually (I know my robot's local IP)",
             _CLOUD_ACCOUNT_SENTINEL: (

@@ -3214,6 +3214,22 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     status_coordinator = PrimeStatusCoordinator(hass, config_entry, blid, prime_robot)
     await status_coordinator.async_start()
 
+    # NEW: household_id, needed for get_schedules()/PrimeScheduleCalendar
+    # (calendar.py). Best-effort deliberately -- get_household_id()'s own
+    # response-shape handling is defensive but not yet confirmed against
+    # every real account shape, and a schedule calendar showing "no data
+    # yet" is a far better failure mode here than blocking the entire
+    # V4/Prime setup (battery/vacuum/etc., all already working) over a
+    # single optional feature.
+    try:
+        household_id = await prime_robot.get_household_id()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "roomba_plus: could not resolve household_id for %s -- schedule "
+            "calendar will show no data until this succeeds", blid, exc_info=True,
+        )
+        household_id = None
+
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
@@ -3221,6 +3237,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_robot=prime_robot,
         prime_coordinator=coordinator,
         prime_status_coordinator=status_coordinator,
+        prime_household_id=household_id,
     )
 
     async def _async_disconnect_on_stop(event: Any) -> None:

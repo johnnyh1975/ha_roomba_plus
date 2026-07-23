@@ -94,6 +94,13 @@ class RoombaData:
     prime_robot: "PrimeRobot | None" = None
     prime_coordinator: "PrimeCoordinator | None" = None
     prime_status_coordinator: "PrimeStatusCoordinator | None" = None
+    # NEW: household_id for THIS robot, resolved once via
+    # PrimeRobot.get_household_id() during _async_setup_entry_prime() --
+    # needed for get_schedules()/PrimeScheduleCalendar (calendar.py).
+    # None if it couldn't be resolved (account/response shape edge case,
+    # or genuinely no household found) -- calendar.py's own CLOUD_ONLY
+    # branch treats that as "schedule data unavailable", not an error.
+    prime_household_id: str | None = None
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None

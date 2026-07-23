@@ -37,9 +37,23 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
 # A connectivity/error sensor is planned (see
 # NEW (this session): sensor.py now has a dedicated CLOUD_ONLY branch
 # (sensor_prime.py) -- no longer "not-yet-built".
+#
+# BUG FOUND AND FIXED (later same session): binary_sensor.py's own
+# CLOUD_ONLY entities (PrimeBinPresentSensor/PrimeTankPresentSensor/
+# PrimeRobotConnectivitySensor) and switch.py's PrimeCarpetBoostSwitch
+# were built and tested in isolation, but this list was never updated
+# to include their platforms -- meaning HA never actually called
+# either module's async_setup_entry() for a CLOUD_ONLY config entry,
+# so none of these entities were ever created for a real user despite
+# working code existing for them. Caught by reviewing a real field
+# tester's own screenshots, which only ever showed sensor.py entities,
+# never any of these.
 PRIME_PLATFORMS: Final[list[Platform]] = [
     Platform.VACUUM,
     Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.SWITCH,
+    Platform.CALENDAR,
 ]
 
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)

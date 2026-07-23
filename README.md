@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -159,6 +159,12 @@ setup today, you may want to wait for a later alpha.
   detected" setting. The write mechanism itself is confirmed to work (the same one already
   confirmed for other shadow writes), but whether toggling it actually changes the robot's real
   behavior isn't confirmed yet the way start/stop/dock/find are
+- Schedule calendar — read-only, same `calendar.roomba_*_schedule` pattern as Classic robots,
+  showing each schedule's own room/zone (resolved to a real name via the account's map data,
+  falling back to "Zone {id}" if unnamed). Only weekly-recurring schedules are shown; bi-weekly/
+  monthly/one-time schedules are deliberately skipped rather than shown with a guessed date —
+  verifying any of those needs a real device test that waits days/weeks to see whether the robot
+  actually fires as expected, a materially higher-risk test than anything else in this project
 - Two diagnostic sensors: current mission event, and connection health
 
 **What's not there yet:**
