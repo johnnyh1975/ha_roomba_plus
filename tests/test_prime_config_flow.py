@@ -446,3 +446,96 @@ class TestAsyncStepPrimeClassicAnalytics:
         result = await flow.async_step_prime_classic_analytics()
         assert result["type"] == "form"
         assert result["step_id"] == "prime_classic_analytics"
+
+
+class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
+    """REAL FIELD BUG FOUND AND FIXED (chairstacker, with screenshots):
+    V4/Prime robots still respond to the same local UDP discovery
+    broadcast Classic robots use, even though they can't actually be
+    set up or controlled that way. RoombaInfo.sku is exactly what
+    distinguishes them -- this step wasn't checking it at all before,
+    so a Prime device appeared as a seemingly-normal, but entirely
+    non-functional, "local IP" choice."""
+
+    def _make_device(self, ip: str, sku: str, blid: str = "BLID1") -> MagicMock:
+        device = MagicMock()
+        device.ip = ip
+        device.sku = sku
+        device.robot_name = "MyRobot"
+        device.blid = blid
+        return device
+
+    @pytest.mark.asyncio
+    async def test_prime_device_excluded_from_dropdown_choices(self):
+        flow = _make_flow()
+        prime_device = self._make_device("10.0.0.5", "G185020")
+
+        with patch(
+            "custom_components.roomba_plus.config_flow._async_discover_roombas",
+            new=AsyncMock(return_value=[prime_device]),
+        ):
+            with patch.object(flow, "_async_current_ids", return_value=set()):
+                result = await flow.async_step_user()
+
+        assert result["type"] == "form"
+        schema_keys = list(result["data_schema"].schema.keys())
+        choices = result["data_schema"].schema[schema_keys[0]].container
+        assert "10.0.0.5" not in choices
+        assert _CLOUD_ACCOUNT_SENTINEL in choices
+
+    @pytest.mark.asyncio
+    async def test_classic_device_still_shown_normally(self):
+        flow = _make_flow()
+        classic_device = self._make_device("10.0.0.6", "R980020", blid="BLID2")
+
+        with patch(
+            "custom_components.roomba_plus.config_flow._async_discover_roombas",
+            new=AsyncMock(return_value=[classic_device]),
+        ):
+            with patch.object(flow, "_async_current_ids", return_value=set()):
+                result = await flow.async_step_user()
+
+        schema_keys = list(result["data_schema"].schema.keys())
+        choices = result["data_schema"].schema[schema_keys[0]].container
+        assert "10.0.0.6" in choices
+
+    @pytest.mark.asyncio
+    async def test_prime_device_matching_self_host_redirects_to_cloud_account_not_local_link(self):
+        """The worse of the two consequences: a genuine zeroconf/DHCP
+        discovery pre-sets self.host before this step even runs -- the
+        OLD code took a fast path straight into the (broken) local-link
+        flow with no form and no choice at all. Now redirects to the
+        cloud-account flow instead, since the SKU already answers the
+        question a form would otherwise ask."""
+        flow = _make_flow()
+        prime_device = self._make_device("10.0.0.5", "G185020")
+        flow.host = "10.0.0.5"
+
+        with patch(
+            "custom_components.roomba_plus.config_flow._async_discover_roombas",
+            new=AsyncMock(return_value=[prime_device]),
+        ):
+            with patch.object(flow, "_async_current_ids", return_value=set()):
+                result = await flow.async_step_user()
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "prime_account"
+
+    @pytest.mark.asyncio
+    async def test_classic_device_matching_self_host_still_fast_paths_to_local_link(self):
+        """Confirms the fix is scoped to Prime devices specifically --
+        Classic's own existing fast-path behavior must be unaffected."""
+        flow = _make_flow()
+        classic_device = self._make_device("10.0.0.6", "R980020", blid="BLID2")
+        flow.host = "10.0.0.6"
+
+        with patch(
+            "custom_components.roomba_plus.config_flow._async_discover_roombas",
+            new=AsyncMock(return_value=[classic_device]),
+        ), patch.object(flow, "_async_current_ids", return_value=set()), patch.object(
+            flow, "_async_start_link", new=AsyncMock(return_value={"type": "form", "step_id": "link"})
+        ) as mock_start_link:
+            result = await flow.async_step_user()
+
+        mock_start_link.assert_awaited_once()
+        assert result["step_id"] == "link"

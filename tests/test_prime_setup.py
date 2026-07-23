@@ -101,6 +101,7 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot.get_named_shadow = AsyncMock(
             return_value=MagicMock(payload={"state": {"reported": {}}})
         )
+        fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
 
         async def _empty_named_shadows_updates():
             return
@@ -130,7 +131,40 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.prime_robot is fake_prime_robot
         assert runtime_data.prime_coordinator is not None
         assert runtime_data.prime_status_coordinator is not None
+        assert runtime_data.prime_household_id == "hh1"
         fake_prime_robot.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_household_id_failure_does_not_block_setup(self) -> None:
+        """CONFIRMED DELIBERATE (this session): get_household_id()'s own
+        response-shape handling isn't confirmed against every real
+        account shape yet -- a failure here must degrade to "no
+        schedule data", not fail the entire V4/Prime setup (battery/
+        vacuum/etc., all already working, over one optional feature)."""
+        hass, config_entry = _make_hass_and_entry()
+        fake_prime_robot = MagicMock()
+        fake_prime_robot.connect = AsyncMock()
+        fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_household_id = AsyncMock(side_effect=RuntimeError("simulated failure"))
+
+        async def _empty_named_shadows_updates():
+            return
+            yield  # pragma: no cover -- makes this an async generator
+
+        fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
+
+        with patch(
+            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+            new=AsyncMock(return_value=fake_prime_robot),
+        ):
+            result = await _async_setup_entry_prime(hass, config_entry)
+
+        assert result is True
+        runtime_data: RoombaData = config_entry.runtime_data
+        assert runtime_data.prime_household_id is None
+        assert runtime_data.prime_robot is fake_prime_robot  # rest of setup unaffected
 
     @pytest.mark.asyncio
     async def test_credentials_error_raises_config_entry_auth_failed(self) -> None:

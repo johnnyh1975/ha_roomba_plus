@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import datetime
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from freezegun import freeze_time
 
 
-def _make_calendar(vacuum_state: dict | None = None):
+def _make_calendar(vacuum_state: dict | None = None, config_entry=None):
     """Minimal RoombaScheduleCalendar — bypasses IRobotEntity.__init__
     (no roombapy/device-registry setup needed for these tests), same
     pattern as other platform test files in this suite."""
@@ -18,6 +18,10 @@ def _make_calendar(vacuum_state: dict | None = None):
     cal = RoombaScheduleCalendar.__new__(RoombaScheduleCalendar)
     cal._blid = "TESTBLID"
     cal.vacuum_state = vacuum_state or {}
+    if config_entry is None:
+        config_entry = MagicMock()
+        config_entry.options = {}
+    cal._config_entry = config_entry
     return cal
 
 
@@ -169,3 +173,271 @@ class TestNewStateFilter:
     def test_false_for_unrelated_update(self):
         cal = _make_calendar()
         assert cal.new_state_filter({"cleanMissionStatus": {}}) is False
+
+
+class TestZoneLabelsInSummary:
+    """REAL UX GAP FOUND AND FIXED: cleanSchedule2 entries carry a
+    region reference (cmd.regions) the same way SmartZoneSelect already
+    uses to discover known zones -- this was always present but
+    discarded here, showing a bare "Cleaning" for every event
+    regardless of which zone (if any) it actually targets."""
+
+    @pytest.mark.asyncio
+    async def test_smart_tier_entry_with_region_shows_zone_label(self):
+        """SMART tier (i/s/j-series): a schedule entry referencing a
+        region_id must resolve to its user-assigned label in the
+        event summary."""
+        state = {
+            "cleanSchedule2": [
+                {
+                    "enabled": True,
+                    "start": {"hour": 8, "min": 0, "day": [1]},
+                    "cmd": {"regions": [{"region_id": "23", "type": "rid"}]},
+                },
+            ],
+        }
+        config_entry = MagicMock()
+        config_entry.options = {"smart_zone_labels": {"23": "Kitchen"}}
+        cal = _make_calendar(state, config_entry=config_entry)
+        start = datetime.datetime(2026, 7, 20, tzinfo=datetime.timezone.utc)  # a Monday
+        end = start + datetime.timedelta(days=1)
+
+        events = await cal.async_get_events(MagicMock(), start, end)
+
+        assert len(events) == 1
+        assert events[0].summary == "Cleaning: Kitchen"
+
+    @pytest.mark.asyncio
+    async def test_smart_tier_entry_without_region_shows_plain_summary(self):
+        """A SMART-tier entry with no region reference at all means
+        "whole house" -- must NOT show a zone label just because the
+        tier is capable of having one."""
+        state = {
+            "cleanSchedule2": [
+                {"enabled": True, "start": {"hour": 9, "min": 0, "day": [1]}},
+            ],
+        }
+        cal = _make_calendar(state)
+        start = datetime.datetime(2026, 7, 20, tzinfo=datetime.timezone.utc)
+        end = start + datetime.timedelta(days=1)
+
+        events = await cal.async_get_events(MagicMock(), start, end)
+
+        assert len(events) == 1
+        assert events[0].summary == "Cleaning"
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_tier_legacy_schedule_never_shows_zone_label(self):
+        """EPHEMERAL tier (legacy cleanSchedule, 900/600-series) has no
+        region concept at all (no persistent map) -- must always show
+        the plain summary, never attempt zone resolution."""
+        state = {
+            "cleanSchedule": {"cycle": ["start"] * 7, "h": [8] * 7, "m": [0] * 7},
+        }
+        config_entry = MagicMock()
+        config_entry.options = {"smart_zone_labels": {"23": "Kitchen"}}  # irrelevant here
+        cal = _make_calendar(state, config_entry=config_entry)
+        start = datetime.datetime(2026, 7, 20, tzinfo=datetime.timezone.utc)
+        end = start + datetime.timedelta(days=1)
+
+        events = await cal.async_get_events(MagicMock(), start, end)
+
+        assert len(events) == 1
+        assert events[0].summary == "Cleaning"
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_region_falls_back_to_auto_generated_name(self):
+        """A region_id with no user-assigned label yet still shows
+        SOMETHING useful (matching SmartZoneSelect's own "Zone {id}"
+        fallback), rather than silently omitting it."""
+        state = {
+            "cleanSchedule2": [
+                {
+                    "enabled": True,
+                    "start": {"hour": 8, "min": 0, "day": [1]},
+                    "cmd": {"regions": [{"region_id": "99", "type": "rid"}]},
+                },
+            ],
+        }
+        cal = _make_calendar(state)  # no labels configured at all
+        start = datetime.datetime(2026, 7, 20, tzinfo=datetime.timezone.utc)
+        end = start + datetime.timedelta(days=1)
+
+        events = await cal.async_get_events(MagicMock(), start, end)
+
+        assert len(events) == 1
+        assert events[0].summary == "Cleaning: Zone 99"
+
+    @pytest.mark.asyncio
+    async def test_multiple_regions_in_one_entry_shows_all_labels(self):
+        """cmd.regions is a list -- a single schedule entry CAN target
+        more than one zone at once. All of them must appear in the
+        summary, not just the first."""
+        state = {
+            "cleanSchedule2": [
+                {
+                    "enabled": True,
+                    "start": {"hour": 8, "min": 0, "day": [1]},
+                    "cmd": {"regions": [
+                        {"region_id": "23", "type": "rid"},
+                        {"region_id": "24", "type": "rid"},
+                    ]},
+                },
+            ],
+        }
+        config_entry = MagicMock()
+        config_entry.options = {
+            "smart_zone_labels": {"23": "Kitchen", "24": "Living Room"},
+        }
+        cal = _make_calendar(state, config_entry=config_entry)
+        start = datetime.datetime(2026, 7, 20, tzinfo=datetime.timezone.utc)
+        end = start + datetime.timedelta(days=1)
+
+        events = await cal.async_get_events(MagicMock(), start, end)
+
+        assert len(events) == 1
+        assert events[0].summary == "Cleaning: Kitchen, Living Room"
+
+
+def _make_prime_calendar(prime_household_id="hh1", prime_robot=None):
+    """Minimal PrimeScheduleCalendar — bypasses IRobotEntity.__init__,
+    same pattern as _make_calendar() above."""
+    from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+    cal = PrimeScheduleCalendar.__new__(PrimeScheduleCalendar)
+    cal._blid = "TESTBLID"
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_household_id = prime_household_id
+    config_entry.runtime_data.prime_robot = prime_robot or MagicMock()
+    cal._config_entry = config_entry
+    cal._cached_occurrences = []
+    cal._cached_room_names = {}
+    return cal
+
+
+class TestPrimeScheduleCalendarFetchOccurrences:
+    @pytest.mark.asyncio
+    async def test_no_household_id_returns_empty_without_calling_get_schedules(self):
+        """No household_id resolved yet (e.g. get_household_id() failed
+        during setup) -- must degrade to "no data", never attempt the
+        call with None."""
+        cal = _make_prime_calendar(prime_household_id=None)
+
+        result = await cal._fetch_occurrences(
+            datetime.datetime(2026, 7, 20), datetime.datetime(2026, 7, 27)
+        )
+
+        assert result == []
+        cal._config_entry.runtime_data.prime_robot.get_schedules.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_schedules_failure_returns_empty_not_raises(self):
+        prime_robot = MagicMock()
+        prime_robot.get_schedules = AsyncMock(side_effect=RuntimeError("simulated"))
+        cal = _make_prime_calendar(prime_robot=prime_robot)
+
+        result = await cal._fetch_occurrences(
+            datetime.datetime(2026, 7, 20), datetime.datetime(2026, 7, 27)
+        )
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_successful_fetch_parses_real_schedules(self):
+        """Uses the REAL confirmed response shape: SchedulesResponse.
+        household_schedules -> list[SchedulesList], each with its own
+        .schedules -> list[dict] (raw dicts, parsed here via
+        HouseholdSchedule.from_json() -- not already-parsed
+        HouseholdSchedule instances, which an earlier, incorrect
+        version of both this test and the code it exercises assumed)."""
+        schedule_raw = {
+            "schedule_id": "hs1",
+            "options": {
+                "name": "Kitchen",
+                "enabled": True,
+                "deleted": False,
+                "frequency": "WEEKLY",
+                "start": {"day": [2], "hour": 8, "min": 0},
+                "commands": [{"regions": [{"region_id": "23", "type": "rid"}]}],
+            },
+        }
+        prime_robot = MagicMock()
+        response = MagicMock()
+        schedules_list = MagicMock()
+        schedules_list.schedules = [schedule_raw]
+        response.household_schedules = [schedules_list]
+        prime_robot.get_schedules = AsyncMock(return_value=response)
+        cal = _make_prime_calendar(prime_robot=prime_robot)
+
+        result = await cal._fetch_occurrences(
+            datetime.datetime(2026, 7, 20), datetime.datetime(2026, 7, 27)
+        )
+
+        assert len(result) == 1
+        prime_robot.get_schedules.assert_awaited_once_with("hh1")
+
+
+class TestPrimeScheduleCalendarRoomNames:
+    @pytest.mark.asyncio
+    async def test_get_active_map_versions_failure_returns_empty_not_raises(self):
+        prime_robot = MagicMock()
+        prime_robot.get_active_map_versions = AsyncMock(side_effect=RuntimeError("simulated"))
+        cal = _make_prime_calendar(prime_robot=prime_robot)
+
+        result = await cal._fetch_room_names()
+
+        assert result == {}
+
+
+class TestPrimeScheduleCalendarEvent:
+    def test_event_returns_none_when_no_future_occurrences_cached(self):
+        cal = _make_prime_calendar()
+        cal._cached_occurrences = []
+
+        assert cal.event is None
+
+    @freeze_time("2026-07-20 00:00:00")
+    def test_event_uses_zone_label_from_cached_room_names(self):
+        cal = _make_prime_calendar()
+        future = datetime.datetime(2026, 7, 21, 8, 0, tzinfo=datetime.timezone.utc)
+        cal._cached_occurrences = [
+            (future, future + datetime.timedelta(hours=1), ["23"], "Kitchen schedule"),
+        ]
+        cal._cached_room_names = {"23": "Kitchen"}
+
+        event = cal.event
+
+        assert event is not None
+        assert event.summary == "Cleaning: Kitchen"
+
+    @freeze_time("2026-07-20 00:00:00")
+    def test_event_falls_back_to_zone_id_label_when_unnamed(self):
+        cal = _make_prime_calendar()
+        future = datetime.datetime(2026, 7, 21, 8, 0, tzinfo=datetime.timezone.utc)
+        cal._cached_occurrences = [
+            (future, future + datetime.timedelta(hours=1), ["99"], None),
+        ]
+        cal._cached_room_names = {}
+
+        event = cal.event
+
+        assert event is not None
+        assert event.summary == "Cleaning: Zone 99"
+
+
+class TestAsyncSetupEntryRoutesByConnectionType:
+    @pytest.mark.asyncio
+    async def test_cloud_only_creates_prime_schedule_calendar(self):
+        from custom_components.roomba_plus.calendar import async_setup_entry
+        from custom_components.roomba_plus.models import ConnectionType
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        config_entry.runtime_data.blid = "BLID123"
+        added = []
+
+        await async_setup_entry(MagicMock(), config_entry, lambda entities, **kw: added.extend(entities))
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+        assert len(added) == 1
+        assert isinstance(added[0], PrimeScheduleCalendar)
