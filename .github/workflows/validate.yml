@@ -79,7 +79,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a17"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.1.11a18"
 
       - name: Run full test suite with coverage
         run: |
@@ -180,6 +180,15 @@ jobs:
       # can't sit unnoticed between releases again.
       - name: Check README badge vs. manifest.json
         run: python3 scripts/check_version_badge.py
+
+      # Directly motivated by real, repeated drift: manifest.json and both
+      # CI workflow files each carry their own literal roombapy-prime pin
+      # string, and these have drifted out of sync from each other more
+      # than once (a version bump touching one or two references but not
+      # all three) -- once leading to CI silently testing a stale
+      # roombapy-prime commit for an entire session before being noticed.
+      - name: Check roombapy-prime pin consistency
+        run: python3 scripts/check_roombapy_prime_pin.py
 
   markdown-links:
     name: Markdown Link Check
