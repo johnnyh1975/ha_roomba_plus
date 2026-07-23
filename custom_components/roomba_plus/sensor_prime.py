@@ -70,7 +70,7 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(None, blid)
+        super().__init__(None, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_mission_event"
 
@@ -142,7 +142,7 @@ class PrimeConnectionHealthSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(None, blid)
+        super().__init__(None, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_connection_health"
 
@@ -188,7 +188,7 @@ class _PrimeCurrentStateSensorBase(IRobotEntity, SensorEntity):
     Classic equivalents already live)."""
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(None, blid)
+        super().__init__(None, blid, config_entry)
         self._config_entry = config_entry
 
     @property
@@ -446,7 +446,7 @@ class PrimeFirmwareVersionSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(None, blid)
+        super().__init__(None, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_firmware_version"
 

@@ -11,7 +11,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
 
@@ -50,6 +50,53 @@ async def async_get_config_entry_diagnostics(
     from . import roomba_reported_state  # noqa: PLC0415
 
     data = config_entry.runtime_data
+
+    # REAL CRASH FOUND AND FIXED (architecture review, not a field
+    # report): this whole function unconditionally accessed
+    # data.roomba's own attributes (roomba_connected, current_state,
+    # etc.) further below -- data.roomba is None for every CLOUD_ONLY
+    # (V4/Prime) entry, so calling HA's own "Download diagnostics"
+    # button (Settings -> Devices -> a Prime robot) would have raised
+    # AttributeError immediately, every single time, for every real
+    # Prime user. Returns a separate, genuinely Prime-relevant
+    # diagnostics dict instead of reaching any of the Classic-only
+    # code below.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        status_coordinator = data.prime_status_coordinator
+        mission_coordinator = data.prime_coordinator
+        return {
+            "integration": DOMAIN,
+            "version": config_entry.version,
+            "title": config_entry.title,
+            "connection_type": data.connection_type.value,
+            "config": async_redact_data(dict(config_entry.data), _CLOUD_REDACT),
+            "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
+            "prime": {
+                "household_id_resolved": data.prime_household_id is not None,
+                "serial_info_resolved": data.prime_serial_info is not None,
+                "model_sku": getattr(data.prime_serial_info, "sku", None),
+                "family": getattr(data.prime_serial_info, "family", None),
+                # serial_number itself is device-identifying -- deliberately
+                # omitted, same reasoning as BLID redaction above.
+            },
+            "status_coordinator": {
+                "started": status_coordinator is not None,
+                "last_update_success": getattr(status_coordinator, "last_update_success", None),
+                "named_shadows_seeded": (
+                    sorted((status_coordinator.data or {}).keys())
+                    if status_coordinator is not None and status_coordinator.data is not None
+                    else []
+                ),
+            },
+            "mission_coordinator": {
+                "started": mission_coordinator is not None,
+                "last_update_success": getattr(mission_coordinator, "last_update_success", None),
+                "has_mission_data": (
+                    mission_coordinator is not None and mission_coordinator.data is not None
+                ),
+            },
+        }
+
     roomba = data.roomba
     state = roomba_reported_state(roomba)
 

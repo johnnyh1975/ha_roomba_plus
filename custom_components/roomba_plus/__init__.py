@@ -3230,6 +3230,21 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
         household_id = None
 
+    # NEW: model/serial info for a correct DeviceInfo -- see
+    # IRobotEntity.__init__'s own docstring for the bug this fixes (every
+    # Prime entity's device page previously showed no model/serial/firmware
+    # at all). Best-effort, same reasoning as household_id above -- a device
+    # page missing model/serial is a far better failure mode than blocking
+    # the entire V4/Prime setup over it.
+    try:
+        serial_info = await prime_robot.get_serial_number_data()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "roomba_plus: could not resolve serial/model info for %s -- device "
+            "page will show no model/serial until this succeeds", blid, exc_info=True,
+        )
+        serial_info = None
+
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
@@ -3238,6 +3253,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_coordinator=coordinator,
         prime_status_coordinator=status_coordinator,
         prime_household_id=household_id,
+        prime_serial_info=serial_info,
     )
 
     async def _async_disconnect_on_stop(event: Any) -> None:

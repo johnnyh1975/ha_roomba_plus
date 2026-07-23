@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 if TYPE_CHECKING:
     from roombapy import Roomba
     from roombapy_prime import PrimeRobot
+    from roombapy_prime.models import RobotSerialInfo
     from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
     from .const import RobotProfile
@@ -101,6 +102,11 @@ class RoombaData:
     # or genuinely no household found) -- calendar.py's own CLOUD_ONLY
     # branch treats that as "schedule data unavailable", not an error.
     prime_household_id: str | None = None
+    # NEW: model/serial/firmware-adjacent data for a correct DeviceInfo (see
+    # IRobotEntity.__init__'s own docstring for the bug this fixes -- every
+    # Prime entity's device page previously showed no model/serial at all).
+    # Best-effort, same reasoning as prime_household_id above.
+    prime_serial_info: "RobotSerialInfo | None" = None
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None

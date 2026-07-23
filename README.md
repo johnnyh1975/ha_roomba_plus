@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a5-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -166,6 +166,10 @@ setup today, you may want to wait for a later alpha.
   verifying any of those needs a real device test that waits days/weeks to see whether the robot
   actually fires as expected, a materially higher-risk test than anything else in this project
 - Two diagnostic sensors: current mission event, and connection health
+- The device page itself (Settings → Devices) now shows the robot's real name, model, serial
+  number, and firmware version — previously always blank/generic for every Prime robot despite
+  individual sensors already showing the same data correctly (a separate code path that had
+  never been fixed for Prime at all)
 
 **What's not there yet:**
 - A direct docked/charging boolean — charging state is available (in the mission-event sensor's

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_CONNECTIONS
 from homeassistant.helpers import device_registry as dr
@@ -12,6 +12,9 @@ from homeassistant.helpers.entity import Entity
 
 from . import roomba_reported_state
 from .const import DOMAIN
+
+if TYPE_CHECKING:
+    from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,24 +36,70 @@ class IRobotEntity(Entity):
     _attr_should_poll = False
     _attr_has_entity_name = True
 
-    def __init__(self, roomba: Any, blid: str) -> None:
-        """Initialise the entity with the roombapy Roomba object and BLID."""
+    def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
+        """Initialise the entity with the roombapy Roomba object and BLID.
+
+        config_entry is optional and, before this session, was never
+        actually used here at all -- every Prime entity passes
+        roomba=None (there is no roombapy Roomba object for a
+        cloud-only device) and stored its OWN config_entry separately,
+        AFTER calling this __init__, meaning this method always built
+        DeviceInfo from roomba_reported_state(None) == {} for every
+        single Prime entity.
+
+        REAL BUG THIS FIXES (found during an architecture review, not
+        a field report -- no test or entity behavior surfaced it,
+        since every individual Prime entity's OWN sensor/switch state
+        looked completely correct; only the DEVICE PAGE itself, a
+        separate part of the HA UI few of this project's own tests
+        ever touch, was affected): every Prime robot's device showed
+        up in Settings -> Devices with a generic "Roomba XXXX" name
+        (last 4 chars of the BLID, from _resolve_name({}, blid)'s own
+        fallback), no model, no serial number, and no firmware version
+        -- despite PrimeFirmwareVersionSensor and others already
+        showing the SAME underlying data correctly as individual
+        sensors. The device-level info and the sensor-level info come
+        from entirely separate code paths, and only the sensor one was
+        ever fixed.
+
+        Now, when config_entry is provided and roomba is None (the
+        Prime case), builds DeviceInfo from three sources instead:
+          - name: config_entry.title, which has ALWAYS correctly held
+            the real robot name (or blid fallback) since this
+            project's very first Prime release -- config_flow.py's own
+            _async_create_prime_entry() sets this at onboarding time,
+            for every entry, old or new, so no migration is needed for
+            already-configured installs.
+          - model/model_id/serial_number: config_entry.runtime_data.
+            prime_serial_info (RobotSerialInfo, from
+            get_serial_number_data() -- best-effort, fetched once
+            during setup; None for any entry where that fetch failed
+            or hasn't happened yet, same graceful-degradation
+            reasoning as prime_household_id).
+          - sw_version: config_entry.runtime_data.
+            prime_status_coordinator.data's own "rw-software" shadow
+            content (already flowing for every Prime entity's other
+            sensors; no new fetch needed here).
+        """
         self.vacuum = roomba
         self._blid = blid
         self.vacuum_state = roomba_reported_state(roomba)
 
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self.robot_unique_id)},
-            serial_number=(
-                (self.vacuum_state.get("hwPartsRev") or {}).get("navSerialNo")
-            ),
-            manufacturer="iRobot",
-            model=self.vacuum_state.get("sku"),
-            model_id=self.vacuum_state.get("sku"),   # IA74-MI: full SKU in device registry
-            name=self._resolve_name(self.vacuum_state, blid),
-            sw_version=self.vacuum_state.get("softwareVer"),
-            hw_version=str(self.vacuum_state.get("hardwareRev", "")),
-        )
+        if roomba is None and config_entry is not None:
+            self._attr_device_info = self._build_prime_device_info(blid, config_entry)
+        else:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, self.robot_unique_id)},
+                serial_number=(
+                    (self.vacuum_state.get("hwPartsRev") or {}).get("navSerialNo")
+                ),
+                manufacturer="iRobot",
+                model=self.vacuum_state.get("sku"),
+                model_id=self.vacuum_state.get("sku"),   # IA74-MI: full SKU in device registry
+                name=self._resolve_name(self.vacuum_state, blid),
+                sw_version=self.vacuum_state.get("softwareVer"),
+                hw_version=str(self.vacuum_state.get("hardwareRev", "")),
+            )
 
         # Add MAC address connection if available.
         # NOTE: do NOT let the MAC become the device name — HA picks up the
@@ -64,6 +113,27 @@ class IRobotEntity(Entity):
             self._attr_device_info[ATTR_CONNECTIONS] = {
                 (dr.CONNECTION_NETWORK_MAC, mac_address)
             }
+
+    def _build_prime_device_info(self, blid: str, config_entry: "RoombaConfigEntry") -> DeviceInfo:
+        """See __init__'s own docstring for the full reasoning. Every
+        field here is best-effort/optional -- a still-generic name or
+        missing model/serial is a real, visible gap, but never a
+        reason to fail entity setup outright."""
+        data = config_entry.runtime_data
+        serial_info = getattr(data, "prime_serial_info", None)
+        status_coordinator = getattr(data, "prime_status_coordinator", None)
+        coordinator_data = getattr(status_coordinator, "data", None) or {}
+        software_shadow = coordinator_data.get("rw-software") or {}
+
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.robot_unique_id)},
+            serial_number=getattr(serial_info, "serial_number", None),
+            manufacturer="iRobot",
+            model=getattr(serial_info, "sku", None) or getattr(serial_info, "family", None),
+            model_id=getattr(serial_info, "sku", None),
+            name=config_entry.title or f"Roomba {blid[-4:]}",
+            sw_version=software_shadow.get("softwareVer"),
+        )
 
     # ── Identity ──────────────────────────────────────────────────────────────
 

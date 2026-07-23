@@ -200,10 +200,42 @@ def _deep_merge_reported(existing: dict[str, Any], new: dict[str, Any]) -> dict[
     This merges recursively instead -- new keys/values are added or
     overwritten at whatever depth they appear at, but any existing
     key NOT present in the new update is preserved untouched, at
-    every level of nesting (not just the shadow's own top level)."""
+    every level of nesting (not just the shadow's own top level).
+
+    SECOND REAL BUG FOUND AND FIXED IN THIS SAME FUNCTION (chairstacker,
+    a later report): battery specifically still went to "Unknown"
+    immediately on mission start, even with the fix above in place --
+    the exact same "explicit null vs missing key" class of bug this
+    project has hit 12+ times elsewhere (dict.get(key, default) only
+    guards a MISSING key, not a PRESENT key whose value is explicitly
+    null). A mission-start update apparently includes "batPct": null
+    explicitly, rather than omitting the key -- likely the shadow's own
+    way of saying "no fresh reading yet for this field in THIS
+    particular update", not "this value is now genuinely unknown". The
+    loop below now treats an explicit null the same as a missing key
+    when a real existing value is already present -- new information
+    always wins, but null is never treated as new information capable
+    of clobbering a real one.
+
+    CONSIDERED, NOT ACTED ON (no confirmed field evidence either way,
+    unlike the null case above): the same "no new info in this update"
+    signal COULD in principle also show up as an empty list rather
+    than an explicit null for a list-typed field (this project's own
+    models confirm exactly one such field, CurrentStateShadow.p2maps)
+    -- an empty list overwriting a previously non-empty one would lose
+    data the same way null did for batPct. Deliberately NOT guarded
+    against here: unlike null, an empty list is also a genuinely
+    plausible REAL value (e.g. "no pending maps right now"), so
+    guarding it without confirmed evidence risks the opposite mistake
+    -- refusing to accept a real, legitimate emptying. If p2maps (or
+    any other list field) is ever observed reverting to a stale,
+    non-empty value the way battery did, this is the first place to
+    look."""
     result = dict(existing)
     for key, new_value in new.items():
         existing_value = result.get(key)
+        if new_value is None and existing_value is not None:
+            continue  # explicit null must not clobber a real, already-known value
         if isinstance(existing_value, dict) and isinstance(new_value, dict):
             result[key] = _deep_merge_reported(existing_value, new_value)
         else:

@@ -365,7 +365,7 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_carpet_boost"
 

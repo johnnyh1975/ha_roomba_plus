@@ -331,7 +331,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
     _attr_content_type = "image/png"
 
     def __init__(self, prime_robot: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._cache = None
         self.access_tokens: collections.deque = collections.deque([], 2)
         self._prime_robot = prime_robot
@@ -344,7 +344,19 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
-        self._watch_task = asyncio.create_task(self._async_watch_live_map())
+        # CONSISTENCY FIX (this session): was a bare asyncio.create_task()
+        # here -- every OTHER background task in this project (both
+        # coordinators) uses config_entry.async_create_background_task()
+        # instead, which ties the task's lifetime to the config entry
+        # itself (auto-cancelled on unload/reload by HA's own framework,
+        # not just by this entity's own async_will_remove_from_hass()
+        # below -- kept as a second, redundant cancellation path, not
+        # removed, since it doesn't hurt to have both).
+        self._watch_task = self._config_entry.async_create_background_task(
+            self.hass,
+            self._async_watch_live_map(),
+            name=f"roomba_plus_prime_live_map_{self._blid}",
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         if self._watch_task is not None:
@@ -355,28 +367,63 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         reconnects transparently across drops (same reconnect-hardened
         _watch_topic() engine as watch_mission_timeline(), see
         prime_coordinator.py's own docstring), so this loop only needs
-        to react to messages, not to handle connection loss itself."""
+        to react to messages, not to handle connection loss itself.
+
+        DEFENSIVE OUTER RETRY LOOP (added alongside the identical fix
+        already made in PrimeCoordinator._async_watch_mission_timeline()
+        and PrimeStatusCoordinator._async_watch_status_updates() --
+        this is the THIRD occurrence of the exact same gap, found only
+        because this entity had NEVER actually run before this session
+        [Platform.IMAGE was missing from PRIME_PLATFORMS the whole
+        time, see const.py's own docstring], so the bug had no chance
+        to surface via real usage the way the other two did. A single
+        unexpected exception here -- even though watch_live_map() is
+        "designed to retry forever internally" per its own docstring --
+        would previously have ended this task PERMANENTLY for the rest
+        of the session, silently freezing the live map at whatever the
+        last-received frame happened to be. Now degrades to "retry
+        after a short delay" instead, for both an exception and the
+        generator simply ending on its own (also anomalous -- see the
+        other two fixes' own docstrings for why that case needs the
+        same backoff, not an immediate, undelayed re-call)."""
         from roombapy_prime.models.livemap import MapUpdateMessage, decode_rawmap_to_png
 
         session = async_get_clientsession(self.hass)
-        try:
-            async for message in self._prime_robot.watch_live_map():
-                if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
-                    continue
-                try:
-                    async with session.get(message.livemap_url_raw) as resp:
-                        raw_bytes = await resp.read()
-                    png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
-                except Exception:  # noqa: BLE001
-                    _LOGGER.exception("roomba_plus: failed to decode live map update for %s", self._blid)
-                    continue
-                self._png_bytes = png_bytes
-                self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
-                self.async_write_ha_state()
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception("roomba_plus: watch_live_map() for %s ended unexpectedly", self._blid)
+        backoff = 5.0
+        while True:
+            try:
+                async for message in self._prime_robot.watch_live_map():
+                    if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
+                        continue
+                    try:
+                        async with session.get(message.livemap_url_raw) as resp:
+                            raw_bytes = await resp.read()
+                        png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception(
+                            "roomba_plus: failed to decode live map update for %s", self._blid
+                        )
+                        continue
+                    self._png_bytes = png_bytes
+                    self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+                    self.async_write_ha_state()
+                    backoff = 5.0  # a live update means things are healthy again
+                _LOGGER.warning(
+                    "roomba_plus: watch_live_map() for %s ended without an exception "
+                    "(unexpected -- it's meant to run forever) -- retrying in %.0fs",
+                    self._blid, backoff,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "roomba_plus: watch_live_map() for %s ended unexpectedly -- retrying "
+                    "in %.0fs (this is this entity's own outer safety net; the library "
+                    "itself already retries connection drops internally, so reaching "
+                    "this suggests something else went wrong)", self._blid, backoff,
+                )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)
 
     async def async_image(self) -> bytes | None:
         return self._png_bytes or self._blank_image()

@@ -1217,7 +1217,7 @@ class _PrimeStatusSensorBase(IRobotEntity):
     this in alongside BinarySensorEntity."""
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._config_entry = config_entry
 
     @property
@@ -1321,7 +1321,7 @@ class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        IRobotEntity.__init__(self, roomba=None, blid=blid)
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_connected"
 
