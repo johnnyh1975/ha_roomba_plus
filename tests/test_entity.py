@@ -54,3 +54,105 @@ class TestIRobotEntityInitNullGuards:
         roomba = _make_roomba({"dock": {"tankLvl": 42}, "sku": "m611020"})
         entity = IRobotEntity(roomba, "BLID123")
         assert entity.dock_tank_level == 42
+
+
+class TestPrimeDeviceInfo:
+    """REAL BUG FOUND AND FIXED (architecture review, not a field
+    report): every Prime entity passes roomba=None (no roombapy Roomba
+    object exists for a cloud-only device) -- IRobotEntity.__init__
+    previously always built DeviceInfo from roomba_reported_state(None)
+    == {}, regardless of connection type. Every Prime robot's device
+    page showed a generic "Roomba XXXX" name, no model, no serial, no
+    firmware version -- despite PrimeFirmwareVersionSensor and others
+    already showing the SAME underlying data correctly as individual
+    sensors. Device-level info and sensor-level info are entirely
+    separate code paths; only the sensor one had ever been built
+    correctly for Prime."""
+
+    def _make_prime_config_entry(self, title="Bogdana", serial_info=None, software_shadow=None):
+        config_entry = MagicMock()
+        config_entry.title = title
+        config_entry.runtime_data.prime_serial_info = serial_info
+        config_entry.runtime_data.prime_status_coordinator.data = (
+            {"rw-software": software_shadow} if software_shadow is not None else {}
+        )
+        return config_entry
+
+    def test_name_comes_from_config_entry_title(self):
+        """config_entry.title has ALWAYS correctly held the real robot
+        name since this project's very first Prime release (set at
+        onboarding time) -- no migration needed for already-configured
+        installs, unlike model/serial/firmware below."""
+        config_entry = self._make_prime_config_entry(title="Bogdana")
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["name"] == "Bogdana"
+
+    def test_falls_back_to_blid_when_title_is_empty(self):
+        config_entry = self._make_prime_config_entry(title="")
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["name"] == "Roomba D123"
+
+    def test_model_and_serial_from_prime_serial_info(self):
+        from roombapy_prime.models import RobotSerialInfo
+
+        serial_info = RobotSerialInfo(serial_number="SN123456", sku="G185020", family="Roomba Combo")
+        config_entry = self._make_prime_config_entry(serial_info=serial_info)
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["serial_number"] == "SN123456"
+        assert entity._attr_device_info["model"] == "G185020"
+        assert entity._attr_device_info["model_id"] == "G185020"
+
+    def test_model_falls_back_to_family_when_sku_missing(self):
+        from roombapy_prime.models import RobotSerialInfo
+
+        serial_info = RobotSerialInfo(serial_number="SN123456", sku=None, family="Roomba Combo")
+        config_entry = self._make_prime_config_entry(serial_info=serial_info)
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["model"] == "Roomba Combo"
+
+    def test_missing_serial_info_degrades_gracefully_not_raises(self):
+        config_entry = self._make_prime_config_entry(serial_info=None)
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["serial_number"] is None
+        assert entity._attr_device_info["model"] is None
+
+    def test_firmware_version_from_coordinator_data(self):
+        config_entry = self._make_prime_config_entry(software_shadow={"softwareVer": "p25-405+9.3.7"})
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["sw_version"] == "p25-405+9.3.7"
+
+    def test_missing_coordinator_data_degrades_gracefully_not_raises(self):
+        config_entry = self._make_prime_config_entry()
+        config_entry.runtime_data.prime_status_coordinator = None
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["sw_version"] is None
+
+    def test_no_config_entry_at_all_falls_back_to_original_classic_behavior(self):
+        """roomba=None with NO config_entry either (shouldn't happen in
+        practice for a real Prime entity, but must not crash) -- same
+        as the original, pre-fix behavior."""
+        entity = IRobotEntity(None, "BLID123")
+
+        assert entity._attr_device_info["name"] == "Roomba D123"
+        assert entity._attr_device_info["model"] is None
+
+    def test_manufacturer_is_always_irobot(self):
+        config_entry = self._make_prime_config_entry()
+
+        entity = IRobotEntity(None, "BLID123", config_entry)
+
+        assert entity._attr_device_info["manufacturer"] == "iRobot"

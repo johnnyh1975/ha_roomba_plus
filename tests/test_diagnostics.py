@@ -82,3 +82,77 @@ class TestFirmwareVerDiagnostics:
         })
         assert "bbchg" in diag["lifetime_stats"]
         assert diag["lifetime_stats"]["bbchg"]["nChatters"] == 42
+
+
+class TestCloudOnlyDiagnostics:
+    """REAL CRASH FOUND AND FIXED (architecture review, not a field
+    report): async_get_config_entry_diagnostics() unconditionally
+    accessed data.roomba's own attributes further down -- data.roomba
+    is None for every CLOUD_ONLY (V4/Prime) entry, so HA's own
+    "Download diagnostics" button would have raised AttributeError
+    immediately, every time, for every real Prime user."""
+
+    def _make_cloud_only_entry(self) -> MagicMock:
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.version = 22
+        entry.title = "Bogdana"
+        entry.data = {}
+        entry.options = {}
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.roomba = None
+        entry.runtime_data.prime_household_id = "hh1"
+        entry.runtime_data.prime_serial_info = MagicMock(sku="G185020", family="Roomba Combo")
+        entry.runtime_data.prime_status_coordinator.last_update_success = True
+        entry.runtime_data.prime_status_coordinator.data = {"rw-software": {}, "ro-currentstate": {}}
+        entry.runtime_data.prime_coordinator.last_update_success = True
+        entry.runtime_data.prime_coordinator.data = MagicMock()
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_does_not_crash_and_returns_prime_relevant_data(self):
+        from custom_components.roomba_plus.diagnostics import async_get_config_entry_diagnostics
+
+        entry = self._make_cloud_only_entry()
+        hass = MagicMock()
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["connection_type"] == "cloud_only"
+        assert result["prime"]["household_id_resolved"] is True
+        assert result["prime"]["model_sku"] == "G185020"
+        assert result["status_coordinator"]["last_update_success"] is True
+        assert sorted(result["status_coordinator"]["named_shadows_seeded"]) == [
+            "ro-currentstate", "rw-software",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_missing_household_id_and_serial_info_shown_honestly(self):
+        from custom_components.roomba_plus.diagnostics import async_get_config_entry_diagnostics
+
+        entry = self._make_cloud_only_entry()
+        entry.runtime_data.prime_household_id = None
+        entry.runtime_data.prime_serial_info = None
+        hass = MagicMock()
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["prime"]["household_id_resolved"] is False
+        assert result["prime"]["serial_info_resolved"] is False
+        assert result["prime"]["model_sku"] is None
+
+    @pytest.mark.asyncio
+    async def test_never_touches_data_roomba_at_all(self):
+        """The actual crash reproduction: data.roomba is None, and if
+        this branch ever reaches the Classic code path below it by
+        mistake, accessing roomba.roomba_connected on None raises
+        AttributeError immediately."""
+        from custom_components.roomba_plus.diagnostics import async_get_config_entry_diagnostics
+
+        entry = self._make_cloud_only_entry()
+        assert entry.runtime_data.roomba is None  # sanity-check the premise
+        hass = MagicMock()
+
+        # Must not raise.
+        await async_get_config_entry_diagnostics(hass, entry)

@@ -309,6 +309,42 @@ class TestDeepMergeReported:
 
         assert existing == {"batPct": 100}
 
+    def test_explicit_null_does_not_clobber_a_real_existing_value(self):
+        """SECOND REAL BUG (chairstacker, later report): battery still
+        went to "Unknown" immediately on mission start even with the
+        wholesale-replace fix above already in place. A mission-start
+        update apparently includes "batPct": null EXPLICITLY, not an
+        omitted key -- the exact same "explicit null vs missing key"
+        class of bug this project has hit 12+ times elsewhere. An
+        explicit null must not clobber a real, already-known value."""
+        existing = {"batPct": 100, "detectedPad": "padPlate"}
+        mission_start_update = {"cleanMissionStatus": {"phase": "run"}, "batPct": None}
+
+        result = _deep_merge_reported(existing, mission_start_update)
+
+        assert result["batPct"] == 100
+        assert result["cleanMissionStatus"] == {"phase": "run"}
+
+    def test_a_real_new_value_still_updates_normally(self):
+        """Confirms the null-guard above doesn't accidentally block
+        genuine updates -- only an explicit null is special-cased."""
+        existing = {"batPct": 100}
+
+        result = _deep_merge_reported(existing, {"batPct": 95})
+
+        assert result["batPct"] == 95
+
+    def test_explicit_null_is_accepted_when_no_real_value_exists_yet(self):
+        """A null for a field that was never known in the first place
+        (existing_value is None too) is harmless either way -- confirms
+        the guard is specifically about NOT clobbering real data, not
+        about rejecting null unconditionally."""
+        existing: dict = {}
+
+        result = _deep_merge_reported(existing, {"batPct": None})
+
+        assert result["batPct"] is None
+
 
 class TestAsyncWatchStatusUpdatesMergeBehavior:
     @pytest.mark.asyncio

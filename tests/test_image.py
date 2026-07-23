@@ -14,6 +14,7 @@ import datetime
 import collections
 import pytest
 from unittest.mock import MagicMock
+from custom_components.roomba_plus.entity import IRobotEntity
 from unittest.mock import AsyncMock
 import homeassistant.helpers.entity_platform as _ep
 import math
@@ -2115,3 +2116,122 @@ class TestPrimeMapImage:
         entity._png_bytes = b"fake-png-bytes"
         result = await entity.async_image()
         assert result == b"fake-png-bytes"
+
+
+class TestPrimeMapImageWatchRetry:
+    """_async_watch_live_map()'s own outer retry loop -- REAL BUG FOUND
+    AND FIXED (architecture review, not a field report): this had the
+    exact same missing-retry gap already found and fixed twice before
+    in PrimeCoordinator/PrimeStatusCoordinator, but this entity had
+    NEVER actually run before this session (Platform.IMAGE was missing
+    from PRIME_PLATFORMS the whole time), so the bug never had a
+    chance to surface via real usage the way the other two did."""
+
+    def _entity(self, prime_robot=None, config_entry=None):
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._png_bytes = None
+        entity._blid = "TESTBLID"
+        entity.hass = MagicMock()
+        entity._prime_robot = prime_robot or MagicMock()
+        entity._config_entry = config_entry or MagicMock()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_retries_after_unexpected_exception_instead_of_dying_permanently(self):
+        entity = self._entity()
+        call_count = 0
+
+        def fake_watch_live_map():
+            nonlocal call_count
+            call_count += 1
+
+            async def _gen():
+                if call_count == 1:
+                    raise RuntimeError("simulated unexpected failure")
+                    yield  # pragma: no cover -- unreachable, makes this an async generator
+                raise asyncio.CancelledError
+
+            return _gen()
+
+        entity._prime_robot.watch_live_map = fake_watch_live_map
+
+        with patch("asyncio.sleep", new=AsyncMock()), patch(
+            "custom_components.roomba_plus.image.async_get_clientsession", return_value=MagicMock()
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await entity._async_watch_live_map()
+
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_normal_generator_completion_also_retries_not_tight_loops(self):
+        """The SAME lesson already learned twice before: a generator
+        ending WITHOUT an exception is also anomalous (it's meant to
+        run forever) and must get the same backoff, not an immediate,
+        undelayed re-call that would busy-loop."""
+        entity = self._entity()
+        call_count = 0
+
+        def fake_watch_live_map():
+            nonlocal call_count
+            call_count += 1
+
+            async def _gen():
+                if call_count >= 2:
+                    raise asyncio.CancelledError
+                return
+                yield  # pragma: no cover -- unreachable, makes this an async generator
+
+            return _gen()
+
+        entity._prime_robot.watch_live_map = fake_watch_live_map
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        with patch("asyncio.sleep", new=_fake_sleep), patch(
+            "custom_components.roomba_plus.image.async_get_clientsession", return_value=MagicMock()
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await entity._async_watch_live_map()
+
+        assert call_count == 2
+        assert sleep_calls == [5.0]  # backoff was actually applied, not skipped
+
+
+class TestPrimeMapImageBackgroundTask:
+    """CONSISTENCY FIX (this session): async_added_to_hass() previously
+    used a bare asyncio.create_task() -- every other background task
+    in this project uses config_entry.async_create_background_task()
+    instead, which ties the task's lifetime to the config entry itself
+    (auto-cancelled on unload/reload by HA's own framework)."""
+
+    @pytest.mark.asyncio
+    async def test_uses_config_entry_background_task_not_bare_asyncio_create_task(self):
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._blid = "TESTBLID"
+        entity._prime_robot = MagicMock()
+        entity._config_entry = MagicMock()
+        # async_create_background_task() receives the coroutine as an argument
+        # but (being a MagicMock) never awaits/schedules it -- close it
+        # explicitly so this test doesn't leak a "coroutine was never
+        # awaited" warning, same pattern already used elsewhere in this suite.
+        entity._config_entry.async_create_background_task.side_effect = (
+            lambda hass, coro, name, **kw: coro.close()
+        )
+        entity.hass = MagicMock()
+        entity.access_tokens = None
+
+        with patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()), patch.object(
+            PrimeMapImage, "async_update_token",
+        ):
+            await entity.async_added_to_hass()
+
+        entity._config_entry.async_create_background_task.assert_called_once()
+        call_kwargs = entity._config_entry.async_create_background_task.call_args
+        assert call_kwargs.kwargs.get("name") == "roomba_plus_prime_live_map_TESTBLID"

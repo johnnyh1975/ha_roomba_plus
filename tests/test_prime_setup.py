@@ -95,6 +95,8 @@ class TestAsyncSetupEntryPrime:
 
     @pytest.mark.asyncio
     async def test_success_path_sets_runtime_data(self) -> None:
+        from roombapy_prime.models import RobotSerialInfo
+
         hass, config_entry = _make_hass_and_entry()
         fake_prime_robot = MagicMock()
         fake_prime_robot.connect = AsyncMock()
@@ -102,6 +104,8 @@ class TestAsyncSetupEntryPrime:
             return_value=MagicMock(payload={"state": {"reported": {}}})
         )
         fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
+        fake_serial_info = RobotSerialInfo(serial_number="SN1", sku="G185020")
+        fake_prime_robot.get_serial_number_data = AsyncMock(return_value=fake_serial_info)
 
         async def _empty_named_shadows_updates():
             return
@@ -132,7 +136,39 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.prime_coordinator is not None
         assert runtime_data.prime_status_coordinator is not None
         assert runtime_data.prime_household_id == "hh1"
+        assert runtime_data.prime_serial_info is fake_serial_info
         fake_prime_robot.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_serial_info_failure_does_not_block_setup(self) -> None:
+        """Same reasoning as test_household_id_failure_does_not_block_setup
+        above -- a device page missing model/serial is a far better
+        failure mode than blocking the entire V4/Prime setup over it."""
+        hass, config_entry = _make_hass_and_entry()
+        fake_prime_robot = MagicMock()
+        fake_prime_robot.connect = AsyncMock()
+        fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
+        fake_prime_robot.get_serial_number_data = AsyncMock(side_effect=RuntimeError("simulated failure"))
+
+        async def _empty_named_shadows_updates():
+            return
+            yield  # pragma: no cover -- makes this an async generator
+
+        fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
+
+        with patch(
+            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+            new=AsyncMock(return_value=fake_prime_robot),
+        ):
+            result = await _async_setup_entry_prime(hass, config_entry)
+
+        assert result is True
+        runtime_data: RoombaData = config_entry.runtime_data
+        assert runtime_data.prime_serial_info is None
+        assert runtime_data.prime_robot is fake_prime_robot  # rest of setup unaffected
 
     @pytest.mark.asyncio
     async def test_household_id_failure_does_not_block_setup(self) -> None:

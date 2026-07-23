@@ -364,3 +364,32 @@ class TestPrimeCarpetBoostSwitch:
         switch = self._make({"carpetBoost": True})
         await switch.async_turn_off()
         switch._prime_robot.set_setting.assert_awaited_once_with("carpetBoost", False)
+
+
+class TestPrimeCarpetBoostSwitchDeviceInfo:
+    """End-to-end confirmation that config_entry actually flows through
+    to IRobotEntity.__init__ for a real Prime entity class -- the
+    other PrimeCarpetBoostSwitch tests above patch __init__ away
+    entirely, which would not have caught a regression in this
+    specific wiring (config_entry now passed to the base __init__,
+    not just stored separately afterward)."""
+
+    def test_device_info_uses_config_entry_title_and_serial_info(self):
+        from roombapy_prime.models import RobotSerialInfo
+        from custom_components.roomba_plus.switch import PrimeCarpetBoostSwitch
+
+        config_entry = MagicMock()
+        config_entry.title = "Bogdana"
+        config_entry.runtime_data.prime_serial_info = RobotSerialInfo(
+            serial_number="SN1", sku="G185020",
+        )
+        config_entry.runtime_data.prime_status_coordinator.data = {
+            "rw-software": {"softwareVer": "p25-405+9.3.7"},
+        }
+
+        switch = PrimeCarpetBoostSwitch("BLID123", config_entry)
+
+        assert switch._attr_device_info["name"] == "Bogdana"
+        assert switch._attr_device_info["model"] == "G185020"
+        assert switch._attr_device_info["serial_number"] == "SN1"
+        assert switch._attr_device_info["sw_version"] == "p25-405+9.3.7"

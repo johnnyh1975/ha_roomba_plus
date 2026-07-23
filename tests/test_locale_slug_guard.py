@@ -28,10 +28,18 @@ from pathlib import Path
 import pytest
 
 INTEGRATION = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
-PLATFORM_FILES = [
-    "button.py", "image.py", "select.py", "sensor.py",
-    "switch.py", "binary_sensor.py", "vacuum.py", "device_tracker.py",
-]
+
+# AUTO-DISCOVERED (this session) rather than a manually maintained list --
+# a manually maintained list is EXACTLY what caused two real gaps: calendar.py
+# and sensor_prime.py both had real IRobotEntity subclasses with
+# _attr_translation_key, correctly following both rules, but were simply never
+# added to this list, so this guard never actually checked them at all. Scanning
+# every .py file in the integration is safe even though most of them (const.py,
+# models.py, schedule_parser.py, etc.) define no entity classes at all -- the
+# rules below only ever fire on classes that actually match the pattern
+# (_attr_translation_key present), so scanning "too many" files costs nothing,
+# while the previous "too few" manually-curated list cost two real regressions.
+PLATFORM_FILES = sorted(p.name for p in INTEGRATION.glob("*.py") if p.name != "__init__.py")
 
 # FavoriteButton sets _attr_name dynamically in __init__ from iRobot app routine
 # name — this is intentional and locale-independent (app names are user-defined).
