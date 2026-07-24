@@ -19,6 +19,7 @@ from custom_components.roomba_plus.switch import (
     ChildLockSwitch,
     EcoChargeSwitch,
     GentleModeSwitch,
+    PrimeCarpetBoostSwitch,
     async_setup_entry,
 )
 
@@ -393,3 +394,46 @@ class TestPrimeCarpetBoostSwitchDeviceInfo:
         assert switch._attr_device_info["model"] == "G185020"
         assert switch._attr_device_info["serial_number"] == "SN1"
         assert switch._attr_device_info["sw_version"] == "p25-405+9.3.7"
+
+
+class TestPrimeSwitchSetupCapabilityGating:
+    """NEW (this session) -- PrimeCarpetBoostSwitch is now capability-
+    gated on cap.carpetBoost. See get_prime_capability_flags()'s own
+    docstring for the "None means unknown, only explicit 0 means
+    absent" contract."""
+
+    def _entry(self, cap: dict | None):
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        entry.runtime_data.prime_status_coordinator.data = (
+            {PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": cap}} if cap is not None else None
+        )
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_carpet_boost_is_zero(self):
+        entry = self._entry({"carpetBoost": 0})
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        assert added == []
+
+    @pytest.mark.asyncio
+    async def test_included_when_carpet_boost_is_nonzero(self):
+        entry = self._entry({"carpetBoost": 3})
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        assert len(added) == 1
+        assert isinstance(added[0], PrimeCarpetBoostSwitch)
+
+    @pytest.mark.asyncio
+    async def test_included_when_capability_unknown(self):
+        """Fail-open default -- no coordinator data yet."""
+        entry = self._entry(None)
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        assert len(added) == 1
+        assert isinstance(added[0], PrimeCarpetBoostSwitch)

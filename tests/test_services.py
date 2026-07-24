@@ -249,6 +249,107 @@ class TestFireMaintenanceResetEvent:
         assert payload["component"] == "wheel"
 
 
+class TestHandleSmartStartConnectionTypeBranching:
+    """NEW (this session) -- async_handle_smart_start() used to
+    unconditionally call data.roomba.start whenever no blocking_manager
+    was configured for the entry, regardless of tier -- a real crash
+    (AttributeError) for any Prime entry with no CONF_BLOCKING_SENSORS
+    set, which is the common case (blocking sensors are opt-in)."""
+
+    def _make_call(self, hass, rooms=None, override=False):
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.test"]}
+        if rooms is not None:
+            call.data["rooms"] = rooms
+        if override:
+            call.data["override_blocking"] = override
+        return call
+
+    def _patch_entity_registry(self, config_entry_id="entry1"):
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry(config_entry_id)
+        return patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        )
+
+    @pytest.mark.asyncio
+    async def test_prime_no_blocking_manager_calls_send_simple_command(self):
+        """THE crash fix itself."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blocking_manager = None
+        entry.runtime_data.prime_robot = AsyncMock()
+        hass.config_entries.async_get_entry.return_value = entry
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass))
+
+        entry.runtime_data.prime_robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_classic_no_blocking_manager_still_calls_roomba_start(self):
+        """Unaffected by the fix -- the pre-existing Classic path."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        entry.runtime_data.blocking_manager = None
+        started = []
+        entry.runtime_data.roomba.start = lambda: started.append(True)
+        hass.config_entries.async_get_entry.return_value = entry
+        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass))
+
+        assert started == [True]
+
+    @pytest.mark.asyncio
+    async def test_prime_with_rooms_raises_honest_error_not_a_crash(self):
+        """The room-targeted case: a clear, honest error instead of
+        either a crash or the misleading "not_smart_map" message."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+        from homeassistant.exceptions import ServiceValidationError
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        hass.config_entries.async_get_entry.return_value = entry
+
+        with self._patch_entity_registry("entry1"):
+            with pytest.raises(ServiceValidationError) as exc_info:
+                await async_handle_smart_start(self._make_call(hass, rooms=["Kitchen"]))
+
+        assert exc_info.value.translation_key == "prime_rooms_not_supported"
+
+    @pytest.mark.asyncio
+    async def test_blocking_manager_present_delegates_regardless_of_tier(self):
+        """Untouched by this session's fix -- confirms the existing
+        blocking_manager delegation path still works exactly as before."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blocking_manager = AsyncMock()
+        hass.config_entries.async_get_entry.return_value = entry
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass, override=True))
+
+        entry.runtime_data.blocking_manager.check_and_start.assert_awaited_once_with(None, True)
+
+
 class TestHandleResetServiceFiresEvent:
     """v2.9.0 LOGBOOK — _handle_reset_service() fires maintenance_reset."""
 

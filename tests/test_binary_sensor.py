@@ -1298,12 +1298,46 @@ class TestPrimeRobotConnectivitySensor:
         assert sensor.is_on is True
 
 
+class TestPrimeDockErrorSensor:
+    """NEW (this session) -- CurrentStateShadow.dock.error, confirmed
+    type (int) but no real nonzero value ever observed."""
+
+    def test_is_on_false_when_error_is_zero(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry({"dock": {"error": 0}})
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is False
+        assert sensor.extra_state_attributes == {"raw_error_code": 0}
+
+    def test_is_on_true_for_nonzero_error_code(self):
+        """No real nonzero value has ever been observed -- this
+        confirms the CODE handles it correctly regardless."""
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry({"dock": {"error": 5}})
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+        assert sensor.extra_state_attributes == {"raw_error_code": 5}
+
+    def test_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry(None)
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is None
+
+
 class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
     @pytest.mark.asyncio
     async def test_adds_all_three_prime_binary_sensors(self):
         from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
         from custom_components.roomba_plus.binary_sensor import (
             PrimeBinPresentSensor,
+            PrimeDockErrorSensor,
             PrimeRobotConnectivitySensor,
             PrimeTankPresentSensor,
         )
@@ -1319,7 +1353,52 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
 
         await binary_sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
 
-        assert len(created) == 3
+        assert len(created) == 4
         assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
         assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
         assert any(isinstance(e, PrimeRobotConnectivitySensor) for e in created)
+        assert any(isinstance(e, PrimeDockErrorSensor) for e in created)
+
+
+class TestAsyncSetupEntryBinarySensorCapabilityGating:
+    """NEW (this session) -- PrimeTankPresentSensor excluded when
+    cap.scrub is explicitly 0 (no mop capability). See
+    get_prime_capability_flags()'s own docstring for the "None means
+    unknown, only explicit 0 means absent" contract."""
+
+    def _entry(self, cap: dict | None):
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        entry.runtime_data.prime_status_coordinator.data = (
+            {PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": cap}} if cap is not None else None
+        )
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_scrub_is_zero(self):
+        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeBinPresentSensor, PrimeTankPresentSensor,
+        )
+
+        entry = self._entry({"scrub": 0})
+        created: list = []
+        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+
+        assert not any(isinstance(e, PrimeTankPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_included_when_scrub_is_nonzero(self):
+        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        entry = self._entry({"scrub": 3})
+        created: list = []
+        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)

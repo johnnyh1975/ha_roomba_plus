@@ -218,6 +218,51 @@ def _make_status_coordinator() -> tuple[PrimeStatusCoordinator, MagicMock, Magic
     return coordinator, config_entry, prime_robot
 
 
+class TestAsyncStartSeedsClassicShadow:
+    """NEW (this session) -- async_start() now ALSO seeds the classic/
+    unnamed shadow (get_state(), not get_named_shadow()) once, under
+    CLASSIC_SHADOW_KEY, for CapabilityFlags/DockCapabilities gating.
+    Deliberately seed-only (see CLASSIC_SHADOW_KEY's own docstring) --
+    no corresponding push-loop test needed, since it isn't added there."""
+
+    @pytest.mark.asyncio
+    async def test_seeds_classic_shadow_alongside_the_eight_named_ones(self) -> None:
+        coordinator, _config_entry, prime_robot = _make_status_coordinator()
+
+        async def fake_get_named_shadow(name):
+            return ShadowResponse(topic="x", payload={"state": {"reported": {"_name": name}}})
+
+        prime_robot.get_named_shadow = fake_get_named_shadow
+        prime_robot.get_state = AsyncMock(
+            return_value=ShadowResponse(topic="x", payload={"state": {"reported": {"cap": {"scrub": 3}}}})
+        )
+
+        await coordinator.async_start()
+
+        assert coordinator.data[PrimeStatusCoordinator.CLASSIC_SHADOW_KEY] == {"cap": {"scrub": 3}}
+        # The eight named shadows are still seeded too -- this is additive, not a replacement.
+        assert coordinator.data["ro-currentstate"] == {"_name": "ro-currentstate"}
+
+    @pytest.mark.asyncio
+    async def test_classic_shadow_failure_does_not_block_setup(self) -> None:
+        """A failure fetching the classic/unnamed shadow specifically
+        must not raise ConfigEntryNotReady -- that guard exists for the
+        eight named shadows all failing together, a different, more
+        serious situation than this one shadow alone being unreachable."""
+        coordinator, _config_entry, prime_robot = _make_status_coordinator()
+
+        async def fake_get_named_shadow(name):
+            return ShadowResponse(topic="x", payload={"state": {"reported": {"_name": name}}})
+
+        prime_robot.get_named_shadow = fake_get_named_shadow
+        prime_robot.get_state = AsyncMock(side_effect=ShadowConnectionError("simulated"))
+
+        await coordinator.async_start()  # must not raise
+
+        assert PrimeStatusCoordinator.CLASSIC_SHADOW_KEY not in coordinator.data
+        assert coordinator.data["ro-currentstate"] == {"_name": "ro-currentstate"}
+
+
 class TestAsyncWatchStatusUpdatesRetryBehavior:
     """_async_watch_status_updates()'s own outer retry loop -- added
     after a real field report (chairstacker): sensors got stuck at
@@ -376,3 +421,81 @@ class TestAsyncWatchStatusUpdatesMergeBehavior:
         assert coordinator.data["ro-currentstate"]["cleanMissionStatus"] == {"phase": "reloc"}
         # the untouched shadow must survive completely unaffected.
         assert coordinator.data["rw-settings"] == {"suctionLevel": 3}
+
+
+class TestGetPrimeCapabilityFlags:
+    """NEW (this session) -- get_prime_capability_flags(), used to
+    gate six Prime entities on real per-device hardware capability
+    (see its own docstring for the "None means unknown, only explicit
+    0 means absent" contract)."""
+
+    def _make_config_entry(self, coordinator_data):
+        config_entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = coordinator_data
+        config_entry.runtime_data.prime_status_coordinator = coordinator
+        return config_entry
+
+    def test_returns_none_none_when_coordinator_missing(self):
+        from custom_components.roomba_plus.prime_coordinator import get_prime_capability_flags
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_status_coordinator = None
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        assert cap is None
+        assert dock_cap is None
+
+    def test_returns_none_none_when_coordinator_data_missing(self):
+        from custom_components.roomba_plus.prime_coordinator import get_prime_capability_flags
+
+        config_entry = self._make_config_entry(None)
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        assert cap is None
+        assert dock_cap is None
+
+    def test_extracts_cap_from_classic_shadow(self):
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator, get_prime_capability_flags,
+        )
+
+        config_entry = self._make_config_entry({
+            PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": {"scrub": 3, "carpetBoost": 0}},
+        })
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        assert cap.scrub == 3
+        assert cap.carpet_boost == 0
+        assert dock_cap is None
+
+    def test_extracts_dock_cap_from_ro_currentstate(self):
+        from custom_components.roomba_plus.prime_coordinator import get_prime_capability_flags
+
+        config_entry = self._make_config_entry({
+            "ro-currentstate": {"dock": {"cap": {"pw": 1, "pd": 0}}},
+        })
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        assert cap is None
+        assert dock_cap.pad_wash == 1
+        assert dock_cap.pad_dry == 0
+
+    def test_extracts_both_when_both_shadows_present(self):
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator, get_prime_capability_flags,
+        )
+
+        config_entry = self._make_config_entry({
+            PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": {"suctionLvl": 4}},
+            "ro-currentstate": {"dock": {"cap": {"pw": 1, "pd": 1}}},
+        })
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        assert cap.suction_lvl == 4
+        assert dock_cap.pad_wash == 1

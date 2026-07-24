@@ -577,3 +577,147 @@ class TestDockContactConfirmedPrecedesMissionEnd:
             "a stale pre-correction version (v3.2.1 field-confirmed: this "
             "exact ordering bug was caught before shipping)"
         )
+
+
+class TestCalendarPlatformIfEnabled:
+    """NEW (this session) -- CONF_ENABLE_SCHEDULE_CALENDAR opt-out for
+    Platform.CALENDAR, default True so existing installations keep
+    their calendar entity after upgrading (see that constant's own
+    docstring, const.py, for why default True specifically)."""
+
+    def test_returns_calendar_platform_by_default(self):
+        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from homeassistant.const import Platform
+
+        config_entry = MagicMock()
+        config_entry.options = {}
+
+        assert _calendar_platform_if_enabled(config_entry) == [Platform.CALENDAR]
+
+    def test_returns_empty_when_explicitly_disabled(self):
+        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
+
+        config_entry = MagicMock()
+        config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: False}
+
+        assert _calendar_platform_if_enabled(config_entry) == []
+
+    def test_returns_calendar_platform_when_explicitly_enabled(self):
+        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
+        from homeassistant.const import Platform
+
+        config_entry = MagicMock()
+        config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: True}
+
+        assert _calendar_platform_if_enabled(config_entry) == [Platform.CALENDAR]
+
+
+class TestRemoveCalendarEntityIfDisabled:
+    """NEW (this session) -- explicit entity-registry cleanup so a
+    disabled calendar entity doesn't linger forever as "unavailable"
+    (unloading a platform doesn't remove its registry record on its
+    own)."""
+
+    def test_removes_calendar_entity_when_disabled(self):
+        from custom_components.roomba_plus import _remove_calendar_entity_if_disabled
+        from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
+
+        config_entry = MagicMock()
+        config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: False}
+        config_entry.entry_id = "entry1"
+
+        calendar_entry = MagicMock(domain="calendar", entity_id="calendar.roomba_schedule")
+        sensor_entry = MagicMock(domain="sensor", entity_id="sensor.roomba_battery")
+        fake_er = MagicMock()
+
+        with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+             patch(
+                 "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                 return_value=[calendar_entry, sensor_entry],
+             ):
+            _remove_calendar_entity_if_disabled(MagicMock(), config_entry)
+
+        fake_er.async_remove.assert_called_once_with("calendar.roomba_schedule")
+
+    def test_does_nothing_when_enabled(self):
+        """Default (no option set at all) must NOT remove anything --
+        the whole point of defaulting to True is that existing
+        installations are left untouched."""
+        from custom_components.roomba_plus import _remove_calendar_entity_if_disabled
+
+        config_entry = MagicMock()
+        config_entry.options = {}
+        config_entry.entry_id = "entry1"
+
+        fake_er = MagicMock()
+        with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+             patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
+            _remove_calendar_entity_if_disabled(MagicMock(), config_entry)
+
+        mock_entries.assert_not_called()
+        fake_er.async_remove.assert_not_called()
+
+
+class TestReloadOnOptionsChangeIncludesCalendar:
+    """NEW (this session) -- CONF_ENABLE_SCHEDULE_CALENDAR added to the
+    reload-trigger key set (renamed _CONNECTION_KEYS ->
+    _RELOAD_TRIGGER_KEYS internally). Without this, saving the option
+    would silently do nothing until the user manually reloaded the
+    integration -- unlike every other option on this form, which is
+    read fresh at render/runtime rather than baked into the platforms
+    list at setup time."""
+
+    @pytest.mark.asyncio
+    async def test_reload_triggered_when_calendar_option_changes(self):
+        from custom_components.roomba_plus import _async_reload_on_options_change
+        from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
+
+        config_entry = MagicMock()
+        config_entry.data = {}  # never synced before -- an existing installation
+        config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: False}
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await _async_reload_on_options_change(hass, config_entry)
+
+        hass.config_entries.async_reload.assert_awaited_once_with("entry1")
+
+    @pytest.mark.asyncio
+    async def test_no_reload_when_calendar_option_matches_default_and_was_never_touched(self):
+        """The default-application fix (this session): before it, an
+        existing installation's very first options save of ANYTHING
+        (even something unrelated) would spuriously reload once, since
+        .data has no key at all yet (reads as None) while .options
+        would already resolve to the real default (True) -- None !=
+        True looks like a change even though nothing meaningful did."""
+        from custom_components.roomba_plus import _async_reload_on_options_change
+
+        config_entry = MagicMock()
+        config_entry.data = {}
+        config_entry.options = {}  # both resolve to the same default -- no real change
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await _async_reload_on_options_change(hass, config_entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_reload_after_sync(self):
+        from custom_components.roomba_plus import _async_reload_on_options_change
+        from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
+
+        config_entry = MagicMock()
+        config_entry.data = {CONF_ENABLE_SCHEDULE_CALENDAR: False}  # already synced
+        config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: False}
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await _async_reload_on_options_change(hass, config_entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()

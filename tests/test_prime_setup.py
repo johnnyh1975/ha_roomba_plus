@@ -103,6 +103,9 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot.get_named_shadow = AsyncMock(
             return_value=MagicMock(payload={"state": {"reported": {}}})
         )
+        fake_prime_robot.get_state = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
         fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
         fake_serial_info = RobotSerialInfo(serial_number="SN1", sku="G185020")
         fake_prime_robot.get_serial_number_data = AsyncMock(return_value=fake_serial_info)
@@ -150,6 +153,9 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot.get_named_shadow = AsyncMock(
             return_value=MagicMock(payload={"state": {"reported": {}}})
         )
+        fake_prime_robot.get_state = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
         fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
         fake_prime_robot.get_serial_number_data = AsyncMock(side_effect=RuntimeError("simulated failure"))
 
@@ -181,6 +187,9 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot = MagicMock()
         fake_prime_robot.connect = AsyncMock()
         fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_state = AsyncMock(
             return_value=MagicMock(payload={"state": {"reported": {}}})
         )
         fake_prime_robot.get_household_id = AsyncMock(side_effect=RuntimeError("simulated failure"))

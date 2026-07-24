@@ -128,9 +128,21 @@ class TestBackwardEveryCloudOnlyModuleIsListed:
     a real CLOUD_ONLY entry at all."""
 
     def test_every_module_referencing_cloud_only_is_in_prime_platforms(self) -> None:
+        """CARVED-OUT EXCEPTION (this session): calendar.py is
+        deliberately NOT in the static PRIME_PLATFORMS list anymore --
+        Platform.CALENDAR is now conditional on
+        CONF_ENABLE_SCHEDULE_CALENDAR (default True), added at runtime
+        by __init__.py's _calendar_platform_if_enabled(), called
+        identically at all four platform-list build sites (Classic
+        setup/unload, Prime setup/unload). This is a deliberate,
+        single, well-tested exception to the invariant this test
+        otherwise enforces -- not a reopening of the original bug this
+        test exists to catch (every OTHER CLOUD_ONLY module must still
+        be unconditionally listed)."""
         referencing = _platform_files_referencing_cloud_only()
         listed_modules = {_PLATFORM_TO_MODULE[p] for p in PRIME_PLATFORMS}
-        missing = referencing - listed_modules
+        deliberately_conditional = {"calendar"}
+        missing = referencing - listed_modules - deliberately_conditional
         assert not missing, (
             f"{missing} reference ConnectionType.CLOUD_ONLY but are NOT in "
             f"PRIME_PLATFORMS -- this is exactly the shape of the original bug "

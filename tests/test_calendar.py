@@ -389,6 +389,30 @@ class TestPrimeScheduleCalendarRoomNames:
         assert result == {}
 
 
+class TestPrimeScheduleCalendarAsyncUpdate:
+    @pytest.mark.asyncio
+    @freeze_time("2026-07-23 16:05:00")
+    async def test_fetches_with_start_shifted_back_by_default_event_duration(self):
+        """REAL BUG (this session, chairstacker) -- see async_update()'s
+        own docstring. Fetching from exactly `now` meant an occurrence
+        that already started today was pushed a full week ahead by
+        _weekly_occurrences()'s own logic, never even entering the
+        returned list. Confirms the fetch window's start is shifted
+        back, not just that `event` handles ongoing occurrences once
+        they're already in the cache (covered by TestPrimeScheduleCalendarEvent)."""
+        from custom_components.roomba_plus.schedule_parser import DEFAULT_EVENT_DURATION
+
+        cal = _make_prime_calendar()
+        cal._fetch_room_names = AsyncMock(return_value={})
+        cal._fetch_occurrences = AsyncMock(return_value=[])
+
+        await cal.async_update()
+
+        called_start, called_end = cal._fetch_occurrences.call_args.args
+        expected_start = datetime.datetime(2026, 7, 23, 16, 5, tzinfo=datetime.timezone.utc) - DEFAULT_EVENT_DURATION
+        assert called_start == expected_start
+
+
 class TestPrimeScheduleCalendarEvent:
     def test_event_returns_none_when_no_future_occurrences_cached(self):
         cal = _make_prime_calendar()
@@ -423,6 +447,58 @@ class TestPrimeScheduleCalendarEvent:
 
         assert event is not None
         assert event.summary == "Cleaning: Zone 99"
+
+    @freeze_time("2026-07-23 16:05:00")
+    def test_event_returns_ongoing_occurrence_not_just_future_ones(self):
+        """REAL BUG (this session, chairstacker): a schedule-triggered
+        mission was actively running (started 16:05, 15 minutes prior),
+        but this calendar showed "Off" throughout -- event() used to
+        only ever look for start > now, so an already-started
+        occurrence was invisible to it regardless of whether it was
+        still ongoing."""
+        cal = _make_prime_calendar()
+        started = datetime.datetime(2026, 7, 23, 15, 50, tzinfo=datetime.timezone.utc)
+        cal._cached_occurrences = [
+            (started, started + datetime.timedelta(hours=1), ["5"], "Living room clean"),
+        ]
+        cal._cached_room_names = {"5": "Living Room"}
+
+        event = cal.event
+
+        assert event is not None
+        assert event.summary == "Cleaning: Living Room"
+
+    @freeze_time("2026-07-23 16:05:00")
+    def test_event_prefers_ongoing_occurrence_over_a_later_future_one(self):
+        cal = _make_prime_calendar()
+        started = datetime.datetime(2026, 7, 23, 15, 50, tzinfo=datetime.timezone.utc)
+        later = datetime.datetime(2026, 7, 24, 8, 0, tzinfo=datetime.timezone.utc)
+        cal._cached_occurrences = [
+            (started, started + datetime.timedelta(hours=1), ["5"], "Ongoing"),
+            (later, later + datetime.timedelta(hours=1), ["9"], "Tomorrow"),
+        ]
+        cal._cached_room_names = {}
+
+        event = cal.event
+
+        assert event is not None
+        assert event.summary == "Cleaning: Zone 5"
+
+    @freeze_time("2026-07-23 17:30:00")
+    def test_event_falls_back_to_future_once_ongoing_occurrence_has_ended(self):
+        cal = _make_prime_calendar()
+        ended = datetime.datetime(2026, 7, 23, 15, 50, tzinfo=datetime.timezone.utc)
+        later = datetime.datetime(2026, 7, 24, 8, 0, tzinfo=datetime.timezone.utc)
+        cal._cached_occurrences = [
+            (ended, ended + datetime.timedelta(hours=1), ["5"], "Already over"),
+            (later, later + datetime.timedelta(hours=1), ["9"], "Tomorrow"),
+        ]
+        cal._cached_room_names = {}
+
+        event = cal.event
+
+        assert event is not None
+        assert event.summary == "Cleaning: Zone 9"
 
 
 class TestAsyncSetupEntryRoutesByConnectionType:

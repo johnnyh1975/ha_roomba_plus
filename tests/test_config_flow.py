@@ -449,3 +449,51 @@ class TestReauthConfirmForm:
             })
         assert result["errors"] == {"base": "cannot_connect"}
         flow.hass.config_entries.async_update_entry.assert_not_called()
+
+
+class TestAsyncStepSettingsBranchesByConnectionType:
+    """NEW (this session) -- Prime (CLOUD_ONLY) entries used to land on
+    the SAME settings form as Classic, showing fields that mean
+    nothing for Prime at all (map size/scale, correlation entities --
+    all Classic-only rendering concepts). Now branches: Prime gets its
+    own minimal form."""
+
+    @pytest.mark.asyncio
+    async def test_prime_shows_only_the_calendar_toggle(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow.config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_settings(None)
+
+        schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
+        assert any("enable_schedule_calendar" in k for k in schema_keys)
+        assert not any("map_size_px" in k for k in schema_keys)
+        assert not any("correlation_entities" in k for k in schema_keys)
+
+    @pytest.mark.asyncio
+    async def test_classic_shows_existing_fields_plus_the_calendar_toggle(self):
+        flow = _make_options_flow()
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_settings(None)
+
+        schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
+        assert any("map_size_px" in k for k in schema_keys)
+        assert any("enable_schedule_calendar" in k for k in schema_keys)
+
+    @pytest.mark.asyncio
+    async def test_prime_settings_save_writes_calendar_option(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow.config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        flow.async_create_entry = MagicMock(side_effect=lambda **kw: kw)
+
+        await flow.async_step_settings({"enable_schedule_calendar": False})
+
+        flow.async_create_entry.assert_called_once()
+        saved = flow.async_create_entry.call_args.kwargs["data"]
+        assert saved["enable_schedule_calendar"] is False

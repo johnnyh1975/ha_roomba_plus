@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.roomba_plus.models import ConnectionType
 from custom_components.roomba_plus.sensor_prime import (
     PrimeBatterySensor,
     PrimeConnectionHealthSensor,
@@ -208,13 +209,22 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         from custom_components.roomba_plus.models import ConnectionType
         from custom_components.roomba_plus.sensor_prime import (
             PrimeBatterySensor,
+            PrimeCanceledMissionsSensor,
+            PrimeChargeCyclesErrorSensor,
+            PrimeChargeCyclesOkSensor,
             PrimeDetectedPadSensor,
             PrimeDockStatusSensor,
+            PrimeFailedMissionsSensor,
             PrimeFirmwareVersionSensor,
+            PrimeNavigationResetsSensor,
             PrimePadDryStatusSensor,
             PrimePadWashStatusSensor,
             PrimeRuntimeHoursSensor,
+            PrimeSerialNumberSensor,
+            PrimeSuccessfulMissionsSensor,
             PrimeSuctionLevelSensor,
+            PrimeSystemUptimeSensor,
+            PrimeTotalMissionsSensor,
         )
 
         entry = MagicMock()
@@ -227,7 +237,10 @@ class TestAsyncSetupEntryCloudOnlyBranch:
 
         await sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
 
-        assert len(created) == 10
+        # 6 always-present + 4 capability-gated (unknown -> created by
+        # default) + 8 ro-stats-backed + 1 ro-configinfo-backed (this
+        # session) = 19.
+        assert len(created) == 19
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
         assert any(isinstance(e, PrimeBatterySensor) for e in created)
@@ -238,6 +251,77 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         assert any(isinstance(e, PrimePadWashStatusSensor) for e in created)
         assert any(isinstance(e, PrimePadDryStatusSensor) for e in created)
         assert any(isinstance(e, PrimeSuctionLevelSensor) for e in created)
+        assert any(isinstance(e, PrimeTotalMissionsSensor) for e in created)
+        assert any(isinstance(e, PrimeSuccessfulMissionsSensor) for e in created)
+        assert any(isinstance(e, PrimeCanceledMissionsSensor) for e in created)
+        assert any(isinstance(e, PrimeFailedMissionsSensor) for e in created)
+        assert any(isinstance(e, PrimeChargeCyclesOkSensor) for e in created)
+        assert any(isinstance(e, PrimeChargeCyclesErrorSensor) for e in created)
+        assert any(isinstance(e, PrimeSystemUptimeSensor) for e in created)
+        assert any(isinstance(e, PrimeNavigationResetsSensor) for e in created)
+        assert any(isinstance(e, PrimeSerialNumberSensor) for e in created)
+
+
+class TestAsyncSetupEntryCapabilityGating:
+    """NEW (this session) -- the four capability-gated sensors are
+    excluded when the classic/unnamed shadow's cap explicitly reports
+    0 (confirmed-negative pattern, see get_prime_capability_flags()'s
+    own docstring) -- complements the test above, which covers the
+    "capability unknown -> create anyway" default."""
+
+    def _entry_with_cap(self, cap: dict, dock_cap: dict | None = None):
+        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        classic_reported: dict = {"cap": cap}
+        current_state_reported: dict = {"dock": {"cap": dock_cap}} if dock_cap is not None else {}
+        entry.runtime_data.prime_status_coordinator.data = {
+            PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: classic_reported,
+            "ro-currentstate": current_state_reported,
+        }
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_scrub_zero_excludes_pad_and_suction_but_not_others(self):
+        from custom_components.roomba_plus import sensor as sensor_mod
+        from custom_components.roomba_plus.sensor_prime import PrimeDetectedPadSensor
+
+        entry = self._entry_with_cap({"scrub": 0, "suctionLvl": 0})
+        created = []
+        await sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+
+        assert not any(isinstance(e, PrimeDetectedPadSensor) for e in created)
+        assert not any(isinstance(e, PrimeSuctionLevelSensor) for e in created)
+        assert any(isinstance(e, PrimeBatterySensor) for e in created)
+        assert any(isinstance(e, PrimeDockStatusSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_nonzero_scrub_includes_pad_sensor(self):
+        from custom_components.roomba_plus import sensor as sensor_mod
+        from custom_components.roomba_plus.sensor_prime import PrimeDetectedPadSensor
+
+        entry = self._entry_with_cap({"scrub": 3, "suctionLvl": 4})
+        created = []
+        await sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+
+        assert any(isinstance(e, PrimeDetectedPadSensor) for e in created)
+        assert any(isinstance(e, PrimeSuctionLevelSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_dock_cap_zero_excludes_pad_wash_and_dry(self):
+        from custom_components.roomba_plus import sensor as sensor_mod
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimePadDryStatusSensor, PrimePadWashStatusSensor,
+        )
+
+        entry = self._entry_with_cap({"scrub": 3}, dock_cap={"pw": 0, "pd": 0})
+        created = []
+        await sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+
+        assert not any(isinstance(e, PrimePadWashStatusSensor) for e in created)
+        assert not any(isinstance(e, PrimePadDryStatusSensor) for e in created)
 
 
 class TestDockStateLabel:
@@ -295,3 +379,133 @@ class TestPrimeSuctionLevelSensor:
         sensor = PrimeSuctionLevelSensor("BLID123", config_entry)
 
         assert sensor.native_value == "high"
+
+
+def _make_stats_config_entry(ro_stats: dict | None = None) -> MagicMock:
+    """For the StatsShadow-backed sensors (mission stats, charge
+    cycles, uptime, nav resets) -- confirmed with REAL VALUES this
+    session (chairstacker's raw_shadows.json), see StatsShadow's own
+    docstring."""
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"ro-stats": ro_stats} if ro_stats is not None else None
+    )
+    return config_entry
+
+
+def _make_configinfo_config_entry(ro_configinfo: dict | None = None) -> MagicMock:
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"ro-configinfo": ro_configinfo} if ro_configinfo is not None else None
+    )
+    return config_entry
+
+
+# Real bbmssn capture (chairstacker) -- sums exactly, cross-validated
+# against ro-currentstate's own cleanMissionStatus.nMssn in the same session.
+_REAL_BBMSSN = {"nMssn": 276, "nMssnC": 25, "nMssnF": 4, "nMssnOk": 247}
+
+
+class TestPrimeMissionStatsSensors:
+    """NEW (this session) -- four sensors reusing Classic's own
+    translation_keys, since StatsShadow.bbmssn's fields are confirmed
+    identical to what Classic's own equivalent sensors read."""
+
+    def test_total_missions(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeTotalMissionsSensor
+
+        config_entry = _make_stats_config_entry({"bbmssn": _REAL_BBMSSN})
+        sensor = PrimeTotalMissionsSensor("BLID123", config_entry)
+        assert sensor.native_value == 276
+
+    def test_successful_missions(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeSuccessfulMissionsSensor
+
+        config_entry = _make_stats_config_entry({"bbmssn": _REAL_BBMSSN})
+        sensor = PrimeSuccessfulMissionsSensor("BLID123", config_entry)
+        assert sensor.native_value == 247
+
+    def test_canceled_missions(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeCanceledMissionsSensor
+
+        config_entry = _make_stats_config_entry({"bbmssn": _REAL_BBMSSN})
+        sensor = PrimeCanceledMissionsSensor("BLID123", config_entry)
+        assert sensor.native_value == 25
+
+    def test_failed_missions(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeFailedMissionsSensor
+
+        config_entry = _make_stats_config_entry({"bbmssn": _REAL_BBMSSN})
+        sensor = PrimeFailedMissionsSensor("BLID123", config_entry)
+        assert sensor.native_value == 4
+
+    def test_counts_sum_to_total_internal_consistency_check(self):
+        """The same cross-validation that confirmed these are genuine
+        lifetime counters, not arbitrary numbers, expressed as a test."""
+        assert _REAL_BBMSSN["nMssnC"] + _REAL_BBMSSN["nMssnF"] + _REAL_BBMSSN["nMssnOk"] == _REAL_BBMSSN["nMssn"]
+
+    def test_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeTotalMissionsSensor
+
+        config_entry = _make_stats_config_entry(None)
+        sensor = PrimeTotalMissionsSensor("BLID123", config_entry)
+        assert sensor.native_value is None
+
+
+class TestPrimeChargeCycleSensors:
+    """NEW (this session) -- new translation keys, NOT the same
+    concept as Classic's own battery_cycles (see each class's own
+    docstring for why)."""
+
+    def test_charge_cycles_ok(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeChargeCyclesOkSensor
+
+        config_entry = _make_stats_config_entry({"bbchg": {"nChgOk": 561, "nChgErr": 0}})
+        sensor = PrimeChargeCyclesOkSensor("BLID123", config_entry)
+        assert sensor.native_value == 561
+
+    def test_charge_cycles_error(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeChargeCyclesErrorSensor
+
+        config_entry = _make_stats_config_entry({"bbchg": {"nChgOk": 561, "nChgErr": 0}})
+        sensor = PrimeChargeCyclesErrorSensor("BLID123", config_entry)
+        assert sensor.native_value == 0
+
+
+class TestPrimeSystemUptimeSensor:
+    def test_native_value_reflects_real_captured_hours(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeSystemUptimeSensor
+
+        config_entry = _make_stats_config_entry({"bbsys": {"hr": 7354, "min": 0}})
+        sensor = PrimeSystemUptimeSensor("BLID123", config_entry)
+        assert sensor.native_value == 7354
+
+
+class TestPrimeNavigationResetsSensor:
+    def test_native_value_reflects_real_captured_value(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeNavigationResetsSensor
+
+        config_entry = _make_stats_config_entry({"bbrstinfo": {"nNavRst": 22}})
+        sensor = PrimeNavigationResetsSensor("BLID123", config_entry)
+        assert sensor.native_value == 22
+
+
+class TestPrimeSerialNumberSensor:
+    def test_native_value_reflects_real_captured_serial(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeSerialNumberSensor
+
+        config_entry = _make_configinfo_config_entry(
+            {"hwPartsRev": {"navSerialNo": "G185020H250311N105749"}}
+        )
+        sensor = PrimeSerialNumberSensor("BLID123", config_entry)
+        assert sensor.native_value == "G185020H250311N105749"
+
+    def test_none_when_serial_is_empty_string(self):
+        """Most hwPartsRev fields are empty strings in the one real
+        capture seen (only nav_serial_no was populated) -- an empty
+        string should read as "no data", not a literal empty value."""
+        from custom_components.roomba_plus.sensor_prime import PrimeSerialNumberSensor
+
+        config_entry = _make_configinfo_config_entry({"hwPartsRev": {"navSerialNo": ""}})
+        sensor = PrimeSerialNumberSensor("BLID123", config_entry)
+        assert sensor.native_value is None
