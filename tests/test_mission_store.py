@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import pytest
+from freezegun import freeze_time
 from homeassistant.util import dt as dt_util
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.mission_store import DaySummary
@@ -1261,6 +1262,7 @@ class TestMergeCloudFieldsB1Ext:
 
     # ── query_by_day integration: the original field bug ─────────────────────
 
+    @freeze_time("2026-07-10 12:00:00")
     def test_query_by_day_completed_count_after_b1ext_correction(self):
         """End-to-end repro of the field bug (980 OG, 26.06.2026):
         before B1-EXT, summary showed completed:3 for a day that had one
@@ -1269,7 +1271,20 @@ class TestMergeCloudFieldsB1Ext:
 
         After B1-EXT fires via backfill_from_cloud(), query_by_day() must
         show completed:0 for that day (the third missing mission is a
-        separate RECORDS-UNION issue, not tested here)."""
+        separate RECORDS-UNION issue, not tested here).
+
+        REAL FLAKY-TEST BUG FIXED (found via a live CI failure, not just
+        theoretical): query_by_day(days=28) computes its cutoff from
+        dt_util.now() -- genuinely real, correct production behavior for
+        "last N days from now", nothing wrong with the underlying code.
+        But this test's own data is pinned to a REAL historic date from
+        the field archive (2026-06-26) with NO frozen time at all, so it
+        only ever passed while the real wall-clock date happened to be
+        within 28 days of that fixed date -- which stopped being true the
+        moment CI ran on/after ~2026-07-24. Freezing time to a fixed date
+        safely mid-window (14 days after the archive date, comfortably
+        clear of both edges) makes this deterministic forever, independent
+        of whenever this test actually runs."""
         store = MissionStore()
         ts1 = 1782457275  # 07:01 UTC
         ts2 = 1782464921  # 09:08 UTC — both from the real field archive
