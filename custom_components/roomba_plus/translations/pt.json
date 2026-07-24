@@ -731,6 +731,21 @@
           "high": "Alto",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Ciclos de carga (bem-sucedidos)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Ciclos de carga (falhados)"
+      },
+      "prime_system_uptime": {
+        "name": "Tempo de atividade do sistema"
+      },
+      "prime_navigation_resets": {
+        "name": "Reinícios de navegação"
+      },
+      "prime_serial_number": {
+        "name": "Número de série"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Depósito de esfregona presente"
+      },
+      "prime_dock_error": {
+        "name": "Erro da base"
       },
       "mop_lid_closed": {
         "name": "Tampa de esfregona aberta"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "A limpeza por divisão requer um robô com um Smart Map finalizado (i7, s9, série j ou Braava jet m6). Este robô não tem Smart Map — se for um modelo compatível, certifique-se de que o mapa está guardado na app iRobot."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} é um robô Prime/V4 — a limpeza por divisão ainda não é suportada para esta geração (os comandos de limpeza por região continuam por confirmar para dispositivos Prime)."
     },
     "no_rooms_configured": {
       "message": "Nenhuma divisão configurada ainda. Para usar esta ação: (1) Abre a app iRobot, (2) Inicia uma limpeza por divisão para cada divisão, (3) Regressa ao Home Assistant — as divisões aparecerão automaticamente nas opções do Roomba+ onde podes atribuir nomes."

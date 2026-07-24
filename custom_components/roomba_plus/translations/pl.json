@@ -731,6 +731,21 @@
           "high": "Wysoki",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Cykle ładowania (udane)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Cykle ładowania (nieudane)"
+      },
+      "prime_system_uptime": {
+        "name": "Czas pracy systemu"
+      },
+      "prime_navigation_resets": {
+        "name": "Resety nawigacji"
+      },
+      "prime_serial_number": {
+        "name": "Numer seryjny"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Zbiornik mopa obecny"
+      },
+      "prime_dock_error": {
+        "name": "Błąd stacji dokującej"
       },
       "mop_lid_closed": {
         "name": "Pokrywa mopa otwarta"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "Sprzątanie pomieszczeń wymaga robota z ukończoną Smart Map (i7, s9, seria j lub Braava jet m6). Ten robot nie ma Smart Map — jeśli jest to kompatybilny model, upewnij się, że jego mapa jest zapisana w aplikacji iRobot."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} to robot Prime/V4 — sprzątanie konkretnego pomieszczenia nie jest jeszcze obsługiwane dla tej generacji (polecenia sprzątania według regionu wciąż nie są potwierdzone dla urządzeń Prime)."
     },
     "no_rooms_configured": {
       "message": "Brak skonfigurowanych pomieszczeń. Aby użyć tej akcji: (1) Otwórz aplikację iRobot, (2) Rozpocznij sprzątanie ukierunkowane na pomieszczenie dla każdego pomieszczenia, (3) Wróć do Home Assistant — pomieszczenia pojawią się automatycznie w opcjach Roomba+ gdzie możesz przypisać nazwy."

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    SensorEntity,
     SensorStateClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 )
 from homeassistant.core import HomeAssistant
@@ -58,15 +59,24 @@ from .const import CONF_CORRELATION_ENTITIES
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_prime import (
     PrimeBatterySensor,
+    PrimeCanceledMissionsSensor,
+    PrimeChargeCyclesErrorSensor,
+    PrimeChargeCyclesOkSensor,
     PrimeConnectionHealthSensor,
     PrimeDetectedPadSensor,
     PrimeDockStatusSensor,
+    PrimeFailedMissionsSensor,
     PrimeFirmwareVersionSensor,
     PrimeMissionEventSensor,
+    PrimeNavigationResetsSensor,
     PrimePadDryStatusSensor,
     PrimePadWashStatusSensor,
     PrimeRuntimeHoursSensor,
+    PrimeSerialNumberSensor,
+    PrimeSuccessfulMissionsSensor,
     PrimeSuctionLevelSensor,
+    PrimeSystemUptimeSensor,
+    PrimeTotalMissionsSensor,
 )
 
 from .sensor_core import (
@@ -182,18 +192,48 @@ async def async_setup_entry(
     # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
     # a different coordinator entirely) applies to a CLOUD_ONLY entry.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
-        async_add_entities([
+        from .prime_coordinator import get_prime_capability_flags
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        entities: list[SensorEntity] = [
             PrimeMissionEventSensor(data.blid, config_entry),
             PrimeConnectionHealthSensor(data.blid, config_entry),
             PrimeBatterySensor(data.blid, config_entry),
-            PrimeDetectedPadSensor(data.blid, config_entry),
             PrimeRuntimeHoursSensor(data.blid, config_entry),
             PrimeFirmwareVersionSensor(data.blid, config_entry),
             PrimeDockStatusSensor(data.blid, config_entry),
-            PrimePadWashStatusSensor(data.blid, config_entry),
-            PrimePadDryStatusSensor(data.blid, config_entry),
-            PrimeSuctionLevelSensor(data.blid, config_entry),
-        ])
+            # NEW (this session): ro-stats-backed lifetime stats,
+            # confirmed with real values (see StatsShadow's own
+            # docstring). Four mission-outcome sensors reuse Classic's
+            # own translation_keys (same confirmed field family);
+            # charge/uptime/reset sensors use new keys -- see each
+            # class's own docstring for why.
+            PrimeTotalMissionsSensor(data.blid, config_entry),
+            PrimeSuccessfulMissionsSensor(data.blid, config_entry),
+            PrimeCanceledMissionsSensor(data.blid, config_entry),
+            PrimeFailedMissionsSensor(data.blid, config_entry),
+            PrimeChargeCyclesOkSensor(data.blid, config_entry),
+            PrimeChargeCyclesErrorSensor(data.blid, config_entry),
+            PrimeSystemUptimeSensor(data.blid, config_entry),
+            PrimeNavigationResetsSensor(data.blid, config_entry),
+            # NEW (this session): ro-configinfo-backed, confirmed real
+            # value (see ConfigInfoShadow's own docstring).
+            PrimeSerialNumberSensor(data.blid, config_entry),
+        ]
+        # NEW (this session): capability-gated -- see
+        # get_prime_capability_flags()'s own docstring for the "None
+        # means unknown, only explicit 0 means absent" contract.
+        if cap is None or cap.scrub != 0:
+            entities.append(PrimeDetectedPadSensor(data.blid, config_entry))
+        if cap is None or cap.suction_lvl != 0:
+            entities.append(PrimeSuctionLevelSensor(data.blid, config_entry))
+        if dock_cap is None or dock_cap.pad_wash != 0:
+            entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
+        if dock_cap is None or dock_cap.pad_dry != 0:
+            entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
+
+        async_add_entities(entities)
         return
 
     roomba = config_entry.runtime_data.roomba

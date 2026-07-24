@@ -267,7 +267,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     itself touched again -- only the seed-fetch list below, if a new
     shadow is added to it.
 
-    Seeded via ALL EIGHT shadows fetched once at startup (not just
+    Seeded via ALL EIGHT NAMED shadows fetched once at startup (not just
     ro-currentstate) specifically BECAUSE watch_named_shadows_updates()
     is a single "+" wildcard covering every named shadow already --
     the push side receives updates for all of them regardless, so
@@ -299,13 +299,27 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     # The eight named shadows this project has confirmed exist and
     # modeled the content of (see roombapy-prime's own
     # verify_named_shadows.py KNOWN_SHADOWS/CANDIDATE_SHADOWS for the
-    # same list) -- NOT the classic/unnamed shadow, which has its own,
-    # separate get_state()-based path elsewhere and no confirmed
-    # update/accepted-style push story of its own yet.
+    # same list) -- NOT the classic/unnamed shadow (see
+    # CLASSIC_SHADOW_KEY below for that one).
     NAMED_SHADOWS: Final[tuple[str, ...]] = (
         "rw-settings", "rw-constatus", "rw-schedule", "rw-software",
         "ro-currentstate", "ro-stats", "ro-services", "ro-configinfo",
     )
+
+    # NEW (this session): the classic/unnamed shadow (get_state(), NOT
+    # get_named_shadow()) is now ALSO seeded once at startup, under this
+    # key in coordinator.data -- carries CapabilityFlags (cap) and
+    # DockCapabilities (nested under ro-currentstate.dock.cap instead),
+    # the only per-device hardware-capability data found anywhere in
+    # this project so far (see ClassicShadowState's own docstring,
+    # roombapy-prime's models/robot_info.py). SEED-ONLY, deliberately
+    # NOT added to _async_watch_status_updates()'s push loop below:
+    # hardware capabilities don't change at runtime, so a single fetch
+    # is sufficient forever, and this shadow's own push behavior is
+    # separately unconfirmed (see this class's own docstring above) --
+    # no reason to depend on an unconfirmed mechanism for data that
+    # doesn't need live updates anyway.
+    CLASSIC_SHADOW_KEY: Final[str] = "classic"
 
     def __init__(
         self,
@@ -359,6 +373,21 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise ConfigEntryNotReady(
                 f"Could not fetch any named shadow for V4/Prime robot {self.blid}: {last_exc}"
             )
+
+        # NEW (this session): one-time seed of the classic/unnamed shadow
+        # (see CLASSIC_SHADOW_KEY's own docstring above) -- deliberately
+        # NOT counted towards the "every shadow failed" check above,
+        # since the eight named shadows are the ones this coordinator's
+        # own ConfigEntryNotReady guard was built around; this one
+        # failing shouldn't block setup on its own.
+        try:
+            state_response = await self.prime_robot.get_state()
+            seeded[self.CLASSIC_SHADOW_KEY] = (state_response.payload or {}).get("state", {}).get("reported", {})
+        except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
+            _LOGGER.warning(
+                "roomba_plus: could not seed classic/unnamed shadow for %s: %s", self.blid, exc
+            )
+
         self.async_set_updated_data(seeded)
 
         self.config_entry.async_create_background_task(
@@ -431,3 +460,42 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+
+
+def get_prime_capability_flags(config_entry: Any) -> tuple[Any | None, Any | None]:
+    """Returns (CapabilityFlags, DockCapabilities) for a CLOUD_ONLY
+    config entry -- (None, None) if genuinely unavailable (coordinator
+    not yet seeded, classic shadow fetch failed at startup, etc.).
+
+    NEW (this session) -- used to gate entities on real, per-device
+    hardware capability (see const.py's own existing precedent for
+    Classic: cap.get("carpetBoost")/cap.get("pose")/cap.get("maps")),
+    previously entirely absent for Prime entities.
+
+    IMPORTANT CONTRACT: None means "unknown", NOT "absent". Callers
+    should default to CREATING an entity when either return value is
+    None -- only an explicit 0 (confirmed negative pattern this
+    session: binFullDetect/matter both read 0 in a real capture from a
+    device that otherwise has almost every other capability, proving 0
+    genuinely means "not present" for this cap object) should suppress
+    an entity. Failing open on a transient fetch hiccup is the safer
+    default -- a missing entity reads as "this integration is broken"
+    to a user, while an entity that doesn't quite apply is a much
+    smaller problem."""
+    coordinator = config_entry.runtime_data.prime_status_coordinator
+    if coordinator is None or coordinator.data is None:
+        return None, None
+
+    from roombapy_prime.models import ClassicShadowState, CurrentStateShadow
+
+    classic_raw = coordinator.data.get(PrimeStatusCoordinator.CLASSIC_SHADOW_KEY)
+    cap = ClassicShadowState.from_json(classic_raw).cap if classic_raw else None
+
+    dock_cap = None
+    current_state_raw = coordinator.data.get("ro-currentstate")
+    if current_state_raw:
+        current_state = CurrentStateShadow.from_json(current_state_raw)
+        if current_state.dock is not None:
+            dock_cap = current_state.dock.cap
+
+    return cap, dock_cap

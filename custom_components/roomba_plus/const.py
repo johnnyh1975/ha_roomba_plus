@@ -22,16 +22,16 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.SWITCH,
     Platform.SELECT,
     Platform.DEVICE_TRACKER,
-    # v3.4.0 CAL — always present regardless of robot tier: scheduling
-    # is a software feature virtually every iRobot model supports,
-    # unlike map-dependent Platform.IMAGE (added conditionally further
-    # down) which needs real pose/pmap hardware capability.
-    Platform.CALENDAR,
     # v3.4.0 TODO — always present: filter/brush maintenance applies to
     # every robot tier. "Reconfigure rooms" (SMART-tier only, see
     # todo.py) simply never appears in the list on EPHEMERAL robots.
     Platform.TODO,
 ]
+# Platform.CALENDAR moved out of this list (this session) -- now gated on
+# CONF_ENABLE_SCHEDULE_CALENDAR (default True, see const.py's own docstring
+# on that option) via __init__.py's _calendar_platform_if_enabled(), called
+# identically at all four platform-list build sites (Classic setup/unload,
+# Prime setup/unload).
 
 # NEW (V4/Prime, v4.0.0a0 MVP scope): deliberately just VACUUM for now.
 # A connectivity/error sensor is planned (see
@@ -61,9 +61,10 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.SWITCH,
-    Platform.CALENDAR,
     Platform.IMAGE,
 ]
+# Platform.CALENDAR moved out of this list too (this session) -- same
+# gating as LOCAL_PLATFORMS, see the comment there.
 
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)
 CONF_IROBOT_USERNAME: Final = "irobot_username"
@@ -94,6 +95,17 @@ CONF_MAP_SIZE_PX: Final = "map_size_px"
 CONF_MAP_SCALE: Final = "map_scale_mm_per_px"
 CONF_FILTER_HOURS: Final = "filter_threshold_hours"
 CONF_BRUSH_HOURS: Final = "brush_threshold_hours"
+
+# NEW: opt-OUT toggle for the schedule calendar entity (Platform.CALENDAR).
+# Default True is deliberate -- CALENDAR is the only platform that's always
+# loaded regardless of hardware capability (unlike IMAGE, gated on
+# map_capability), so an existing installation must keep getting its
+# calendar entity after upgrading to this option unless the user actively
+# opts out (see chairstacker's own feedback: forced sidebar panel, not a
+# request to remove the calendar's DATA). Applies to both Classic and Prime
+# -- see async_step_settings()'s own connection_type branch for why each
+# tier gets a differently-scoped options form.
+CONF_ENABLE_SCHEDULE_CALENDAR: Final = "enable_schedule_calendar"
 
 # ── v1.7.0 — L5 Blocking sensors ─────────────────────────────────────────────
 CONF_BLOCKING_SENSORS: Final = "blocking_sensors"        # list[str] entity IDs
@@ -159,6 +171,7 @@ DEFAULT_DELAY: Final = 30
 DEFAULT_CERT: Final = "/etc/ssl/certs/ca-certificates.crt"
 
 DEFAULT_MAP_ENABLED: Final = True
+DEFAULT_ENABLE_SCHEDULE_CALENDAR: Final = True
 DEFAULT_MAP_SIZE_PX: Final = 600
 DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
 

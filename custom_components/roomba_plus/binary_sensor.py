@@ -65,11 +65,24 @@ async def async_setup_entry(
     # machinery rather than threading branches through it.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         if data.prime_status_coordinator is not None:
-            async_add_entities([
+            from .prime_coordinator import get_prime_capability_flags
+
+            cap, _dock_cap = get_prime_capability_flags(config_entry)
+
+            entities: list[BinarySensorEntity] = [
                 PrimeBinPresentSensor(data.blid, config_entry),
-                PrimeTankPresentSensor(data.blid, config_entry),
                 PrimeRobotConnectivitySensor(data.blid, config_entry),
-            ])
+                # NEW (this session): ro-currentstate.dock.error-backed,
+                # confirmed type (int), no real error value observed yet.
+                PrimeDockErrorSensor(data.blid, config_entry),
+            ]
+            # NEW (this session): capability-gated -- a mop tank only
+            # makes sense on a device with mop capability. See
+            # get_prime_capability_flags()'s own docstring for the
+            # "None means unknown, only explicit 0 means absent" contract.
+            if cap is None or cap.scrub != 0:
+                entities.append(PrimeTankPresentSensor(data.blid, config_entry))
+            async_add_entities(entities)
         return
 
     roomba = data.roomba
@@ -1294,6 +1307,43 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         if state is None:
             return None
         return state.tank_present
+
+
+class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """V4/Prime dock error indicator. Reads
+    CurrentStateShadow.dock.error (confirmed live as an int, chairstacker
+    -- always 0 in the one real capture seen so far, no actual error
+    condition has ever been observed). NEW translation key -- no
+    confirmed-equivalent Classic sensor found for this specific,
+    dock-scoped error code (distinct from mission-level error codes).
+    is_on is True for any nonzero value -- the specific MEANING of a
+    given nonzero code is unconfirmed, so the raw value is also
+    exposed as an extra_state_attribute for anyone who needs it."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="prime_dock_error",
+        translation_key="prime_dock_error",
+    )
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_dock_error"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None or state.dock is None or state.dock.error is None:
+            return None
+        return state.dock.error != 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        if state is None or state.dock is None:
+            return {}
+        return {"raw_error_code": state.dock.error}
 
 
 class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):

@@ -43,6 +43,7 @@ from .const import (
     CONF_BLOCKING_SENSORS,
     CONF_CONNECTION_TYPE,
     CONF_CONTINUOUS,
+    CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
@@ -54,6 +55,7 @@ from .const import (
     CONF_SMART_ZONE_DATA,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
+    DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -3027,6 +3029,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     if ctx.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
+    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
 
     # v3.2.1 — MQTT-watchdog stamp callback MUST be registered before the
     # platforms: entities register their on_message callbacks during setup,
@@ -3094,6 +3097,49 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
+
+
+def _calendar_platform_if_enabled(config_entry: RoombaConfigEntry) -> list[Platform]:
+    """Returns [Platform.CALENDAR] unless the user has opted out via
+    CONF_ENABLE_SCHEDULE_CALENDAR (default True -- see that constant's
+    own docstring in const.py for why an opt-OUT, not opt-in).
+
+    Deliberately reads ONLY config_entry.options -- unambiguous at
+    every one of the four call sites this is used from (Classic
+    setup/unload, Prime setup/unload), unlike map_capability, which
+    setup's own transient `ctx` vs config_entry.runtime_data may or
+    may not already agree on at the exact point each platforms list is
+    built. Called identically from all four sites on purpose: this
+    project has hit the exact bug of "conditional platform logic
+    duplicated in multiple places, one of them never updated" more
+    than once before (see PRIME_PLATFORMS's own docstring, const.py,
+    for two real examples -- CLOUD_ONLY entities and then Platform.IMAGE
+    itself were each, separately, missing from one spot). One small
+    function, called from everywhere platforms lists are built, makes
+    that whole bug class structurally impossible here."""
+    if config_entry.options.get(CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR):
+        return [Platform.CALENDAR]
+    return []
+
+
+def _remove_calendar_entity_if_disabled(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
+    """Explicit entity-registry cleanup when CONF_ENABLE_SCHEDULE_CALENDAR
+    is off (this session). Unloading Platform.CALENDAR (because it's no
+    longer in the platforms list) only stops the entity from being live
+    -- it does NOT remove the entity registry's own record, which would
+    otherwise linger forever as "unavailable" (never re-created, since
+    setup no longer forwards this platform for this entry). Idempotent
+    and safe to call on every unload regardless of whether the option
+    just changed or was already off -- a no-op if there's nothing to
+    remove."""
+    if config_entry.options.get(CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR):
+        return
+    from homeassistant.helpers import entity_registry as er
+
+    entity_reg = er.async_get(hass)
+    for entry in er.async_entries_for_config_entry(entity_reg, config_entry.entry_id):
+        if entry.domain == "calendar":
+            entity_reg.async_remove(entry.entity_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
@@ -3245,6 +3291,21 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
         serial_info = None
 
+    # NEW (this session): BlockingManager was never instantiated for
+    # Prime entries at all -- roomba_plus.smart_start's blocking-sensor
+    # gate simply didn't exist for Prime, on top of the separate crash
+    # this session also fixed (services.py's own data.roomba.start
+    # fallback when no blocking sensors are configured). Same
+    # conditional-creation rule as Classic: only when the user has
+    # actually configured CONF_BLOCKING_SENSORS.
+    blocking_manager: BlockingManager | None = None
+    if config_entry.options.get(CONF_BLOCKING_SENSORS):
+        blocking_manager = BlockingManager(hass, config_entry)
+        _LOGGER.debug(
+            "Roomba+ (Prime) blocking manager active — sensors: %s",
+            config_entry.options[CONF_BLOCKING_SENSORS],
+        )
+
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
@@ -3254,6 +3315,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_status_coordinator=status_coordinator,
         prime_household_id=household_id,
         prime_serial_info=serial_info,
+        blocking_manager=blocking_manager,
     )
 
     async def _async_disconnect_on_stop(event: Any) -> None:
@@ -3263,8 +3325,19 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_disconnect_on_stop)
     )
 
+    # NEW (this session): Prime entries had NO options-change listener at
+    # all -- changing ANY option (including CONF_ENABLE_SCHEDULE_CALENDAR)
+    # silently did nothing until a manual reload. Classic has had this
+    # since v2.x (see _async_reload_on_options_change() itself); Prime's
+    # own setup path was simply never given the equivalent call.
+    config_entry.async_on_unload(
+        config_entry.add_update_listener(_async_reload_on_options_change)
+    )
+
     from .const import PRIME_PLATFORMS
-    await hass.config_entries.async_forward_entry_setups(config_entry, PRIME_PLATFORMS)
+    platforms = list(PRIME_PLATFORMS)
+    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
+    await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid
@@ -3279,16 +3352,28 @@ async def async_unload_entry(
 
     NEW (V4/Prime): CLOUD_ONLY entries take a short, separate path --
     no local platforms list gating on map_capability, no mission-timer/
-    blocking-manager/presence-manager cleanup (none of those exist for
-    a CLOUD_ONLY entry, see _async_setup_entry_prime()) -- just
-    unloading PRIME_PLATFORMS and disconnecting the PrimeRobot.
+    presence-manager cleanup (neither exists for a CLOUD_ONLY entry) --
+    just unloading PRIME_PLATFORMS and disconnecting the PrimeRobot.
+
+    CORRECTED (this session): blocking_manager cleanup was missing from
+    this list entirely -- BlockingManager itself is now instantiated
+    for Prime too (see _async_setup_entry_prime()), so its queue must
+    be cancelled here the same way Classic's own unload path already
+    does, or a pending queued start (waiting for blocking sensors to
+    clear) would keep running against a config entry that's mid-unload.
     """
     if config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
         from .const import PRIME_PLATFORMS
+        platforms = list(PRIME_PLATFORMS)
+        platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
         unload_ok = await hass.config_entries.async_unload_platforms(
-            config_entry, PRIME_PLATFORMS
+            config_entry, platforms
         )
         if unload_ok:
+            _remove_calendar_entity_if_disabled(hass, config_entry)
+            bm = config_entry.runtime_data.blocking_manager
+            if bm is not None:
+                bm.cancel_queue()
             prime_robot = config_entry.runtime_data.prime_robot
             if prime_robot is not None:
                 await prime_robot.disconnect()
@@ -3302,11 +3387,13 @@ async def async_unload_entry(
     if data.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
+    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, platforms
     )
     if unload_ok:
+        _remove_calendar_entity_if_disabled(hass, config_entry)
         bm = config_entry.runtime_data.blocking_manager
         if bm is not None:
             bm.cancel_queue()
@@ -3340,16 +3427,43 @@ async def async_unload_entry(
 async def _async_reload_on_options_change(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> None:
-    """Reload only when connection-relevant options change.
+    """Reload when connection-relevant options change, OR when an
+    option that affects the platforms list itself changes.
 
-    Compares current data against current options for CONF_CONTINUOUS / CONF_DELAY.
+    Compares current data against current options for the tracked keys.
     When they differ, syncs data first so subsequent option changes do NOT
-    re-trigger a reload (prevents false reconnect on every options edit after
-    the first connection-relevant change).
-    """
-    _CONNECTION_KEYS = {CONF_CONTINUOUS, CONF_DELAY}
-    old_vals = {k: config_entry.data.get(k) for k in _CONNECTION_KEYS}
-    new_vals = {k: config_entry.options.get(k) for k in _CONNECTION_KEYS}
+    re-trigger a reload (prevents false reconnect/reload on every options
+    edit after the first tracked change).
+
+    CONF_ENABLE_SCHEDULE_CALENDAR (this session) is tracked here for a
+    DIFFERENT reason than CONF_CONTINUOUS/CONF_DELAY: it doesn't affect
+    the actual Roomba/cloud connection, only which platforms
+    _calendar_platform_if_enabled() returns -- but that list is only
+    (re-)read at setup/unload time, so without a reload here, saving
+    the option would silently do nothing until the user manually
+    reloaded the integration. The data/options sync mechanism below is
+    generic (just "did a tracked value change since the last reload"),
+    so reusing it needs no new machinery -- only a bigger tracked-key
+    set. Renamed from _CONNECTION_KEYS to _RELOAD_TRIGGER_KEYS to
+    reflect that this set is no longer only about the connection."""
+    _RELOAD_TRIGGER_KEYS = {CONF_CONTINUOUS, CONF_DELAY, CONF_ENABLE_SCHEDULE_CALENDAR}
+
+    def _get(source: dict[str, Any], key: str) -> Any:
+        # CONF_ENABLE_SCHEDULE_CALENDAR needs its default applied on BOTH
+        # sides of the comparison -- unlike CONF_CONTINUOUS/CONF_DELAY
+        # (always seeded into config_entry.data at initial entry
+        # creation), this option has no such seeding, so an existing
+        # entry's .data genuinely has no key for it at all yet. Reading
+        # None from .data but the real default from .options would make
+        # EVERY existing installation's first-ever options save (even an
+        # unrelated one) look like a change and trigger a spurious extra
+        # reload -- harmless, but avoidable.
+        if key == CONF_ENABLE_SCHEDULE_CALENDAR:
+            return source.get(key, DEFAULT_ENABLE_SCHEDULE_CALENDAR)
+        return source.get(key)
+
+    old_vals = {k: _get(config_entry.data, k) for k in _RELOAD_TRIGGER_KEYS}
+    new_vals = {k: _get(config_entry.options, k) for k in _RELOAD_TRIGGER_KEYS}
     if old_vals != new_vals:
         # Sync data to match new options so the next options change starts from
         # a clean baseline and does not re-trigger an unintended reload.

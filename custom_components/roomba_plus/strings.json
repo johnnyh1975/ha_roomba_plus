@@ -733,6 +733,21 @@
           "high": "High",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Charge cycles (successful)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Charge cycles (failed)"
+      },
+      "prime_system_uptime": {
+        "name": "System uptime"
+      },
+      "prime_navigation_resets": {
+        "name": "Navigation resets"
+      },
+      "prime_serial_number": {
+        "name": "Serial number"
       }
     },
     "device_tracker": {
@@ -755,6 +770,9 @@
       },
       "mop_tank_present": {
         "name": "Mop tank present"
+      },
+      "prime_dock_error": {
+        "name": "Dock error"
       },
       "mop_lid_closed": {
         "name": "Mop lid open"
@@ -1120,6 +1138,9 @@
     },
     "not_smart_map": {
       "message": "Room cleaning requires a Smart Map robot (i7, s9, j-series). This robot does not support Smart Maps."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} is a Prime/V4-generation robot — room-targeted smart_start isn't supported yet for this generation (region-based cleaning commands are still unconfirmed for Prime devices)."
     },
     "no_rooms_configured": {
       "message": "No rooms configured yet. To use this action: (1) Open the iRobot app, (2) Start a room-targeted clean for each room, (3) Return to Home Assistant — the rooms will appear automatically in the Roomba+ options where you can assign names."

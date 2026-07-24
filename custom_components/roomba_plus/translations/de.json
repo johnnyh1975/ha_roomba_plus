@@ -731,6 +731,21 @@
           "high": "Hoch",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Ladezyklen (erfolgreich)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Ladezyklen (fehlgeschlagen)"
+      },
+      "prime_system_uptime": {
+        "name": "Systemlaufzeit"
+      },
+      "prime_navigation_resets": {
+        "name": "Navigations-Resets"
+      },
+      "prime_serial_number": {
+        "name": "Seriennummer"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Wischwassertank eingesetzt"
+      },
+      "prime_dock_error": {
+        "name": "Dock-Fehler"
       },
       "mop_lid_closed": {
         "name": "Mop-Deckel offen"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "Raumreinigung erfordert einen Roboter mit finalisierter Smart Map (i7, s9, j-Serie oder Braava jet m6). Dieser Roboter hat keine Smart Map — falls es ein kompatibles Modell ist, stelle sicher, dass seine Karte in der iRobot-App gespeichert ist."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} ist ein Prime/V4-Roboter — raumspezifischer smart_start wird für diese Generation noch nicht unterstützt (regionsbasierte Reinigungskommandos sind für Prime-Geräte weiterhin unbestätigt)."
     },
     "no_rooms_configured": {
       "message": "Noch keine Räume konfiguriert. Vorgehensweise: (1) iRobot-App öffnen, (2) Für jeden Raum eine raumbasierte Reinigung starten, (3) In Home Assistant öffnen sich die Roomba+-Optionen automatisch, wo die Räume benannt werden können."

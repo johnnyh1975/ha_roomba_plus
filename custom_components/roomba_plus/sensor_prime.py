@@ -467,3 +467,305 @@ class PrimeFirmwareVersionSensor(IRobotEntity, SensorEntity):
         coordinator = self._config_entry.runtime_data.prime_status_coordinator
         if coordinator is not None:
             self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class _PrimeStatsSensorBase(IRobotEntity, SensorEntity):
+    """Shared base for V4/Prime sensors reading from
+    PrimeStatusCoordinator's "ro-stats" data (StatsShadow) -- all
+    confirmed with REAL VALUES this session (chairstacker's
+    raw_shadows.json capture), unlike when this shadow was first
+    modeled with key names only. See roombapy-prime's own
+    models/robot_info.py::StatsShadow for the full evidence trail,
+    including the internal-consistency checks that confirm these are
+    genuine lifetime counters, not arbitrary numbers (BbMssnStats's
+    counters sum exactly; BbSysStats's hour count matches the
+    device's registration age)."""
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+
+    @property
+    def suggested_object_id(self) -> str:
+        return self.entity_description.key
+
+    @property
+    def _stats(self) -> Any:
+        from roombapy_prime.models import StatsShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-stats")
+        if raw is None:
+            return None
+        return StatsShadow.from_json(raw)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeTotalMissionsSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime mission count. Reuses Classic's OWN
+    translation_key ("total_missions") rather than a new Prime-specific
+    one -- StatsShadow.bbmssn.n_mssn is confirmed (this session) to be
+    the exact same field (nMssn) Classic's own equivalent sensor reads,
+    just via a different transport (cloud shadow vs local MQTT). Real
+    value seen: 276, cross-validated against ro-currentstate's own
+    cleanMissionStatus.nMssn from the SAME capture."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_total_missions",
+        translation_key="total_missions",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_total_missions"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbmssn is None:
+            return None
+        return stats.bbmssn.n_mssn
+
+
+class PrimeSuccessfulMissionsSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime successful-mission count. Reuses Classic's own
+    "successful_missions" translation_key -- see PrimeTotalMissionsSensor's
+    own docstring for the field-equivalence evidence. Real value seen: 247."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_successful_missions",
+        translation_key="successful_missions",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_successful_missions"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbmssn is None:
+            return None
+        return stats.bbmssn.n_mssn_ok
+
+
+class PrimeCanceledMissionsSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime canceled-mission count. Reuses Classic's own
+    "canceled_missions" translation_key. Real value seen: 25."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_canceled_missions",
+        translation_key="canceled_missions",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_canceled_missions"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbmssn is None:
+            return None
+        return stats.bbmssn.n_mssn_canceled
+
+
+class PrimeFailedMissionsSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime failed-mission count. Reuses Classic's own
+    "failed_missions" translation_key. Real value seen: 4."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_failed_missions",
+        translation_key="failed_missions",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_failed_missions"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbmssn is None:
+            return None
+        return stats.bbmssn.n_mssn_failed
+
+
+class PrimeChargeCyclesOkSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime successful charge-cycle count
+    (StatsShadow.bbchg.n_chg_ok). NEW translation key -- NOT the same
+    concept as Classic's own "battery_cycles" sensor, which depends on
+    nLithChrg/nNimhChrg (fields absent entirely in the one real Prime
+    capture seen so far, see BbChg3Stats's own docstring) -- this reads
+    a genuinely different sub-field (bbchg, not bbchg3) that Classic's
+    own bbchg sensors don't surface at all (Classic's own bbchg holds
+    dock-contact-health counters -- nChatters/nKnockoffs/nAborts --
+    not charge-success/failure counts). Real value seen: 561."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_charge_cycles_ok",
+        translation_key="prime_charge_cycles_ok",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_charge_cycles_ok"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbchg is None:
+            return None
+        return stats.bbchg.n_chg_ok
+
+
+class PrimeChargeCyclesErrorSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime failed charge-cycle count
+    (StatsShadow.bbchg.n_chg_err). See PrimeChargeCyclesOkSensor's own
+    docstring for why this is a new translation key, not a Classic
+    reuse. Real value seen: 0."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_charge_cycles_error",
+        translation_key="prime_charge_cycles_error",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_charge_cycles_error"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbchg is None:
+            return None
+        return stats.bbchg.n_chg_err
+
+
+class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime system uptime, in hours
+    (StatsShadow.bbsys.hours). No Classic equivalent found -- genuinely
+    new for Prime. Real value seen: 7354h, plausible given the device's
+    own registration date (roughly 307 days before the capture, 307*24
+    = 7368h, close enough to be a believable "hours since registration"
+    counter -- see BbSysStats's own docstring)."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_system_uptime",
+        translation_key="prime_system_uptime",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_system_uptime"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbsys is None:
+            return None
+        return stats.bbsys.hours
+
+
+class PrimeNavigationResetsSensor(_PrimeStatsSensorBase):
+    """V4/Prime lifetime navigation-reset count
+    (StatsShadow.bbrstinfo.n_nav_rst). NEW translation key, DELIBERATELY
+    not reusing Classic's own "reset_diagnostics" key: that sensor's
+    own native_value is nSafRst (safety-triggered resets), a DIFFERENT
+    primary field than the one confirmed for Prime so far (nNavRst --
+    nSafRst/nMobRst/safCauses were all absent entirely in the one real
+    capture seen). Reusing the same key/wording would imply this shows
+    the same metric Classic's does, which isn't confirmed. Real value
+    seen: 22."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_navigation_resets",
+        translation_key="prime_navigation_resets",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_navigation_resets"
+
+    @property
+    def native_value(self) -> int | None:
+        stats = self._stats
+        if stats is None or stats.bbrstinfo is None:
+            return None
+        return stats.bbrstinfo.n_nav_rst
+
+
+class PrimeSerialNumberSensor(IRobotEntity, SensorEntity):
+    """V4/Prime serial number -- read from the named shadow
+    "ro-configinfo" (ConfigInfoShadow.hw_parts_rev.nav_serial_no),
+    confirmed live (chairstacker) as a real value
+    ("G185020H250311N105749", matching the device's own SKU prefix
+    G185020). A separate data source from the ro-stats-backed sensors
+    above -- same reasoning as PrimeFirmwareVersionSensor's own
+    docstring (rw-software): PrimeStatusCoordinator seeds/watches ALL
+    eight named shadows independently."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_serial_number",
+        translation_key="prime_serial_number",
+        entity_registry_enabled_default=False,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_serial_number"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return self.entity_description.key
+
+    @property
+    def native_value(self) -> str | None:
+        from roombapy_prime.models import ConfigInfoShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-configinfo")
+        if raw is None:
+            return None
+        config_info = ConfigInfoShadow.from_json(raw)
+        if config_info.hw_parts_rev is None:
+            return None
+        return config_info.hw_parts_rev.nav_serial_no or None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))

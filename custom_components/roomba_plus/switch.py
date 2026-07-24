@@ -39,9 +39,16 @@ async def async_setup_entry(
     # named-shadow data, not roomba_reported_state()'s Classic shape.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         if data.prime_status_coordinator is not None:
-            async_add_entities([
-                PrimeCarpetBoostSwitch(data.blid, config_entry),
-            ])
+            from .prime_coordinator import get_prime_capability_flags
+
+            cap, _dock_cap = get_prime_capability_flags(config_entry)
+            # NEW (this session): capability-gated -- see
+            # get_prime_capability_flags()'s own docstring for the
+            # "None means unknown, only explicit 0 means absent" contract.
+            if cap is None or cap.carpet_boost != 0:
+                async_add_entities([
+                    PrimeCarpetBoostSwitch(data.blid, config_entry),
+                ])
         return
 
     roomba = data.roomba

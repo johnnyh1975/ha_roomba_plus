@@ -56,7 +56,7 @@ from .const import (
     SERVICE_CREATE_BACKUP,
     SERVICE_RESTORE_BACKUP,
 )
-from .models import MapCapability, RoombaConfigEntry, RoombaData
+from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 
 if TYPE_CHECKING:
     pass
@@ -550,6 +550,26 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             )
 
         data: RoombaData = config_entry.runtime_data
+        if rooms and data.connection_type == ConnectionType.CLOUD_ONLY:
+            # HONEST ERROR, NOT A CRASH (this session): room-targeted
+            # smart_start delegates to roomba_plus.clean_room, which for
+            # Prime devices is still blocked on an unresolved transport
+            # question (region-based routine commands have had zero
+            # effect in two live field tests so far) -- there is
+            # currently no way to fulfil this request at all, for any
+            # Prime device, regardless of map/schedule setup. This is
+            # DELIBERATELY a different message from the "not_smart_map"
+            # error below: that one means "this specific robot lacks a
+            # finalized map", which isn't the actual problem here and
+            # would send someone chasing the wrong fix.
+            raise ServiceValidationError(
+                f"{eid} is a Prime/V4 robot -- room-targeted smart_start isn't "
+                "supported yet for this generation (region-based cleaning "
+                "commands are still unconfirmed for Prime devices).",
+                translation_domain=DOMAIN,
+                translation_key="prime_rooms_not_supported",
+                translation_placeholders={"entity_id": eid},
+            )
         if rooms and data.map_capability != MapCapability.SMART:
             raise ServiceValidationError(
                 f"{eid} does not support room targeting — this requires a "
@@ -567,6 +587,16 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
                 {"entity_id": eid, ATTR_ROOM_NAME: rooms},
                 blocking=True,
             )
+        elif data.connection_type == ConnectionType.CLOUD_ONLY:
+            # REAL CRASH FIXED (this session): this branch (no
+            # blocking_manager configured at all -- CONF_BLOCKING_SENSORS
+            # empty/unset) used to unconditionally call data.roomba.start,
+            # which is None for every Prime entry -- an AttributeError on
+            # any Prime user calling roomba_plus.smart_start with no
+            # blocking sensors configured, regardless of rooms/override.
+            # send_simple_command("start") is the same confirmed-working
+            # path the vacuum entity's own start action already uses.
+            await data.prime_robot.send_simple_command("start")
         else:
             await hass.async_add_executor_job(data.roomba.start)
 

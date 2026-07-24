@@ -731,6 +731,21 @@
           "high": "Alta",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Ciclos de carga (exitosos)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Ciclos de carga (fallidos)"
+      },
+      "prime_system_uptime": {
+        "name": "Tiempo de actividad del sistema"
+      },
+      "prime_navigation_resets": {
+        "name": "Reinicios de navegación"
+      },
+      "prime_serial_number": {
+        "name": "Número de serie"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Depósito de fregona presente"
+      },
+      "prime_dock_error": {
+        "name": "Error de la base"
       },
       "mop_lid_closed": {
         "name": "Tapa de fregona abierta"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "La limpieza por habitación requiere un robot con un Smart Map finalizado (i7, s9, serie j o Braava jet m6). Este robot no tiene Smart Map — si es un modelo compatible, asegúrate de que su mapa esté guardado en la app de iRobot."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} es un robot Prime/V4 — la limpieza por habitación aún no es compatible con esta generación (los comandos de limpieza por región siguen sin confirmarse para dispositivos Prime)."
     },
     "no_rooms_configured": {
       "message": "No hay habitaciones configuradas aún. Para usar esta acción: (1) Abre la app iRobot, (2) Inicia una limpieza por habitación para cada habitación, (3) Vuelve a Home Assistant — las habitaciones aparecerán automáticamente en las opciones de Roomba+ donde podrás asignarles nombres."

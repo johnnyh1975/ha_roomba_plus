@@ -276,13 +276,34 @@ class BlockingManager:
                 )
 
     async def _do_start(self, rooms: list[str] | None) -> None:
-        """Execute the actual start command on the robot."""
+        """Execute the actual start command on the robot.
+
+        CORRECTED (this session): used to unconditionally assume a
+        Classic entry (data.roomba, plain hass.services.async_call to
+        the Classic-only clean_room service). Both would fail for a
+        Prime/CLOUD_ONLY entry -- data.roomba is None (AttributeError),
+        and clean_room's underlying region-based transport is still
+        unconfirmed for Prime (two live field tests, zero effect so
+        far). See services.py's own async_handle_smart_start() for the
+        equivalent fix on the OTHER path that can reach a robot start
+        (this manager isn't the only caller -- smart_start falls
+        through to data.roomba.start directly when no blocking sensors
+        are configured at all, i.e. blocking_manager is None)."""
         from homeassistant.helpers import entity_registry as er
-        from .models import RoombaData
+        from .models import ConnectionType, RoombaData
 
         data: RoombaData = self._entry.runtime_data
 
         if rooms:
+            if data.connection_type == ConnectionType.CLOUD_ONLY:
+                _LOGGER.error(
+                    "BlockingManager: room-targeted start requested for a "
+                    "Prime/V4 robot (blid=%s) -- not supported yet, region-"
+                    "based cleaning commands are still unconfirmed for "
+                    "Prime devices. Nothing was sent.",
+                    data.blid,
+                )
+                return
             # Resolve the vacuum entity_id via the entity registry using unique_id.
             # Never construct entity_id from blid — HA slugifies names at registration
             # time and the result is not guaranteed to match any specific pattern.
@@ -304,6 +325,8 @@ class BlockingManager:
                 {"entity_id": entity_entry, "room_name": rooms},
                 blocking=True,
             )
+        elif data.connection_type == ConnectionType.CLOUD_ONLY:
+            await data.prime_robot.send_simple_command("start")
         else:
             await self._hass.async_add_executor_job(data.roomba.start)
         _LOGGER.info("BlockingManager: start issued")

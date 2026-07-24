@@ -731,6 +731,21 @@
           "high": "Hoog",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Laadcycli (geslaagd)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Laadcycli (mislukt)"
+      },
+      "prime_system_uptime": {
+        "name": "Systeem-uptime"
+      },
+      "prime_navigation_resets": {
+        "name": "Navigatie-resets"
+      },
+      "prime_serial_number": {
+        "name": "Serienummer"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Dweiltank aanwezig"
+      },
+      "prime_dock_error": {
+        "name": "Dockfout"
       },
       "mop_lid_closed": {
         "name": "Dweilklep open"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "Kamerreinigen vereist een robot met een voltooide Smart Map (i7, s9, j-serie of Braava jet m6). Deze robot heeft geen Smart Map — als het een compatibel model is, zorg dan dat de kaart is opgeslagen in de iRobot-app."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} is een Prime/V4-robot — kamerspecifieke smart_start wordt voor deze generatie nog niet ondersteund (regiogebaseerde reinigingscommando's zijn voor Prime-apparaten nog niet bevestigd)."
     },
     "no_rooms_configured": {
       "message": "Nog geen kamers geconfigureerd. Om deze actie te gebruiken: (1) Open de iRobot-app, (2) Start een kamergerichte schoonmaak voor elke kamer, (3) Ga terug naar Home Assistant — de kamers verschijnen automatisch in Roomba+-opties waar je namen kunt toewijzen."

@@ -44,7 +44,11 @@ import datetime as dt_stdlib
 
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
-from .schedule_parser import parse_schedule_occurrences_with_regions, parse_prime_schedule_occurrences
+from .schedule_parser import (
+    DEFAULT_EVENT_DURATION,
+    parse_schedule_occurrences_with_regions,
+    parse_prime_schedule_occurrences,
+)
 from .select import resolve_zone_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -244,14 +248,47 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
     async def async_update(self) -> None:
         """HA's own periodic polling refreshes the cache `event` reads
         from -- see this class's own docstring for why polling (not
-        push) is the right fit here."""
+        push) is the right fit here.
+
+        REAL BUG FOUND AND FIXED (this session, chairstacker: a
+        schedule-triggered mission was actively running, but this
+        calendar showed "Off" throughout): fetching from exactly `now`
+        meant an occurrence that had ALREADY started today was pushed
+        a full week ahead by _weekly_occurrences()'s own "if first <
+        start: first += 7 days" logic (schedule_parser.py) -- it was
+        never even in the returned occurrence list at all, not just
+        filtered out afterwards. Fetching from `now - DEFAULT_EVENT_DURATION`
+        instead means an occurrence that started up to one placeholder-
+        duration ago is still included, so `event` (below) has a chance
+        to recognize it as ongoing. Doesn't fully solve missions that
+        run longer than DEFAULT_EVENT_DURATION (60 min) -- there's no
+        real mission-duration data to fall back on here, only the
+        existing fixed placeholder; see schedule_parser.py's own notes
+        on that limitation."""
         now = dt_util.now()
         self._cached_room_names = await self._fetch_room_names()
-        self._cached_occurrences = await self._fetch_occurrences(now, now + _NEXT_EVENT_LOOKAHEAD)
+        self._cached_occurrences = await self._fetch_occurrences(
+            now - DEFAULT_EVENT_DURATION, now + _NEXT_EVENT_LOOKAHEAD
+        )
 
     @property
     def event(self) -> CalendarEvent | None:
+        """REAL BUG FOUND AND FIXED (this session, chairstacker, see
+        async_update()'s own docstring for the fetch-side half of this
+        fix): this used to only ever consider occurrences with
+        start > now, so a currently-ongoing occurrence (start in the
+        past, end still ahead) could never be returned -- HA's own
+        calendar "on/off" state comes directly from whether `event`
+        returns something covering `now`, so this meant the entity
+        showed "Off" for the ENTIRE duration of an active,
+        schedule-triggered mission. Now checks for an ongoing occurrence
+        (start <= now < end) first, falling back to the next upcoming
+        one only if nothing is currently ongoing."""
         now = dt_util.now()
+        ongoing = [o for o in self._cached_occurrences if o[0] <= now < o[1]]
+        if ongoing:
+            start, end, region_ids, name = min(ongoing, key=lambda o: o[0])
+            return _to_calendar_event(start, end, self._zone_labels(region_ids))
         future = [o for o in self._cached_occurrences if o[0] > now]
         if not future:
             return None

@@ -731,6 +731,21 @@
           "high": "Élevé",
           "turbo": "Turbo"
         }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Cycles de charge (réussis)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Cycles de charge (échoués)"
+      },
+      "prime_system_uptime": {
+        "name": "Temps de fonctionnement du système"
+      },
+      "prime_navigation_resets": {
+        "name": "Réinitialisations de navigation"
+      },
+      "prime_serial_number": {
+        "name": "Numéro de série"
       }
     },
     "binary_sensor": {
@@ -748,6 +763,9 @@
       },
       "mop_tank_present": {
         "name": "Réservoir de lavage présent"
+      },
+      "prime_dock_error": {
+        "name": "Erreur de la station"
       },
       "mop_lid_closed": {
         "name": "Couvercle de lavage ouvert"
@@ -1118,6 +1136,9 @@
     },
     "not_smart_map": {
       "message": "Le nettoyage par pièce nécessite un robot avec une Smart Map finalisée (i7, s9, série j ou Braava jet m6). Ce robot na pas de Smart Map — sil sagit dun modèle compatible, assurez-vous que sa carte est enregistrée dans lapplication iRobot."
+    },
+    "prime_rooms_not_supported": {
+      "message": "{entity_id} est un robot Prime/V4 — le nettoyage par pièce nest pas encore pris en charge pour cette génération (les commandes de nettoyage par région restent non confirmées pour les appareils Prime)."
     },
     "no_rooms_configured": {
       "message": "Aucune pièce configurée pour l'instant. Pour utiliser cette action : (1) Ouvrez l'application iRobot, (2) Démarrez un nettoyage ciblé par pièce pour chaque pièce, (3) Revenez dans Home Assistant — les pièces apparaîtront automatiquement dans les options Roomba+ où vous pourrez leur attribuer des noms."

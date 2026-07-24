@@ -50,6 +50,7 @@ from .const import (
     CONF_CONTINUOUS,
     CONF_DEMAND_CLEANING_ENABLED,
     CONF_DEMAND_MULTIPLIER,
+    CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
@@ -67,6 +68,7 @@ from .const import (
     DEFAULT_CLEAN_DELAY_MIN,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
+    DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -1100,13 +1102,42 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Connection and map settings form."""
+        """Connection and map settings form.
+
+        BRANCHES ON connection_type (this session): a CLOUD_ONLY (Prime)
+        entry used to land on this SAME form as Classic, showing fields
+        that mean nothing for Prime at all (CONF_MAP_SIZE_PX/CONF_MAP_SCALE/
+        CONF_CORRELATION_ENTITIES -- all Classic-only rendering/correlation
+        concepts). Prime now gets its own, deliberately minimal form
+        instead -- today that's just CONF_ENABLE_SCHEDULE_CALENDAR, the
+        only cross-tier preference that exists so far (see that constant's
+        own docstring, const.py, for why it defaults to True)."""
+        options = self.config_entry.options
+
+        if self.config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
+            if user_input is not None:
+                updated = dict(options)
+                updated.update(user_input)
+                return self.async_create_entry(title="", data=updated)
+            return self.async_show_form(
+                step_id="settings",
+                data_schema=vol.Schema(
+                    {
+                        vol.Optional(
+                            CONF_ENABLE_SCHEDULE_CALENDAR,
+                            default=options.get(
+                                CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+                            ),
+                        ): bool,
+                    }
+                ),
+            )
+
         if user_input is not None:
             updated = dict(self.config_entry.options)
             updated.update(user_input)
             return self.async_create_entry(title="", data=updated)
 
-        options = self.config_entry.options
         return self.async_show_form(
             step_id="settings",
             data_schema=vol.Schema(
@@ -1146,6 +1177,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                             multiple=True,
                         )
                     ),
+                    vol.Optional(
+                        CONF_ENABLE_SCHEDULE_CALENDAR,
+                        default=options.get(
+                            CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+                        ),
+                    ): bool,
                 }
             ),
         )
