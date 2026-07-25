@@ -156,3 +156,138 @@ class TestCloudOnlyDiagnostics:
 
         # Must not raise.
         await async_get_config_entry_diagnostics(hass, entry)
+
+
+class TestPrimeCapabilityReport:
+    """NEW (this session): the most common Prime support question is
+    "why do I not have sensor X?" -- and since a6 the honest answer is
+    often "your robot's own capability flags say it can't". Neither the
+    flags nor the resulting decision were visible anywhere."""
+
+    def _entry(self, cap=None, dock_cap=None):
+        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
+
+        entry = MagicMock()
+        data = {}
+        if cap is not None:
+            data[PrimeStatusCoordinator.CLASSIC_SHADOW_KEY] = {"cap": cap}
+        if dock_cap is not None:
+            data["ro-currentstate"] = {"dock": {"cap": dock_cap}}
+        entry.runtime_data.prime_status_coordinator.data = data or None
+        return entry
+
+    def test_zero_flag_is_reported_as_suppressed_with_the_reason(self):
+        from custom_components.roomba_plus.diagnostics import _prime_capability_report
+
+        report = _prime_capability_report(self._entry(cap={"scrub": 0}))
+
+        assert "suppressed" in report["entity_decisions"]["detected_pad"]
+        assert "cap.scrub == 0" in report["entity_decisions"]["detected_pad"]
+
+    def test_nonzero_flag_is_reported_as_created_with_the_value(self):
+        from custom_components.roomba_plus.diagnostics import _prime_capability_report
+
+        report = _prime_capability_report(self._entry(cap={"suctionLvl": 4}))
+
+        assert "created" in report["entity_decisions"]["suction_level"]
+        assert "4" in report["entity_decisions"]["suction_level"]
+
+    def test_unknown_capability_says_so_rather_than_implying_a_decision(self):
+        """Failing open is the documented contract -- the diagnostics
+        must make clear that's what happened, not imply the robot
+        reported something."""
+        from custom_components.roomba_plus.diagnostics import _prime_capability_report
+
+        report = _prime_capability_report(self._entry())
+
+        assert "unknown" in report["entity_decisions"]["detected_pad"]
+
+    def test_dock_capabilities_are_reported_separately_from_robot_ones(self):
+        from custom_components.roomba_plus.diagnostics import _prime_capability_report
+
+        report = _prime_capability_report(self._entry(cap={"scrub": 3}, dock_cap={"pw": 0}))
+
+        assert "suppressed" in report["entity_decisions"]["pad_wash_status"]
+        assert "created" in report["entity_decisions"]["detected_pad"]
+
+
+class TestPrimeMissionStatus:
+    """The fields that explain a mission silently never starting --
+    readiness refusals appear in no error field and on no rejection
+    topic."""
+
+    def _entry(self, mission_status=None, detected_pad=None):
+        entry = MagicMock()
+        if mission_status is None and detected_pad is None:
+            entry.runtime_data.prime_status_coordinator.data = None
+        else:
+            entry.runtime_data.prime_status_coordinator.data = {
+                "ro-currentstate": {
+                    "cleanMissionStatus": mission_status or {},
+                    "detectedPad": detected_pad,
+                }
+            }
+        return entry
+
+    def test_readiness_codes_are_named_not_just_numbered(self):
+        from custom_components.roomba_plus.diagnostics import _prime_mission_status
+
+        status = _prime_mission_status(
+            self._entry({"notReady": 22, "condNotReady": [75]})
+        )
+
+        assert status["not_ready_name"] == "MAP_VERSION_MISMATCH"
+        assert status["cond_not_ready"] == ["NO_VAC_WITH_PAD"]
+
+    def test_unknown_readiness_code_stays_honestly_unknown(self):
+        from custom_components.roomba_plus.diagnostics import _prime_mission_status
+
+        status = _prime_mission_status(self._entry({"notReady": 43}))
+
+        assert status["not_ready_name"] == "UNKNOWN_43"
+
+    def test_mission_id_is_deliberately_omitted(self):
+        """It identifies a specific run and adds nothing to triage."""
+        from custom_components.roomba_plus.diagnostics import _prime_mission_status
+
+        status = _prime_mission_status(self._entry({"missionId": "01KY7M4XHX", "phase": "run"}))
+
+        assert "mission_id" not in status
+        assert status["phase"] == "run"
+
+    def test_returns_none_when_no_coordinator_data(self):
+        from custom_components.roomba_plus.diagnostics import _prime_mission_status
+
+        assert _prime_mission_status(self._entry()) is None
+
+
+class TestLiveMapStatsInDiagnostics:
+    """NEW (this session): born from a real field report where the map
+    stayed blank while data was arriving and failing to decode 106
+    times an hour. The counters make that visible at a glance instead
+    of requiring someone to scrape their log."""
+
+    def test_stats_are_included_in_the_prime_diagnostics(self):
+        from custom_components.roomba_plus.models import RoombaData
+
+        data = RoombaData(blid="x", roomba=None)
+        data.live_map_stats = {
+            "updates_received": 106,
+            "decode_ok": 0,
+            "decode_failed": 106,
+            "last_error": "ValueError('Unsupported protobuf wire type 4 at offset 6')",
+            "last_payload_prefix_hex": "0a04deadbeef",
+        }
+
+        assert data.live_map_stats["decode_failed"] == 106
+        assert data.live_map_stats["decode_ok"] == 0
+
+    def test_field_defaults_to_none_before_any_map_entity_exists(self):
+        """A robot with no map capability never creates the image
+        entity at all -- the field must simply stay None rather than
+        implying zero updates were received."""
+        from custom_components.roomba_plus.models import RoombaData
+
+        data = RoombaData(blid="x", roomba=None)
+
+        assert data.live_map_stats is None
