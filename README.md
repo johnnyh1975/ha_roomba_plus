@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a7-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a8-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -130,9 +130,12 @@ path, not an extension of the existing one, using the companion
 
 **This is a real alpha, not a preview label on finished work.** It's been tested against
 multiple real robots on separate accounts and works for what it does — but the feature set is
-deliberately narrower than everything described above, and one piece (battery/docked status)
-is still unconfirmed and not exposed at all yet. If your V4/Prime robot is central to your
-setup today, you may want to wait for a later alpha.
+deliberately narrower than everything described above.
+
+**The one thing it cannot do is send a robot to a specific room.** Region-based cleaning works
+for Classic robots on this page and does not work for Prime ones; the protocol path for it is
+still unsolved, and it is where most current development effort goes. If room-specific
+cleaning is why you want this, that part is not ready. Everything else listed below is.
 
 **What works right now:**
 - Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
@@ -165,6 +168,15 @@ setup today, you may want to wait for a later alpha.
   monthly/one-time schedules are deliberately skipped rather than shown with a guessed date —
   verifying any of those needs a real device test that waits days/weeks to see whether the robot
   actually fires as expected, a materially higher-risk test than anything else in this project
+- **Error sensor** — the robot's own error code, translated, with the same stale-error
+  suppression Classic uses (the firmware does not reset the code when it docks after a
+  failure, so a naive sensor would show a long-finished error forever). Also exposes the
+  robot's readiness state as attributes, for the case where a mission is refused *without*
+  an error code being set
+- **Capability-gated entities** — sensors your robot cannot support (a mop pad on a
+  vacuum-only model, a pad-wash dock it does not have) are not created at all, rather than
+  sitting permanently unavailable. If you are wondering why a particular entity is missing,
+  the integration's diagnostics download now names the flag responsible
 - Two diagnostic sensors: current mission event, and connection health
 - The device page itself (Settings → Devices) now shows the robot's real name, model, serial
   number, and firmware version — previously always blank/generic for every Prime robot despite
@@ -191,7 +203,8 @@ protocol: [Release notes →](release-notes/)
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
-- **V4/Prime robots don't have battery/docked status yet** — still unconfirmed on the wire even after several live tests; see [V4/Prime support (alpha)](#v4prime-support-alpha) above.
+- **V4/Prime robots cannot be sent to a specific room** — region-based cleaning works on Classic robots but not on Prime. The command is accepted without error and the robot does not move; the cause is still being investigated across several independent efforts, and no public project has solved it yet. Battery, dock and mission status *are* now confirmed and exposed — an earlier version of this note said otherwise.
+- **V4/Prime virtual walls and robot settings are not exposed** — the underlying write paths exist in the companion library but have never been run against a real device, so nothing is built on top of them yet.
 - **V4/Prime + Classic robots on the same Home Assistant instance simultaneously** — each is independently confirmed working, but running both types at once hasn't been specifically tested.
 
 ---

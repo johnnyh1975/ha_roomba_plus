@@ -5,6 +5,7 @@ Accessible via Settings → Devices & Services → Roomba+ → Download diagnost
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -33,6 +34,81 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
     return result
+
+
+def _prime_capability_report(config_entry: RoombaConfigEntry) -> dict[str, Any]:
+    """NEW (this session): the single most common Prime support question
+    is "why do I not have sensor X?" -- and since v4.0.0a6 the honest
+    answer is often "because your robot's own capability flags say it
+    can't do that". None of that was visible anywhere: the flags weren't
+    in diagnostics, and neither was the decision they drove. Anyone
+    asking had to be walked through it by hand.
+
+    Reports the raw flags AND the resulting per-entity decision, in the
+    same three-way form the gating itself uses (created / suppressed /
+    created-because-unknown) -- see get_prime_capability_flags()'s own
+    "None means unknown, only explicit 0 means absent" contract."""
+    from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
+
+    cap, dock_cap = get_prime_capability_flags(config_entry)
+
+    def _decision(flag: Any, label: str) -> str:
+        if flag is None:
+            return "created (capability unknown -- failing open)"
+        if flag == 0:
+            return f"suppressed ({label} == 0)"
+        return f"created ({label} == {flag!r})"
+
+    return {
+        "cap_flags": dataclasses.asdict(cap) if cap is not None else None,
+        "dock_cap_flags": dataclasses.asdict(dock_cap) if dock_cap is not None else None,
+        "entity_decisions": {
+            "detected_pad": _decision(getattr(cap, "scrub", None), "cap.scrub"),
+            "mop_tank_present": _decision(getattr(cap, "scrub", None), "cap.scrub"),
+            "suction_level": _decision(getattr(cap, "suction_lvl", None), "cap.suctionLvl"),
+            "carpet_boost_switch": _decision(getattr(cap, "carpet_boost", None), "cap.carpetBoost"),
+            "pad_wash_status": _decision(getattr(dock_cap, "pad_wash", None), "dock.cap.pw"),
+            "pad_dry_status": _decision(getattr(dock_cap, "pad_dry", None), "dock.cap.pd"),
+        },
+    }
+
+
+def _prime_mission_status(config_entry: RoombaConfigEntry) -> dict[str, Any] | None:
+    """NEW (this session): the fields that explain what the robot is
+    actually doing -- and, crucially, why it might have REFUSED to do
+    something. not_ready/cond_not_ready carry readiness-refusal reasons
+    that appear in no error field and on no rejection topic; a mission
+    that silently never starts leaves its trace here and nowhere else.
+    regions_left shows whether a region-based mission actually began.
+
+    Deliberately omits mission_id -- it identifies a specific run and
+    adds nothing to triage."""
+    from roombapy_prime.models import CurrentStateShadow, RobotReadinessState  # noqa: PLC0415
+
+    coordinator = config_entry.runtime_data.prime_status_coordinator
+    if coordinator is None or not coordinator.data:
+        return None
+    raw = coordinator.data.get("ro-currentstate")
+    if not raw:
+        return None
+
+    status = CurrentStateShadow.from_json(raw).clean_mission_status
+    if status is None:
+        return None
+
+    cond = status.cond_not_ready or []
+    return {
+        "phase": status.phase,
+        "cycle": status.cycle,
+        "error": status.error,
+        "not_ready": status.not_ready,
+        "not_ready_name": RobotReadinessState.name_for(status.not_ready),
+        "cond_not_ready": [
+            RobotReadinessState.name_for(c) if isinstance(c, int) else c for c in cond
+        ],
+        "regions_left": (raw.get("cleanMissionStatus") or {}).get("regions_left"),
+        "detected_pad": CurrentStateShadow.from_json(raw).detected_pad,
+    }
 
 
 async def async_get_config_entry_diagnostics(
@@ -88,6 +164,9 @@ async def async_get_config_entry_diagnostics(
                     else []
                 ),
             },
+            "live_map": data.live_map_stats,
+            "capabilities": _prime_capability_report(config_entry),
+            "mission_status": _prime_mission_status(config_entry),
             "mission_coordinator": {
                 "started": mission_coordinator is not None,
                 "last_update_success": getattr(mission_coordinator, "last_update_success", None),

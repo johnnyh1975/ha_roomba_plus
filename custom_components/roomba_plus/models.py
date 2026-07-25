@@ -121,7 +121,13 @@ class RoombaData:
     # opt-in freeze path.
     mission_map_cache: dict = field(default_factory=dict)
     # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
-    blocking_manager: BlockingManager | None = None  # v1.7.0 L5
+    blocking_manager: BlockingManager | None = None
+    # NEW (this session): live-map decode statistics, populated by
+    # PrimeMapImage and read by diagnostics. Lives here rather than on
+    # the entity so diagnostics can reach it without locating the
+    # entity instance -- see PrimeMapImage.__init__ for why it's
+    # tracked at all.
+    live_map_stats: dict[str, Any] | None = None  # v1.7.0 L5
     # v1.8.0 — Mission log, presence scheduling, and error state
     mission_store: MissionStore | None = None
     presence_manager: PresenceManager | None = None

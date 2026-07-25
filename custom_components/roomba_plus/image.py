@@ -29,6 +29,7 @@ Persistence:
 from __future__ import annotations
 
 import asyncio
+import sys
 import collections
 import datetime
 import io
@@ -339,6 +340,20 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_map"
         self._png_bytes: bytes | None = None
         self._watch_task: asyncio.Task[None] | None = None
+        # NEW (this session): live-map decode statistics, kept on the
+        # CONFIG ENTRY rather than on this entity, so diagnostics can
+        # read them without having to locate the entity instance. Born
+        # from a real field report where the map stayed blank while data
+        # was arriving and failing to decode 106 times an hour -- the
+        # counters make that visible in one glance instead of requiring
+        # someone to scrape their log.
+        config_entry.runtime_data.live_map_stats = {
+            "updates_received": 0,
+            "decode_ok": 0,
+            "decode_failed": 0,
+            "last_error": None,
+            "last_payload_prefix_hex": None,
+        }
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
 
     async def async_added_to_hass(self) -> None:
@@ -411,6 +426,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         # fail at offset 1, the real one failed at offset 6 --
                         # so the payload really was protobuf-shaped), but it's
                         # a genuine robustness gap either way.
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["updates_received"] += 1
                         if http_status != 200:
                             _LOGGER.warning(
                                 "roomba_plus: live map download for %s returned HTTP %s "
@@ -419,6 +436,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                             )
                             continue
                         png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
+                        stats["decode_ok"] += 1
                     except Exception:  # noqa: BLE001
                         # NEW (same field report): the old message said only
                         # "failed to decode", with nothing about WHAT arrived --
@@ -427,6 +445,12 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         # identifying an unexpected format (protobuf vs. an
                         # error page vs. compressed data) from a log alone,
                         # without needing another round-trip to the reporter.
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["decode_failed"] += 1
+                        stats["last_error"] = repr(sys.exc_info()[1])
+                        stats["last_payload_prefix_hex"] = (
+                            locals().get("raw_bytes", b"")[:32].hex() or None
+                        )
                         _LOGGER.exception(
                             "roomba_plus: failed to decode live map update for %s "
                             "(HTTP %s, %s, %d bytes, first 32 bytes: %s)",
