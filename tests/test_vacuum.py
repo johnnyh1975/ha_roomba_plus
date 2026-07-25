@@ -1453,3 +1453,78 @@ class TestPrimeCoordinatorListenerRegistration:
         with patch.object(v, "schedule_update_ha_state") as mock_schedule:
             v._handle_prime_coordinator_update()
         mock_schedule.assert_called_once()
+
+
+class TestPrimeActivityPrefersCleanMissionStatusPhase:
+    """NEW (this session, real field report -- chairstacker): the
+    mission-timeline event type alone cannot express "heading home".
+    His own log showed "travel" firing both for room-to-room travel
+    mid-mission AND for the trip back to the dock, so a completed
+    mission still reported CLEANING all the way home. phase
+    (cleanMissionStatus, ro-currentstate) is CONFIRMED LIVE for Prime
+    and draws exactly that distinction."""
+
+    def _entity_with(self, *, phase=None, event_type=None):
+        from homeassistant.components.vacuum import VacuumActivity  # noqa: F401
+
+        v = _make_prime_vacuum_entity()
+        status_coordinator = MagicMock()
+        status_coordinator.data = (
+            {"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}} if phase is not None else {}
+        )
+        v._config_entry.runtime_data.prime_status_coordinator = status_coordinator
+
+        coordinator = MagicMock()
+        if event_type is not None:
+            coordinator.data = MagicMock(event=[MagicMock(event_type=event_type)])
+        else:
+            coordinator.data = None
+        v._config_entry.runtime_data.prime_coordinator = coordinator
+        return v
+
+    def test_hm_post_msn_reports_returning_not_cleaning(self):
+        """THE actual reported bug: mission done, robot heading home."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="hmPostMsn", event_type="travel")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_hm_mid_msn_still_reports_cleaning(self):
+        """Heading home to RECHARGE mid-mission is genuinely still an
+        active mission -- must NOT be reported as returning."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="hmMidMsn", event_type="travel")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_run_phase_reports_cleaning(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="run", event_type="travel")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_falls_back_to_event_map_when_phase_absent(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase=None, event_type="zone")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_falls_back_to_event_map_when_phase_unrecognized(self):
+        """An unknown phase must not swallow the event stream -- the
+        event map stays the safety net."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="somethingNewFromFirmware", event_type="pause")
+
+        assert v.activity == VacuumActivity.PAUSED
+
+    def test_idle_when_neither_source_has_anything(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase=None, event_type=None)
+
+        assert v.activity == VacuumActivity.IDLE

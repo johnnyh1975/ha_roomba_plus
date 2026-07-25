@@ -3467,6 +3467,16 @@ class TestRoomsOverdueMerged:
     def _now(self) -> str:
         return "2026-07-04T12:00:00+00:00"
 
+    # SAME TIME-BOMB CLASS as
+    # test_query_by_day_completed_count_after_b1ext_correction above
+    # (found empirically by re-running this file under a frozen future
+    # clock, rather than by reading the code): the fixture data is
+    # pinned to real historic dates, but the lookback window inside the
+    # queried method derives from the REAL clock -- so the test only
+    # passed while today happened to sit close enough to those dates.
+    # Frozen to the same 2026-07-04 these tests already pass in as
+    # their own "now", making them deterministic forever.
+    @freeze_time("2026-07-04 12:00:00")
     def test_configured_overrides_learned_with_x1_threshold(self):
         """Kitchen's learned cadence is ~4 days -> healthy at 4 days
         since last under learned mean+2sigma — but a configured
@@ -3504,6 +3514,7 @@ class TestRoomsOverdueMerged:
         assert a["expected_interval_days"] is None
         assert a["overdue_factor"] is None
 
+    @freeze_time("2026-07-04 12:00:00")
     def test_unknown_config_key_falls_back_to_learned(self):
         """A stale/unknown frequency key in options must not crash or
         create a bogus interval — it falls through to learned."""
@@ -3548,6 +3559,7 @@ class TestRoomHistoryLivePathRegression:
         # Without maps: raw rids, still functional for interval math
         assert set(store.room_cleaning_history()) == {"7", "9"}
 
+    @freeze_time("2026-07-04 12:00:00")
     def test_live_records_feed_coverage_health(self):
         store = MissionStore()
         stamps = ["2026-06-20", "2026-06-24", "2026-06-28", "2026-07-02"]

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.roomba_plus.const import ERROR_CODE_LABELS
 from custom_components.roomba_plus.models import ConnectionType
 from custom_components.roomba_plus.sensor_prime import (
     PrimeBatterySensor,
@@ -214,6 +215,7 @@ class TestAsyncSetupEntryCloudOnlyBranch:
             PrimeChargeCyclesOkSensor,
             PrimeDetectedPadSensor,
             PrimeDockStatusSensor,
+            PrimeErrorSensor,
             PrimeFailedMissionsSensor,
             PrimeFirmwareVersionSensor,
             PrimeNavigationResetsSensor,
@@ -238,9 +240,9 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         await sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
 
         # 6 always-present + 4 capability-gated (unknown -> created by
-        # default) + 8 ro-stats-backed + 1 ro-configinfo-backed (this
-        # session) = 19.
-        assert len(created) == 19
+        # default) + 8 ro-stats-backed + 1 ro-configinfo-backed + 1
+        # error sensor (this session) = 20.
+        assert len(created) == 20
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
         assert any(isinstance(e, PrimeBatterySensor) for e in created)
@@ -260,6 +262,7 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         assert any(isinstance(e, PrimeSystemUptimeSensor) for e in created)
         assert any(isinstance(e, PrimeNavigationResetsSensor) for e in created)
         assert any(isinstance(e, PrimeSerialNumberSensor) for e in created)
+        assert any(isinstance(e, PrimeErrorSensor) for e in created)
 
 
 class TestAsyncSetupEntryCapabilityGating:
@@ -441,7 +444,15 @@ class TestPrimeMissionStatsSensors:
 
     def test_counts_sum_to_total_internal_consistency_check(self):
         """The same cross-validation that confirmed these are genuine
-        lifetime counters, not arbitrary numbers, expressed as a test."""
+        lifetime counters, not arbitrary numbers, expressed as a test.
+
+        IMPORTANT, per a real field observation (chairstacker): this
+        sum holds only while the robot is IDLE. Mid-mission the total
+        is one HIGHER, because n_mssn increments at mission START while
+        the outcome counters increment at mission END. _REAL_BBMSSN is
+        a capture from an idle robot, so the assertion is valid here --
+        but this is NOT a general invariant and must not be treated as
+        one elsewhere. See PrimeTotalMissionsSensor's own docstring."""
         assert _REAL_BBMSSN["nMssnC"] + _REAL_BBMSSN["nMssnF"] + _REAL_BBMSSN["nMssnOk"] == _REAL_BBMSSN["nMssn"]
 
     def test_none_when_no_coordinator_data_yet(self):
@@ -509,3 +520,61 @@ class TestPrimeSerialNumberSensor:
         config_entry = _make_configinfo_config_entry({"hwPartsRev": {"navSerialNo": ""}})
         sensor = PrimeSerialNumberSensor("BLID123", config_entry)
         assert sensor.native_value is None
+
+
+class TestPrimeErrorSensor:
+    """NEW (this session) -- reuses Classic's ERROR_CODE_LABELS and its
+    translation_key, and critically INHERITS Classic's hard-won
+    stale-error suppression: cleanMissionStatus.error persists across
+    missions (the firmware never resets it to 0 on docking), so a naive
+    sensor would show a long-finished error forever while charging."""
+
+    def _entity(self, **status):
+        from custom_components.roomba_plus.sensor_prime import PrimeErrorSensor
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status}
+        }
+        return PrimeErrorSensor("BLID123", config_entry)
+
+    def test_reports_the_label_during_an_active_mission(self):
+        sensor = self._entity(cycle="clean", phase="run", error=671)
+
+        assert sensor.native_value == ERROR_CODE_LABELS[671]
+
+    def test_suppresses_a_stale_error_while_charging(self):
+        """THE trap this sensor exists to avoid -- error 671 still set
+        from a finished mission, robot back on the dock."""
+        sensor = self._entity(cycle="none", phase="charge", error=671)
+
+        assert sensor.native_value == "None"
+
+    def test_suppresses_stale_error_when_idle_too(self):
+        sensor = self._entity(cycle="none", phase="idle", error=671)
+
+        assert sensor.native_value == "None"
+
+    def test_no_error_during_a_mission_reports_none_label(self):
+        sensor = self._entity(cycle="clean", phase="run", error=0)
+
+        assert sensor.native_value == "None"
+
+    def test_exposes_readiness_fields_as_attributes(self):
+        """A readiness-based START REFUSAL leaves `error` at 0 and puts
+        the reasons in cond_not_ready -- see the class docstring."""
+        sensor = self._entity(cycle="none", phase="charge", error=0, notReady=8, condNotReady=["binFull"])
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["not_ready"] == 8
+        assert attrs["cond_not_ready"] == ["binFull"]
+
+    def test_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.sensor_prime import PrimeErrorSensor
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_status_coordinator.data = None
+        sensor = PrimeErrorSensor("BLID123", config_entry)
+
+        assert sensor.native_value is None
+        assert sensor.extra_state_attributes == {}
