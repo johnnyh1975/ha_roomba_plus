@@ -795,6 +795,15 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     507: {"label": "Communication error",       "description": "A communication error occurred. Reboot required.",         "action": "Reboot the robot."},
     508: {"label": "Clean Base update failure",  "description": "The Clean Base software update failed.",                  "action": "Retry the update. Contact iRobot support if the error persists."},
     509: {"label": "Clean Base update failure",  "description": "The Clean Base software update failed.",                  "action": "Retry the update. Contact iRobot support if the error persists."},
+    # FIELD-REPORTED, SINGLE OBSERVATION (chairstacker, Combo 405 / V4
+    # Prime, v4.0.0a6): a mission paused almost immediately after
+    # starting, with the clean water tank empty, and 671 was the code
+    # shown. The correlation is his own inference from what the robot
+    # did plus the tank state he could see -- not read from any iRobot
+    # documentation or decompiled string table. Wording deliberately
+    # kept close to the confirmed 460s/500s water/refill family rather
+    # than claiming more specificity than one observation supports.
+    671: {"label": "Clean water tank empty",     "description": "The clean water tank is empty. Mopping cannot continue.", "action": "Refill the clean water tank and restart the mission."},
     1010: {"label": "Clear path",              "description": "The robot's path is obstructed.",                          "action": "Clear obstacles from the robot's path and restart."},
 }
 

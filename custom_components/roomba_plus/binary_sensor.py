@@ -203,7 +203,18 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
         translation_key="bin_present",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba, blid: str) -> None:
@@ -327,7 +338,18 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
         translation_key="mop_tank_present",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba, blid: str) -> None:
@@ -679,7 +701,18 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
         translation_key="mop_tank_present_direct",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str) -> None:
@@ -1267,7 +1300,18 @@ class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         name="Bin present",
         translation_key="bin_present",
     )
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
@@ -1294,7 +1338,18 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         name="Mop tank present",
         translation_key="mop_tank_present",
     )
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:

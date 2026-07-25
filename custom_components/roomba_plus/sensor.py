@@ -65,6 +65,7 @@ from .sensor_prime import (
     PrimeConnectionHealthSensor,
     PrimeDetectedPadSensor,
     PrimeDockStatusSensor,
+    PrimeErrorSensor,
     PrimeFailedMissionsSensor,
     PrimeFirmwareVersionSensor,
     PrimeMissionEventSensor,
@@ -203,6 +204,7 @@ async def async_setup_entry(
             PrimeRuntimeHoursSensor(data.blid, config_entry),
             PrimeFirmwareVersionSensor(data.blid, config_entry),
             PrimeDockStatusSensor(data.blid, config_entry),
+            PrimeErrorSensor(data.blid, config_entry),
             # NEW (this session): ro-stats-backed lifetime stats,
             # confirmed with real values (see StatsShadow's own
             # docstring). Four mission-outcome sensors reuse Classic's

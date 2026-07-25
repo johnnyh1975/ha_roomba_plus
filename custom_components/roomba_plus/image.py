@@ -398,10 +398,43 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     try:
                         async with session.get(message.livemap_url_raw) as resp:
                             raw_bytes = await resp.read()
+                            http_status = resp.status
+                            content_type = resp.headers.get("Content-Type", "?")
+                        # NEW (this session, prompted by a real field report:
+                        # 106 consecutive decode failures, chairstacker): the
+                        # HTTP status was never checked at all -- an expired
+                        # presigned URL (403) or any other error response would
+                        # have its ERROR BODY fed straight into the protobuf
+                        # parser, producing a confusing parse error instead of
+                        # a clear "the download itself failed". Ruled out as
+                        # the cause of THAT specific report (error-page bodies
+                        # fail at offset 1, the real one failed at offset 6 --
+                        # so the payload really was protobuf-shaped), but it's
+                        # a genuine robustness gap either way.
+                        if http_status != 200:
+                            _LOGGER.warning(
+                                "roomba_plus: live map download for %s returned HTTP %s "
+                                "(%s, %d bytes) -- skipping this frame",
+                                self._blid, http_status, content_type, len(raw_bytes),
+                            )
+                            continue
                         png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
                     except Exception:  # noqa: BLE001
+                        # NEW (same field report): the old message said only
+                        # "failed to decode", with nothing about WHAT arrived --
+                        # leaving the actual payload a complete guess. The
+                        # hex prefix is the single most useful thing for
+                        # identifying an unexpected format (protobuf vs. an
+                        # error page vs. compressed data) from a log alone,
+                        # without needing another round-trip to the reporter.
                         _LOGGER.exception(
-                            "roomba_plus: failed to decode live map update for %s", self._blid
+                            "roomba_plus: failed to decode live map update for %s "
+                            "(HTTP %s, %s, %d bytes, first 32 bytes: %s)",
+                            self._blid,
+                            locals().get("http_status", "?"),
+                            locals().get("content_type", "?"),
+                            len(locals().get("raw_bytes", b"")),
+                            locals().get("raw_bytes", b"")[:32].hex(),
                         )
                         continue
                     self._png_bytes = png_bytes

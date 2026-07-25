@@ -40,6 +40,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
+from .const import ERROR_CODE_LABELS
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
@@ -515,7 +516,21 @@ class PrimeTotalMissionsSensor(_PrimeStatsSensorBase):
     the exact same field (nMssn) Classic's own equivalent sensor reads,
     just via a different transport (cloud shadow vs local MQTT). Real
     value seen: 276, cross-validated against ro-currentstate's own
-    cleanMissionStatus.nMssn from the SAME capture."""
+    cleanMissionStatus.nMssn from the SAME capture.
+
+    COUNTER SEMANTICS, clarified by a real field observation
+    (chairstacker, v4.0.0a6): this total does NOT always equal
+    successful + canceled + failed. It matches exactly when the robot
+    is IDLE (confirmed: 247 + 25 + 4 = 276 in the capture above), but
+    is one HIGHER while a mission is in progress -- n_mssn increments
+    when a mission STARTS, whereas the three outcome counters only
+    increment once it ENDS with a known result. The in-flight mission
+    is therefore counted in the total but not yet in any outcome
+    bucket. This is the robot's own counter behavior, faithfully
+    reported (no arithmetic happens on our side) -- NOT an off-by-one
+    on this integration's part. Worth remembering before treating the
+    sum as an invariant anywhere: it holds at rest, not during a
+    mission."""
 
     entity_description = SensorEntityDescription(
         key="prime_total_missions",
@@ -769,3 +784,69 @@ class PrimeSerialNumberSensor(IRobotEntity, SensorEntity):
         coordinator = self._config_entry.runtime_data.prime_status_coordinator
         if coordinator is not None:
             self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
+    """V4/Prime error label, read from
+    CurrentStateShadow.clean_mission_status.error (CONFIRMED LIVE for
+    Prime, chairstacker's own ro-currentstate payload).
+
+    Reuses Classic's OWN translation_key ("error") and its
+    ERROR_CODE_LABELS catalogue rather than introducing a parallel
+    Prime-specific one -- the codes are the same product-wide
+    catalogue, only the transport differs (cloud shadow vs local MQTT),
+    exactly as with the mission-count sensors.
+
+    INHERITS CLASSIC'S HARD-WON STALE-ERROR SUPPRESSION, deliberately
+    rather than reading the field raw: cleanMissionStatus.error
+    PERSISTS across missions -- the firmware does not reset it to 0
+    when the robot docks after a failure (see _error_value()'s own
+    docstring in sensor_helpers.py, where Classic learned this). A
+    naive Prime sensor would therefore show a long-finished error
+    indefinitely while the robot sits charging. Same suppression rule:
+    when there's no active or queued mission (cycle "none") and the
+    phase indicates rest, report "None".
+
+    ALSO EXPOSES not_ready / cond_not_ready as attributes (this
+    session): per the parallel APK research, a readiness-based START
+    REFUSAL (ResolvedMissionStatus 7/8/12/13) surfaces through those
+    two fields rather than through `error` -- so a robot that refused
+    to start would leave `error` at 0 while cond_not_ready carries the
+    actual reasons. Keeping them visible here means that case is
+    diagnosable from the entity itself, not only from a CLI script."""
+
+    entity_description = SensorEntityDescription(
+        key="prime_error",
+        translation_key="error",
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_error"
+
+    @property
+    def _mission_status(self) -> Any:
+        state = self._current_state
+        return None if state is None else state.clean_mission_status
+
+    @property
+    def native_value(self) -> str | None:
+        status = self._mission_status
+        if status is None:
+            return None
+        # Same rule Classic uses -- see this class's own docstring.
+        if (status.cycle or "none") == "none" and (status.phase or "") in ("charge", "stop", "idle", ""):
+            return "None"
+        return ERROR_CODE_LABELS.get(status.error or 0, "None")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._mission_status
+        if status is None:
+            return {}
+        return {
+            "error_code": status.error,
+            "not_ready": status.not_ready,
+            "cond_not_ready": status.cond_not_ready,
+        }

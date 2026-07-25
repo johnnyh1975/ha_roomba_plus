@@ -238,6 +238,40 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         approximates activity from mission events.
         """
         if self._connection_type is ConnectionType.CLOUD_ONLY:
+            # NEW (this session, prompted by a real field report,
+            # chairstacker): the mission-timeline event type alone
+            # CANNOT express "heading home". His own activity log shows
+            # why -- "travel" fires both for room-to-room travel
+            # mid-mission AND for the final trip back to the dock, so a
+            # completed mission still reported CLEANING all the way
+            # home, only flipping once "evac" arrived (by which point
+            # the robot was already AT the dock being emptied, so even
+            # that RETURNING was both late and, strictly, wrong).
+            #
+            # cleanMissionStatus.phase (ro-currentstate) is CONFIRMED
+            # LIVE for Prime (chairstacker's own real payload, see
+            # CleanMissionStatus's docstring in roombapy-prime) and
+            # draws exactly the distinction the event stream can't:
+            # hmPostMsn (heading home, mission done) vs. hmMidMsn
+            # (heading home to recharge, mission continues) vs. run.
+            # Reuses Classic's own long-proven PHASE_TO_ACTIVITY map
+            # rather than inventing a second, parallel mapping.
+            #
+            # Falls back to the event-type map when phase is absent or
+            # unrecognized -- the event stream stays the safety net,
+            # since phase living in a shadow means it could in
+            # principle lag or be missing on some firmware, which the
+            # event stream would not be.
+            status_coordinator = (
+                self._config_entry.runtime_data.prime_status_coordinator
+                if self._config_entry is not None else None
+            )
+            if status_coordinator is not None and status_coordinator.data:
+                current_state = status_coordinator.data.get("ro-currentstate") or {}
+                phase = (current_state.get("cleanMissionStatus") or {}).get("phase")
+                if phase in PHASE_TO_ACTIVITY:
+                    return PHASE_TO_ACTIVITY[phase]
+
             coordinator = (
                 self._config_entry.runtime_data.prime_coordinator
                 if self._config_entry is not None else None
