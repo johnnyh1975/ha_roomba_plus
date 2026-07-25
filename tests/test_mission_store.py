@@ -1262,17 +1262,37 @@ class TestMergeCloudFieldsB1Ext:
     # ── query_by_day integration: the original field bug ─────────────────────
 
     def test_query_by_day_completed_count_after_b1ext_correction(self):
-        """End-to-end repro of the field bug (980 OG, 26.06.2026):
-        before B1-EXT, summary showed completed:3 for a day that had one
-        error_battery and one cancelled_by_user mission, because both local
-        records had result='completed' and were never corrected.
+        """End-to-end repro of the field bug (980 OG, originally observed
+        26.06.2026): before B1-EXT, summary showed completed:3 for a day
+        that had one error_battery and one cancelled_by_user mission,
+        because both local records had result='completed' and were never
+        corrected.
 
         After B1-EXT fires via backfill_from_cloud(), query_by_day() must
         show completed:0 for that day (the third missing mission is a
-        separate RECORDS-UNION issue, not tested here)."""
+        separate RECORDS-UNION issue, not tested here).
+
+        v3.5.1 bug-hunt fix (real CI failure): the original field
+        timestamps were hardcoded as absolute Unix time (26.06.2026,
+        07:01/09:08 UTC) with a fixed `days=28` query window — correct when
+        written, but guaranteed to silently start failing once that fixed
+        date aged past 28 days before "now" on whatever day CI happens to
+        run. Anchored to `dt_util.utcnow()` instead, preserving the
+        original recording's exact internal structure (the 1020s/9360s
+        mission durations and the 7646s gap between the two end-times) —
+        only the calendar anchor is now relative, not the values that
+        actually matter for the assertions.
+        """
+        from homeassistant.util import dt as dt_util
         store = MissionStore()
-        ts1 = 1782457275  # 07:01 UTC
-        ts2 = 1782464921  # 09:08 UTC — both from the real field archive
+        # 5 days ago, comfortably inside the 28-day window regardless of
+        # when CI runs — same margin approach as the api_views.py fix this
+        # same bug-hunt round.
+        anchor = (dt_util.utcnow() - datetime.timedelta(days=5)).replace(
+            hour=7, minute=1, second=15, microsecond=0
+        )
+        ts1 = int(anchor.timestamp())        # was 07:01 UTC on a fixed date
+        ts2 = ts1 + 7646                     # was 09:08 UTC — same gap as original
         store._records = [
             {
                 "id": f"m_{ts1 - 1020}",
@@ -1306,10 +1326,9 @@ class TestMergeCloudFieldsB1Ext:
         assert store._records[0]["result"] == "error"
         assert store._records[1]["result"] == "cancelled"
 
-        from datetime import date, timezone
-        day = date(2026, 6, 26)
+        day = dt_util.as_local(anchor).date()
         summaries = store.query_by_day(days=28)
-        assert day in summaries, "must have a summary for 2026-06-26"
+        assert day in summaries, f"must have a summary for {day}"
         s = summaries[day]
         assert s.completed == 0, (
             f"field bug: query_by_day counted {s.completed} completed "
