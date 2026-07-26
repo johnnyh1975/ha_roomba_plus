@@ -291,3 +291,63 @@ class TestLiveMapStatsInDiagnostics:
         data = RoombaData(blid="x", roomba=None)
 
         assert data.live_map_stats is None
+
+
+class TestPushFreshnessInDiagnostics:
+    """The first thing to look at when Prime sensors appear frozen.
+
+    `last_update_success` stays True forever if a push stream stops
+    delivering, because nothing raises -- the generator simply never
+    yields again. A coordinator can therefore report itself perfectly
+    healthy while showing hours-old data, which is what a field report
+    described.
+
+    This field is the only one that separates "quiet because nothing is
+    happening" from "quiet because the stream died"."""
+
+    def _freshness(self, ts):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _push_freshness
+
+        data = MagicMock()
+        data.last_mqtt_message_ts = ts
+        return _push_freshness(data)
+
+    def test_never_having_received_anything_says_so_outright(self):
+        """Zero is the loudest signal available here, and it must not be
+        rendered as 'a very long time ago' -- it means the stream never
+        started."""
+        result = self._freshness(0.0)
+
+        assert result["seconds_ago"] is None
+        assert "EVER" in result["note"]
+
+    def test_a_recent_message_reports_a_small_age(self):
+        import time
+
+        result = self._freshness(time.time() - 5)
+
+        assert result["seconds_ago"] < 60
+        assert result["note"] == "recent"
+
+    def test_a_long_silence_is_called_stale(self):
+        import time
+
+        result = self._freshness(time.time() - 7200)
+
+        assert result["seconds_ago"] > 7000
+        assert "stale" in result["note"]
+
+    def test_an_unreadable_value_does_not_raise(self):
+        """Diagnostics must never be the thing that breaks. Someone
+        downloading it is already trying to work out why something is
+        wrong; a traceback here replaces their answer with a second
+        problem."""
+        # A MagicMock would NOT exercise this -- float(MagicMock())
+        # succeeds and returns 1.0. It takes a genuinely
+        # unconvertible value, which is what a corrupted or
+        # wrong-typed store entry would actually look like.
+        assert self._freshness("not a timestamp")["note"] == "unreadable"
+        assert self._freshness(object())["note"] == "unreadable"
+        assert self._freshness(None)["seconds_ago"] is None
