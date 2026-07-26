@@ -40,6 +40,8 @@ exactly that data, not folded into this one.
 """
 from __future__ import annotations
 
+import time as _time
+
 import asyncio
 import logging
 from typing import Any, Final
@@ -157,6 +159,28 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         while True:
             try:
                 async for delta in self.prime_robot.watch_mission_timeline():
+                    # Feeds the same freshness signal Classic robots use.
+                    #
+                    # GAP FOUND IN THE FIELD (DaRealGuGu): Prime never
+                    # touched last_mqtt_message_ts at all -- it is written
+                    # only from callbacks.py, which is a Classic-only code
+                    # path. Every staleness check built on it therefore
+                    # sat permanently silent for Prime robots.
+                    #
+                    # His symptom is exactly what that allows: the mission
+                    # event sensor froze on "fin" and the dock status
+                    # stopped moving, both at once, while the integration
+                    # reported itself perfectly healthy. Two independent
+                    # sensors stopping together points at the stream, not
+                    # at either sensor -- and nothing was watching the
+                    # stream.
+                    #
+                    # A watch that stops DELIVERING without ever RAISING
+                    # is invisible to the error path above: the generator
+                    # simply never yields again. A timestamp is the only
+                    # thing that distinguishes "quiet because nothing is
+                    # happening" from "quiet because the stream died".
+                    self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self.async_set_updated_data(MissionTimelineReport.from_json(delta.payload))
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
@@ -440,6 +464,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         continue
                     updated = dict(self.data or {})
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
+                    self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self.async_set_updated_data(updated)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(

@@ -268,9 +268,40 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
             if status_coordinator is not None and status_coordinator.data:
                 current_state = status_coordinator.data.get("ro-currentstate") or {}
-                phase = (current_state.get("cleanMissionStatus") or {}).get("phase")
+                mission_status = current_state.get("cleanMissionStatus") or {}
+                phase = mission_status.get("phase")
                 if phase in PHASE_TO_ACTIVITY:
-                    return PHASE_TO_ACTIVITY[phase]
+                    activity = PHASE_TO_ACTIVITY[phase]
+                    # SUSPECTED FIELD BUG, UNCONFIRMED ROOT CAUSE (this
+                    # session, DaRealGuGu): reported the vacuum status
+                    # staying on "Returning to dock" for several minutes
+                    # after the robot had physically finished emptying
+                    # and the SEPARATE dock-status sensor (also read from
+                    # this same coordinator's ro-currentstate, so not a
+                    # stale-data problem) had already gone back to ready.
+                    #
+                    # This applies the same corroboration rule this
+                    # project already learned the hard way for
+                    # cleanMissionStatus.error (see PrimeErrorSensor's
+                    # own docstring): the firmware may not always flip
+                    # `phase` to a rest value once a mission genuinely
+                    # ends, so `phase` alone can lag or stick. `cycle`
+                    # dropping to "none" is the same corroborating
+                    # signal used there, reused here for the same
+                    # reason -- not because this exact phase/cycle
+                    # combination has been confirmed stuck in a real
+                    # capture (it has not; there's no ro-currentstate
+                    # snapshot from a robot in the exact stuck state
+                    # yet), but because the alternative -- doing
+                    # nothing -- has a confirmed field report against
+                    # it and this correction can only ever turn a wrong
+                    # RETURNING into a DOCKED, never the other way.
+                    if (
+                        activity == VacuumActivity.RETURNING
+                        and (mission_status.get("cycle") or "none") == "none"
+                    ):
+                        return VacuumActivity.DOCKED
+                    return activity
 
             coordinator = (
                 self._config_entry.runtime_data.prime_coordinator
@@ -543,19 +574,47 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.vacuum.send_command, "start"
             )
 
+    async def _async_send_verb(self, verb: str) -> None:
+        """Sends one simple command verb over whichever transport this
+        robot uses.
+
+        EXTRACTED (this session). Four methods -- start, stop, pause and
+        locate -- each carried their own identical copy of this branch:
+
+            if CLOUD_ONLY:
+                await self._prime_robot.send_simple_command(verb)
+                return
+            await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
+
+        Four copies of one decision is four chances to update three of
+        them. That is not hypothetical here: a fix belonging in one of
+        these branches has already been put in the wrong one once.
+
+        NOTE ON WHY THIS IS NOT A SUBCLASS. An earlier architecture note
+        proposed an IRobotVacuumPrime subclass for exactly this problem.
+        That was wrong, and the reason is worth recording so nobody
+        tries it again: the entity class is chosen by DEVICE CAPABILITY
+        (BraavaJet / RoombaVacuumCarpetBoost / RoombaVacuum), and
+        connection type is orthogonal to that. A Prime robot can be any
+        of the three, so subclassing would need BraavaJetPrime,
+        RoombaVacuumCarpetBoostPrime and so on -- a combinatorial
+        explosion to remove one if-statement.
+
+        Only the four uniform verbs go through here. return_to_base and
+        send_command keep their own branches because their two paths
+        genuinely differ in behaviour, not just in transport."""
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            await self._prime_robot.send_simple_command(verb)
+            return
+        await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
+
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum cleaner."""
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command("stop")
-            return
-        await self.hass.async_add_executor_job(self.vacuum.send_command, "stop")
+        await self._async_send_verb("stop")
 
     async def async_pause(self) -> None:
         """Pause the cleaning cycle."""
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command("pause")
-            return
-        await self.hass.async_add_executor_job(self.vacuum.send_command, "pause")
+        await self._async_send_verb("pause")
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Return the vacuum to its dock.
@@ -622,10 +681,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         own locate button through MissionUIServiceCommand.
         FindLocateRobotRunAction to this exact CommandType.FIND value).
         """
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command("find")
-            return
-        await self.hass.async_add_executor_job(self.vacuum.send_command, "find")
+        await self._async_send_verb("find")
 
     async def async_send_command(
         self,

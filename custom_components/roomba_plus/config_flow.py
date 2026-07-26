@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 import logging
-from typing import Any, Final
+from typing import Any
 
 from roombapy import RoombaFactory, RoombaInfo
 from roombapy.discovery import RoombaDiscovery
@@ -107,50 +107,17 @@ _CLOUD_ACCOUNT_SENTINEL = "__cloud_account__"
 # V4/Prime-generation SKU prefixes -- CORRECTED (this session, parallel
 # native-analysis track, decompiled com/irobot/core/SkuUtils.java): the
 # earlier single-LETTER check below (just "g"/"n") was genuinely unsafe,
-# not just incomplete. SkuUtils.java's own platform table shows "R" and
-# "Q" are each used by BOTH generations -- R285020 (Prime,
-# EnhancedComboNextPlus) vs. R980020 (Classic, Roomba 980 -- this
-# project's own chairstacker test unit) and R111840 (Classic, Atlantis/
-# 100-series); Q352020/Q012020 (Prime) vs. "q" already listed as a
-# known-but-unconfirmed CLASSIC prefix in const.py's own
-# _KNOWN_IROBOT_SKU_PREFIXES. A single-letter check would have
-# eventually misclassified a real Classic robot as Prime -- a worse
-# failure mode than the original bug (silent cloud-only setup for a
-# local-network-capable device, vs. the original bug's loud, reportable
-# "not found on network" error).
-#
-# Fixed: match on the first THREE characters (letter + 2 digits), which
-# SkuUtils.java's own table confirms disambiguates every case above
-# (R28 vs. R98/R11, etc.). Confirmed platforms, from SkuUtils.java's own
-# table plus two real field devices whose specific SKU wasn't the exact
-# one shown there (G185020/N185240 -- SkuUtils.java's table gives one
-# representative/default SKU per platform, e.g.
-# DEFAULT_ESSENTIAL_COMBO_NEXT_SKU = "G185020", not every regional/bundle
-# variant, so a field-confirmed real SKU can differ slightly from the
-# table's own example for the same platform):
-#   G18 - EssentialComboNext (G185020) - chairstacker, jadestar1864
-#   N18 - real field SKU N185240 (Roomba Plus 505 Combo) - darealgugu
-#         (GitHub issue) -- SkuUtils.java's own table shows N28
-#         (EnhancedComboPlus) as N's reference SKU, not N18 specifically,
-#         consistent with the "one example per platform" caveat above.
-#   Everything else below is from SkuUtils.java's own table directly,
-#   not yet confirmed by an actual field device: G28
-#   (EssentialComboNextPlus), Q35 (Essential), Y35 (EssentialCombo),
-#   Y41 (EssentialComboPlus), L12 (EssentialComboMini), K15 (Enhanced),
-#   N28 (EnhancedComboPlus), R28 (EnhancedComboNextPlus), X18
-#   (MaxCombo), X28 (MaxComboPlus), F15 (MiniCombo), Q01
-#   (CongoVacuum), Y01 (CongoCombo).
-_PRIME_SKU_PREFIXES: Final[frozenset[str]] = frozenset(
-    "G18 G28 N18 N28 Q35 Q01 Y35 Y41 Y01 L12 K15 R28 X18 X28 F15".split()
-)
-
-
+# SKU table MOVED TO roombapy-prime (this session): it is protocol
+# knowledge, needed by the diagnostic tools as much as by this
+# integration, and two copies would drift. See that function's own
+# comment for why the prefix is three characters rather than one --
+# a single letter genuinely misclassifies real devices.
 def _is_prime_sku(sku: str | None) -> bool:
-    """True for V4/Prime-generation SKUs -- see _PRIME_SKU_PREFIXES
-    above for exactly which prefixes are confirmed and why a 3-character
-    (letter + 2 digits) prefix is used rather than the letter alone.
-    """
-    return bool(sku) and sku[:3].upper() in _PRIME_SKU_PREFIXES
+    """True for V4/Prime-generation SKUs. Thin wrapper kept so this
+    module's own call sites and tests stay unchanged."""
+    from roombapy_prime.auth import is_prime_sku  # noqa: PLC0415
+
+    return is_prime_sku(sku)
 
 
 # ── Input validation ──────────────────────────────────────────────────────────

@@ -451,9 +451,21 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         stats["last_payload_prefix_hex"] = (
                             locals().get("raw_bytes", b"")[:32].hex() or None
                         )
+                        # The first two bytes are what solved this the
+                        # first time round: 78 9c is a zlib header, and
+                        # the payload turned out to be compressed rather
+                        # than the protocol being wrong. Naming that
+                        # directly saves the next person the same detour.
+                        head = locals().get("raw_bytes", b"")[:2]
+                        hint = (
+                            " -- looks zlib-compressed (78 xx); this should be handled, so "
+                            "please report it"
+                            if head[:1] == b"\x78"
+                            else ""
+                        )
                         _LOGGER.exception(
                             "roomba_plus: failed to decode live map update for %s "
-                            "(HTTP %s, %s, %d bytes, first 32 bytes: %s)",
+                            "(HTTP %s, %s, %d bytes, first 32 bytes: %s)" + hint,
                             self._blid,
                             locals().get("http_status", "?"),
                             locals().get("content_type", "?"),
