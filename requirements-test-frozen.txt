@@ -106,7 +106,7 @@ requests==2.32.3
 requests-mock==1.12.1
 respx==0.21.1
 roombapy==1.9.1
-s3transfer==0.19.0
+s3transfer==0.19.2
 scapy==2.7.0
 securetar==2024.11.0
 setuptools==82.0.1
