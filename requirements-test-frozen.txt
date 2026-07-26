@@ -89,7 +89,7 @@ pytest==8.3.4
 pytest-aiohttp==1.0.5
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
-pytest-github-actions-annotate-failures==0.2.0
+pytest-github-actions-annotate-failures==0.4.2
 pytest-homeassistant-custom-component==0.13.205
 pytest-picked==0.5.0
 pytest-socket==0.7.0
