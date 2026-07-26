@@ -5,6 +5,8 @@ Accessible via Settings → Devices & Services → Roomba+ → Download diagnost
 """
 from __future__ import annotations
 
+import time as _time_mod
+
 import dataclasses
 from typing import Any
 
@@ -34,6 +36,39 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
     return result
+
+
+def _push_freshness(data: Any) -> dict[str, Any]:
+    """How long since ANY Prime push message arrived.
+
+    Written by both Prime coordinators on every message. Zero means
+    nothing has ever arrived -- which on a robot that has been running
+    is a far stronger signal than any of the success flags nearby."""
+    # Coerced defensively: diagnostics must never be the thing that
+    # raises. Someone downloading it is already trying to work out why
+    # something is broken, and a traceback here replaces the answer
+    # they came for with a second problem.
+    try:
+        ts = float(getattr(data, "last_mqtt_message_ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return {"last_message_ts": None, "seconds_ago": None, "note": "unreadable"}
+
+    if ts <= 0:
+        return {
+            "last_message_ts": None,
+            "seconds_ago": None,
+            "note": "no push message has EVER arrived -- the stream is not delivering",
+        }
+    age = _time_mod.time() - ts
+    return {
+        "last_message_ts": round(ts),
+        "seconds_ago": round(age),
+        "note": (
+            "stale -- a running robot should push far more often than this"
+            if age > 900
+            else "recent"
+        ),
+    }
 
 
 def _prime_capability_report(config_entry: RoombaConfigEntry) -> dict[str, Any]:
@@ -164,6 +199,19 @@ async def async_get_config_entry_diagnostics(
                     else []
                 ),
             },
+            # THE FIRST THING TO LOOK AT when Prime sensors appear frozen.
+            #
+            # last_update_success stays True forever if the push stream
+            # simply stops delivering, because nothing raises -- the
+            # generator just never yields again. So a coordinator can
+            # report itself perfectly healthy while showing hours-old
+            # data, which is exactly what a field report described.
+            #
+            # This is the only field that distinguishes "quiet because
+            # nothing is happening" from "quiet because the stream
+            # died". A large seconds_ago on a robot that has been
+            # active means the connection is gone, whatever else says.
+            "push_freshness": _push_freshness(data),
             "live_map": data.live_map_stats,
             "capabilities": _prime_capability_report(config_entry),
             "mission_status": _prime_mission_status(config_entry),

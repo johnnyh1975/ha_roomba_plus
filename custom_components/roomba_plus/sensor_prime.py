@@ -681,10 +681,17 @@ class PrimeChargeCyclesErrorSensor(_PrimeStatsSensorBase):
 class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
     """V4/Prime lifetime system uptime, in hours
     (StatsShadow.bbsys.hours). No Classic equivalent found -- genuinely
-    new for Prime. Real value seen: 7354h, plausible given the device's
-    own registration date (roughly 307 days before the capture, 307*24
-    = 7368h, close enough to be a believable "hours since registration"
-    counter -- see BbSysStats's own docstring)."""
+    new for Prime.
+
+    Real value seen: 7354h against 7368h of wall-clock time since
+    registration. The 14-hour gap is probably POWERED-OFF time rather
+    than rounding: the tester suggested this counts time the system was
+    actually powered up, and 14 hours of downtime over ten months is
+    unremarkable. Unconfirmed -- see BbSysStats's own docstring for
+    what would settle it.
+
+    Practical consequence: do NOT present this as "time since you got
+    the robot". It is closer to an operating-hours meter."""
 
     entity_description = SensorEntityDescription(
         key="prime_system_uptime",
