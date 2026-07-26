@@ -1689,3 +1689,44 @@ class TestMigrationV24ToV25MatchesRealEntity:
         config_entry = MagicMock()
         tracker = RoombaDeviceTracker(roomba, "REALBLID123", config_entry)
         assert tracker.suggested_object_id is None
+
+
+class TestMigrationsLiveInTheirOwnModule:
+    """async_migrate_entry moved out of __init__.py into migrations.py
+    (2,145 lines, roughly sixty percent of that file).
+
+    The move is only safe as long as Home Assistant can still find the
+    function where it looks for it: on the integration module itself.
+    A dropped re-export would not fail loudly -- HA would simply
+    conclude the integration has no migrations, and every existing
+    install would silently stop being upgraded. That is the failure
+    this guards."""
+
+    def test_home_assistant_can_still_find_it_on_the_package(self):
+        import custom_components.roomba_plus as pkg
+
+        assert callable(getattr(pkg, "async_migrate_entry", None))
+
+    def test_it_actually_comes_from_the_new_module(self):
+        """Guards the reverse mistake: a copy left behind in __init__.py
+        would pass the test above while diverging from the real one."""
+        import custom_components.roomba_plus as pkg
+
+        assert pkg.async_migrate_entry.__module__.endswith(".migrations")
+
+    def test_the_signature_home_assistant_calls_is_unchanged(self):
+        import inspect
+
+        import custom_components.roomba_plus as pkg
+
+        params = list(inspect.signature(pkg.async_migrate_entry).parameters)
+        assert params == ["hass", "config_entry"]
+
+    def test_the_version_history_travelled_with_it(self):
+        """That docstring is the only record of what each schema version
+        changed -- losing it in a move would be quietly expensive."""
+        from custom_components.roomba_plus.migrations import async_migrate_entry
+
+        doc = async_migrate_entry.__doc__ or ""
+        assert "Version history" in doc
+        assert "1 → 2" in doc

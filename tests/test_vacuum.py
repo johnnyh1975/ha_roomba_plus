@@ -1464,13 +1464,14 @@ class TestPrimeActivityPrefersCleanMissionStatusPhase:
     (cleanMissionStatus, ro-currentstate) is CONFIRMED LIVE for Prime
     and draws exactly that distinction."""
 
-    def _entity_with(self, *, phase=None, event_type=None):
+    def _entity_with(self, *, phase=None, event_type=None, cycle="clean"):
         from homeassistant.components.vacuum import VacuumActivity  # noqa: F401
 
         v = _make_prime_vacuum_entity()
         status_coordinator = MagicMock()
         status_coordinator.data = (
-            {"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}} if phase is not None else {}
+            {"ro-currentstate": {"cleanMissionStatus": {"phase": phase, "cycle": cycle}}}
+            if phase is not None else {}
         )
         v._config_entry.runtime_data.prime_status_coordinator = status_coordinator
 
@@ -1483,10 +1484,11 @@ class TestPrimeActivityPrefersCleanMissionStatusPhase:
         return v
 
     def test_hm_post_msn_reports_returning_not_cleaning(self):
-        """THE actual reported bug: mission done, robot heading home."""
+        """THE actual reported bug: mission done, robot heading home --
+        with an active cycle, i.e. genuinely still travelling back."""
         from homeassistant.components.vacuum import VacuumActivity
 
-        v = self._entity_with(phase="hmPostMsn", event_type="travel")
+        v = self._entity_with(phase="hmPostMsn", event_type="travel", cycle="clean")
 
         assert v.activity == VacuumActivity.RETURNING
 
@@ -1528,3 +1530,151 @@ class TestPrimeActivityPrefersCleanMissionStatusPhase:
         v = self._entity_with(phase=None, event_type=None)
 
         assert v.activity == VacuumActivity.IDLE
+
+
+class TestPrimeActivityStuckOnReturning:
+    """FIELD REPORT (DaRealGuGu): the vacuum's activity stayed on
+    "Returning to dock" for several minutes after the robot had
+    genuinely finished -- while the SEPARATE dock-status sensor, read
+    from the same coordinator's ro-currentstate, had already gone
+    emptying -> ready. Ruling out stale coordinator data: if the dock
+    sensor updated, this coordinator's data updated too.
+
+    UNCONFIRMED ROOT CAUSE. No real capture yet shows the exact stuck
+    phase/cycle combination -- this applies the same corroboration this
+    project already learned the hard way for cleanMissionStatus.error
+    (see PrimeErrorSensor's own docstring): the firmware may not always
+    flip `phase` to a rest value once a mission genuinely ends, and
+    `cycle` dropping to "none" is the same corroborating signal used
+    there. This correction can only turn a wrong RETURNING into DOCKED,
+    never the reverse, so it cannot make a real in-progress return
+    disappear."""
+
+    def _prime_vacuum(self, ro_currentstate: dict):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator.data = {"ro-currentstate": ro_currentstate}
+        entry.runtime_data.prime_coordinator.data = None
+        v._config_entry = entry
+        return v
+
+    def test_returning_with_an_active_cycle_is_left_alone(self):
+        """The common, correct case: genuinely still heading home mid or
+        post mission with cycle active must NOT be touched."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "hmPostMsn", "cycle": "clean"}})
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_returning_with_no_active_cycle_corrects_to_docked(self):
+        """The reported bug: phase stuck on a returning value with cycle
+        already back to none -- consistent with the mission actually
+        being over."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "evac", "cycle": "none"}})
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_missing_cycle_field_is_treated_as_none(self):
+        """Same defaulting convention already used elsewhere in this
+        file for a sparse cleanMissionStatus."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "hmPostMsn"}})
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_non_returning_phases_are_never_touched_by_this_check(self):
+        """The correction is scoped to RETURNING specifically -- it must
+        not become a general override for other phases."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "run", "cycle": "none"}})
+
+        assert v.activity == VacuumActivity.CLEANING
+
+
+class TestSendVerbIsSharedByTheUniformActions:
+    """Four methods -- stop, pause, locate and the Prime side of start
+    -- each carried an identical copy of the same transport branch.
+
+    Four copies of one decision is four chances to update three of
+    them, and that is not hypothetical: a fix belonging in one of these
+    branches has already been put in the wrong one once in this
+    project's history.
+
+    Deliberately NOT solved with an IRobotVacuumPrime subclass, which
+    an earlier architecture note had proposed. The entity class is
+    chosen by device capability (BraavaJet / RoombaVacuumCarpetBoost /
+    RoombaVacuum) and connection type is orthogonal to it -- a Prime
+    robot can be any of the three, so subclassing would need
+    BraavaJetPrime, RoombaVacuumCarpetBoostPrime and so on. A
+    combinatorial explosion to remove one if-statement."""
+
+    def _vacuum(self, connection_type):
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = connection_type
+        v._prime_robot = AsyncMock()
+        v.vacuum = MagicMock()
+        v.hass = MagicMock()
+        v.hass.async_add_executor_job = AsyncMock()
+        return v
+
+    @pytest.mark.asyncio
+    async def test_prime_goes_through_the_prime_robot(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        v = self._vacuum(ConnectionType.CLOUD_ONLY)
+
+        await v._async_send_verb("stop")
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("stop")
+        v.hass.async_add_executor_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_classic_goes_through_the_local_connection(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        v = self._vacuum(ConnectionType.LOCAL_PUSH)
+
+        await v._async_send_verb("stop")
+
+        v.hass.async_add_executor_job.assert_awaited_once()
+        v._prime_robot.send_simple_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_three_uniform_actions_all_route_through_it(self):
+        """If one of these ever stops using the shared helper, the
+        duplication is back and this test is the only thing that would
+        notice."""
+        from custom_components.roomba_plus.models import ConnectionType
+
+        for method, verb in (("async_stop", "stop"), ("async_pause", "pause"),
+                             ("async_locate", "find")):
+            v = self._vacuum(ConnectionType.CLOUD_ONLY)
+            await getattr(v, method)()
+            v._prime_robot.send_simple_command.assert_awaited_once_with(verb)
+
+    def test_the_remaining_branches_are_genuinely_different(self):
+        """return_to_base and send_command keep their own checks on
+        purpose: their two paths differ in behaviour, not just in
+        transport. This records that as intent rather than oversight."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        dock = inspect.getsource(IRobotVacuum.async_return_to_base)
+        send = inspect.getsource(IRobotVacuum.async_send_command)
+
+        assert "CLOUD_ONLY" in dock, "dock skips the classic pause-then-wait dance"
+        assert "CLOUD_ONLY" in send, "send_command is refused entirely for Prime"

@@ -11,6 +11,8 @@ initialized instance instead of a partially-stubbed one.
 """
 from __future__ import annotations
 
+import contextlib
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -499,3 +501,67 @@ class TestGetPrimeCapabilityFlags:
 
         assert cap.suction_lvl == 4
         assert dock_cap.pad_wash == 1
+
+
+class TestPrimePushFeedsTheFreshnessSignal:
+    """GAP FOUND IN THE FIELD (DaRealGuGu). `last_mqtt_message_ts` is
+    written only from callbacks.py, which is a Classic-only code path --
+    so for Prime robots it stayed at 0.0 forever and every staleness
+    check built on it sat permanently silent.
+
+    His symptom is exactly what that allows: the mission event sensor
+    froze on "fin" and the dock status stopped updating, both at once,
+    while the integration reported itself perfectly healthy. Two
+    independent sensors stopping together points at the stream rather
+    than at either sensor -- and nothing was watching the stream.
+
+    The error path above cannot catch this: a watch that stops
+    DELIVERING without ever RAISING simply never yields again. A
+    timestamp is the only thing separating "quiet because nothing is
+    happening" from "quiet because the stream died"."""
+
+    def _entry(self):
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data.last_mqtt_message_ts = 0.0
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_a_mission_event_updates_the_timestamp(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.prime_coordinator import PrimeCoordinator
+
+        entry = self._entry()
+        robot = MagicMock()
+
+        async def _one_event():
+            yield MagicMock(payload={"event": [{"type": "start", "ts": 1}]})
+
+        robot.watch_mission_timeline = _one_event
+        coordinator = object.__new__(PrimeCoordinator)
+        coordinator.blid = "B"
+        coordinator.prime_robot = robot
+        coordinator.config_entry = entry
+        coordinator.async_set_updated_data = MagicMock()
+
+        # NARROWED (this session): this used to suppress bare Exception,
+        # which swallowed an AttributeError from a method name that did
+        # not exist -- so the test passed the wrong function name in
+        # silence and asserted against a timestamp nothing had ever
+        # written. A suppress broad enough to hide the test being wrong
+        # is worse than no test.
+        with patch.object(coordinator, "async_set_update_error", MagicMock()), \
+             patch("asyncio.sleep", AsyncMock(side_effect=StopAsyncIteration)):
+            with contextlib.suppress(StopAsyncIteration):
+                await coordinator._async_watch_mission_timeline()
+
+        assert entry.runtime_data.last_mqtt_message_ts > 0.0
+
+    def test_the_timestamp_starts_at_zero(self):
+        """First-boot guard elsewhere relies on 0.0 meaning 'nothing has
+        ever arrived', so it must not be pre-seeded."""
+        entry = self._entry()
+
+        assert entry.runtime_data.last_mqtt_message_ts == 0.0
