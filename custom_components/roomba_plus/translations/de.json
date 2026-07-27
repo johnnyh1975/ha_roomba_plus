@@ -746,6 +746,9 @@
       },
       "prime_serial_number": {
         "name": "Seriennummer"
+      },
+      "prime_consumable_part": {
+        "name": "Verbrauchsteil – {part}"
       }
     },
     "binary_sensor": {
@@ -1137,9 +1140,6 @@
     "not_smart_map": {
       "message": "Raumreinigung erfordert einen Roboter mit finalisierter Smart Map (i7, s9, j-Serie oder Braava jet m6). Dieser Roboter hat keine Smart Map — falls es ein kompatibles Modell ist, stelle sicher, dass seine Karte in der iRobot-App gespeichert ist."
     },
-    "prime_rooms_not_supported": {
-      "message": "{entity_id} ist ein Prime/V4-Roboter — raumspezifischer smart_start wird für diese Generation noch nicht unterstützt (regionsbasierte Reinigungskommandos sind für Prime-Geräte weiterhin unbestätigt)."
-    },
     "no_rooms_configured": {
       "message": "Noch keine Räume konfiguriert. Vorgehensweise: (1) iRobot-App öffnen, (2) Für jeden Raum eine raumbasierte Reinigung starten, (3) In Home Assistant öffnen sich die Roomba+-Optionen automatisch, wo die Räume benannt werden können."
     },
@@ -1178,6 +1178,9 @@
     },
     "cloud_temporarily_unavailable": {
       "message": "Die iRobot-Cloud ist vorübergehend nicht erreichbar: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Unbekannte(r) Raum/Räume für {entity_id}: {rooms}. Bekannte Räume: {known}."
     }
   },
   "selector": {

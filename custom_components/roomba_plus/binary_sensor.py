@@ -49,6 +49,19 @@ PARALLEL_UPDATES = 0
 _NOT_READY_MAP_SAVING: int = 64  # notReady bitmask bit 6
 
 
+def _prime_reports_tank(config_entry: RoombaConfigEntry) -> bool:
+    """True if the robot reports a tankPresent field at all.
+
+    Deliberately checks for the KEY, not its value: False means "the
+    tank is currently out", which is exactly what the sensor exists to
+    show. Only a missing key means this robot has no onboard tank at
+    all -- as on a Combo whose water lives in the Clean Base."""
+    coordinator = getattr(config_entry.runtime_data, "prime_status_coordinator", None)
+    data = getattr(coordinator, "data", None) or {}
+    current = data.get("ro-currentstate") or {}
+    return "tankPresent" in current
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
@@ -76,11 +89,23 @@ async def async_setup_entry(
                 # confirmed type (int), no real error value observed yet.
                 PrimeDockErrorSensor(data.blid, config_entry),
             ]
-            # NEW (this session): capability-gated -- a mop tank only
-            # makes sense on a device with mop capability. See
-            # get_prime_capability_flags()'s own docstring for the
-            # "None means unknown, only explicit 0 means absent" contract.
-            if cap is None or cap.scrub != 0:
+            # CORRECTED (this session, from a field report): gate on the
+            # robot actually REPORTING a tank, not on it being able to mop.
+            #
+            # This used to check `cap.scrub != 0`. A tester's Combo can
+            # mop -- so it passed -- but its water lives in the Clean
+            # Base, not in the robot. He got a sensor for a tank he does
+            # not have.
+            #
+            # Mop capability and an onboard tank coincide on most
+            # hardware, which is exactly why this survived. The field
+            # the sensor actually reads is `tankPresent`; if the robot
+            # never reports it, there is nothing to show.
+            #
+            # Absent field means no entity. A present field means one,
+            # whatever its value -- False is a real answer ("the tank is
+            # out"), only absence means "this robot has no such thing".
+            if _prime_reports_tank(config_entry):
                 entities.append(PrimeTankPresentSensor(data.blid, config_entry))
             async_add_entities(entities)
         return
@@ -629,7 +654,20 @@ class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
         translation_key="schedule_hold_active",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    # NO device class, deliberately (this session).
+    #
+    # This was BinarySensorDeviceClass.RUNNING, which makes Home
+    # Assistant render the states as "Running"/"Not running" -- nonsense
+    # for a HOLD. A tester reported the sensor showing Off while a
+    # scheduled run was underway and reasonably read that as a bug; Off
+    # is correct (nothing is holding the schedule back), but nothing in
+    # how it presents itself says so.
+    #
+    # Same mistake as the presence device class that was on the tank and
+    # bin sensors until a7, where it rendered as "Home"/"Away". A device
+    # class only changes the label, never the state, so removing it
+    # cannot break an automation -- it just stops the entity describing
+    # itself wrongly.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:

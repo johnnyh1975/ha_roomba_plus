@@ -1,6 +1,6 @@
 # Architecture
 
-Written after a review in July 2026, at ~45,000 lines of integration code and 4,200 tests. It
+Written after a review in July 2026, at ~45,000 lines of integration code and 4,282 tests. It
 exists because none of what follows was written down anywhere — it lived in docstrings scattered
 across 44 files, which meant every contributor had to rediscover it.
 
@@ -32,7 +32,7 @@ setup path a *new* config entry takes. After that, `connection_type` is authorit
 
 ## Where data comes from
 
-Three coordinators, each with a genuinely different shape. They are separate on purpose: mixing
+Four coordinators, each with a genuinely different shape. They are separate on purpose: mixing
 differently-shaped sources into one would force every listener to ask what kind of update just
 arrived.
 
@@ -45,6 +45,11 @@ mission event.
 **`PrimeStatusCoordinator`** — push, no polling, but seeded once at startup. Carries all eight
 named shadows plus the classic/unnamed one. Seeded because the push side only delivers *changes*,
 so a slow-moving value like battery percentage would otherwise show nothing for hours.
+
+**`PrimePartsCoordinator`** — the one genuinely polling coordinator, every six hours. Consumable
+parts come from a REST endpoint that nothing pushes, so it has to ask. It asks rarely: consumables
+move on a scale of cleaning hours, and hammering someone else's cloud API for a number that shifts
+a few times a day would be rude.
 
 Classic's own live state does not go through a coordinator at all — it arrives via callbacks
 registered on the `roombapy` object (`callbacks.py`).
@@ -75,11 +80,23 @@ not a second reconnect layer. If one fires, something unusual happened.
 `RoombaData` (`models.py`) is `config_entry.runtime_data` — one object per robot, reachable from
 every entity.
 
-It is **large**, currently 30+ fields mixing Classic-only health tracking (charge-cycle peaks,
-dirt-density trends, battery-contact anomalies), Prime-only runtime state, and shared
-infrastructure (coordinators, six stores). This is a known weakness rather than a design: each new
-feature adds a field most consumers do not care about. Splitting it by responsibility is a
-worthwhile future change.
+It is **large** — 47 fields — mixing Classic-only health tracking, Prime-only runtime state and
+shared infrastructure (coordinators, six stores).
+
+**Size alone turned out not to be the problem.** A review looked for the usual suspects and found
+none: no mutable-default bugs, no paired fields drifting apart, and each writer coherent within its
+own module. Most fields are read by five to seventeen modules, which is exactly what a
+`runtime_data` container is for.
+
+What it *did* find was four fields left behind when v3.5.0 removed the Repair Issues they fed. Two
+were never written again; two were recomputed on every cloud update — including a median over ten
+mission records, in two separate places — for a consumer that had not existed for two minor
+versions. All four are gone, and a guard test now names any field nothing outside `models.py`
+references.
+
+**The rule that makes a container this size decidable** is in the class docstring: ephemeral state
+belongs here, anything that must survive a restart belongs in a Store. That rule was previously
+written on two of the dead fields and would have been deleted with them.
 
 Persistent state lives in stores under `hass.storage`, keyed by entry id — `MissionStore`,
 `MissionArchive`, `GeometryStore`, `GridStore`, `RobotProfileStore`, `OutlineStore` and others.
@@ -107,7 +124,19 @@ migrations and silently stop upgrading every existing install. A test guards it.
 
 Recorded because a review that stays in one person's head is not a review.
 
-- **`RoombaData` is a god object.** See above.
+- **`image.py`, 2,546 lines, and `_handle_mission_end()` inside it.** Eight releases have patched
+  that one method, and **four of those were ordering fixes** — each shipped as a real bug first.
+
+  Splitting it into named steps was considered and rejected: the dependencies do not flow through
+  values but through seven shared stores as side effects. A signature cannot express "this must run
+  after GridStore already contains the current mission", so extraction would move the constraint
+  further from the code that depends on it. The ordering constraints are now stated together at the
+  top of the method, and two of them are enforced by a test — verified by reintroducing the real
+  v3.2.1 bug and watching it fail.
+
+  Splitting the file's four classes into separate files was also considered and rejected: they
+  share five helper functions, so it would trade one file for five plus new import coupling, for no
+  benefit beyond a shorter scroll.
 - **`vacuum.py` checks `connection_type` at six separate points** inside one class. Four identical
   copies of the same transport branch were collapsed into `_async_send_verb()`; the remaining ones
   differ in behaviour rather than merely in transport.
@@ -120,13 +149,16 @@ Recorded because a review that stays in one person's head is not a review.
 - **`sensor_core.py` sits at ~42% coverage**, up from 32%. Consumable arithmetic, the countdown
   tick and availability logic are now covered; the remainder is `extra_state_attributes` and the
   schedule-parsing helpers.
-- **`config_flow.py` at ~45%** is the first thing every user touches, and the second-least tested.
+- **`config_flow.py` at ~51%**, up from 45%. The setup error paths a user hits before they have any
+  entity or log to inspect are now covered — wrong credentials, rate limiting, certificate
+  problems, and the pairing step's two fallbacks to manual entry. The remainder is discovery and
+  reconfiguration.
 
 ---
 
 ## Testing
 
-4,200 tests, ~35 seconds. More test code than production code.
+4,282 tests, ~40 seconds. More test code than production code.
 
 Two conventions worth knowing:
 

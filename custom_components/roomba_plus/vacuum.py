@@ -65,7 +65,7 @@ from .const import (
     SQFT_TO_M2,
 )
 from .entity import IRobotEntity
-from .models import ConnectionType, MapCapability, RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -188,6 +188,30 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.async_on_remove(
                     pc.async_add_listener(self._handle_prime_coordinator_update)
                 )
+            # THE STATUS COORDINATOR TOO -- this was missing, and it is
+            # where activity actually comes from.
+            #
+            # ROOT CAUSE of a field report (DaRealGuGu) that survived two
+            # attempted fixes. His vacuum showed "Returning to dock" while
+            # the robot sat on it, and his diagnostics download showed
+            # phase="charge", cycle="none" -- data that maps cleanly to
+            # DOCKED. The data was right the whole time; nothing ever
+            # asked the entity to look at it again.
+            #
+            # activity reads cleanMissionStatus.phase from THIS
+            # coordinator. Subscribing only to the mission-event one
+            # meant the vacuum re-rendered when an event arrived and
+            # never when the phase changed -- so a phase that settled to
+            # "charge" after the last event was simply never displayed.
+            #
+            # Both earlier attempts (a9, a11) corrected the mapping
+            # instead, which was the wrong layer: no mapping fix can
+            # help an entity that is not re-reading its source.
+            sc = self._config_entry.runtime_data.prime_status_coordinator
+            if sc is not None:
+                self.async_on_remove(
+                    sc.async_add_listener(self._handle_prime_coordinator_update)
+                )
 
     # ── Feature flags ────────────────────────────────────────────────────────
 
@@ -201,15 +225,22 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
           - not a Braava mop (Braava uses padWetness Select, not room segments)
         """
         flags = SUPPORT_IROBOT
-        data = (
-            self._config_entry.runtime_data
-            if self._config_entry is not None
-            else None
-        )
+        # ASKS THE BACKEND (this session), not map_capability.
+        #
+        # The service can clean rooms on Prime robots now, but this
+        # property still said it could not -- so the capability worked
+        # while the UI never offered it. Advertising and doing must
+        # agree; a feature reachable only by hand-writing a service call
+        # is barely a feature.
+        #
+        # is_mop stays: a Braava targets rooms through padWetness rather
+        # than region segments, which is a device difference rather than
+        # a generation one.
+        from .room_cleaning import async_get_room_cleaning_backend  # noqa: PLC0415
+
         if (
-            data is not None
-            and data.map_capability == MapCapability.SMART
-            and data.has_cloud
+            self._config_entry is not None
+            and async_get_room_cleaning_backend(self._config_entry) is not None
             and not is_mop(self.vacuum_state)
             and hasattr(VacuumEntityFeature, "CLEAN_AREA")  # HA 2026.3+ only; silently absent on older
         ):
@@ -266,43 +297,23 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self._config_entry.runtime_data.prime_status_coordinator
                 if self._config_entry is not None else None
             )
+            # Read once, OUTSIDE the branch below. The event branch
+            # further down needs the same cycle value, and scoping it to
+            # the phase branch is what let a9's fix cover only half the
+            # problem.
+            mission_status: dict[str, Any] = {}
             if status_coordinator is not None and status_coordinator.data:
                 current_state = status_coordinator.data.get("ro-currentstate") or {}
                 mission_status = current_state.get("cleanMissionStatus") or {}
                 phase = mission_status.get("phase")
                 if phase in PHASE_TO_ACTIVITY:
                     activity = PHASE_TO_ACTIVITY[phase]
-                    # SUSPECTED FIELD BUG, UNCONFIRMED ROOT CAUSE (this
-                    # session, DaRealGuGu): reported the vacuum status
-                    # staying on "Returning to dock" for several minutes
-                    # after the robot had physically finished emptying
-                    # and the SEPARATE dock-status sensor (also read from
-                    # this same coordinator's ro-currentstate, so not a
-                    # stale-data problem) had already gone back to ready.
-                    #
-                    # This applies the same corroboration rule this
-                    # project already learned the hard way for
-                    # cleanMissionStatus.error (see PrimeErrorSensor's
-                    # own docstring): the firmware may not always flip
-                    # `phase` to a rest value once a mission genuinely
-                    # ends, so `phase` alone can lag or stick. `cycle`
-                    # dropping to "none" is the same corroborating
-                    # signal used there, reused here for the same
-                    # reason -- not because this exact phase/cycle
-                    # combination has been confirmed stuck in a real
-                    # capture (it has not; there's no ro-currentstate
-                    # snapshot from a robot in the exact stuck state
-                    # yet), but because the alternative -- doing
-                    # nothing -- has a confirmed field report against
-                    # it and this correction can only ever turn a wrong
-                    # RETURNING into a DOCKED, never the other way.
                     if (
                         activity == VacuumActivity.RETURNING
-                        and (mission_status.get("cycle") or "none") == "none"
+                        and self._prime_cycle_is_idle()
                     ):
                         return VacuumActivity.DOCKED
                     return activity
-
             coordinator = (
                 self._config_entry.runtime_data.prime_coordinator
                 if self._config_entry is not None else None
@@ -310,9 +321,34 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             report = coordinator.data if coordinator is not None else None
             if report is None or not report.event:
                 return VacuumActivity.IDLE
-            return MISSION_EVENT_TYPE_TO_ACTIVITY.get(
+            activity = MISSION_EVENT_TYPE_TO_ACTIVITY.get(
                 report.event[0].event_type, VacuumActivity.IDLE
             )
+            # THE SAME CORROBORATION AS THE PHASE BRANCH ABOVE, which it
+            # was missing (this session, second field report from the
+            # same tester).
+            #
+            # a9 added the cycle check to the phase branch only. He
+            # still saw "Returning to dock" on a robot sitting at its
+            # dock -- because when the phase is unmapped or the status
+            # shadow has not been seeded, control falls through to HERE,
+            # where nothing checked anything.
+            #
+            # The likely event is "evac": MISSION_EVENT_TYPE_TO_ACTIVITY
+            # maps it to RETURNING on the reasoning that a self-emptying
+            # base can evac MID-mission, so it is not reliably "docked".
+            # That reasoning holds for the mission, not for the robot's
+            # position -- during evac the robot has ARRIVED at the dock,
+            # mid-mission or not. HA's DOCKED means "at the dock", not
+            # "mission over".
+            #
+            # Left as a corroborated correction rather than remapping
+            # evac outright: the mapping's own justification is sound
+            # for the mid-mission case, and cycle == "none" is exactly
+            # what distinguishes that case from this one.
+            if activity == VacuumActivity.RETURNING and self._prime_cycle_is_idle():
+                return VacuumActivity.DOCKED
+            return activity
 
         status = self.vacuum_state.get("cleanMissionStatus") or {}
         # Default to "none" so a missing/sparse cleanMissionStatus (cycle absent
@@ -574,6 +610,26 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.vacuum.send_command, "start"
             )
 
+    def _prime_cycle_is_idle(self) -> bool:
+        """True when the robot reports no active cleaning cycle.
+
+        Used to corroborate a "returning" reading. Returns False when
+        the status shadow is unavailable -- unknown must not be read as
+        idle, or a genuine trip back to the dock would be reported as
+        docked.
+        """
+        coordinator = (
+            self._config_entry.runtime_data.prime_status_coordinator
+            if self._config_entry is not None else None
+        )
+        if coordinator is None or not coordinator.data:
+            return False
+        current_state = coordinator.data.get("ro-currentstate") or {}
+        mission_status = current_state.get("cleanMissionStatus") or {}
+        if "cycle" not in mission_status:
+            return False
+        return (mission_status.get("cycle") or "none") == "none"
+
     async def _async_send_verb(self, verb: str) -> None:
         """Sends one simple command verb over whichever transport this
         robot uses.
@@ -728,7 +784,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         live state.pmaps via _resolve_pmapv_id so it is never stale after a
         map retrain. Falls back to the first pmap in state if pmap_id is absent.
         """
-        from .services import _resolve_pmapv_id
+        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
 
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
@@ -951,7 +1007,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             for zid in bare_zone_ids
         ]
 
-        from .services import _resolve_pmapv_id
+        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
         # Primary: cloud coordinator — always authoritative, never stale.
         user_pmapv_id: str | None = data.cloud_coordinator.active_user_pmapv_id
         if not user_pmapv_id:

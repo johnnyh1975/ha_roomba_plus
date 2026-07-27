@@ -42,7 +42,10 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 )
-from homeassistant.core import HomeAssistant
+from collections.abc import Callable
+from typing import Any
+
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 # ir/dt_util: not used by this module's own code. Kept importable here as
 # `sensor.ir`/`sensor.dt_util` purely so that tests using
@@ -68,6 +71,7 @@ from .sensor_prime import (
     PrimeErrorSensor,
     PrimeFailedMissionsSensor,
     PrimeFirmwareVersionSensor,
+    PrimeConsumablePartSensor,
     PrimeMissionEventSensor,
     PrimeNavigationResetsSensor,
     PrimePadDryStatusSensor,
@@ -236,6 +240,26 @@ async def async_setup_entry(
             entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
 
         async_add_entities(entities)
+
+        # Consumable parts: one sensor per part the ROBOT reports,
+        # discovered rather than hard-coded.
+        #
+        # The set differs by model -- a vacuum-only robot has no mop
+        # pads, one without a self-emptying base has no dirt bag. A
+        # fixed list would invent entities for hardware that lacks them
+        # and miss whatever exists on hardware nobody here owns.
+        #
+        # ADDED VIA A LISTENER, not just once at setup. The parts fetch
+        # is best-effort: if it fails during startup -- a cloud hiccup,
+        # a rate limit -- there is no data yet and nothing to create.
+        # Adding them only here would mean those users never get the
+        # sensors until they reload the config entry, for a failure
+        # that resolves itself within hours.
+        #
+        # The listener also covers a part appearing later for a real
+        # reason: a dirt bag showing up after someone attaches a
+        # self-emptying base.
+        _add_discovered_parts(data, config_entry, async_add_entities)
         return
 
     roomba = config_entry.runtime_data.roomba
@@ -364,3 +388,34 @@ async def async_setup_entry(
         entities.append(RoombaRelocalisationRateSensor(roomba, blid, config_entry))
 
     async_add_entities(entities)
+
+
+def _add_discovered_parts(
+    data: Any, config_entry: RoombaConfigEntry, async_add_entities: Callable[..., None]
+) -> None:
+    """Creates a sensor for each consumable part, now and as they appear.
+
+    Entities are added exactly once per part_id. `known` is captured by
+    the closure rather than stored on the coordinator, so a reload
+    starts clean -- Home Assistant builds fresh entities on reload
+    anyway, and a stale set would silently suppress them.
+    """
+    coordinator = getattr(data, "prime_parts_coordinator", None)
+    if coordinator is None:
+        return
+
+    known: set[str] = set()
+
+    @callback
+    def _add_new() -> None:
+        parts = coordinator.data or {}
+        new = [pid for pid in sorted(parts) if pid not in known]
+        if not new:
+            return
+        known.update(new)
+        async_add_entities(
+            PrimeConsumablePartSensor(data.blid, pid, config_entry) for pid in new
+        )
+
+    _add_new()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new))

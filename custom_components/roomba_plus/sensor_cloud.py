@@ -403,26 +403,27 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
             )
             CloudRawSensor._sc1_warned.add(key)
         value = self.entity_description.value_fn(self._coordinator.raw_records)
-        # F6a/F6b — cache values to RoombaData for repair check functions
+        # Caches cleaning_speed_trend_value, which IS still read (by the
+        # F6a-successor logic further down this same file).
+        #
+        # TWO SIBLING BRANCHES REMOVED HERE (this session): they cached
+        # recharge_fraction_value and dirt_density_rising, and nothing
+        # anywhere read either one. v3.5.0 removed the Repair Issues
+        # they fed (battery_recharge_high is still listed in
+        # repairs.py's _REMOVED_REPAIR_TRANSLATION_KEYS) but left the
+        # data scaffolding standing.
+        #
+        # The dirt-density branch was not merely dead storage: it ran a
+        # median over up to ten mission records on every sensor update,
+        # for a consumer that had not existed for two minor versions.
+        #
+        # What made it hard to spot: the comment above claimed "this now
+        # only maintains the cached values other code reads". That was
+        # already untrue when it was written, and a comment asserting a
+        # consumer is precisely what stops anyone checking for one.
         data = self._config_entry.runtime_data
         if key == "cleaning_speed_trend":
             data.cleaning_speed_trend_value = str(value) if value else None
-        elif key == "recent_recharge_fraction":
-            data.recharge_fraction_value = float(value) if value is not None else None
-        elif key == "recent_dirt_density":
-            # Update dirt_density_rising flag for F6a cause classification
-            records = self._coordinator.raw_records
-            if records and len(records) >= 6:
-                import statistics as _stat
-                densities = [
-                    float(r["dirt"]) / float(r["sqft"])
-                    for r in records
-                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
-                ]
-                if len(densities) >= 6:
-                    recent = _stat.median(densities[:5])
-                    older  = _stat.median(densities[5:])
-                    data.dirt_density_rising = (recent / older > 1.10) if older > 0 else False
         return value
 
     @property
@@ -619,21 +620,6 @@ class _ConsolidatedCloudSensor(IRobotEntity, SensorEntity):
         data = self._config_entry.runtime_data
         data.cleaning_speed_trend_value = trend_value
 
-    def _cache_and_check_f6b(
-        self, recharge_value: float | None, dirt_rising: bool | None
-    ) -> None:
-        """Cache recharge_fraction_value + dirt_density_rising.
-
-        v3.5.0: the battery_recharge_high Repair Issue was removed (the
-        mission_recharge_minutes sensor already surfaces this signal); this
-        now only maintains the cached values other code reads.
-        """
-        data = self._config_entry.runtime_data
-        data.recharge_fraction_value = recharge_value
-        if dirt_rising is not None:
-            data.dirt_density_rising = dirt_rising
-
-
 class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
     """SC1 — Cleaning performance: completion rate + speed + trend + streak.
 
@@ -741,25 +727,22 @@ class RoombaCleaningAnalytics30dSensor(_ConsolidatedCloudSensor):
             rf = _raw_recharge_fraction(records)
             if rf is not None:
                 attrs["recharge_pct"] = rf
-            # B1/B2-PRE — cache recharge_fraction_value + dirt_density_rising for
-            # F6b Repair and F6a cause classification.  Migrated from the now-
-            # deactivated CloudRawSensor side-effects (keys "recent_recharge_fraction"
-            # and "recent_dirt_density").  Idempotent: F6b check only on change.
-            dirt_rising: bool | None = None
-            if len(records) >= 6:
-                densities = [
-                    float(r["dirt"]) / float(r["sqft"])
-                    for r in records
-                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
-                ]
-                if len(densities) >= 6:
-                    recent = _statistics.median(densities[:5])
-                    older  = _statistics.median(densities[5:])
-                    dirt_rising = (recent / older > 1.10) if older > 0 else False
-            self._cache_and_check_f6b(
-                float(rf) if rf is not None else None,
-                dirt_rising,
-            )
+            # A SECOND COPY of the dirt-density median lived here and was
+            # removed with the first (this session). Both fed
+            # recharge_fraction_value and dirt_density_rising, which
+            # nothing has read since v3.5.0 removed the Repair Issues
+            # they existed for.
+            #
+            # Note the shape of the mistake: the work had already been
+            # MIGRATED once ("Migrated from the now-deactivated
+            # CloudRawSensor side-effects") -- someone deactivated the
+            # original, carefully moved the computation to a new home,
+            # and nobody asked whether anything still consumed the
+            # result. Migrating dead code preserves it more effectively
+            # than leaving it alone would have.
+            #
+            # dirt_density and recharge_pct are still exposed as
+            # attributes above; only the unread caching is gone.
         return attrs
 
 

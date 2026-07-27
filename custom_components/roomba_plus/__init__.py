@@ -39,6 +39,7 @@ from .callbacks import (
     make_cloud_refresh_callback,
 )
 from .const import (
+    ISSUE_TRACKER_URL,
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
     CONF_CONNECTION_TYPE,
@@ -92,7 +93,7 @@ from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA'
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
-from .prime_coordinator import PrimeCoordinator, PrimeStatusCoordinator
+from .prime_coordinator import PrimeCoordinator, PrimePartsCoordinator, PrimeStatusCoordinator
 from ._prime_login_bridge import pop_pending_login
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -1041,6 +1042,77 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
     return True
 
 
+def _async_note_unknown_sku(sku: str | None, blid: str) -> None:
+    """Asks for a report about a robot whose SKU we do not recognise --
+    once setup has actually succeeded.
+
+    DELIBERATELY HERE AND NOT IN THE CONFIG FLOW. At discovery time all
+    that exists is an SKU string, and whether the robot is really Prime
+    is a guess. By this point it is a fact: the account-based setup
+    worked, which only happens for a Prime-generation robot.
+
+    That changes what the report is worth. A diagnostics download now
+    exists and contains the capability flags, the dock capability flags
+    and the shadow structure -- which is what actually makes a new model
+    interesting. Every capability gap this project has found so far came
+    from exactly that data, and each one surfaced only because a tester
+    pasted raw output nobody had thought to ask for.
+
+    Asking at the earlier moment would also have asked more people: an
+    unrecognised SKU at discovery is sometimes just a Classic robot the
+    table missed. Asking here means only genuinely new Prime models
+    generate a request.
+    """
+    from roombapy_prime.auth import sku_generation  # noqa: PLC0415
+
+    if sku_generation(sku) == "prime":
+        return
+
+    _LOGGER.warning(
+        "roomba_plus: robot %s set up successfully with SKU %r, which this version does "
+        "not recognise as a known model. Everything should work -- but the SKU table is "
+        "used to tell robot generations apart, so an unknown one is worth adding. "
+        "If you are willing: %s -- please attach a diagnostics download "
+        "(Settings > Devices & Services > Roomba+ > three dots > Download diagnostics), "
+        "which carries the capability data that makes a new model useful. It contains no "
+        "credentials; the integration redacts those.",
+        blid, sku or "not reported", _unknown_sku_issue_url(sku),
+    )
+
+
+def _unknown_sku_issue_url(sku: str | None) -> str:
+    """A prefilled GitHub issue for an unrecognised SKU.
+
+    Prefilled because "please open an issue" is a request most people
+    decline, and those who accept still have to work out what to
+    include -- so the reports that do arrive usually omit the one field
+    that matters.
+
+    The SKU identifies a product model, not a person or a household, so
+    nothing here needs redacting. The BLID is deliberately absent: it
+    identifies one specific robot, contributes nothing to classifying a
+    model, and belongs to the user rather than in a public issue.
+    """
+    from urllib.parse import quote  # noqa: PLC0415
+
+    body = (
+        f"Roomba+ set up a robot with SKU `{sku or 'not reported'}` successfully via the "
+        "iRobot account flow, but does not recognise that SKU as a known model.\n\n"
+        "**What model is this robot?** (the name on the box or in the iRobot app)\n\n"
+        "**Diagnostics download attached?** Settings > Devices & Services > Roomba+ > "
+        "the three dots next to the robot > Download diagnostics. This carries the "
+        "capability flags and shadow structure, which is what makes a new model useful "
+        "to support properly. It contains no credentials.\n\n"
+        "---\n"
+        "_Reported from Roomba+. An SKU identifies a product model, not a person._\n"
+    )
+    title = f"Unrecognised SKU: {sku or 'not reported'}"
+    return (
+        f"{ISSUE_TRACKER_URL}/new"
+        f"?title={quote(title)}&body={quote(body)}&labels={quote('sku-table')}"
+    )
+
+
 async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
     """Entirely separate setup path for CLOUD_ONLY (V4/Prime) entries.
 
@@ -1115,6 +1187,19 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     status_coordinator = PrimeStatusCoordinator(hass, config_entry, blid, prime_robot)
     await status_coordinator.async_start()
 
+    # Consumable parts. Best-effort on purpose: this is enrichment, and
+    # a robot whose parts endpoint is unreachable should still finish
+    # setting up with everything else working. Same reasoning as the
+    # household lookup below.
+    parts_coordinator = PrimePartsCoordinator(hass, prime_robot, blid, config_entry)
+    try:
+        await parts_coordinator.async_config_entry_first_refresh()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "roomba_plus: could not fetch consumable parts for %s -- continuing without "
+            "them; the sensors will appear once a later refresh succeeds", blid,
+        )
+
     # NEW: household_id, needed for get_schedules()/PrimeScheduleCalendar
     # (calendar.py). Best-effort deliberately -- get_household_id()'s own
     # response-shape handling is defensive but not yet confirmed against
@@ -1146,6 +1231,8 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
         serial_info = None
 
+    _async_note_unknown_sku(getattr(serial_info, "sku", None), blid)
+
     # NEW (this session): BlockingManager was never instantiated for
     # Prime entries at all -- roomba_plus.smart_start's blocking-sensor
     # gate simply didn't exist for Prime, on top of the separate crash
@@ -1168,6 +1255,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_robot=prime_robot,
         prime_coordinator=coordinator,
         prime_status_coordinator=status_coordinator,
+        prime_parts_coordinator=parts_coordinator,
         prime_household_id=household_id,
         prime_serial_info=serial_info,
         blocking_manager=blocking_manager,

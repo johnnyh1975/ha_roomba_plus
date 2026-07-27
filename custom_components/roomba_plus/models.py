@@ -32,7 +32,11 @@ if TYPE_CHECKING:
     from .freeze_snapshot_store import FreezeSnapshotStore        # v3.2.1
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
     from .mission_timer_store import MissionTimerStore        # v2.6 MP1
-    from .prime_coordinator import PrimeCoordinator, PrimeStatusCoordinator  # V4/Prime
+    from .prime_coordinator import (  # V4/Prime
+        PrimeCoordinator,
+        PrimePartsCoordinator,
+        PrimeStatusCoordinator,
+    )
 
 
 class MapCapability(Enum):
@@ -77,7 +81,25 @@ class ConnectionType(Enum):
 
 @dataclass
 class RoombaData:
-    """Runtime data stored in config_entry.runtime_data."""
+    """Runtime data stored in config_entry.runtime_data.
+
+    WHAT BELONGS HERE. Ephemeral per-entry state: anything that should
+    start fresh when Home Assistant restarts. Anything that must
+    SURVIVE a restart belongs in a Store instead (MissionStore,
+    MaintenanceStore, RobotProfileStore and the rest), which persists
+    to hass.storage.
+
+    That rule was previously written on two fields that nothing used,
+    and would have been deleted along with them. It is the only thing
+    that makes a container this size decidable, so it lives here now.
+
+    NOT EVERY FIELD APPLIES TO EVERY ROBOT. A Prime (CLOUD_ONLY) entry
+    leaves the Classic health-tracking fields at their defaults and
+    vice versa, because callbacks.py, repairs.py and sensor_cloud.py
+    are Classic-only paths today. Read a default value as "this path
+    never ran", not as "the robot reported nothing" -- the two look
+    identical from here and mean very different things.
+    """
 
     blid: str
     # NEW (V4/Prime): Optional, not required -- a CLOUD_ONLY entry has no
@@ -95,6 +117,10 @@ class RoombaData:
     prime_robot: "PrimeRobot | None" = None
     prime_coordinator: "PrimeCoordinator | None" = None
     prime_status_coordinator: "PrimeStatusCoordinator | None" = None
+    #: Consumable parts (filter, brushes, pads, dirt bag). The only
+    #: POLLING coordinator here -- parts come from REST, nothing pushes
+    #: them. See its own docstring for why it polls rarely.
+    prime_parts_coordinator: "PrimePartsCoordinator | None" = None
     # NEW: household_id for THIS robot, resolved once via
     # PrimeRobot.get_household_id() during _async_setup_entry_prime() --
     # needed for get_schedules()/PrimeScheduleCalendar (calendar.py).
@@ -135,17 +161,17 @@ class RoombaData:
     last_error_at: str | None = None        # ISO datetime string
     last_error_zone: str | None = None      # zone name at last error time
 
-    # F6a/F6b — consecutive-update counters for performance & battery issues.
-    # Stored here (not in MaintenanceStore) because they reset on every HA
-    # restart — they measure run-time sensor trend, not persistent history.
-    consecutive_declining_speed: int = 0
-    consecutive_battery_warn: int = 0
-
-    # F6a/F6b — latest sensor values cached so repair check functions can
-    # read them without importing sensor.py (avoids circular imports).
+    # Latest sensor values cached so repair check functions can read them
+    # without importing sensor.py (avoids circular imports).
+    #
+    # FOUR SIBLINGS REMOVED (this session): consecutive_declining_speed,
+    # consecutive_battery_warn, dirt_density_rising and
+    # recharge_fraction_value were left behind when v3.5.0 removed the
+    # F6a/F6b Repair Issues they fed. Two were never written at all;
+    # two were recomputed on every cloud update -- including a median
+    # over ten mission records, twice over, for a consumer that had not
+    # existed for two minor versions.
     cleaning_speed_trend_value: str | None = None   # "improving"|"stable"|"declining"|"unknown"
-    dirt_density_rising: bool = False
-    recharge_fraction_value: float | None = None
     battery_retention_value: float | None = None
 
     # F6f — battery contact/bus-communication anomaly detection. A real
@@ -155,6 +181,34 @@ class RoombaData:
     # over successive cycles (intermittent contact reduces effective
     # charge transferred each cycle). Both feed the same repair issue —
     # see repairs.py::async_check_battery_contact_issue.
+    # THESE SIX ARE ONE STATE MACHINE, not six independent values.
+    # async_check_battery_contact_issue() is their only reader AND their
+    # only writer, and the invariants between them live nowhere else:
+    #
+    #   - current_charge_cycle_peak belongs to the cycle IN PROGRESS and
+    #     is cleared when that cycle ends
+    #   - charge_cycle_peaks only ever gains an entry at that moment,
+    #     and stays bounded to _CHARGE_PEAK_HISTORY_LEN
+    #   - was_charging is the edge detector the other two depend on --
+    #     set it without the rest and a cycle is silently lost or
+    #     counted twice
+    #   - last_batpct_value and last_batpct_at are a pair; a value with
+    #     a stale timestamp yields a nonsense rate
+    #
+    # Writing any of them from anywhere else would break those
+    # invariants with no error and no obvious symptom -- the counters
+    # would simply drift, and a battery-contact problem would be
+    # detected late or not at all.
+    #
+    # DELIBERATELY NOT extracted into its own object yet. The obvious
+    # argument for extracting -- protecting the invariants from other
+    # modules -- does not apply while exactly one function touches
+    # them. And repairs.py is expected to gain a Prime path, which will
+    # NOT have the same inputs (Prime exposes no equivalent of
+    # bbchg.smberr). Designing the shared shape now would mean
+    # inventing an interface for a caller that does not exist yet,
+    # against a requirement already known to differ. Better done when
+    # the second case is real.
     last_batpct_value: float | None = None
     last_batpct_at: float | None = None   # time.monotonic() of last_batpct_value
     consecutive_battery_contact_anomaly: int = 0

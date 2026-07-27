@@ -40,6 +40,8 @@ exactly that data, not folded into this one.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 import time as _time
 
 import asyncio
@@ -49,7 +51,7 @@ from typing import Any, Final
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from roombapy_prime import (
     PrimeRobot,
@@ -524,3 +526,73 @@ def get_prime_capability_flags(config_entry: Any) -> tuple[Any | None, Any | Non
             dock_cap = current_state.dock.cap
 
     return cap, dock_cap
+
+
+class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """V4/Prime consumable parts -- filter, brushes, pads, dirt bag.
+
+    THE ONE POLLING COORDINATOR HERE, and deliberately so. The other
+    two are push-only because their data arrives over MQTT. Parts come
+    from a REST endpoint that nothing pushes, so this has to ask.
+
+    It asks rarely. Consumables move on a scale of hours of runtime; a
+    filter does not change between one minute and the next, and polling
+    a cloud API hard for a number that shifts a few times a day would
+    be rude to a service this project does not own.
+
+    WHY THIS EXISTS AT ALL (chairstacker): he asked for the app's
+    consumables view in Home Assistant and attached a screenshot. The
+    data turned out to be already reachable -- the library has
+    supported this endpoint for a while and the integration simply
+    never called it. That is a gap on our side rather than a protocol
+    limitation.
+
+    NOTE ON WHAT THIS IS NOT: Classic robots compute consumable wear
+    themselves, in maintenance_store.py, because the robot reports
+    nothing about it -- including learning your real replacement
+    interval after a couple of resets. None of that applies here. Prime
+    robots are simply told the answer by the cloud, so this coordinator
+    stores what it is given and does no arithmetic of its own.
+    """
+
+    #: Parts change on the scale of cleaning hours. Six hours is
+    #: frequent enough that a user never sees a badly stale number and
+    #: infrequent enough to be a good citizen against someone else's API.
+    UPDATE_INTERVAL = timedelta(hours=6)
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        prime_robot: Any,
+        blid: str,
+        config_entry: ConfigEntry,
+    ) -> None:
+        self.prime_robot = prime_robot
+        self.blid = blid
+        super().__init__(
+            hass,
+            _LOGGER,
+            # Matches how the other two coordinators in this file name
+            # themselves -- no import of DOMAIN, which this module has
+            # deliberately stayed free of.
+            name=f"roomba_plus_prime_parts_{blid}",
+            update_interval=self.UPDATE_INTERVAL,
+            config_entry=config_entry,
+        )
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Returns {part_id: RobotPart}.
+
+        Keyed by part_id because that is what the sensors are built
+        from, and because the set of parts differs by model -- a
+        vacuum-only robot has no mop pads, a robot without a
+        self-emptying base has no dirt bag. Discovering them rather
+        than hard-coding a list is the only thing that works across
+        hardware nobody here owns.
+        """
+        try:
+            info = await self.prime_robot.get_robot_parts()
+        except Exception as exc:  # noqa: BLE001
+            raise UpdateFailed(f"could not fetch consumable parts: {exc}") from exc
+
+        return {p.part_id: p for p in (getattr(info, "parts", None) or []) if p.part_id}

@@ -67,6 +67,11 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
 # gating as LOCAL_PLATFORMS, see the comment there.
 
 # Cloud credential keys — stored in config_entry.data (encrypted by HA)
+#: Where users are pointed to report things the integration cannot
+#: resolve itself -- an unrecognised robot SKU, for instance. Kept here
+#: rather than inline so it stays in step with manifest.json.
+ISSUE_TRACKER_URL: Final = "https://github.com/johnnyh1975/ha_roomba_plus/issues"
+
 CONF_IROBOT_USERNAME: Final = "irobot_username"
 CONF_IROBOT_PASSWORD: Final = "irobot_password"
 

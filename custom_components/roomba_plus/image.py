@@ -494,6 +494,27 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
 
+    @property
+    def available(self) -> bool:
+        """Unavailable until a map has actually been decoded.
+
+        ADDED (this session, from a field report). This entity served a
+        blank placeholder whenever it had no data, so a tester looked at
+        a white square for weeks with nothing anywhere indicating a
+        fault -- the integration was quietly saying "I have nothing to
+        show" and it was indistinguishable from "the map is empty right
+        now".
+
+        There was a second symptom too: with no image ever produced,
+        image_last_updated never moves, so the frontend keeps requesting
+        a signed URL that eventually expires and logs an authentication
+        error pointing at Home Assistant rather than at us.
+
+        Unavailable is the honest state. The placeholder stays for the
+        window between the entity appearing and the first map arriving,
+        which is normal and brief."""
+        return super().available and self._png_bytes is not None
+
     async def async_image(self) -> bytes | None:
         return self._png_bytes or self._blank_image()
 
@@ -1339,6 +1360,45 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             )
 
     def _handle_mission_end(self, ending_phase: str = "") -> None:
+        """End-of-mission processing. ORDER-SENSITIVE THROUGHOUT.
+
+        READ THIS BEFORE MOVING ANYTHING. Eight releases have patched
+        this method, and four of those patches were ordering fixes --
+        v2.8.2, and three separate ones in v3.2.1. Each shipped as a
+        real bug first.
+
+        The constraints, collected here because they were previously
+        discoverable only by reading all fourteen comment blocks below:
+
+          1. Clear the checkpoint BEFORE the "nothing to process"
+             early-return. A checkpoint may legitimately hold zero pose
+             points, and a checkpoint that survives the return is
+             re-salvaged on every HA restart, forever. (v2.8.2)
+
+          2. Feed GridStore BEFORE recomputing room segmentation or the
+             outline. Both now derive from GridStore.cells, so they
+             need this mission's cells already in it. (v3.2.1)
+
+          3. Record poses into MissionTrajectoryStore BEFORE clearing
+             self._mission_points. The store reads the same list
+             GridStore just consumed. (v3.2.1)
+
+          4. Dock-drift is handled in _handle_dock_contact_confirmed(),
+             which runs BEFORE this method. Do not recompute it here --
+             that redundancy existed until v3.2.1 and produced two
+             independent drift vectors.
+
+        WHY THIS IS A COMMENT AND NOT STRUCTURE. Splitting these steps
+        into named methods was considered and rejected: the
+        dependencies do not flow through values but through SEVEN
+        shared stores as side effects. A signature cannot express "this
+        must run after GridStore already contains the current mission",
+        so extraction would move the constraint further from the code
+        that depends on it, not closer. The ordering is the contract;
+        it needs stating, not hiding.
+
+        The step-order test in test_image.py enforces points 2 and 3.
+        """
         # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
         # hass.async_create_task() is not thread-safe and raises RuntimeError
         # on recent HA versions when called from a foreign thread.

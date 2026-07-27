@@ -746,6 +746,9 @@
       },
       "prime_serial_number": {
         "name": "Serienummer"
+      },
+      "prime_consumable_part": {
+        "name": "Verbruiksartikel – {part}"
       }
     },
     "binary_sensor": {
@@ -1137,9 +1140,6 @@
     "not_smart_map": {
       "message": "Kamerreinigen vereist een robot met een voltooide Smart Map (i7, s9, j-serie of Braava jet m6). Deze robot heeft geen Smart Map — als het een compatibel model is, zorg dan dat de kaart is opgeslagen in de iRobot-app."
     },
-    "prime_rooms_not_supported": {
-      "message": "{entity_id} is een Prime/V4-robot — kamerspecifieke smart_start wordt voor deze generatie nog niet ondersteund (regiogebaseerde reinigingscommando's zijn voor Prime-apparaten nog niet bevestigd)."
-    },
     "no_rooms_configured": {
       "message": "Nog geen kamers geconfigureerd. Om deze actie te gebruiken: (1) Open de iRobot-app, (2) Start een kamergerichte schoonmaak voor elke kamer, (3) Ga terug naar Home Assistant — de kamers verschijnen automatisch in Roomba+-opties waar je namen kunt toewijzen."
     },
@@ -1178,6 +1178,9 @@
     },
     "cloud_temporarily_unavailable": {
       "message": "De iRobot-cloud is tijdelijk niet beschikbaar: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Onbekende kamer(s) voor {entity_id}: {rooms}. Bekende kamers: {known}."
     }
   },
   "selector": {

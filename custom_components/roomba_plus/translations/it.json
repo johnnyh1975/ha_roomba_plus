@@ -746,6 +746,9 @@
       },
       "prime_serial_number": {
         "name": "Numero di serie"
+      },
+      "prime_consumable_part": {
+        "name": "Materiale di consumo – {part}"
       }
     },
     "binary_sensor": {
@@ -1137,9 +1140,6 @@
     "not_smart_map": {
       "message": "La pulizia per stanza richiede un robot con una Smart Map finalizzata (i7, s9, serie j o Braava jet m6). Questo robot non ha una Smart Map — se è un modello compatibile, assicurati che la sua mappa sia salvata nellapp iRobot."
     },
-    "prime_rooms_not_supported": {
-      "message": "{entity_id} è un robot Prime/V4 — la pulizia per stanza non è ancora supportata per questa generazione (i comandi di pulizia per regione non sono ancora confermati per i dispositivi Prime)."
-    },
     "no_rooms_configured": {
       "message": "Nessuna stanza configurata. Per usare questa azione: (1) Apri l'app iRobot, (2) Avvia una pulizia per stanza per ogni stanza, (3) Torna in Home Assistant — le stanze appariranno automaticamente nelle opzioni Roomba+ dove potrai assegnare i nomi."
     },
@@ -1178,6 +1178,9 @@
     },
     "cloud_temporarily_unavailable": {
       "message": "Il cloud iRobot non è temporaneamente disponibile: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Stanza/e sconosciuta/e per {entity_id}: {rooms}. Stanze note: {known}."
     }
   },
   "selector": {

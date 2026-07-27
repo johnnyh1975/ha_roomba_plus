@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a10-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a11-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -132,12 +132,20 @@ path, not an extension of the existing one, using the companion
 multiple real robots on separate accounts and works for what it does — but the feature set is
 deliberately narrower than everything described above.
 
-**The one thing it cannot do is send a robot to a specific room.** Region-based cleaning works
-for Classic robots on this page and does not work for Prime ones; the protocol path for it is
-still unsolved, and it is where most current development effort goes. If room-specific
-cleaning is why you want this, that part is not ready. Everything else listed below is.
+**Room cleaning now works** (July 2026). This paragraph used to say it was the one thing Prime
+could not do — that was accurate for months and is not any more. Sending a robot to named rooms
+is confirmed on real hardware, from a saved favorite and from a command built from scratch, and
+Prime robots additionally support per-room suction level, which Classic has no equivalent for.
+
+The remaining gap is **virtual walls**: keep-out and no-mop zones can be read but not written.
+Everything else listed below works.
 
 **What works right now:**
+- **Room cleaning by name** — `roomba_plus.clean_room` and the services built on it. Accent-
+  tolerant matching ("kuche" finds "Küche"), two-pass and suction level per room, and rooms from
+  every saved map so an automation works whether or not the robot is parked on that floor
+- **Consumable parts** — filter, brushes, mop pads and dirt disposal bag, with the app's own
+  units: hours, routines, evacuations
 - Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
   robots on the same account are set up automatically alongside any Prime ones
 - Start, pause, stop, dock
@@ -203,8 +211,9 @@ protocol: [Release notes →](release-notes/)
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
-- **V4/Prime robots cannot be sent to a specific room** — region-based cleaning works on Classic robots but not on Prime. The command is accepted without error and the robot does not move; the cause is still being investigated across several independent efforts, and no public project has solved it yet. Battery, dock and mission status *are* now confirmed and exposed — an earlier version of this note said otherwise.
-- **V4/Prime virtual walls and robot settings are not exposed** — the underlying write paths exist in the companion library but have never been run against a real device, so nothing is built on top of them yet.
+- **V4/Prime room cleaning is confirmed working** (July 2026) — an earlier version of this note said it was the one thing that did not work on Prime. It took three field sessions to establish why: `initiator` is a mandatory field a stored favorite does not carry, and the wire keys are `start`/`region_id` rather than `clean`/`id`. Two of those sessions appeared to *disprove* the explanation and were confounded by commands that never reached the broker. Prime robots also support per-room suction level, which Classic has no equivalent for.
+- **V4/Prime robot settings are confirmed but not yet exposed** — child lock is verified end to end on real hardware (it appears in the iRobot app and the robot announces it audibly); eco charge, no-auto-passes and vacuum-high write and read back cleanly but have no easily observable effect. Nothing is built on top of them in this integration yet. Schedule hold is a known exception: the write succeeds and the schedule stays active, so writing it is evidently not the mechanism the app uses.
+- **V4/Prime virtual walls can be read but not written** — keep-out and no-mop zones read correctly (both zone types confirmed against real data), but writes return HTTP 500 and the cause is not yet found. Two candidates have been ruled out by field testing.
 - **V4/Prime + Classic robots on the same Home Assistant instance simultaneously** — each is independently confirmed working, but running both types at once hasn't been specifically tested.
 
 ---

@@ -746,6 +746,9 @@
       },
       "prime_serial_number": {
         "name": "Numéro de série"
+      },
+      "prime_consumable_part": {
+        "name": "Consommable – {part}"
       }
     },
     "binary_sensor": {
@@ -1137,9 +1140,6 @@
     "not_smart_map": {
       "message": "Le nettoyage par pièce nécessite un robot avec une Smart Map finalisée (i7, s9, série j ou Braava jet m6). Ce robot na pas de Smart Map — sil sagit dun modèle compatible, assurez-vous que sa carte est enregistrée dans lapplication iRobot."
     },
-    "prime_rooms_not_supported": {
-      "message": "{entity_id} est un robot Prime/V4 — le nettoyage par pièce nest pas encore pris en charge pour cette génération (les commandes de nettoyage par région restent non confirmées pour les appareils Prime)."
-    },
     "no_rooms_configured": {
       "message": "Aucune pièce configurée pour l'instant. Pour utiliser cette action : (1) Ouvrez l'application iRobot, (2) Démarrez un nettoyage ciblé par pièce pour chaque pièce, (3) Revenez dans Home Assistant — les pièces apparaîtront automatiquement dans les options Roomba+ où vous pourrez leur attribuer des noms."
     },
@@ -1178,6 +1178,9 @@
     },
     "cloud_temporarily_unavailable": {
       "message": "Le cloud iRobot est temporairement indisponible : {error}"
+    },
+    "unknown_rooms": {
+      "message": "Pièce(s) inconnue(s) pour {entity_id} : {rooms}. Pièces connues : {known}."
     }
   },
   "selector": {

@@ -679,19 +679,20 @@ class PrimeChargeCyclesErrorSensor(_PrimeStatsSensorBase):
 
 
 class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
-    """V4/Prime lifetime system uptime, in hours
-    (StatsShadow.bbsys.hours). No Classic equivalent found -- genuinely
-    new for Prime.
+    """V4/Prime powered-on hours (StatsShadow.bbsys.hours). No Classic
+    equivalent -- genuinely new for Prime.
 
-    Real value seen: 7354h against 7368h of wall-clock time since
-    registration. The 14-hour gap is probably POWERED-OFF time rather
-    than rounding: the tester suggested this counts time the system was
-    actually powered up, and 14 hours of downtime over ten months is
-    unremarkable. Unconfirmed -- see BbSysStats's own docstring for
-    what would settle it.
+    CONFIRMED as POWERED-ON time rather than time since registration,
+    by two field accounts at opposite ends of the range: one robot
+    rarely switched off showed a 14-hour gap against wall-clock time,
+    another that had been unplugged for months showed a 5579-hour gap.
+    Both match what their owners recalled. See BbSysStats's own
+    docstring for the full comparison.
 
-    Practical consequence: do NOT present this as "time since you got
-    the robot". It is closer to an operating-hours meter."""
+    THEREFORE: do not label or describe this as device age or "time
+    since you got the robot". On a robot that has spent months
+    unplugged the two differ by more than half, and a user reading it
+    as age would be badly misled."""
 
     entity_description = SensorEntityDescription(
         key="prime_system_uptime",
@@ -856,4 +857,106 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
             "error_code": status.error,
             "not_ready": status.not_ready,
             "cond_not_ready": status.cond_not_ready,
+        }
+
+
+#: Maps the server's own count_type to a display unit.
+#:
+#: Values taken from a real capture (chairstacker's app screenshot plus
+#: the endpoint's own response): "hr" for the filter and both brushes,
+#: routines for mop pads, evacuations for the dirt disposal bag.
+#:
+#: Anything unrecognised falls through to no unit rather than being
+#: forced into hours -- a wrong unit on a number is worse than none,
+#: because it invites arithmetic that does not hold.
+_PART_COUNT_UNITS: dict[str, str | None] = {
+    "hr": UnitOfTime.HOURS,
+    "hours": UnitOfTime.HOURS,
+    "routines": "routines",
+    "evacs": "evacuations",
+    "evacuations": "evacuations",
+    "missions": "missions",
+}
+
+
+class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
+    """One V4/Prime consumable: filter, a brush, mop pads, dirt bag.
+
+    Created dynamically per part the robot actually reports, rather
+    than from a fixed list. The set differs by model -- a vacuum-only
+    robot has no mop pads, a robot without a self-emptying base has no
+    dirt bag -- and hard-coding it would either invent entities nobody
+    has or miss ones on hardware nobody here owns.
+
+    DIFFERENT IN KIND FROM THE CLASSIC MAINTENANCE SENSORS. Those
+    compute wear themselves in maintenance_store.py, because a Classic
+    robot reports nothing about it -- including learning the owner's
+    real replacement interval after a couple of resets, and taking a
+    user-configured threshold. None of that applies here: the cloud
+    simply states the remaining count, so this sensor reports it and
+    does no arithmetic.
+
+    Which is also why the threshold options in this integration's
+    config flow must not be offered for Prime robots. They would change
+    nothing.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, blid: str, part_id: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        self._part_id = part_id
+        self.entity_description = SensorEntityDescription(
+            key=f"prime_part_{part_id}",
+            translation_key="prime_consumable_part",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        )
+        self._attr_translation_placeholders = {"part": part_id.replace("_", " ")}
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_part_{part_id}"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return f"prime_part_{self._part_id}"
+
+    @property
+    def _part(self) -> Any:
+        coordinator = getattr(self._config_entry.runtime_data, "prime_parts_coordinator", None)
+        if coordinator is None or not coordinator.data:
+            return None
+        return coordinator.data.get(self._part_id)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._part is not None
+
+    @property
+    def native_value(self) -> int | None:
+        part = self._part
+        return None if part is None else part.count_remaining
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Taken from the server per part, not fixed.
+
+        The same robot reports hours for its filter and routines for
+        its mop pads. A single hard-coded unit would be wrong for most
+        of them.
+        """
+        part = self._part
+        if part is None:
+            return None
+        return _PART_COUNT_UNITS.get((part.count_type or "").lower())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        part = self._part
+        if part is None:
+            return {}
+        return {
+            "part_id": part.part_id,
+            "count_type": part.count_type,
+            "count_used": part.count_used,
+            "minutes_remaining": part.minutes_remaining,
+            "category": part.counter_category,
         }

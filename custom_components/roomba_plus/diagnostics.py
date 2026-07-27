@@ -38,6 +38,34 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
     return result
 
 
+def _parts_report(data: Any) -> dict[str, Any]:
+    """Consumable parts as the server reported them.
+
+    Included because the part SET differs by model and is discovered
+    rather than known in advance -- so a robot missing a sensor someone
+    expected is answered here, by showing exactly which parts its own
+    cloud record contains.
+
+    part_id and counts only: nothing here identifies a household."""
+    coordinator = getattr(data, "prime_parts_coordinator", None)
+    if coordinator is None:
+        return {"started": False}
+    parts = coordinator.data or {}
+    return {
+        "started": True,
+        "last_update_success": getattr(coordinator, "last_update_success", None),
+        "parts": {
+            part_id: {
+                "count_remaining": getattr(part, "count_remaining", None),
+                "count_type": getattr(part, "count_type", None),
+                "count_used": getattr(part, "count_used", None),
+                "category": getattr(part, "counter_category", None),
+            }
+            for part_id, part in parts.items()
+        },
+    }
+
+
 def _push_freshness(data: Any) -> dict[str, Any]:
     """How long since ANY Prime push message arrived.
 
@@ -212,6 +240,7 @@ async def async_get_config_entry_diagnostics(
             # died". A large seconds_ago on a robot that has been
             # active means the connection is gone, whatever else says.
             "push_freshness": _push_freshness(data),
+            "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
             "capabilities": _prime_capability_report(config_entry),
             "mission_status": _prime_mission_status(config_entry),

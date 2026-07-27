@@ -120,6 +120,71 @@ def _is_prime_sku(sku: str | None) -> bool:
     return is_prime_sku(sku)
 
 
+def _log_unknown_skus(devices: list[Any]) -> None:
+    """Tells the user what to do now. Deliberately does NOT ask them to
+    report anything yet.
+
+    Excluding a device silently would be the worst outcome of filtering
+    on a positive Classic match: the robot is on the network, visible in
+    the iRobot app, and Home Assistant behaves as though it were not
+    there — which reads as a broken integration rather than an unknown
+    model.
+
+    But asking for a report HERE would ask at the wrong moment. All that
+    is known at discovery time is an SKU string; whether the robot is
+    actually Prime is a guess. Setting it up via the iRobot account
+    settles that question and produces a diagnostics download containing
+    the capability flags and shadow structure — which is what makes a
+    new model worth reporting at all.
+
+    So the report is requested after setup succeeds (see
+    __init__.py::_async_note_unknown_sku), where the issue carries a
+    fact instead of a hypothesis.
+    """
+    if not devices:
+        return
+    listing = ", ".join(
+        f"{getattr(d, 'robot_name', None) or 'unnamed'} (SKU {d.sku or 'not reported'})"
+        for d in devices
+    )
+    _LOGGER.warning(
+        "roomba_plus: %d robot(s) on this network have an SKU this version does not "
+        "recognise: %s. They are not offered for local setup, because an unrecognised "
+        "SKU is most likely a Prime-generation model — those cannot be set up locally. "
+        "Use 'Set up with my iRobot account' instead.",
+        len(devices), listing,
+    )
+
+
+def _is_classic_sku(sku: str | None) -> bool:
+    """True for Classic-generation SKUs. NOT the inverse of
+    _is_prime_sku() -- there is a third answer, and it matters.
+
+    Both returning False means the SKU is UNKNOWN, and what to do with
+    unknown changed once the tables were completed.
+
+    The old local-discovery filter was `not _is_prime_sku(...)`, which
+    lumps unknown in with Classic. That was defensible while the
+    Classic table only held SkuUtils.java's one-default-SKU-per-platform
+    list and missed most of the retail range -- four of five real test
+    robots fell outside it, so excluding unknowns would have locked out
+    working hardware.
+
+    That is no longer the situation. Classic is a CLOSED generation:
+    iRobot has moved to the Prime line, so the 20 prefixes now in that
+    table are effectively the whole set. Prime, by contrast, keeps
+    gaining models. An SKU nobody recognises today is therefore far more
+    likely to be a new Prime robot than a missed Classic one -- and
+    showing it in the local setup list produces exactly the failure this
+    step already documents: a plausible-looking choice that cannot work,
+    failing later at password retrieval with a message about the HOME
+    button that has nothing to do with the cause.
+    """
+    from roombapy_prime.auth import is_classic_sku  # noqa: PLC0415
+
+    return is_classic_sku(sku)
+
+
 # ── Input validation ──────────────────────────────────────────────────────────
 
 async def validate_input(
@@ -369,8 +434,28 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             self.discovered_robots = {
                 device.ip: device
                 for device in devices
-                if device.blid not in already_configured and not _is_prime_sku(device.sku)
+                # POSITIVE match, not the absence of a Prime match --
+                # see _is_classic_sku() for why that flipped.
+                if device.blid not in already_configured and _is_classic_sku(device.sku)
             }
+
+            # Excluding a device silently is the worst outcome of that
+            # flip: the robot is on the network, the user can see it in
+            # the iRobot app, and Home Assistant simply pretends it is
+            # not there. That looks like a broken integration.
+            #
+            # An unrecognised SKU is most likely a Prime model newer
+            # than our table -- in which case account-based setup will
+            # work and local setup cannot. So say that, and ask for the
+            # one detail that lets the table be fixed.
+            self._unknown_sku_devices = [
+                device
+                for device in devices
+                if device.blid not in already_configured
+                and not _is_classic_sku(device.sku)
+                and not _is_prime_sku(device.sku)
+            ]
+            _log_unknown_skus(self._unknown_sku_devices)
 
         if self.host and self.host in self.discovered_robots:
             self.context["title_placeholders"] = {
