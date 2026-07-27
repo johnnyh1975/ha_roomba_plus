@@ -63,11 +63,11 @@ def _make_entry(mission_store=None, maintenance_store=None):
     data = MagicMock()
     data.mission_store = mission_store or MissionStore()
     data.maintenance_store = maintenance_store or MaintenanceStore()
-    data.consecutive_declining_speed = 0
-    data.consecutive_battery_warn = 0
+    # Only the two fields that are actually read remain here. Four
+    # siblings were removed with the F6a/F6b scaffolding -- the
+    # fixture kept setting them long after nothing consumed them,
+    # and MagicMock accepted every one without complaint.
     data.cleaning_speed_trend_value = "stable"
-    data.dirt_density_rising = False
-    data.recharge_fraction_value = 5.0
     data.battery_retention_value = 95.0
     data.roomba_reported_state = MagicMock(return_value={"bbrun": {"hr": 100}})
     entry.runtime_data = data

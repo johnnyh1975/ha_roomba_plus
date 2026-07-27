@@ -341,10 +341,18 @@ class TestElapsedSecHelper:
         """Helper adds monotonic delta when phase=run and _last_phase_ts is set."""
         from custom_components.roomba_plus.sensor import RoombaMissionProgress
 
-        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 30)
-        elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
-        # Should be ~90 s (60 stored + ~30 live)
-        assert 85 <= elapsed <= 95
+        # Clock pinned, same reasoning as the flush tests below: a
+        # tolerance window against the real clock only holds while the
+        # two monotonic() calls land close together, which under load
+        # they sometimes do not.
+        # Patched on the time module itself: sensor_rooms imports it
+        # INSIDE the function, so there is no module-level attribute to
+        # replace.
+        with patch("time.monotonic", return_value=1000.0):
+            mts = self._make_mts(run_sec=60.0, last_phase_ts=970.0)
+            elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
+
+        assert elapsed == 90.0
 
     def test_no_live_delta_when_phase_not_run(self):
         """Helper returns bare run_sec when phase is not 'run'."""
@@ -654,16 +662,34 @@ class TestOnPhaseOtherFlush:
         return mts
 
     def test_flush_adds_pending_delta_to_run_sec(self):
-        """Delta since last phase=run is flushed into run_sec on phase transition."""
-        mts = self._make_mts(run_sec=120.0, last_phase_ts=time.monotonic() - 30)
-        mts.on_phase_other()
-        # run_sec should now be ~150 s (120 stored + ~30 flushed)
-        assert 145 <= mts.run_sec <= 155
+        """Delta since last phase=run is flushed into run_sec on phase transition.
+
+        TIME IS PINNED RATHER THAN TOLERATED (this session). This used
+        to build a timestamp from the real clock and allow ±5 s of slack
+        against whatever time.monotonic() returned inside the code under
+        test. That holds only while the two calls happen close together
+        -- and in a 4,294-test suite under load they sometimes do not.
+        It failed exactly once here, could not be reproduced across ten
+        random orderings, and would have gone on failing occasionally in
+        CI for reasons nobody could pin down.
+
+        Controlling the clock removes the guess entirely: the assertion
+        becomes exact, and a failure means the arithmetic is wrong
+        rather than that the machine was busy."""
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0
+            mts = self._make_mts(run_sec=120.0, last_phase_ts=970.0)
+            mts.on_phase_other()
+
+        assert mts.run_sec == 150.0
 
     def test_last_phase_ts_reset_after_flush(self):
         """_last_phase_ts is always 0 after on_phase_other regardless of flush."""
-        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 10)
-        mts.on_phase_other()
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0
+            mts = self._make_mts(run_sec=60.0, last_phase_ts=990.0)
+            mts.on_phase_other()
+
         assert mts._last_phase_ts == 0.0
 
     def test_no_flush_when_last_phase_ts_zero(self):

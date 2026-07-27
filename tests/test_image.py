@@ -2235,3 +2235,70 @@ class TestPrimeMapImageBackgroundTask:
         entity._config_entry.async_create_background_task.assert_called_once()
         call_kwargs = entity._config_entry.async_create_background_task.call_args
         assert call_kwargs.kwargs.get("name") == "roomba_plus_prime_live_map_TESTBLID"
+
+
+class TestMissionEndStepOrder:
+    """`_handle_mission_end` is order-sensitive, and getting it wrong
+    has shipped as a real bug four times -- v2.8.2 plus three separate
+    fixes in v3.2.1.
+
+    None of those would have been caught by a test, because the
+    dependencies flow through shared stores as side effects rather than
+    through values. Nothing fails; a store is simply fed something
+    empty, or fed before the data it needs exists, and the symptom
+    surfaces later as a missing room outline or a lost trajectory.
+
+    Reading the source is a blunt instrument, and deliberately so: the
+    constraint IS textual ordering, so that is what gets asserted. A
+    behavioural test would need seven stores wired together to observe
+    the same thing."""
+
+    def _source(self) -> str:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        src = inspect.getsource(image)
+        lines = src.splitlines()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name == "_handle_mission_end":
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError("_handle_mission_end not found")
+
+    def _line_of(self, needle: str) -> int:
+        body = self._source()
+        for i, line in enumerate(body.splitlines()):
+            if needle in line and not line.strip().startswith("#"):
+                return i
+        raise AssertionError(f"{needle!r} not found in _handle_mission_end")
+
+    def test_grid_is_fed_before_the_trajectory_is_recorded(self):
+        """Both read the same pose list. GridStore consumes it first;
+        the trajectory store records the same points afterwards."""
+        assert self._line_of("grid_store.update_from_mission") < self._line_of(
+            "trajectory_store.record_mission"
+        )
+
+    def test_the_trajectory_is_recorded_before_the_points_are_cleared(self):
+        """THE v3.2.1 fix. Clearing first leaves the store recording an
+        empty mission -- no error, no warning, just a permanently blank
+        trajectory for that run."""
+        assert self._line_of("trajectory_store.record_mission") < self._line_of(
+            "self._mission_points = []"
+        )
+
+    def test_the_ordering_contract_is_stated_at_the_top(self):
+        """The constraints were previously discoverable only by reading
+        all fourteen comment blocks in the body. If someone removes the
+        summary, the next ordering bug becomes as expensive to find as
+        the last four were."""
+        import inspect
+
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        doc = inspect.getdoc(RoombaMapImage._handle_mission_end) or ""
+
+        assert "ORDER-SENSITIVE" in doc
+        assert "BEFORE clearing" in doc, "the pose-clearing constraint must stay stated"
+        assert "GridStore" in doc, "the store-ordering constraint must stay stated"

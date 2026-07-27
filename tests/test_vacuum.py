@@ -1583,14 +1583,25 @@ class TestPrimeActivityStuckOnReturning:
 
         assert v.activity == VacuumActivity.DOCKED
 
-    def test_missing_cycle_field_is_treated_as_none(self):
-        """Same defaulting convention already used elsewhere in this
-        file for a sparse cleanMissionStatus."""
+    def test_a_missing_cycle_field_is_NOT_treated_as_idle(self):
+        """REVERSED (this session). a9 defaulted a missing cycle to
+        "none", which made an absent field indistinguishable from a
+        finished mission.
+
+        Consolidating both branches onto _prime_cycle_is_idle() adopted
+        its stricter rule instead: absent means UNKNOWN, and unknown
+        must not be read as idle -- otherwise a robot genuinely on its
+        way home, whose status shadow happens to be sparse, would be
+        reported as already docked.
+
+        The correction may only ever turn a wrong RETURNING into
+        DOCKED. Guessing on missing data is how it would start doing
+        the reverse."""
         from homeassistant.components.vacuum import VacuumActivity
 
         v = self._prime_vacuum({"cleanMissionStatus": {"phase": "hmPostMsn"}})
 
-        assert v.activity == VacuumActivity.DOCKED
+        assert v.activity == VacuumActivity.RETURNING
 
     def test_non_returning_phases_are_never_touched_by_this_check(self):
         """The correction is scoped to RETURNING specifically -- it must
@@ -1678,3 +1689,192 @@ class TestSendVerbIsSharedByTheUniformActions:
 
         assert "CLOUD_ONLY" in dock, "dock skips the classic pause-then-wait dance"
         assert "CLOUD_ONLY" in send, "send_command is refused entirely for Prime"
+
+
+class TestReturningCorrectionCoversBothBranches:
+    """a9 added the stale-RETURNING correction to the phase branch only.
+    A field report came back saying the status still stuck at "returning
+    to dock" while the robot sat on it.
+
+    The reason: when the phase branch does not resolve, the EVENT branch
+    takes over, and that one had no corroboration at all. It also maps
+    `evac` to RETURNING -- and evacuation happens AT the dock. The robot
+    has arrived, not still travelling.
+
+    The tester's sequence produces exactly that: mission stopped ->
+    returns -> docks -> evacuates. Last event `evac`, RETURNING forever.
+
+    The original reasoning for evac -> RETURNING was that a
+    self-emptying base can evac mid-mission, so the robot is "not
+    reliably docked". That conflates *where the robot is* with *whether
+    the mission is over*. `cycle` answers the second properly."""
+
+    def _vacuum(self, *, phase=None, cycle="none", event_type=None):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        # The status shadow is ALWAYS seeded here, even when no phase is
+        # set. That matters: _prime_cycle_is_idle() deliberately returns
+        # False when the shadow is missing -- unknown must not be read as
+        # idle, or a genuine trip home would be reported as docked. A
+        # test that omits the shadow therefore exercises "we don't know",
+        # not the reported scenario, where the shadow is present and the
+        # cycle is genuinely finished.
+        status: dict[str, object] = {"cycle": cycle}
+        if phase is not None:
+            status["phase"] = phase
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status}
+        }
+        if event_type is not None:
+            entry.runtime_data.prime_coordinator.data = MagicMock(
+                event=[MagicMock(event_type=event_type)]
+            )
+        else:
+            entry.runtime_data.prime_coordinator.data = None
+        v._config_entry = entry
+        return v
+
+    def test_evac_at_the_dock_after_a_finished_mission_reads_docked(self):
+        """THE reported symptom, via the branch a9 missed."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(event_type="evac")
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_evac_mid_mission_still_reads_returning(self):
+        """The case the original mapping was protecting: a self-emptying
+        base can empty partway through, and the robot really will go out
+        again. An active cycle is what distinguishes the two."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(cycle="clean", event_type="evac")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_the_phase_branch_still_works(self):
+        """a9's original fix must survive the move into a shared method."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(phase="hmPostMsn", cycle="none")
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_an_unknown_cycle_is_not_treated_as_idle(self):
+        """The helper returns False when the status shadow is missing.
+        Reading unknown as idle would report a robot genuinely on its
+        way home as already docked -- the one direction this correction
+        must never take."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(event_type="evac")
+        v._config_entry.runtime_data.prime_status_coordinator.data = {}
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_a_genuine_return_is_never_turned_into_docked(self):
+        """The asymmetry that makes this safe: an active cycle always
+        wins, so a real trip home cannot vanish."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(phase="hmPostMsn", cycle="clean")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_non_returning_activities_are_untouched(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._vacuum(phase="run", cycle="none").activity == VacuumActivity.CLEANING
+        assert self._vacuum(event_type="pause").activity == VacuumActivity.PAUSED
+
+    def test_both_branches_go_through_the_same_correction(self):
+        """Guards against the a9 mistake recurring: fixing one branch and
+        forgetting its sibling. There must be one place, not two."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        source = inspect.getsource(IRobotVacuum.activity.fget)
+
+        assert source.count("_prime_cycle_is_idle()") == 2
+
+
+class TestVacuumSubscribesToTheStatusCoordinator:
+    """ROOT CAUSE of a report that survived two attempted fixes.
+
+    A tester's vacuum showed "Returning to dock" while the robot sat on
+    it. His diagnostics download then showed `phase: "charge"`,
+    `cycle: "none"` -- data that maps cleanly to DOCKED. The data was
+    correct the whole time. Nothing ever asked the entity to look at it
+    again.
+
+    `activity` reads cleanMissionStatus.phase from the STATUS
+    coordinator, but the entity only subscribed to the cloud and
+    mission-event coordinators. So it re-rendered when a mission event
+    arrived and never when the phase changed -- and a phase settling to
+    "charge" after the last event was simply never displayed.
+
+    Both earlier attempts corrected the MAPPING instead. That was the
+    wrong layer: no mapping fix helps an entity that is not re-reading
+    its source. Worth remembering as a diagnostic habit -- when the
+    data is right and the display is wrong, the bug is in the
+    subscription, not the logic."""
+
+    def _added_listeners(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import asyncio
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        subscribed = []
+        for name in ("cloud_coordinator", "prime_coordinator", "prime_status_coordinator"):
+            coord = MagicMock()
+            coord.async_add_listener = (
+                lambda _cb, _n=name: subscribed.append(_n) or (lambda: None)
+            )
+            setattr(entry.runtime_data, name, coord)
+        v._config_entry = entry
+        v.async_on_remove = MagicMock()
+
+        with patch.object(IRobotVacuum.__bases__[0], "async_added_to_hass", AsyncMock()):
+            asyncio.run(v.async_added_to_hass())
+        return subscribed
+
+    def test_the_status_coordinator_is_subscribed(self):
+        """THE fix. activity's data comes from here."""
+        assert "prime_status_coordinator" in self._added_listeners()
+
+    def test_the_other_two_are_still_subscribed(self):
+        """Adding one subscription must not drop the existing ones."""
+        listeners = self._added_listeners()
+
+        assert "cloud_coordinator" in listeners
+        assert "prime_coordinator" in listeners
+
+    def test_a_missing_coordinator_is_survivable(self):
+        """Classic entries have no Prime coordinators at all."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import asyncio
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.prime_coordinator = None
+        entry.runtime_data.prime_status_coordinator = None
+        v._config_entry = entry
+        v.async_on_remove = MagicMock()
+
+        with patch.object(IRobotVacuum.__bases__[0], "async_added_to_hass", AsyncMock()):
+            asyncio.run(v.async_added_to_hass())

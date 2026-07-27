@@ -313,9 +313,19 @@ class TestHandleSmartStartConnectionTypeBranching:
         assert started == [True]
 
     @pytest.mark.asyncio
-    async def test_prime_with_rooms_raises_honest_error_not_a_crash(self):
-        """The room-targeted case: a clear, honest error instead of
-        either a crash or the misleading "not_smart_map" message."""
+    async def test_prime_with_rooms_now_delegates_instead_of_refusing(self):
+        """REVERSED (this session). This test used to assert a
+        Prime-specific refusal whose stated reason was that region
+        commands "have had zero effect in two live field tests".
+
+        That was true when written and is not any more: region cleaning
+        is confirmed working on real Prime hardware, from a saved
+        favorite and built from scratch. The blocker was a missing
+        `initiator` field and two wrong wire keys, not the transport.
+
+        A refusal justified by a finding is only as good as the finding.
+        A Prime robot with a backend now goes through to clean_room like
+        any other."""
         from custom_components.roomba_plus.services import async_handle_smart_start
         from custom_components.roomba_plus.models import ConnectionType
         from homeassistant.exceptions import ServiceValidationError
@@ -323,13 +333,19 @@ class TestHandleSmartStartConnectionTypeBranching:
         hass = MagicMock()
         entry = _make_config_entry(entry_id="entry1")
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_robot = MagicMock()
+        # No blocking manager: sends smart_start down the delegating
+        # branch, which is the one this test is about.
+        entry.runtime_data.blocking_manager = None
         hass.config_entries.async_get_entry.return_value = entry
+        hass.services.async_call = AsyncMock()
 
         with self._patch_entity_registry("entry1"):
-            with pytest.raises(ServiceValidationError) as exc_info:
-                await async_handle_smart_start(self._make_call(hass, rooms=["Kitchen"]))
+            await async_handle_smart_start(self._make_call(hass, rooms=["Kitchen"]))
 
-        assert exc_info.value.translation_key == "prime_rooms_not_supported"
+        # Delegated to clean_room rather than refused. What happens
+        # after that is clean_room's business, and it has its own tests.
+        assert hass.services.async_call.await_args is not None
 
     @pytest.mark.asyncio
     async def test_blocking_manager_present_delegates_regardless_of_tier(self):
@@ -1007,28 +1023,28 @@ class TestResolveRoomsProduction:
     """
 
     def test_stored_pmap_used(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
         result = _resolve_rooms(data, ["Kitchen"], state)
         assert result == [("3", "map_a")]
 
     def test_empty_pmap_resolved_from_state(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"pmaps": [{"abc123": "v42"}]}
         result = _resolve_rooms(data, ["Corridor"], state)
         assert result == [("21", "abc123")]
 
     def test_empty_pmap_no_state_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         with pytest.raises(ServiceValidationError):
             _resolve_rooms(data, ["Corridor"], {})
 
     def test_unknown_room_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
@@ -1036,7 +1052,7 @@ class TestResolveRoomsProduction:
             _resolve_rooms(data, ["Bathroom"], state)
 
     def test_mixed_pmap_resolves(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {
             "21": {"name": "Corridor", "pmap_id": ""},
             "22": {"name": "Kitchen",  "pmap_id": "abc123"},
@@ -1047,7 +1063,7 @@ class TestResolveRoomsProduction:
         assert result[1] == ("22", "abc123")
 
     def test_cross_floor_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {
             "3": {"name": "Kitchen", "pmap_id": "floor1"},

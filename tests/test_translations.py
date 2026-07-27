@@ -21,10 +21,23 @@ _ROOT = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
 _STRINGS = _ROOT / "strings.json"
 _TRANSLATIONS = _ROOT / "translations"
 _TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt", "pl"]
+# The modules that raise translated EXCEPTIONS. Not every module, and
+# not a glob: entity modules use translation_key= for entity names,
+# which live in a different block of strings.json entirely, so globbing
+# mixes two unrelated namespaces and reports 190 false positives.
+#
+# room_cleaning.py was added when the Classic send path moved there
+# (this session) -- the list had gone stale the moment a fourth module
+# started raising translated errors, and reported its key as orphaned
+# while it was in active use.
+#
+# Still hand-maintained, and that is a real weakness. The alternative
+# tried here was worse.
 _SOURCE_FILES = [
     _ROOT / "services.py",
     _ROOT / "vacuum.py",
     _ROOT / "cloud_coordinator.py",
+    _ROOT / "room_cleaning.py",
 ]
 TRANS_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus" / "translations"
 ASCII_KEY_RE = re.compile(r'^[a-z0-9_]+$')

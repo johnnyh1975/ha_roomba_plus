@@ -539,3 +539,60 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
 
         mock_start_link.assert_awaited_once()
         assert result["step_id"] == "link"
+
+
+class TestLocalDiscoveryFiltersOnPositiveClassicMatch:
+    """The local-discovery list now requires a POSITIVE Classic match
+    rather than the absence of a Prime one.
+
+    That inversion changes what happens to an SKU nobody recognises, and
+    the right answer changed with the tables. While the Classic list held
+    only SkuUtils.java's one-default-per-platform entries, it missed most
+    of the retail range — four of five real test robots — so excluding
+    unknowns would have locked out working hardware.
+
+    Classic is now a closed generation and its table is effectively
+    complete, while Prime keeps gaining models. An unrecognised SKU is
+    therefore far more likely to be a new Prime robot, and showing it
+    here yields a plausible-looking choice that cannot work.
+
+    Worth noting how this got written: the change passed the entire
+    suite untouched, because nothing tested the filter at all. A
+    behaviour this easy to invert deserved a test before it had one."""
+
+    def _visible(self, sku: str | None) -> bool:
+        from custom_components.roomba_plus.config_flow import _is_classic_sku
+
+        return _is_classic_sku(sku)
+
+    def test_real_classic_robots_are_offered(self):
+        """Every Classic robot in this project's field-test fleet. If any
+        of these stops matching, real users lose local setup."""
+        for sku in ("i755840", "i755640", "i857640", "i355640",
+                    "R980040", "S955840", "m613840"):
+            assert self._visible(sku), f"{sku} would no longer be offered locally"
+
+    def test_prime_robots_are_not_offered(self):
+        """They cannot be set up this way at all — the account-based flow
+        is the only route."""
+        for sku in ("G185020", "N185240", "Y414040"):
+            assert not self._visible(sku), f"{sku} should not appear in local discovery"
+
+    def test_an_unrecognised_sku_is_not_offered(self):
+        """THE behaviour this change is about. Previously such a device
+        appeared in the list and failed later at password retrieval,
+        with an error about the HOME button that has nothing to do with
+        the cause."""
+        assert not self._visible("ZZ99999")
+
+    def test_the_R_pair_is_separated_correctly(self):
+        """Both prefixes live on one real tester's account. Getting this
+        wrong in either direction is a visible failure for them."""
+        assert self._visible("R980040")        # Classic 980
+        assert not self._visible("R285020")    # Prime EnhancedComboNextPlus
+
+    def test_a_missing_sku_is_not_offered(self):
+        """Discovery does not always report one. Absent is not evidence
+        of Classic."""
+        assert not self._visible(None)
+        assert not self._visible("")

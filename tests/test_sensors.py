@@ -4825,3 +4825,176 @@ class TestRoombaSensorAvailability:
         source = inspect.getsource(RoombaSensor.available.fget)
         assert "available_fn" in source
         assert "return super().available" in source
+
+
+class TestPrimeConsumableParts:
+    """Consumables for Prime robots, from chairstacker's request.
+
+    The data was already reachable -- the library had supported the
+    endpoint for a while and the integration simply never called it.
+    His screenshot made that obvious: everything in it was already in
+    our reach.
+
+    The values below are taken from that screenshot, which is also why
+    the unit handling matters: the SAME robot reports hours for its
+    filter and routines for its mop pads. A single hard-coded unit
+    would be wrong for most parts."""
+
+    def _sensor(self, part_id, **fields):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimeConsumablePartSensor
+
+        part = MagicMock(part_id=part_id, **fields)
+        entry = MagicMock()
+        entry.runtime_data.prime_parts_coordinator.data = {part_id: part}
+
+        sensor = object.__new__(PrimeConsumablePartSensor)
+        sensor._config_entry = entry
+        sensor._part_id = part_id
+        return sensor
+
+    def test_a_filter_reports_hours(self):
+        """"~24 hr left" in his screenshot."""
+        from homeassistant.const import UnitOfTime
+
+        sensor = self._sensor("filter", count_remaining=24, count_type="hr")
+
+        assert sensor.native_value == 24
+        assert sensor.native_unit_of_measurement == UnitOfTime.HOURS
+
+    def test_mop_pads_report_routines_not_hours(self):
+        """"~14 routines left". This is the case a fixed hours unit
+        would silently mislabel."""
+        sensor = self._sensor("mop_pads", count_remaining=14, count_type="routines")
+
+        assert sensor.native_value == 14
+        assert sensor.native_unit_of_measurement == "routines"
+
+    def test_the_dirt_bag_reports_evacuations(self):
+        """"~60 evacs left" -- the one dock-adjacent consumable that is
+        actually tracked."""
+        sensor = self._sensor("dirt_bag", count_remaining=60, count_type="evacs")
+
+        assert sensor.native_unit_of_measurement == "evacuations"
+
+    def test_an_unknown_count_type_gets_no_unit_rather_than_a_wrong_one(self):
+        """A wrong unit is worse than none: it invites arithmetic that
+        does not hold. Better to show a bare number."""
+        sensor = self._sensor("mystery", count_remaining=5, count_type="somethingelse")
+
+        assert sensor.native_value == 5
+        assert sensor.native_unit_of_measurement is None
+
+    def test_a_part_that_disappears_makes_the_sensor_unavailable(self):
+        """Rather than reporting a stale count as if it were current."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimeConsumablePartSensor
+
+        entry = MagicMock()
+        entry.runtime_data.prime_parts_coordinator.data = {}
+        sensor = object.__new__(PrimeConsumablePartSensor)
+        sensor._config_entry = entry
+        sensor._part_id = "filter"
+
+        assert sensor.native_value is None
+
+    def test_the_raw_details_are_kept_as_attributes(self):
+        """count_used and minutes_remaining are not worth their own
+        entities, but throwing them away would lose the only record of
+        what the server actually said."""
+        sensor = self._sensor(
+            "filter", count_remaining=24, count_type="hr",
+            count_used=76, minutes_remaining=1440, counter_category="maintenance",
+        )
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["count_used"] == 76
+        assert attrs["minutes_remaining"] == 1440
+        assert attrs["count_type"] == "hr"
+
+
+class TestConsumablePartsAppearWhenDiscovered:
+    """Parts get sensors as they are discovered, not only at setup.
+
+    A first version added them once during setup and called the rest a
+    known limitation. That was too convenient: the parts fetch is
+    best-effort, so a cloud hiccup at startup would have meant the user
+    never saw these sensors until they reloaded the config entry -- for
+    a failure that resolves itself within hours.
+
+    Home Assistant supports adding entities later; not doing so was a
+    choice, not a constraint."""
+
+    def _wire(self, initial):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_discovered_parts
+
+        added: list = []
+        listeners: list = []
+
+        data = MagicMock()
+        data.blid = "BLID"
+        data.prime_parts_coordinator.data = initial
+        data.prime_parts_coordinator.async_add_listener = (
+            lambda cb: listeners.append(cb) or (lambda: None)
+        )
+        entry = MagicMock()
+
+        _add_discovered_parts(data, entry, lambda gen: added.extend(gen))
+        return data, added, listeners
+
+    def test_parts_present_at_setup_get_sensors_immediately(self):
+        _data, added, _listeners = self._wire({"filter": object(), "dirt_bag": object()})
+
+        assert len(added) == 2
+
+    def test_nothing_at_setup_creates_nothing_yet(self):
+        """The failed-fetch case. No sensors, no crash."""
+        _data, added, _listeners = self._wire({})
+
+        assert added == []
+
+    def test_a_later_refresh_creates_them(self):
+        """THE case the first version could not handle: the fetch failed
+        at startup and succeeded an hour later."""
+        data, added, listeners = self._wire({})
+        assert added == []
+
+        data.prime_parts_coordinator.data = {"filter": object()}
+        listeners[0]()
+
+        assert len(added) == 1
+
+    def test_a_part_is_never_added_twice(self):
+        """The listener fires on every refresh. Without the guard, a
+        robot would accumulate duplicate entities all day."""
+        data, added, listeners = self._wire({"filter": object()})
+        assert len(added) == 1
+
+        for _ in range(5):
+            listeners[0]()
+
+        assert len(added) == 1
+
+    def test_a_newly_appearing_part_joins_the_existing_ones(self):
+        """A dirt bag showing up after someone attaches a self-emptying
+        base -- a real reason for the set to grow mid-life."""
+        data, added, listeners = self._wire({"filter": object()})
+
+        data.prime_parts_coordinator.data = {"filter": object(), "dirt_bag": object()}
+        listeners[0]()
+
+        assert len(added) == 2
+
+    def test_no_coordinator_is_survivable(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_discovered_parts
+
+        data = MagicMock()
+        data.prime_parts_coordinator = None
+
+        _add_discovered_parts(data, MagicMock(), lambda gen: list(gen))

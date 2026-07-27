@@ -1346,6 +1346,12 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
         entry = MagicMock()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blid = "BLID123"
+        # tankPresent has to be reported for the tank sensor to appear
+        # at all -- see TestAsyncSetupEntryTankSensorGating for why the
+        # gate moved off the mop capability flag.
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"tankPresent": True}
+        }
         created = []
 
         def sync_add(entities, **kw):
@@ -1360,45 +1366,131 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
         assert any(isinstance(e, PrimeDockErrorSensor) for e in created)
 
 
-class TestAsyncSetupEntryBinarySensorCapabilityGating:
-    """NEW (this session) -- PrimeTankPresentSensor excluded when
-    cap.scrub is explicitly 0 (no mop capability). See
-    get_prime_capability_flags()'s own docstring for the "None means
-    unknown, only explicit 0 means absent" contract."""
+class TestAsyncSetupEntryTankSensorGating:
+    """CORRECTED (this session, from a field report). This used to gate
+    PrimeTankPresentSensor on `cap.scrub != 0` -- mop capability.
 
-    def _entry(self, cap: dict | None):
+    A tester's Combo can mop, so it passed, but its water lives in the
+    Clean Base rather than in the robot. He got a sensor for a tank he
+    does not have. Mop capability and an onboard tank coincide on most
+    hardware, which is exactly why the wrong check survived.
+
+    The gate now asks whether the robot reports `tankPresent` at all --
+    the field the sensor actually reads."""
+
+    def _entry(self, current_state: dict | None):
         from custom_components.roomba_plus.models import ConnectionType
-        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
 
         entry = MagicMock()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blid = "BLID123"
         entry.runtime_data.prime_status_coordinator.data = (
-            {PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": cap}} if cap is not None else None
+            {"ro-currentstate": current_state} if current_state is not None else None
         )
         return entry
 
+    async def _created(self, entry):
+        from custom_components.roomba_plus.binary_sensor import async_setup_entry
+
+        created: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: created.extend(e))
+        return created
+
     @pytest.mark.asyncio
-    async def test_excluded_when_scrub_is_zero(self):
-        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+    async def test_excluded_when_the_robot_never_reports_a_tank(self):
+        """The reported case: no tankPresent field, so no entity."""
         from custom_components.roomba_plus.binary_sensor import (
-            PrimeBinPresentSensor, PrimeTankPresentSensor,
+            PrimeBinPresentSensor,
+            PrimeTankPresentSensor,
         )
 
-        entry = self._entry({"scrub": 0})
-        created: list = []
-        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+        created = await self._created(self._entry({"batPct": 90}))
 
         assert not any(isinstance(e, PrimeTankPresentSensor) for e in created)
-        assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeBinPresentSensor) for e in created), (
+            "the other sensors must be unaffected"
+        )
 
     @pytest.mark.asyncio
-    async def test_included_when_scrub_is_nonzero(self):
-        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+    async def test_included_when_the_field_is_present(self):
         from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
 
-        entry = self._entry({"scrub": 3})
-        created: list = []
-        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
+        created = await self._created(self._entry({"tankPresent": True}))
 
         assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_included_when_the_field_is_present_but_false(self):
+        """False is a real answer -- "the tank is currently out" -- and
+        is precisely what this sensor exists to report. Only absence
+        means the robot has no such thing."""
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        created = await self._created(self._entry({"tankPresent": False}))
+
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_no_state_has_arrived_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        created = await self._created(self._entry(None))
+
+        assert not any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+
+class TestTankSensorGatedOnTheField:
+    """FIELD REPORT (chairstacker): shown a mop-tank sensor for a robot
+    that has no tank -- the water lives in his Clean Base.
+
+    The gate used to ask "can this robot mop?" (`cap.scrub != 0`). His
+    Combo can, so it passed. But mop capability does not imply an
+    onboard tank; the two merely coincide on most hardware, which is
+    exactly how this survived.
+
+    The honest test is whether the robot reports `tankPresent` at all.
+    And the distinction that matters: an ABSENT field means there is
+    nothing to report, while an explicit `False` is a real answer --
+    "no tank fitted right now" -- and must still produce a sensor."""
+
+    def _entities_for(self, raw_state):
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.blid = "BLID"
+        data.prime_status_coordinator.data = {"ro-currentstate": raw_state}
+        return data
+
+    def _tank_created(self, raw_state) -> bool:
+        data = self._entities_for(raw_state)
+        coordinator = data.prime_status_coordinator
+        raw = (coordinator.data or {}).get("ro-currentstate") or {}
+        return "tankPresent" in raw
+
+    def test_a_robot_that_never_reports_the_field_gets_no_sensor(self):
+        assert self._tank_created({"batPct": 90, "detectedPad": "noPad"}) is False
+
+    def test_an_explicit_false_still_creates_the_sensor(self):
+        """The crucial distinction. False means "no tank fitted", which
+        is information worth showing -- collapsing it with "absent"
+        would hide a real state."""
+        assert self._tank_created({"tankPresent": False}) is True
+
+    def test_an_explicit_true_creates_the_sensor(self):
+        assert self._tank_created({"tankPresent": True}) is True
+
+    def test_mop_capability_alone_is_no_longer_enough(self):
+        """The old gate would have created it here. A robot that can
+        mop but keeps its water in the dock reports no tankPresent."""
+        assert self._tank_created({"cap": {"scrub": 3}}) is False
+
+    def test_the_old_capability_gate_is_gone_from_the_source(self):
+        """Guards against it coming back -- the two conditions look
+        interchangeable and are not."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor)
+
+        assert "cap is None or cap.scrub != 0" not in source
