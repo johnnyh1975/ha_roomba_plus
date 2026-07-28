@@ -748,7 +748,22 @@
         "name": "Numero di serie"
       },
       "prime_consumable_part": {
-        "name": "Materiale di consumo – {part}"
+        "name": "Manutenzione – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Manutenzione – Spazzola laterale"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Manutenzione – Spazzola multisuperficie"
+      },
+      "prime_part_filter": {
+        "name": "Manutenzione – Filtro"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Manutenzione – Sacchetto raccoglipolvere"
+      },
+      "prime_part_mop_pads": {
+        "name": "Manutenzione – Panni DualClean"
       }
     },
     "binary_sensor": {

@@ -748,7 +748,22 @@
         "name": "Seriennummer"
       },
       "prime_consumable_part": {
-        "name": "Verbrauchsteil – {part}"
+        "name": "Wartung – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Wartung – Seitenbürste"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Wartung – Multiflächenbürste"
+      },
+      "prime_part_filter": {
+        "name": "Wartung – Filter"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Wartung – Staubbeutel"
+      },
+      "prime_part_mop_pads": {
+        "name": "Wartung – DualClean Wischtücher"
       }
     },
     "binary_sensor": {

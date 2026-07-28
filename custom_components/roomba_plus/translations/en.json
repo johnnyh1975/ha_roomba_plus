@@ -748,7 +748,22 @@
         "name": "Serial number"
       },
       "prime_consumable_part": {
-        "name": "Consumable – {part}"
+        "name": "Maintenance – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Maintenance – Multi-surface brush"
+      },
+      "prime_part_filter": {
+        "name": "Maintenance – Filter"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Maintenance – Dirt disposal bag"
+      },
+      "prime_part_mop_pads": {
+        "name": "Maintenance – DualClean mop pads"
       }
     },
     "binary_sensor": {

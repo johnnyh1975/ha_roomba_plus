@@ -748,7 +748,22 @@
         "name": "Número de serie"
       },
       "prime_consumable_part": {
-        "name": "Consumible – {part}"
+        "name": "Mantenimiento – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Mantenimiento – Cepillo lateral"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Mantenimiento – Cepillo multisuperficie"
+      },
+      "prime_part_filter": {
+        "name": "Mantenimiento – Filtro"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Mantenimiento – Bolsa de suciedad"
+      },
+      "prime_part_mop_pads": {
+        "name": "Mantenimiento – Mopas DualClean"
       }
     },
     "binary_sensor": {

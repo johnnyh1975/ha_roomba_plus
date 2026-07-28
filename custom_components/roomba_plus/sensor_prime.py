@@ -860,6 +860,58 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
         }
 
 
+#: Part id -> (display name, unit, whether the raw value is minutes).
+#:
+#: The API identifies consumables by NUMBER, not by name -- a sensor
+#: called "Consumable - 67" is accurate and useless. Both @DaRealGuGu
+#: and @chairstacker independently matched their numbers against the
+#: iRobot app and arrived at the same list, which is why these names
+#: are here rather than guessed.
+#:
+#: THE MINUTES FLAG IS THE IMPORTANT PART. For the three time-based
+#: parts the API reports MINUTES while the app displays HOURS:
+#: 5100 -> 85 h, 17580 -> 293 h, 1980 -> 33 h. All three divide evenly
+#: by 60 on two separate accounts, which is about as clear as this
+#: evidence gets. Showing 5100 unitless next to an app saying "85
+#: heures restantes" is not a naming problem, it is a wrong number.
+#:
+#: 202 and 212 are deliberately absent. Neither tester could find them
+#: in the app (values seen: 0 and 165, and 268 elsewhere). Naming them
+#: on a guess would be worse than leaving them numeric -- a wrong label
+#: gets believed, a number invites a question.
+#: Each known part gets its OWN translation key rather than being
+#: substituted into a generic one. A placeholder cannot be translated:
+#: "Consommable - Edge sweeping brush" is worse than plain English,
+#: because it looks like a translation that failed halfway.
+#: Part id -> translation key. NAMES ONLY -- the unit comes from the
+#: server's own count_type, not from this table.
+#:
+#: An earlier version carried units and a "value is in minutes" flag
+#: here, inferred by comparing sensor values against app screenshots.
+#: A diagnostics download then showed count_type outright:
+#:
+#:     67, 71, 72  -> "minutes"          (app displays hours)
+#:     147         -> "evacs"
+#:     148         -> "combo_missions"
+#:     202, 212    -> "pad_washes_used"
+#:
+#: The inference was right, and hardcoding it was still wrong: the
+#: server states this per part, so a hardcoded table would silently
+#: disagree the moment a robot reports something else.
+_KNOWN_PARTS: dict[str, str] = {
+    "67": "prime_part_edge_brush",
+    "71": "prime_part_multi_surface_brush",
+    "72": "prime_part_filter",
+    "147": "prime_part_dirt_bag",
+    "148": "prime_part_mop_pads",
+    # 202 and 212 both report count_type "pad_washes_used" and differ
+    # only by category (maintenance vs replacement). Two testers saw
+    # them and neither could find either in the app, so they stay
+    # numeric -- a made-up label gets believed, a bare number invites a
+    # question.
+}
+
+
 #: Maps the server's own count_type to a display unit.
 #:
 #: Values taken from a real capture (chairstacker's app screenshot plus
@@ -876,6 +928,10 @@ _PART_COUNT_UNITS: dict[str, str | None] = {
     "evacs": "evacuations",
     "evacuations": "evacuations",
     "missions": "missions",
+    # From a real diagnostics download (DaRealGuGu, a11):
+    "minutes": UnitOfTime.HOURS,   # converted in native_value
+    "combo_missions": "routines",
+    "pad_washes_used": "pad washes",
 }
 
 
@@ -912,7 +968,18 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
             translation_key="prime_consumable_part",
             entity_category=EntityCategory.DIAGNOSTIC,
         )
-        self._attr_translation_placeholders = {"part": part_id.replace("_", " ")}
+        known = _KNOWN_PARTS.get(part_id)
+        if known:
+            self.entity_description = SensorEntityDescription(
+                key=f"prime_part_{part_id}",
+                translation_key=known,
+                entity_category=EntityCategory.DIAGNOSTIC,
+            )
+        else:
+            # Unknown part: keep the number visible. 202 and 212 have no
+            # confirmed name, and a made-up label gets believed while a
+            # bare number invites someone to check their own app.
+            self._attr_translation_placeholders = {"part": part_id}
         self._attr_unique_id = f"{self.robot_unique_id}_prime_part_{part_id}"
 
     @property
@@ -933,7 +1000,15 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
     @property
     def native_value(self) -> int | None:
         part = self._part
-        return None if part is None else part.count_remaining
+        if part is None or part.count_remaining is None:
+            return None
+        if (part.count_type or "").lower() == "minutes":
+            # Minutes on the wire, hours in the app -- 5100 -> 85 h,
+            # confirmed on two accounts and then by count_type itself.
+            # Showing 5100 unitless beside an app saying "85 heures"
+            # is not a labelling problem, it is a wrong number.
+            return round(part.count_remaining / 60)
+        return part.count_remaining
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -958,5 +1033,9 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
             "count_type": part.count_type,
             "count_used": part.count_used,
             "minutes_remaining": part.minutes_remaining,
+            # Kept visible for unknown parts: 202 and 212 have no name
+            # yet, and the raw value is the only thing that lets someone
+            # match them against their own app.
+            "raw_count_remaining": part.count_remaining,
             "category": part.counter_category,
         }

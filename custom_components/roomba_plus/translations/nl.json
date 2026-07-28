@@ -748,7 +748,22 @@
         "name": "Serienummer"
       },
       "prime_consumable_part": {
-        "name": "Verbruiksartikel – {part}"
+        "name": "Onderhoud – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Onderhoud – Zijborstel"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Onderhoud – Multi-oppervlakteborstel"
+      },
+      "prime_part_filter": {
+        "name": "Onderhoud – Filter"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Onderhoud – Stofzak"
+      },
+      "prime_part_mop_pads": {
+        "name": "Onderhoud – DualClean dweildoekjes"
       }
     },
     "binary_sensor": {

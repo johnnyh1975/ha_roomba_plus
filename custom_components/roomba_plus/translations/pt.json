@@ -748,7 +748,22 @@
         "name": "Número de série"
       },
       "prime_consumable_part": {
-        "name": "Consumível – {part}"
+        "name": "Manutenção – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Manutenção – Escova lateral"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Manutenção – Escova multissuperfície"
+      },
+      "prime_part_filter": {
+        "name": "Manutenção – Filtro"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Manutenção – Saco de sujidade"
+      },
+      "prime_part_mop_pads": {
+        "name": "Manutenção – Panos DualClean"
       }
     },
     "binary_sensor": {

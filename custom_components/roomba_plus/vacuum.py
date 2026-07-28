@@ -841,7 +841,31 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         except ImportError:
             return []
         data = self._config_entry.runtime_data if self._config_entry else None
-        if not data or not data.has_cloud or data.cloud_coordinator is None:
+        if data is None:
+            return []
+
+        # PRIME BRANCH (this session). Advertising CLEAN_AREA without
+        # implementing this was a real bug: HA showed the "Map vacuum
+        # segments to areas" dialog and it came up empty, because this
+        # method returned [] for every Prime robot. The capability
+        # looked present and did nothing -- worse than not offering it.
+        #
+        # Reported by DaRealGuGu, who could see his rooms in the iRobot
+        # app and none in Home Assistant.
+        if data.connection_type == ConnectionType.CLOUD_ONLY:
+            from .room_cleaning import (  # noqa: PLC0415
+                async_get_room_cleaning_backend,
+            )
+
+            backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+            if backend is None:
+                return []
+            return [
+                Segment(id=f"rid_{room_id}", name=name, group="Room")
+                for name, room_id in sorted((await backend.available_rooms()).items())
+            ]
+
+        if not data.has_cloud or data.cloud_coordinator is None:
             return []
         active_pmap_id = data.cloud_coordinator.active_pmap_id
         if not active_pmap_id:
@@ -908,7 +932,38 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if none of the supplied IDs match the current map (F-RB-2).
         """
         data = self._config_entry.runtime_data if self._config_entry else None
-        if not data or not data.has_cloud or data.cloud_coordinator is None:
+        if data is None:
+            return
+
+        # PRIME BRANCH (this session). Prime segment ids are "rid_<room>",
+        # produced by async_get_segments() above -- no pmap prefix,
+        # because Prime resolves the map itself at send time.
+        #
+        # Without this the method fell through to the Classic path and
+        # returned early on has_cloud, so HA's Clean Area button did
+        # nothing at all for Prime robots.
+        if data.connection_type == ConnectionType.CLOUD_ONLY:
+            from .room_cleaning import (  # noqa: PLC0415
+                async_get_room_cleaning_backend,
+            )
+
+            backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+            room_ids = [
+                seg_id[len("rid_"):] for seg_id in segment_ids
+                if seg_id.startswith("rid_")
+            ]
+            if backend is None or not room_ids:
+                # Stale mapping after the robot remapped, or segments
+                # from a different vacuum. Cleaning nothing quietly
+                # would look like success.
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="no_valid_segments",
+                )
+            await backend.clean_rooms(room_ids)
+            return
+
+        if not data.has_cloud or data.cloud_coordinator is None:
             return
 
         active_pmap_id = data.cloud_coordinator.active_pmap_id

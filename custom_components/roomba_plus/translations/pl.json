@@ -748,7 +748,22 @@
         "name": "Numer seryjny"
       },
       "prime_consumable_part": {
-        "name": "Materiał eksploatacyjny – {part}"
+        "name": "Konserwacja – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Konserwacja – Szczotka boczna"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Konserwacja – Szczotka wielopowierzchniowa"
+      },
+      "prime_part_filter": {
+        "name": "Konserwacja – Filtr"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Konserwacja – Worek na zanieczyszczenia"
+      },
+      "prime_part_mop_pads": {
+        "name": "Konserwacja – Nakładki DualClean"
       }
     },
     "binary_sensor": {

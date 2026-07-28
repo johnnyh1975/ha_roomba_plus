@@ -748,7 +748,22 @@
         "name": "Numéro de série"
       },
       "prime_consumable_part": {
-        "name": "Consommable – {part}"
+        "name": "Maintenance – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Maintenance – Brosse latérale"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Maintenance – Brosse multisurface"
+      },
+      "prime_part_filter": {
+        "name": "Maintenance – Filtre"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Maintenance – Sac d'élimination de la saleté"
+      },
+      "prime_part_mop_pads": {
+        "name": "Maintenance – Lingettes de lavage DualClean"
       }
     },
     "binary_sensor": {

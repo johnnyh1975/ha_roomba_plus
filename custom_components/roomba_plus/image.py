@@ -113,6 +113,13 @@ async def _async_send_coverage_signal(hass: HomeAssistant, entry_id: str) -> Non
     async_dispatcher_send(hass, _SIGNAL_COVERAGE_UPDATED.format(entry_id))
 
 
+def _prime_map_storage_key(entry_id: str) -> str:
+    """Separate from the Classic key: different contents entirely (a PNG
+    rather than renderer state), and a robot never switches generation,
+    so the two can never collide."""
+    return f"{DOMAIN}_prime_map_{entry_id}"
+
+
 def _map_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_{entry_id}"
 
@@ -339,6 +346,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_map"
         self._png_bytes: bytes | None = None
+        self._map_stored_at: str | None = None
         self._watch_task: asyncio.Task[None] | None = None
         # NEW (this session): live-map decode statistics, kept on the
         # CONFIG ENTRY rather than on this entity, so diagnostics can
@@ -349,6 +357,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         # someone to scrape their log.
         config_entry.runtime_data.live_map_stats = {
             "updates_received": 0,
+            "position_messages": 0,
+            "position_points": 0,
             "decode_ok": 0,
             "decode_failed": 0,
             "last_error": None,
@@ -358,6 +368,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
 
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
+        await self._async_restore_png()
         self.async_update_token()
         # CONSISTENCY FIX (this session): was a bare asyncio.create_task()
         # here -- every OTHER background task in this project (both
@@ -401,13 +412,47 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         generator simply ending on its own (also anomalous -- see the
         other two fixes' own docstrings for why that case needs the
         same backoff, not an immediate, undelayed re-call)."""
-        from roombapy_prime.models.livemap import MapUpdateMessage, decode_rawmap_to_png
+        from roombapy_prime.models.livemap import (
+            MapUpdateMessage,
+            PositionUpdateMessage,
+            decode_rawmap_to_png,
+        )
 
         session = async_get_clientsession(self.hass)
         backoff = 5.0
         while True:
             try:
                 async for message in self._prime_robot.watch_live_map():
+                    # POSITION MESSAGES ARE COUNTED, NOT USED (this session).
+                    #
+                    # The stream carries two kinds: a URL to iRobot's own
+                    # rendered PNG, which is what this entity displays, and
+                    # trajectory samples -- which are the same input the
+                    # Classic MapRenderer draws from. Prime could therefore
+                    # render its own map, with room labels and keep-out
+                    # zones, instead of showing a foreign image with none.
+                    #
+                    # Whether that is worth doing depends on ONE unknown:
+                    # how many points actually arrive. Each message carries
+                    # several, and nothing has ever counted them. A sparse
+                    # stream would render a worse map than the PNG.
+                    #
+                    # So this counts first. Two testers download diagnostics
+                    # regularly, and the answer costs them nothing.
+                    #
+                    # Units, if this is ever built on: Prime reports METRES
+                    # (a real keep-out zone measures 2.0 x 2.0), while
+                    # MapRenderer.add_pose takes millimetres. Feeding metres
+                    # straight in puts every point in the same pixel and
+                    # produces a blank map with no error.
+                    if isinstance(message, PositionUpdateMessage):
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["position_messages"] = stats.get("position_messages", 0) + 1
+                        stats["position_points"] = (
+                            stats.get("position_points", 0) + len(message.updates)
+                        )
+                        continue
+
                     if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
                         continue
                     try:
@@ -474,6 +519,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         )
                         continue
                     self._png_bytes = png_bytes
+                    self._map_stored_at = None
+                    await self._async_save_png()
                     self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
                     self.async_write_ha_state()
                     backoff = 5.0  # a live update means things are healthy again
@@ -517,6 +564,68 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
 
     async def async_image(self) -> bytes | None:
         return self._png_bytes or self._blank_image()
+
+    async def _async_restore_png(self) -> None:
+        """Bring back the last map from storage.
+
+        WHY THIS IS NEEDED AT ALL. Unlike Classic, which draws its own
+        map from pose data and already persists renderer state, Prime
+        displays a finished PNG that iRobot produces -- and that arrives
+        only DURING AND AFTER a mission. So after any restart, reload or
+        update there is no map until the robot next runs, which two
+        testers hit within minutes of updating.
+
+        The a11 change to report `unavailable` instead of a blank white
+        square did not cause this; it made it visible. Before, the same
+        absence merely looked like a broken image.
+
+        Storing the last frame is not the ideal fix -- rendering our own
+        map from the position samples in the same stream would bring
+        room labels and keep-out zones with it -- but it is honest about
+        what it is: the most recent map, replaced as soon as the next
+        mission produces one.
+        """
+        import base64  # noqa: PLC0415
+
+        store = Store(
+            self.hass,
+            _MAP_STORAGE_VERSION,
+            _prime_map_storage_key(self._config_entry.entry_id),
+        )
+        try:
+            stored = await store.async_load()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Prime map: could not read stored map", exc_info=True)
+            return
+        if not stored or not stored.get("png_b64"):
+            return
+        try:
+            self._png_bytes = base64.b64decode(stored["png_b64"])
+        except Exception:  # noqa: BLE001
+            # Corrupt or truncated: start blank rather than raising. A
+            # missing map is a normal state here; a crash is not.
+            _LOGGER.debug("Prime map: stored map unreadable", exc_info=True)
+            return
+        self._map_stored_at = stored.get("saved_at")
+        _LOGGER.debug("Prime map: restored %d bytes", len(self._png_bytes))
+
+    async def _async_save_png(self) -> None:
+        """Persist the current frame so a restart does not lose it."""
+        if not self._png_bytes:
+            return
+        import base64  # noqa: PLC0415
+
+        from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+        store = Store(
+            self.hass,
+            _MAP_STORAGE_VERSION,
+            _prime_map_storage_key(self._config_entry.entry_id),
+        )
+        await store.async_save({
+            "png_b64": base64.b64encode(self._png_bytes).decode("ascii"),
+            "saved_at": dt_util.utcnow().isoformat(),
+        })
 
     @staticmethod
     def _blank_image() -> bytes:
