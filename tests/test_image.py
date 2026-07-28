@@ -2302,3 +2302,130 @@ class TestMissionEndStepOrder:
         assert "ORDER-SENSITIVE" in doc
         assert "BEFORE clearing" in doc, "the pose-clearing constraint must stay stated"
         assert "GridStore" in doc, "the store-ordering constraint must stay stated"
+
+
+class TestPrimeMapSurvivesRestart:
+    """The last map is stored and restored.
+
+    Prime shows a PNG that iRobot renders, and that arrives only during
+    and after a mission -- so a restart, reload or update leaves the
+    entity with nothing until the robot next runs. Two testers hit this
+    within minutes of updating to a11.
+
+    The a11 change to report `unavailable` rather than a blank white
+    square did not cause it; it made it visible. Both states mean "no
+    map", but one of them looks like a broken image and the other says
+    so."""
+
+    def _entity(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity.hass = MagicMock()
+        entity._png_bytes = None
+        entity._map_stored_at = None
+        entity._config_entry = MagicMock(entry_id="entry1")
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_a_stored_map_is_restored(self):
+        import base64
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+        payload = {
+            "png_b64": base64.b64encode(b"PNGDATA").decode("ascii"),
+            "saved_at": "2026-07-28T10:00:00+00:00",
+        }
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(return_value=payload)
+            await entity._async_restore_png()
+
+        assert entity._png_bytes == b"PNGDATA"
+        assert entity._map_stored_at == "2026-07-28T10:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_no_stored_map_leaves_the_entity_blank(self):
+        """First run on a new install. Unavailable is the honest state."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(return_value=None)
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_stored_map_does_not_raise(self):
+        """Truncated storage should cost the map, not the whole image
+        platform. Everything else on that entity keeps working."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(
+                return_value={"png_b64": "not valid base64!!!"}
+            )
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    @pytest.mark.asyncio
+    async def test_a_storage_failure_does_not_raise(self):
+        """Disk problems are not this entity's to solve, and a map is
+        not worth failing setup over."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(side_effect=OSError("disk"))
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    @pytest.mark.asyncio
+    async def test_saving_records_when_it_was_saved(self):
+        """So a restored map can be shown as what it is -- the most
+        recent one, not necessarily a current one."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+        entity._png_bytes = b"PNGDATA"
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_save = AsyncMock()
+            await entity._async_save_png()
+            saved = store_cls.return_value.async_save.await_args.args[0]
+
+        assert saved["saved_at"]
+        assert saved["png_b64"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_when_there_is_no_map(self):
+        """Avoids replacing a good stored map with an empty one."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_save = AsyncMock()
+            await entity._async_save_png()
+
+        store_cls.return_value.async_save.assert_not_awaited()
+
+    def test_the_prime_storage_key_differs_from_the_classic_one(self):
+        """Different contents entirely -- a PNG against renderer state.
+        A shared key would make one silently unreadable as the other."""
+        from custom_components.roomba_plus.image import (
+            _map_storage_key,
+            _prime_map_storage_key,
+        )
+
+        assert _prime_map_storage_key("e1") != _map_storage_key("e1")

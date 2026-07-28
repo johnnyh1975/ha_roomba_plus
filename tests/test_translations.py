@@ -41,7 +41,11 @@ _SOURCE_FILES = [
 ]
 TRANS_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus" / "translations"
 ASCII_KEY_RE = re.compile(r'^[a-z0-9_]+$')
-LANG_NEUTRAL = {"SNR", "Status", "Mission – ID", "{name}"}
+# Words that are genuinely identical across languages. "Filter" is the
+# German, Dutch and English spelling of the same word -- flagging it as
+# untranslated would push someone towards inventing a worse German word
+# to satisfy the check.
+LANG_NEUTRAL = {"SNR", "Status", "Mission – ID", "{name}", "Filter", "Filtro", "Filtr"}
 TRANSLATIONS_DIR = (
     Path(__file__).parent.parent
     / "custom_components" / "roomba_plus" / "translations"

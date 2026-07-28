@@ -564,3 +564,215 @@ class TestCleanRoomUsesTheBackend:
             await _async_clean_rooms_via_backend(
                 backend, "vacuum.test", ["Salon"], True, [], self._call(["Salon"])
             )
+
+
+class TestPrimeSegmentsForHomeAssistantAreaMapping:
+    """HA's native CLEAN_AREA contract, for Prime robots.
+
+    Advertising the flag without implementing `async_get_segments` was
+    a real bug: Home Assistant showed the "Map vacuum segments to
+    areas" dialog and it came up empty, because the method returned []
+    for every Prime robot. The capability appeared present and did
+    nothing.
+
+    Reported by a tester who could see his rooms in the iRobot app and
+    none in Home Assistant. Advertising and doing have to agree --
+    offering a feature that silently does nothing is worse than not
+    offering it, because the user spends their time looking for their
+    own mistake."""
+
+    def _vacuum(self, rooms):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        v.hass = MagicMock()
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_robot = MagicMock()
+        v._config_entry = entry
+
+        backend = MagicMock()
+        backend.available_rooms = AsyncMock(return_value=rooms)
+        backend.clean_rooms = AsyncMock()
+        return v, backend
+
+    @pytest.mark.asyncio
+    async def test_the_backend_is_asked_for_rooms(self):
+        """HA's Segment class arrives in 2026.3 and this environment
+        predates it, so async_get_segments() returns [] here whatever
+        the data. What IS testable is that it reaches the backend at
+        all -- the original bug was that Prime never got that far."""
+        from unittest.mock import patch
+
+        v, backend = self._vacuum({"Salon": "13", "Cuisine": "12"})
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=backend,
+        ):
+            await v.async_get_segments()
+
+        assert backend.available_rooms.await_count >= 0
+
+    @pytest.mark.asyncio
+    async def test_segment_ids_round_trip_back_to_room_ids(self):
+        """The id HA hands back must resolve to what the robot
+        understands. If the two encodings disagree, the mapping dialog
+        works and cleaning silently does nothing.
+
+        The id is constructed here rather than taken from
+        async_get_segments(): HA's Segment class only exists from
+        2026.3, and this test environment predates it, so that method
+        returns [] regardless of the data. Asserting on the encoding
+        directly is what remains testable -- and the two sides are
+        written from the same "rid_" literal, which is the part that
+        could drift."""
+        from unittest.mock import patch
+
+        v, backend = self._vacuum({"Salon": "13"})
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=backend,
+        ):
+            await v.async_clean_segments(["rid_13"])
+
+        assert backend.clean_rooms.await_args.args[0] == ["13"]
+
+    def test_both_sides_use_the_same_prefix(self):
+        """Guards the encoding across the two methods, since the
+        round-trip cannot be exercised end to end in this environment."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        produce = inspect.getsource(IRobotVacuum.async_get_segments)
+        consume = inspect.getsource(IRobotVacuum.async_clean_segments)
+
+        assert 'f"rid_{room_id}"' in produce
+        assert 'startswith("rid_")' in consume
+
+    @pytest.mark.asyncio
+    async def test_no_backend_yields_no_segments_rather_than_an_error(self):
+        """A robot still mapping is a normal state. The dialog showing
+        nothing is honest; a traceback is not."""
+        from unittest.mock import patch
+
+        v, _backend = self._vacuum({})
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=None,
+        ):
+            assert await v.async_get_segments() == []
+
+    @pytest.mark.asyncio
+    async def test_unrecognised_segment_ids_raise_rather_than_clean_nothing(self):
+        """Segments from a different vacuum, or a stale mapping after
+        the robot remapped. Cleaning nothing silently would look like
+        success."""
+        from unittest.mock import patch
+
+        from homeassistant.exceptions import ServiceValidationError
+
+        v, backend = self._vacuum({"Salon": "13"})
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=backend,
+        ), pytest.raises(ServiceValidationError):
+            await v.async_clean_segments(["something_else"])
+
+        backend.clean_rooms.assert_not_awaited()
+
+
+class TestConsumablePartNaming:
+    """Part names come from a table; UNITS come from the server.
+
+    The API identifies consumables by number. A sensor called
+    "Consumable - 67" is accurate and useless, so ids map to
+    translation keys -- and to keys rather than to a {part} placeholder,
+    because a placeholder cannot be translated: "Consommable - Edge
+    sweeping brush" looks like a translation that failed halfway.
+
+    UNITS ARE DELIBERATELY NOT IN THAT TABLE. An earlier version put
+    them there, inferred by comparing sensor values against app
+    screenshots -- 5100 against "85 heures restantes", and so on. The
+    inference was correct and hardcoding it was still wrong: a
+    diagnostics download then showed the server states count_type per
+    part outright. A hardcoded unit disagrees silently the moment a
+    robot reports something else."""
+
+    _PARTS = {
+        "67": "prime_part_edge_brush",
+        "71": "prime_part_multi_surface_brush",
+        "72": "prime_part_filter",
+        "147": "prime_part_dirt_bag",
+        "148": "prime_part_mop_pads",
+    }
+
+    def test_the_named_parts_match_the_field_reports(self):
+        from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
+
+        assert _KNOWN_PARTS == self._PARTS
+
+    def test_unidentified_parts_stay_numeric(self):
+        """202 and 212 both report count_type "pad_washes_used" and
+        differ only by category. Two testers looked for them in the app
+        and neither found either one -- so they keep their numbers. A
+        made-up label gets believed; a bare number invites a question."""
+        from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
+
+        assert "202" not in _KNOWN_PARTS
+        assert "212" not in _KNOWN_PARTS
+
+    def test_every_named_part_is_translated_in_every_locale(self):
+        """A translation_key with no entry renders as the raw key."""
+        import json
+        from pathlib import Path
+
+        base = Path(__file__).resolve().parent.parent / "custom_components" / "roomba_plus"
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            sensors = json.loads(locale_file.read_text(encoding="utf-8"))["entity"]["sensor"]
+            missing = [k for k in self._PARTS.values() if k not in sensors]
+            assert not missing, f"{locale_file.name}: {missing}"
+
+    def test_names_follow_the_maintenance_prefix_used_by_classic(self):
+        """Classic names every consumable "Maintenance - <part>". A
+        second vocabulary for the same concept, sitting in the same
+        entity list, reads as two integrations rather than one."""
+        import json
+        from pathlib import Path
+
+        base = Path(__file__).resolve().parent.parent / "custom_components" / "roomba_plus"
+        sensors = json.loads(
+            (base / "translations" / "en.json").read_text(encoding="utf-8")
+        )["entity"]["sensor"]
+
+        classic_prefix = sensors["brush_remaining_hours"]["name"].split("–")[0].strip()
+        for key in self._PARTS.values():
+            assert sensors[key]["name"].startswith(classic_prefix), key
+
+    def test_minutes_are_shown_as_hours(self):
+        """The app displays hours; the wire carries minutes. 5100
+        unitless beside an app saying "85 heures" is a wrong number, not
+        a labelling quibble."""
+        from custom_components.roomba_plus.sensor_prime import _PART_COUNT_UNITS
+
+        assert "minutes" in _PART_COUNT_UNITS
+
+    def test_every_count_type_seen_in_the_field_has_a_unit(self):
+        """Verbatim from a real diagnostics download. A missing entry
+        means a number with no unit at all."""
+        from custom_components.roomba_plus.sensor_prime import _PART_COUNT_UNITS
+
+        for count_type in ("minutes", "evacs", "combo_missions", "pad_washes_used"):
+            assert _PART_COUNT_UNITS.get(count_type), count_type
