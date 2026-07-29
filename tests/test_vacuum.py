@@ -140,6 +140,13 @@ def _make_vacuum_entity_v270_ia74_zone(coordinator=None, vacuum_state=None):
     entry = MagicMock()
     data = MagicMock()
     data.has_cloud = True
+    # SMART is now required for segment cleaning, where the old code
+    # checked only has_cloud. Not a new restriction in practice: HA only
+    # ever offers Clean Area when a backend exists, and a backend
+    # requires SMART -- so a non-SMART robot never had segments to clean
+    # in the first place. The gate is simply consistent now instead of
+    # differing between the produce and consume sides.
+    data.map_capability = MapCapability.SMART
     data.cloud_coordinator = coordinator or _make_coordinator()
     data.cloud_coordinator.regions = coordinator.regions if coordinator else []
     entry.runtime_data = data

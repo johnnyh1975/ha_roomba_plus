@@ -314,14 +314,25 @@ class TestPushFreshnessInDiagnostics:
         data.last_mqtt_message_ts = ts
         return _push_freshness(data)
 
-    def test_never_having_received_anything_says_so_outright(self):
-        """Zero is the loudest signal available here, and it must not be
-        rendered as 'a very long time ago' -- it means the stream never
-        started."""
-        result = self._freshness(0.0)
+    def test_never_having_received_anything_is_reported_without_a_verdict(self):
+        """REWORDED (this session). This used to assert the note said
+        "the stream is not delivering" -- a fault claim.
 
-        assert result["seconds_ago"] is None
-        assert "EVER" in result["note"]
+        It is often not a fault. Shadow deltas arrive on CHANGE, and a
+        robot parked on a full battery changes almost nothing, so zero
+        messages after a restart with no mission since is the expected
+        reading.
+
+        The wording mattered more than it looks: a tester's diagnostics
+        came back with that note, and its author read it back and went
+        hunting a connection bug on a robot that simply had nothing to
+        say. A diagnostic that states a conclusion gets that conclusion
+        believed."""
+        result = self._freshness(0)
+
+        assert result["last_message_ts"] is None
+        assert "EXPECTED if the robot has been idle" in result["note"]
+        assert "not delivering" not in result["note"]
 
     def test_a_recent_message_reports_a_small_age(self):
         import time
@@ -351,3 +362,106 @@ class TestPushFreshnessInDiagnostics:
         assert self._freshness("not a timestamp")["note"] == "unreadable"
         assert self._freshness(object())["note"] == "unreadable"
         assert self._freshness(None)["seconds_ago"] is None
+
+
+class TestPrimeConnectionDiagnostics:
+    """Two fields added to answer questions a tester's data raised, and
+    written without tests until a bug hunt pointed that out.
+
+    Untested diagnostics are a particular trap: they are only ever read
+    when something is already wrong, so a mistake here surfaces at the
+    worst moment and points the investigation somewhere false. That has
+    already happened once in this project -- a note reading "the stream
+    is not delivering" sent its own author hunting a connection bug on a
+    robot that simply had nothing to report."""
+
+    def _data_with_token(self, expires=None):
+        import time
+        from unittest.mock import MagicMock
+
+        from roombapy_prime.auth import ConnectionToken
+
+        payload = {
+            "client_id": "c", "iot_token": "t",
+            "iot_signature": "s", "iot_authorizer_name": "a",
+        }
+        if expires is not None:
+            payload["expires"] = int(time.time()) + expires
+        data = MagicMock()
+        data.prime_robot._mqtt._token = ConnectionToken.from_json(payload)
+        return data
+
+    def test_a_login_with_an_expiry_is_reported_as_schedulable(self):
+        from custom_components.roomba_plus.diagnostics import _prime_token_expiry
+
+        result = _prime_token_expiry(self._data_with_token(expires=3600))
+
+        assert result["known"] is True
+        assert 3500 < result["seconds_remaining"] <= 3600
+
+    def test_a_login_without_an_expiry_says_refresh_cannot_be_scheduled(self):
+        """The question this field exists for. Whether Prime logins even
+        carry `expires` has been open for months, because the value
+        passes through on every login and nothing ever displayed it."""
+        from custom_components.roomba_plus.diagnostics import _prime_token_expiry
+
+        result = _prime_token_expiry(self._data_with_token(expires=None))
+
+        assert result["known"] is False
+        assert "cannot be scheduled" in result["note"]
+
+    def test_no_robot_at_all_does_not_raise(self):
+        """Classic entries, and Prime entries where setup failed part
+        way. A diagnostics download must not itself fail."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_token_expiry
+
+        data = MagicMock()
+        data.prime_robot = None
+
+        assert _prime_token_expiry(data)["known"] is False
+
+    def _data_with_connection(self, connected=None, has_data=True):
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        if not has_data:
+            data.prime_status_coordinator = None
+        else:
+            shadow = {} if connected is None else {"rw-constatus": {"connected": connected}}
+            data.prime_status_coordinator = MagicMock(data=shadow)
+        return data
+
+    def test_an_offline_robot_points_at_the_wi_fi_not_the_integration(self):
+        """THE distinction this field exists for. A robot off the
+        network and a broken push stream look identical from here --
+        shadow reads keep working either way, because the cloud returns
+        the last reported state regardless -- and they need opposite
+        responses."""
+        from custom_components.roomba_plus.diagnostics import _robot_cloud_connection
+
+        result = _robot_cloud_connection(self._data_with_connection(connected=False))
+
+        assert result["connected"] is False
+        assert "Wi-Fi" in result["note"]
+
+    def test_an_online_robot_puts_the_problem_on_our_side(self):
+        from custom_components.roomba_plus.diagnostics import _robot_cloud_connection
+
+        result = _robot_cloud_connection(self._data_with_connection(connected=True))
+
+        assert result["connected"] is True
+        assert "on our side" in result["note"]
+
+    def test_an_unknown_state_is_not_reported_as_either(self):
+        """Absent must not become False. Reporting "robot offline" on
+        missing data would send someone to check a router for no
+        reason."""
+        from custom_components.roomba_plus.diagnostics import _robot_cloud_connection
+
+        for data in (self._data_with_connection(has_data=False),
+                     self._data_with_connection(connected=None)):
+            result = _robot_cloud_connection(data)
+            assert result["known"] is False
+            assert "connected" not in result

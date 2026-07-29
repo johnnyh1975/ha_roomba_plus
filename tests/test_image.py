@@ -2326,6 +2326,7 @@ class TestPrimeMapSurvivesRestart:
         entity.hass = MagicMock()
         entity._png_bytes = None
         entity._map_stored_at = None
+        entity._map_store = None
         entity._config_entry = MagicMock(entry_id="entry1")
         return entity
 
@@ -2390,35 +2391,81 @@ class TestPrimeMapSurvivesRestart:
 
         assert entity._png_bytes is None
 
-    @pytest.mark.asyncio
-    async def test_saving_records_when_it_was_saved(self):
+    def test_saving_records_when_it_was_saved(self):
         """So a restored map can be shown as what it is -- the most
         recent one, not necessarily a current one."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         entity = self._entity()
+        entity._map_store = None
+        entity._png_bytes = b"PNGDATA"
+
+        with patch("custom_components.roomba_plus.image.Store"):
+            entity._async_save_png()
+
+        payload = entity._map_save_payload()
+        assert payload["saved_at"]
+        assert payload["png_b64"]
+
+    def test_writes_are_delayed_rather_than_immediate(self):
+        """A mission produces ~26 frames and only the last is ever read
+        back. Writing each one meant roughly 17 MB per mission of pure
+        flash wear, on hardware that is commonly an SD card."""
+        from unittest.mock import MagicMock, patch
+
+        entity = self._entity()
+        entity._map_store = None
         entity._png_bytes = b"PNGDATA"
 
         with patch("custom_components.roomba_plus.image.Store") as store_cls:
-            store_cls.return_value.async_save = AsyncMock()
-            await entity._async_save_png()
-            saved = store_cls.return_value.async_save.await_args.args[0]
+            store = MagicMock()
+            store_cls.return_value = store
+            entity._async_save_png()
 
-        assert saved["saved_at"]
-        assert saved["png_b64"]
+        store.async_delay_save.assert_called_once()
+        store.async_save.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_nothing_is_written_when_there_is_no_map(self):
-        """Avoids replacing a good stored map with an empty one."""
-        from unittest.mock import AsyncMock, patch
+    def test_the_store_is_cached_across_frames(self):
+        """A fresh Store each call would restart the delay timer every
+        frame and defeat the coalescing entirely."""
+        from unittest.mock import MagicMock, patch
 
         entity = self._entity()
+        entity._map_store = None
+        entity._png_bytes = b"PNGDATA"
 
         with patch("custom_components.roomba_plus.image.Store") as store_cls:
-            store_cls.return_value.async_save = AsyncMock()
-            await entity._async_save_png()
+            store_cls.return_value = MagicMock()
+            entity._async_save_png()
+            entity._async_save_png()
+            entity._async_save_png()
 
-        store_cls.return_value.async_save.assert_not_awaited()
+        assert store_cls.call_count == 1
+
+    def test_the_payload_is_taken_when_the_delay_fires(self):
+        """The callback reads the CURRENT frame, so a burst of frames
+        persists the newest rather than the one that scheduled it."""
+        entity = self._entity()
+        entity._png_bytes = b"FIRST"
+
+        callback_payload_later = entity._map_save_payload
+        entity._png_bytes = b"NEWEST"
+
+        import base64
+        assert base64.b64decode(callback_payload_later()["png_b64"]) == b"NEWEST"
+
+    def test_nothing_is_scheduled_when_there_is_no_map(self):
+        """Avoids replacing a good stored map with an empty one."""
+        from unittest.mock import MagicMock, patch
+
+        entity = self._entity()
+        entity._map_store = None
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value = MagicMock()
+            entity._async_save_png()
+
+        store_cls.assert_not_called()
 
     def test_the_prime_storage_key_differs_from_the_classic_one(self):
         """Different contents entirely -- a PNG against renderer state.

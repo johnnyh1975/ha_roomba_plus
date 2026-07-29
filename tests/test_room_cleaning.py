@@ -141,7 +141,9 @@ class TestPrimeRoomCleaning:
     async def test_room_names_come_back_mapped_to_ids(self):
         backend, _robot = self._backend()
 
-        assert await backend.available_rooms() == {"Kitchen": "12", "Living room": "13"}
+        assert await backend.available_rooms() == {
+            "Kitchen": "MAP-1/12", "Living room": "MAP-1/13",
+        }
 
     @pytest.mark.asyncio
     async def test_the_command_carries_an_initiator(self):
@@ -327,7 +329,9 @@ class TestPrimeRoomCleaning:
         second = MagicMock(rooms_metadata=[self._room("20", "Bedroom")])
         robot.get_map_metadata = AsyncMock(side_effect=[first, second])
 
-        assert await backend.available_rooms() == {"Kitchen": "12", "Bedroom": "20"}
+        assert await backend.available_rooms() == {
+            "Kitchen": "FLOOR-1/12", "Bedroom": "FLOOR-2/20",
+        }
 
     @pytest.mark.asyncio
     async def test_map_versions_are_read_as_dicts_not_objects(self):
@@ -374,7 +378,7 @@ class TestPrimeRoomCleaning:
             rooms=[self._room("12", "Kitchen"), self._room("13", None)]
         )
 
-        assert await backend.available_rooms() == {"Kitchen": "12"}
+        assert await backend.available_rooms() == {"Kitchen": "MAP-1/12"}
 
 
 class TestRoomNameMatching:
@@ -567,132 +571,80 @@ class TestCleanRoomUsesTheBackend:
 
 
 class TestPrimeSegmentsForHomeAssistantAreaMapping:
-    """HA's native CLEAN_AREA contract, for Prime robots.
+    """Prime's own segment id format, now agreed inside one class.
 
-    Advertising the flag without implementing `async_get_segments` was
-    a real bug: Home Assistant showed the "Map vacuum segments to
-    areas" dialog and it came up empty, because the method returned []
-    for every Prime robot. The capability appeared present and did
-    nothing.
+    Producer and consumer share a prefix that nothing outside these two
+    methods would notice drifting apart. They lived in vacuum.py while
+    the Classic pair lived here, which split one contract across two
+    files -- and briefly across two files in opposite directions, after
+    the Classic half moved and the Prime half did not.
 
-    Reported by a tester who could see his rooms in the iRobot app and
-    none in Home Assistant. Advertising and doing have to agree --
-    offering a feature that silently does nothing is worse than not
-    offering it, because the user spends their time looking for their
-    own mistake."""
+    The original bug this covers: a11 advertised CLEAN_AREA to Home
+    Assistant and returned no segments for Prime, so the "map segments
+    to areas" dialog opened empty. A capability that appears present and
+    does nothing is worse than none -- both testers who hit it spent
+    their time looking for their own mistake."""
 
-    def _vacuum(self, rooms):
+    def _backend(self, rooms):
         from unittest.mock import AsyncMock, MagicMock
 
-        from custom_components.roomba_plus.models import ConnectionType
-        from custom_components.roomba_plus.vacuum import IRobotVacuum
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
 
-        v = object.__new__(IRobotVacuum)
-        v._connection_type = ConnectionType.CLOUD_ONLY
-        v.hass = MagicMock()
-        entry = MagicMock()
-        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
-        entry.runtime_data.prime_robot = MagicMock()
-        v._config_entry = entry
-
-        backend = MagicMock()
+        backend = PrimeRoomCleaning(MagicMock(blid="BLID"))
         backend.available_rooms = AsyncMock(return_value=rooms)
         backend.clean_rooms = AsyncMock()
-        return v, backend
+        return backend
 
     @pytest.mark.asyncio
-    async def test_the_backend_is_asked_for_rooms(self):
-        """HA's Segment class arrives in 2026.3 and this environment
-        predates it, so async_get_segments() returns [] here whatever
-        the data. What IS testable is that it reaches the backend at
-        all -- the original bug was that Prime never got that far."""
-        from unittest.mock import patch
+    async def test_room_ids_round_trip_through_the_segment_format(self):
+        """The property that matters: whatever get_segments emits,
+        clean_segments must decode back to the same room id. If the two
+        ever disagree the dialog works and cleaning silently does
+        nothing."""
+        backend = self._backend({"Salon": "13"})
 
-        v, backend = self._vacuum({"Salon": "13", "Cuisine": "12"})
-
-        with patch(
-            "custom_components.roomba_plus.room_cleaning."
-            "async_get_room_cleaning_backend",
-            return_value=backend,
-        ):
-            await v.async_get_segments()
-
-        assert backend.available_rooms.await_count >= 0
-
-    @pytest.mark.asyncio
-    async def test_segment_ids_round_trip_back_to_room_ids(self):
-        """The id HA hands back must resolve to what the robot
-        understands. If the two encodings disagree, the mapping dialog
-        works and cleaning silently does nothing.
-
-        The id is constructed here rather than taken from
-        async_get_segments(): HA's Segment class only exists from
-        2026.3, and this test environment predates it, so that method
-        returns [] regardless of the data. Asserting on the encoding
-        directly is what remains testable -- and the two sides are
-        written from the same "rid_" literal, which is the part that
-        could drift."""
-        from unittest.mock import patch
-
-        v, backend = self._vacuum({"Salon": "13"})
-
-        with patch(
-            "custom_components.roomba_plus.room_cleaning."
-            "async_get_room_cleaning_backend",
-            return_value=backend,
-        ):
-            await v.async_clean_segments(["rid_13"])
+        await backend.clean_segments([f"{backend._SEGMENT_PREFIX}13"])
 
         assert backend.clean_rooms.await_args.args[0] == ["13"]
 
-    def test_both_sides_use_the_same_prefix(self):
-        """Guards the encoding across the two methods, since the
-        round-trip cannot be exercised end to end in this environment."""
-        import inspect
-
-        from custom_components.roomba_plus.vacuum import IRobotVacuum
-
-        produce = inspect.getsource(IRobotVacuum.async_get_segments)
-        consume = inspect.getsource(IRobotVacuum.async_clean_segments)
-
-        assert 'f"rid_{room_id}"' in produce
-        assert 'startswith("rid_")' in consume
-
-    @pytest.mark.asyncio
-    async def test_no_backend_yields_no_segments_rather_than_an_error(self):
-        """A robot still mapping is a normal state. The dialog showing
-        nothing is honest; a traceback is not."""
-        from unittest.mock import patch
-
-        v, _backend = self._vacuum({})
-
-        with patch(
-            "custom_components.roomba_plus.room_cleaning."
-            "async_get_room_cleaning_backend",
-            return_value=None,
-        ):
-            assert await v.async_get_segments() == []
-
     @pytest.mark.asyncio
     async def test_unrecognised_segment_ids_raise_rather_than_clean_nothing(self):
-        """Segments from a different vacuum, or a stale mapping after
-        the robot remapped. Cleaning nothing silently would look like
+        """A stale area mapping after a retrain, or segments from a
+        different vacuum. Cleaning nothing quietly would look like
         success."""
-        from unittest.mock import patch
-
         from homeassistant.exceptions import ServiceValidationError
 
-        v, backend = self._vacuum({"Salon": "13"})
+        backend = self._backend({"Salon": "13"})
 
-        with patch(
-            "custom_components.roomba_plus.room_cleaning."
-            "async_get_room_cleaning_backend",
-            return_value=backend,
-        ), pytest.raises(ServiceValidationError):
-            await v.async_clean_segments(["something_else"])
+        with pytest.raises(ServiceValidationError):
+            await backend.clean_segments(["something_else"])
 
         backend.clean_rooms.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_segments_are_built_from_the_room_list(self):
+        """HA's Segment class arrives in 2026.3 and this environment
+        predates it, so get_segments() returns [] here whatever the
+        data. What is testable is that it consults the backend at all --
+        the original bug was that Prime never got that far."""
+        backend = self._backend({"Salon": "13", "Cuisine": "12"})
+
+        await backend.get_segments()
+
+        assert backend.available_rooms.await_count == 1
+
+    def test_both_sides_share_one_prefix_constant(self):
+        """Written as a shared constant rather than two literals, so
+        producer and consumer cannot drift by a typo."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        produce = inspect.getsource(PrimeRoomCleaning.get_segments)
+        consume = inspect.getsource(PrimeRoomCleaning.clean_segments)
+
+        assert "_SEGMENT_PREFIX" in produce
+        assert "_SEGMENT_PREFIX" in consume
 
 class TestConsumablePartNaming:
     """Part names come from a table; UNITS come from the server.
@@ -776,3 +728,286 @@ class TestConsumablePartNaming:
 
         for count_type in ("minutes", "evacs", "combo_missions", "pad_washes_used"):
             assert _PART_COUNT_UNITS.get(count_type), count_type
+
+
+class TestClassicRoomDataDetection:
+    """Decides whether a Classic robot is offered room cleaning at all,
+    and took three attempts to get right.
+
+    Draft one required `has_cloud` -- too strict. Room names live in
+    config_entry.options; the cloud coordinator only ENRICHES them, so
+    that locked out every Classic user without credentials. Six existing
+    service tests caught it.
+
+    Draft two accepted any SMART robot -- too loose. A smart map with no
+    named rooms anywhere has nothing to target, so the service would be
+    offered and could only fail. A vacuum test caught that one.
+
+    Neither draft was caught by a test of this function, because it had
+    none. Written after a bug hunt found three new functions with zero
+    test references between them."""
+
+    def _check(self, *, zone_data=None, coordinator_data=None, has_coordinator=True):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import _classic_has_room_data
+
+        data = MagicMock(
+            cloud_coordinator=MagicMock(data=coordinator_data) if has_coordinator else None
+        )
+        entry = MagicMock(options={"smart_zone_data": zone_data} if zone_data else {})
+        return _classic_has_room_data(data, entry)
+
+    def test_stored_zone_data_alone_is_enough(self):
+        """The case draft one broke: a user who named their rooms and
+        runs without cloud credentials."""
+        assert self._check(zone_data={"1": {"name": "Kitchen"}}, has_coordinator=False)
+
+    def test_cloud_regions_alone_are_enough(self):
+        """A user who has never opened the options but whose coordinator
+        knows the regions."""
+        assert self._check(coordinator_data={"anything": 1})
+
+    def test_neither_source_means_no_room_cleaning(self):
+        """The case draft two broke: offering a feature whose every call
+        would fail."""
+        assert not self._check(has_coordinator=False)
+
+    def test_empty_zone_data_does_not_count(self):
+        """The options key exists on every entry once anything has been
+        configured. Its presence says nothing; its contents do."""
+        assert not self._check(zone_data={}, has_coordinator=False)
+
+    def test_a_coordinator_that_has_not_fetched_yet_does_not_count(self):
+        """Early in startup. Answering yes here would offer room
+        cleaning for a few seconds and then withdraw it."""
+        assert not self._check(coordinator_data=None)
+
+
+class TestClassicBackendRequiresTheRoomListFirst:
+    """`clean_rooms` depends on state that `available_rooms` populates.
+
+    Classic needs each region's pmap_id alongside its id, and that is
+    recorded while reading the room list. A backend instance is created
+    fresh per request, so calling clean_rooms without having read the
+    rooms leaves the index empty.
+
+    This is a genuine ordering dependency between two methods of the
+    same object -- exactly the shape that has bitten this project
+    before, where step B silently used something step A was supposed to
+    have prepared. The difference here is that it fails loudly.
+
+    Worth stating in a test because the interface does not express it:
+    nothing in the signature says available_rooms must come first."""
+
+    def _backend(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        return ClassicRoomCleaning(MagicMock(), MagicMock(), MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_cleaning_without_reading_rooms_first_raises(self):
+        """Refusing beats sending. An empty pmap_id produces a command
+        the robot accepts and ignores -- the most expensive failure
+        available, because it looks like success."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        with pytest.raises(HomeAssistantError, match="not been read yet"):
+            await self._backend().clean_rooms(["12"])
+
+    @pytest.mark.asyncio
+    async def test_reading_rooms_first_makes_cleaning_possible(self):
+        """The normal path: both service callers read the room list to
+        match names before they can have any ids to clean."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        backend = self._backend()
+        backend._data.cloud_coordinator = MagicMock(
+            data={"x": 1},
+            regions=[{"id": "12", "name": "Kitchen", "pmap_id": "MAP-1"}],
+            zones=[],
+        )
+        backend._config_entry.options = {}
+        backend._data.roomba_reported_state = MagicMock(return_value={})
+        backend._data.has_cloud = True
+        backend._hass.async_add_executor_job = AsyncMock()
+
+        rooms = await backend.available_rooms()
+        assert rooms == {"Kitchen": "12"}
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(["12"])
+
+        assert backend._hass.async_add_executor_job.await_count == 1
+
+
+class TestPrimeMapConsistency:
+    """Room ids and the map to clean against come from two independent
+    sources, and nothing checked them against each other.
+
+    available_rooms() reads ids per map, from get_map_metadata(). The
+    map to send against comes from the robot's own report of where it
+    is. Both are correct individually; together they can disagree.
+
+    Found by feeding deliberately inconsistent data rather than by
+    reading code -- the pattern-based passes over this file had all come
+    back clean."""
+
+    def _backend(self, *, maps, current):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        data = MagicMock(blid="BLID")
+        data.prime_robot.get_active_map_versions = AsyncMock(return_value=maps)
+        room = MagicMock(room_id="1")
+        room.name = "Kitchen"
+        data.prime_robot.get_map_metadata = AsyncMock(
+            return_value=MagicMock(rooms_metadata=[room])
+        )
+        data.prime_robot.send_routine_command_via_cmd_topic = AsyncMock()
+        data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": {"p2mapId": current}}
+        }
+        return PrimeRoomCleaning(data), data.prime_robot
+
+    def _sent_map(self, robot):
+        return robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()["p2map_id"]
+
+    @pytest.mark.asyncio
+    async def test_a_map_the_robot_reports_but_does_not_own_is_ignored(self):
+        """Carried to another floor, or a map deleted in the app while
+        Home Assistant was running. With one map left, its ids are the
+        only ids there are, so falling back to it is safe."""
+        backend, robot = self._backend(
+            maps=[{"p2map_id": "MAP-A"}], current="MAP-GONE"
+        )
+
+        await backend.clean_rooms(["1"])
+
+        assert self._sent_map(robot) == "MAP-A"
+
+    @pytest.mark.asyncio
+    async def test_an_inconsistent_report_with_several_maps_refuses(self):
+        """Here there is no safe fallback: the ids could belong to
+        either map, and guessing cleans the wrong floor."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        backend, _robot = self._backend(
+            maps=[{"p2map_id": "MAP-A"}, {"p2map_id": "MAP-B"}], current="MAP-GONE"
+        )
+
+        with pytest.raises(HomeAssistantError, match="2 maps"):
+            await backend.clean_rooms(["1"])
+
+    @pytest.mark.asyncio
+    async def test_a_consistent_report_is_used_as_before(self):
+        """The check must not break the normal multi-floor case it was
+        added to protect."""
+        backend, robot = self._backend(
+            maps=[{"p2map_id": "MAP-A"}, {"p2map_id": "MAP-B"}], current="MAP-B"
+        )
+
+        await backend.clean_rooms(["1"])
+
+        assert self._sent_map(robot) == "MAP-B"
+
+
+class TestRoomIdsAreQualifiedByTheirMap:
+    """Room ids are per-map, so two floors both have a room "1".
+
+    Returning bare ids meant "Kitchen" downstairs and "Bedroom"
+    upstairs could both resolve to "1", and cleaning targeted whichever
+    map the robot happened to be on. Picking Kitchen while the robot
+    was upstairs cleaned the bedroom -- silently, because the id was
+    perfectly valid on that map too.
+
+    Two testers have multi-floor accounts, so this was reachable rather
+    than theoretical.
+
+    Found by feeding two maps with colliding ids. Every pattern-based
+    pass over this file had come back clean, because both halves are
+    individually correct: listing rooms per map is right, and sending
+    against the robot's current map is right. Only together are they
+    wrong."""
+
+    def _backend(self, rooms_by_map, maps, current=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        def _room(rid, name):
+            room = MagicMock(room_id=rid)
+            room.name = name
+            return room
+
+        data = MagicMock(blid="BLID")
+        data.prime_robot.get_active_map_versions = AsyncMock(return_value=maps)
+
+        async def _meta(map_id):
+            return MagicMock(
+                rooms_metadata=[_room(r, n) for r, n in rooms_by_map.get(map_id, [])]
+            )
+
+        data.prime_robot.get_map_metadata = AsyncMock(side_effect=_meta)
+        data.prime_robot.send_routine_command_via_cmd_topic = AsyncMock()
+        data.prime_status_coordinator.data = (
+            {"ro-currentstate": {"cleanMissionStatus": {"p2mapId": current}}}
+            if current else {}
+        )
+        return PrimeRoomCleaning(data), data.prime_robot
+
+    _TWO_FLOORS = {"M1": [("1", "Kitchen")], "M2": [("1", "Bedroom")]}
+    _MAPS = [{"p2map_id": "M1"}, {"p2map_id": "M2"}]
+
+    @pytest.mark.asyncio
+    async def test_colliding_ids_stay_distinguishable(self):
+        """THE bug. Both rooms are id "1" on their own map."""
+        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M2")
+
+        rooms = await backend.available_rooms()
+
+        assert rooms["Kitchen"] != rooms["Bedroom"]
+
+    @pytest.mark.asyncio
+    async def test_the_map_comes_from_the_room_not_from_the_robot(self):
+        """Choosing a downstairs room while the robot is upstairs must
+        clean downstairs. The id says which map; where the robot stands
+        does not enter into it."""
+        backend, robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M2")
+
+        rooms = await backend.available_rooms()
+        await backend.clean_rooms([rooms["Kitchen"]])
+
+        payload = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()
+        assert payload["p2map_id"] == "M1"
+        assert payload["regions"][0]["region_id"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_rooms_from_two_maps_in_one_call_are_refused(self):
+        """One command targets one map. Cleaning half the request and
+        silently dropping the rest would be worse than saying so."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M1")
+
+        rooms = await backend.available_rooms()
+
+        with pytest.raises(HomeAssistantError, match="different maps"):
+            await backend.clean_rooms([rooms["Kitchen"], rooms["Bedroom"]])
+
+    @pytest.mark.asyncio
+    async def test_a_single_map_still_works_normally(self):
+        """The common case must not pay for the multi-floor fix."""
+        backend, robot = self._backend(
+            {"ONLY": [("7", "Salon")]}, [{"p2map_id": "ONLY"}]
+        )
+
+        rooms = await backend.available_rooms()
+        await backend.clean_rooms([rooms["Salon"]])
+
+        payload = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()
+        assert payload["p2map_id"] == "ONLY"
+        assert payload["regions"][0]["region_id"] == "7"

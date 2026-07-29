@@ -35,9 +35,18 @@ class TestStorageKeyRegistry:
     on every removal, same class of bug this whole fix addresses."""
 
     def test_expected_key_count(self):
-        """15 stores confirmed against source at implementation time —
-        13 STORAGE_KEY_PREFIX modules + image.py's 2 own keys."""
-        assert len(_STORAGE_KEYS_TO_REMOVE) == 15
+        """16 stores: 13 STORAGE_KEY_PREFIX modules + image.py's 3 own
+        keys (the third is the Prime map PNG, added this session).
+
+        A count assertion looks brittle and earns its place here. It
+        fired the moment a new Store was added without a removal entry
+        -- which is the whole failure mode: nothing else notices a
+        forgotten key until a user uninstalls and a file with a picture
+        of their home stays behind.
+
+        Bumping this number is the point at which you confirm you added
+        the entry deliberately rather than making a test pass."""
+        assert len(_STORAGE_KEYS_TO_REMOVE) == 16
 
     def test_no_duplicate_keys(self):
         templates = [k for _, k in _STORAGE_KEYS_TO_REMOVE]
