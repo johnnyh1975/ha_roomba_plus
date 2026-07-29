@@ -4,13 +4,18 @@ updates:
   # automated way currently to notice a security patch landing upstream.
   # Weekly (not daily) — this is test tooling, not runtime dependencies
   # shipped to users; no urgency that justifies daily PR noise.
+  #
+  # No `labels:` here, deliberately: Dependabot requires labels to already
+  # exist in the repo before it can apply them to a PR, and neither
+  # "dependencies" nor "ci" exist yet (see the GitHub error this was
+  # written in response to). Create both under Settings → Labels first if
+  # you want the categorization back, then re-add `labels: ["dependencies"]`
+  # / `labels: ["dependencies", "ci"]` to the two entries below.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
 
   # The workflow files themselves (actions/checkout, actions/setup-python,
   # hacs/action, home-assistant/actions, softprops/action-gh-release, etc.)
@@ -19,6 +24,3 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    labels:
-      - "dependencies"
-      - "ci"
