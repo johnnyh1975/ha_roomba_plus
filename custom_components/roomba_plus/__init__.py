@@ -1540,6 +1540,11 @@ _STORAGE_KEYS_TO_REMOVE: Final[list[tuple[str, str]]] = [
     ("room_seg_store", "roomba_plus_roomseg_{entry_id}"),
     ("image (map render state)", "roomba_plus_map_{entry_id}"),
     ("image (mission checkpoint)", "roomba_plus_map_checkpoint_{entry_id}"),
+    # Prime map PNG, added this session with the map persistence.
+    # Found by a bug hunt rather than a test: a new Store was created
+    # without a matching entry here, so uninstalling would have left a
+    # file behind containing a picture of someone's home.
+    ("image (prime map)", "roomba_plus_prime_map_{entry_id}"),
 ]
 
 

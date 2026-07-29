@@ -156,6 +156,24 @@ class RoomCleaningBackend(ABC):
         """
 
     @abstractmethod
+    async def get_segments(self) -> list:
+        """Rooms as Home Assistant Clean Area segments.
+
+        The id format is each backend's own business and is agreed with
+        its clean_segments() alone. Classic prefixes with the pmap id so
+        segments from another map can be recognised; Prime does not,
+        because it resolves the map at send time.
+
+        Both halves of that agreement live in the same class on purpose:
+        nothing outside these two methods would notice them drifting
+        apart, and for a while they lived in different files.
+        """
+
+    @abstractmethod
+    async def clean_segments(self, segment_ids: list[str]) -> None:
+        """Clean the given Home Assistant segments."""
+
+    @abstractmethod
     async def clean_rooms(
         self,
         room_ids: list[str],
@@ -301,6 +319,19 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         Restricting this to the current map would make the same
         automation work in the evening and fail in the morning.
 
+        IDS ARE QUALIFIED BY THEIR MAP -- "<p2map_id>/<room_id>".
+        
+        Room ids are assigned per map and start low, so two floors
+        almost certainly both have a room "1". Returning bare ids meant
+        "Kitchen" downstairs and "Bedroom" upstairs could both resolve
+        to "1", and cleaning then targeted whichever map the robot
+        happened to be on. Choosing "Kitchen" while the robot was
+        upstairs cleaned the bedroom -- silently, since the id was
+        valid on that map too.
+
+        Found by feeding two maps with colliding ids, not by reading
+        the code: both halves are individually correct.
+
         DUPLICATE NAMES: the room from the map the robot is currently
         on wins. Borrowed from services.py::_resolve_rooms, which has
         handled this for Classic robots for a long time -- a first draft
@@ -342,7 +373,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                             "target them separately.",
                             room.name, self._data.blid,
                         )
-                        rooms[room.name] = room.room_id
+                        rooms[room.name] = f"{p2map_id}/{room.room_id}"
                         from_current.add(room.name)
                     else:
                         _LOGGER.warning(
@@ -353,10 +384,49 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                         )
                     continue
 
-                rooms[room.name] = room.room_id
+                rooms[room.name] = f"{p2map_id}/{room.room_id}"
                 if is_current:
                     from_current.add(room.name)
         return rooms
+
+    _SEGMENT_PREFIX = "rid_"
+
+    async def get_segments(self) -> list:
+        """Prime rooms as HA Clean Area segments.
+
+        The id format is agreed with clean_segments() below and nowhere
+        else, which is why both live here rather than one of them in
+        vacuum.py. Classic makes the same agreement about its own
+        pmap-prefixed format, in the same file, for the same reason.
+
+        Prime needs no pmap prefix: unlike Classic it resolves the map
+        at send time, from the one the robot reports being on.
+        """
+        try:
+            from homeassistant.components.vacuum import Segment  # noqa: PLC0415
+        except ImportError:
+            return []
+
+        return [
+            Segment(id=f"{self._SEGMENT_PREFIX}{room_id}", name=name, group="Room")
+            for name, room_id in sorted((await self.available_rooms()).items())
+        ]
+
+    async def clean_segments(self, segment_ids: list[str]) -> None:
+        """Decode HA segment ids back to room ids and clean them."""
+        room_ids = [
+            seg_id[len(self._SEGMENT_PREFIX):]
+            for seg_id in segment_ids
+            if seg_id.startswith(self._SEGMENT_PREFIX)
+        ]
+        if not room_ids:
+            # A stale area mapping, or segments belonging to another
+            # vacuum. Cleaning nothing quietly would look like success.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+        await self.clean_rooms(room_ids)
 
     async def clean_rooms(
         self,
@@ -366,13 +436,6 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
     ) -> None:
-        from roombapy_prime.models.mission_control import (  # noqa: PLC0415
-            CommandParams,
-            MissionCommandType,
-            Region,
-            RegionType,
-            RoutineCommand,
-        )
 
         # SAME READINESS CHECK CLASSIC HAS. A robot rebuilding its map
         # has region ids in flux, so a command sent now can target a
@@ -385,7 +448,51 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # thing Classic did that Prime did not.
         self._raise_if_map_updating()
 
+        # Ids arrive qualified as "<p2map_id>/<room_id>" (see
+        # available_rooms), which removes the guesswork entirely: the
+        # map is not inferred from where the robot happens to be, it
+        # comes with the room the caller asked for.
+        qualified = [r for r in room_ids if "/" in r]
+        if qualified:
+            maps = {r.split("/", 1)[0] for r in qualified}
+            if len(maps) > 1:
+                raise HomeAssistantError(
+                    "Those rooms are on different maps. A single cleaning command "
+                    "can only target one map, so please clean them separately."
+                )
+            p2map_id = maps.pop()
+            room_ids = [r.split("/", 1)[1] for r in qualified]
+            self._raise_if_map_updating()
+            await self._send_region_command(
+                p2map_id, room_ids, ordered=ordered,
+                two_pass=two_pass, suction_level=suction_level,
+            )
+            return
+
         p2map_id = await self._current_map_id()
+
+        # THE ROBOT'S MAP MUST BE ONE WE LISTED ROOMS FROM.
+        #
+        # Room ids come from get_map_metadata() per map; the map to
+        # clean against comes from the robot's own report. Two sources,
+        # and nothing checked them against each other -- so a robot
+        # reporting a map that is not in its own list (carried to
+        # another floor, a map deleted in the app while HA was running,
+        # a freshly created one) would have had ids from map A sent
+        # against map B. The robot then cleans the wrong room or
+        # nothing, with no error anywhere.
+        #
+        # Falling back to the single-map path is right here: if there is
+        # exactly one map, its ids are the only ids there are. With
+        # several, refusing is the only honest answer.
+        if p2map_id and p2map_id not in await self._all_map_ids():
+            _LOGGER.warning(
+                "roomba_plus: robot %s reports being on map %s, which is not in its "
+                "own map list -- ignoring it and falling back",
+                self._data.blid, p2map_id,
+            )
+            p2map_id = None
+
         if not p2map_id:
             # Falling back to a single map is safe; guessing between
             # several is not. On one map there is nothing to get wrong.
@@ -404,6 +511,35 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     "This robot has no saved maps yet, so it cannot clean a named "
                     "room. Let it finish a full mapping run first."
                 )
+
+        await self._send_region_command(
+            p2map_id, room_ids, ordered=ordered,
+            two_pass=two_pass, suction_level=suction_level,
+        )
+
+    async def _send_region_command(
+        self,
+        p2map_id: str,
+        room_ids: list[str],
+        *,
+        ordered: bool,
+        two_pass: list[bool | None] | None,
+        suction_level: list[int | None] | None,
+    ) -> None:
+        """Builds and sends the region command for one map.
+
+        Extracted so the qualified-id path and the fallback path cannot
+        drift apart -- two copies of a payload this specific is exactly
+        how a wire key ends up correct in one place and wrong in the
+        other.
+        """
+        from roombapy_prime.models.mission_control import (  # noqa: PLC0415
+            CommandParams,
+            MissionCommandType,
+            Region,
+            RegionType,
+            RoutineCommand,
+        )
 
         command = RoutineCommand(
             command_type=MissionCommandType.START,
@@ -612,6 +748,238 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
 
 
+    async def get_segments(self) -> list:
+        """The Classic side of HA's Clean Area segment list.
+
+        MOVED (this session), completing what clean_segments started.
+        Leaving the producer in vacuum.py while the consumer lived here
+        split one contract across two files: the pmap-prefixed id format
+        is agreed between exactly these two methods, and nothing else
+        would have flagged them drifting apart.
+
+        Checked before moving rather than after: no entity-only
+        attribute is reached in here, unlike clean_segments, which
+        silently used self.vacuum and self.vacuum_state and needed three
+        rounds of test failures to surface them.
+        """
+        # Segment lands in HA 2026.3. Returning [] on older versions
+        # matches supported_features, which gates CLEAN_AREA on the same
+        # hasattr -- so capability and data agree about whether this HA
+        # can do segments at all.
+        try:
+            from homeassistant.components.vacuum import Segment  # noqa: PLC0415
+        except ImportError:
+            return []
+
+        from .const import CONF_FLOOR  # noqa: PLC0415
+
+        if not self._data.has_cloud or self._data.cloud_coordinator is None:
+            return []
+        active_pmap_id = self._data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            # Coordinator has not yet fetched pmap data — returning segments with a
+            # None prefix would create IDs that never match in async_clean_segments.
+            _LOGGER.debug(
+                "async_get_segments: active_pmap_id not yet available — returning empty"
+            )
+            return []
+        floor_label = (
+            self._config_entry.options.get(CONF_FLOOR) or None
+            if self._config_entry else None
+        )
+        # Room segments (rid)
+        segments = [
+            Segment(
+                id=f"{active_pmap_id}_{region['id']}",
+                name=region.get("name", region["id"]),
+                group=floor_label,
+            )
+            for region in self._data.cloud_coordinator.regions
+            if region.get("id")
+        ]
+        # IA74-ZONE full (v2.7.0): zone segments (zid).
+        # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
+        # async_clean_segments can distinguish them from room segments.
+        # Zone type is surfaced as the group label for HA's mapping UI.
+        for zone in self._data.cloud_coordinator.zones:
+            zid = zone.get("id")
+            if not zid:
+                continue
+            zone_type = zone.get("zone_type", "zone")
+            zone_name = zone.get("name") or f"Zone {zid}"
+            segments.append(Segment(
+                id=f"{active_pmap_id}_zid_{zid}",
+                name=zone_name,
+                group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
+            ))
+        return segments
+
+    async def clean_segments(self, segment_ids: list[str]) -> None:
+        """HA Clean Area segments, which are NOT the same as room ids.
+
+        MOVED VERBATIM from vacuum.py (this session), with two entity
+        attributes rebound: `self.vacuum` and `self.vacuum_state` are
+        conveniences IRobotEntity provides, and they resolve here to
+        `self._data.roomba` and `roomba_reported_state()` -- the same
+        objects by a different route.
+
+        Both were missed by the mechanical rewrite that moved this and
+        were caught by existing tests. Worth naming: a move that renames
+        `data.` to `self._data.` looks complete and silently leaves
+        anything that was reached another way. Kept as its own
+        method rather than folded into clean_rooms(), because Classic
+        segments carry three things room ids do not:
+
+          - a pmap_id prefix, so segments from another map can be
+            recognised and skipped rather than sent to the wrong map
+          - a "zid_" marker separating user-drawn ZONES from named
+            rooms; both clean, through different payload fields
+          - self-healing: a room id that no longer exists on the current
+            map is looked up again by its stored name, because a retrain
+            renumbers rooms and would otherwise break every saved area
+            mapping silently
+
+        None of that has a Prime equivalent, which is why PrimeRoom-
+        Cleaning implements this as a thin decode of its own prefix.
+
+        An earlier plan was to drop this into clean_rooms() and lose the
+        distinction. That would have quietly removed zone cleaning and
+        the self-healing from every Classic user -- the same shape of
+        mistake as an earlier draft here that dropped four capabilities
+        while "moving" code that it was actually rewriting.
+        """
+        active_pmap_id = self._data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+        region_ids: list[str] = []
+        prefix = f"{active_pmap_id}_"
+        for seg_id in segment_ids:
+            # v2.4.3 PMAP-UNDERSCORE: pmap_ids may contain underscores (URL-safe
+            # base64 encoding). partition("_") splits on the first underscore and
+            # produces a wrong pmap_id for IDs like "2Bly_kGURy6OcUVTX7FN3w_19".
+            # Use a prefix check instead — region_ids are always plain integers.
+            if seg_id.startswith(prefix):
+                region_ids.append(seg_id[len(prefix):])
+
+        if not region_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+
+        # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
+        # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping
+        # in async_get_segments().  Rooms are plain integers (e.g. "19").
+        _ZONE_PREFIX = "zid_"
+        raw_zone_ids = [r for r in region_ids if r.startswith(_ZONE_PREFIX)]
+        raw_room_ids = [r for r in region_ids if not r.startswith(_ZONE_PREFIX)]
+        # Extract the bare zone_id (strip "zid_" prefix)
+        bare_zone_ids = [z[len(_ZONE_PREFIX):] for z in raw_zone_ids]
+
+        # Validate + auto-heal room IDs against the current cloud map (zone IDs
+        # are stable across map retrains — no validation needed for them).
+        current_regions = self._data.cloud_coordinator.regions
+        current_region_ids: set[str] = {
+            str(r["id"]) for r in current_regions if r.get("id")
+        }
+        validated_room_ids = list(raw_room_ids)
+        if current_region_ids and raw_room_ids:
+            stale = [rid for rid in raw_room_ids if rid not in current_region_ids]
+            if stale:
+                # Build name → current_id lookup from live cloud data
+                name_to_current: dict[str, str] = {
+                    r["name"].casefold(): str(r["id"])
+                    for r in current_regions
+                    if r.get("name") and r.get("id")
+                }
+                zone_labels: dict[str, str] = (
+                    self._config_entry.options.get("smart_zone_labels", {})
+                    if self._config_entry else {}
+                )
+                healed: list[str] = []
+                for stale_rid in stale:
+                    label = zone_labels.get(stale_rid, "")
+                    current_id = name_to_current.get(label.casefold()) if label else None
+                    if current_id and current_id not in raw_room_ids:
+                        healed.append(current_id)
+                        _LOGGER.info(
+                            "async_clean_segments: auto-healed stale region %s → %s "
+                            "('%s') — map retrained but room name matched current map",
+                            stale_rid, current_id, label,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "async_clean_segments: stale region %s could not be "
+                            "auto-healed (label=%r, not in current map) — skipping. "
+                            "Re-map vacuum segments to areas in HA to fix permanently.",
+                            stale_rid, label or "<unlabeled>",
+                        )
+                validated_room_ids = (
+                    [r for r in raw_room_ids if r in current_region_ids] + healed
+                )
+
+        if not validated_room_ids and not bare_zone_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+
+        regions = [
+            {
+                "region_id": rid,
+                "type": "rid",
+                "params": {"noAutoPasses": False, "twoPass": False},
+            }
+            for rid in validated_room_ids
+        ] + [
+            # IA74-ZONE full (v2.7.0): zones use type "zid" with bare zone_id
+            {
+                "region_id": zid,
+                "type": "zid",
+                "params": {"noAutoPasses": False, "twoPass": False},
+            }
+            for zid in bare_zone_ids
+        ]
+
+        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
+        # Primary: cloud coordinator — always authoritative, never stale.
+        user_pmapv_id: str | None = self._data.cloud_coordinator.active_user_pmapv_id
+        if not user_pmapv_id:
+            user_pmapv_id = _resolve_pmapv_id(self._data.roomba_reported_state(), active_pmap_id)
+        if user_pmapv_id is None:
+            _LOGGER.warning(
+                "async_clean_segments: user_pmapv_id not found in cloud or "
+                "state.pmaps for pmap %s — sending command without version ID",
+                active_pmap_id,
+            )
+
+        # Bug 5 fix (v2.7.0): per field logs, including user_pmapv_id in pure
+        # zone (zid) commands causes error 224. Omit it when no room regions
+        # are present. Mixed room+zone commands retain it for room-ID validation.
+        include_pmapv = bool(validated_room_ids)
+
+        params: dict[str, Any] = {
+            "ordered": 1,
+            "pmap_id": active_pmap_id,
+            "regions": regions,
+        }
+        if include_pmapv and user_pmapv_id is not None:
+            params["user_pmapv_id"] = user_pmapv_id
+        await self._hass.async_add_executor_job(
+            self._data.roomba.send_command,
+            "start",
+            params,
+        )
+        # F-RB-1: best-effort state update after segment clean command.
+        # Cloud may not yet have the new state; failure is non-fatal.
+        try:
+            await self._data.cloud_coordinator.async_refresh()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("async_clean_segments: post-command cloud refresh failed (non-fatal)")
+
 def _classic_has_room_data(data: RoombaData, config_entry: RoombaConfigEntry) -> bool:
     """Whether a Classic robot has any room names to work with.
 
@@ -642,6 +1010,13 @@ def async_get_room_cleaning_backend(
     replaces the old `map_capability == SMART` check, which was a
     Classic-shaped question that no Prime robot could ever pass.
     """
+    if config_entry is None:
+        # Entities can briefly exist without one -- and the code this
+        # replaced checked for it. A move that drops a guard the
+        # original had is the quiet kind of regression, caught here by
+        # an existing test rather than by the move itself.
+        return None
+
     data: RoombaData = config_entry.runtime_data
 
     if data.connection_type == ConnectionType.CLOUD_ONLY:

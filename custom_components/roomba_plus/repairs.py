@@ -711,7 +711,8 @@ async def async_enrich_drift_issue(
 
     v3.5.0 Repairs redesign: demoted from Repair Issue to event —
     DRIFT-AUTO's own self-healing design already treats this as transient
-    (drift_recovered() re-arms it via _disarm(), see image.py), which fits
+    (drift_recovered() re-arms it via _disarm(), see geometry_store.py),
+    which fits
     an event/Logbook model better than a persistent, must-dismiss Repair.
 
     Called by geometry_store when a new drift event is recorded. Event

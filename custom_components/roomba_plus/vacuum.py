@@ -58,8 +58,6 @@ from .const import (
     OVERLAP_DEEP,
     OVERLAP_EXTENDED,
     OVERLAP_STANDARD,
-    CONF_FLOOR,
-    DOMAIN,
     MISSION_EVENT_TYPE_TO_ACTIVITY,
     PHASE_TO_ACTIVITY,
     SQFT_TO_M2,
@@ -829,82 +827,15 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── CLEAN_AREA (F-I15, HA 2026.3) ───────────────────────────────────────
 
     async def async_get_segments(self) -> list:
-        """Return regions as Segment objects for the CLEAN_AREA mapping UI.
-
-        Called when the user opens the area↔segment mapping in HA.
-        No async_refresh() needed — last coordinator poll data is current enough.
-        Gate: only reachable when CLEAN_AREA is in supported_features (SMART + cloud + HA 2026.3+).
-        """
-        # Defensive: Segment requires HA 2026.3+; guarded by hasattr in supported_features.
-        try:
-            from homeassistant.components.vacuum import Segment
-        except ImportError:
-            return []
-        data = self._config_entry.runtime_data if self._config_entry else None
-        if data is None:
-            return []
-
-        # PRIME BRANCH (this session). Advertising CLEAN_AREA without
-        # implementing this was a real bug: HA showed the "Map vacuum
-        # segments to areas" dialog and it came up empty, because this
-        # method returned [] for every Prime robot. The capability
-        # looked present and did nothing -- worse than not offering it.
-        #
-        # Reported by DaRealGuGu, who could see his rooms in the iRobot
-        # app and none in Home Assistant.
-        if data.connection_type == ConnectionType.CLOUD_ONLY:
-            from .room_cleaning import (  # noqa: PLC0415
-                async_get_room_cleaning_backend,
-            )
-
-            backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
-            if backend is None:
-                return []
-            return [
-                Segment(id=f"rid_{room_id}", name=name, group="Room")
-                for name, room_id in sorted((await backend.available_rooms()).items())
-            ]
-
-        if not data.has_cloud or data.cloud_coordinator is None:
-            return []
-        active_pmap_id = data.cloud_coordinator.active_pmap_id
-        if not active_pmap_id:
-            # Coordinator has not yet fetched pmap data — returning segments with a
-            # None prefix would create IDs that never match in async_clean_segments.
-            _LOGGER.debug(
-                "async_get_segments: active_pmap_id not yet available — returning empty"
-            )
-            return []
-        floor_label = (
-            self._config_entry.options.get(CONF_FLOOR) or None
-            if self._config_entry else None
+        """The rooms HA can map to areas. Delegates to the backend."""
+        from .room_cleaning import (  # noqa: PLC0415
+            async_get_room_cleaning_backend as _get_backend,
         )
-        # Room segments (rid)
-        segments = [
-            Segment(
-                id=f"{active_pmap_id}_{region['id']}",
-                name=region.get("name", region["id"]),
-                group=floor_label,
-            )
-            for region in data.cloud_coordinator.regions
-            if region.get("id")
-        ]
-        # IA74-ZONE full (v2.7.0): zone segments (zid).
-        # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
-        # async_clean_segments can distinguish them from room segments.
-        # Zone type is surfaced as the group label for HA's mapping UI.
-        for zone in data.cloud_coordinator.zones:
-            zid = zone.get("id")
-            if not zid:
-                continue
-            zone_type = zone.get("zone_type", "zone")
-            zone_name = zone.get("name") or f"Zone {zid}"
-            segments.append(Segment(
-                id=f"{active_pmap_id}_zid_{zid}",
-                name=zone_name,
-                group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
-            ))
-        return segments
+
+        backend = _get_backend(self._config_entry, self.hass)
+        if backend is None:
+            return []
+        return await backend.get_segments()
 
     async def async_clean_area(self, cleaning_area_ids: list[str]) -> None:
         """Handle vacuum.clean_area — VacuumEntityFeature.CLEAN_AREA (HA 2026.3+).
@@ -924,179 +855,21 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     async def async_clean_segments(
         self, segment_ids: list[str], **kwargs: Any
     ) -> None:
-        """Start a region-cleaning mission for the given segment IDs.
+        """Start a segment-cleaning mission. Delegates to the backend.
 
-        F-I15: kwargs (including repeat) silently ignored — removed from spec Oct 2025.
-        twoPass is read from the robot's live noAutoPasses/twoPass state (CleaningPassesSelect).
-        Segments from other pmaps are silently ignored; raises ServiceValidationError
-        if none of the supplied IDs match the current map (F-RB-2).
+        Both generations now go through RoomCleaningBackend, so the id
+        format is agreed inside one class per generation rather than
+        across two files. kwargs (including repeat) are ignored --
+        removed from the HA spec in Oct 2025.
         """
-        data = self._config_entry.runtime_data if self._config_entry else None
-        if data is None:
-            return
-
-        # PRIME BRANCH (this session). Prime segment ids are "rid_<room>",
-        # produced by async_get_segments() above -- no pmap prefix,
-        # because Prime resolves the map itself at send time.
-        #
-        # Without this the method fell through to the Classic path and
-        # returned early on has_cloud, so HA's Clean Area button did
-        # nothing at all for Prime robots.
-        if data.connection_type == ConnectionType.CLOUD_ONLY:
-            from .room_cleaning import (  # noqa: PLC0415
-                async_get_room_cleaning_backend,
-            )
-
-            backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
-            room_ids = [
-                seg_id[len("rid_"):] for seg_id in segment_ids
-                if seg_id.startswith("rid_")
-            ]
-            if backend is None or not room_ids:
-                # Stale mapping after the robot remapped, or segments
-                # from a different vacuum. Cleaning nothing quietly
-                # would look like success.
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="no_valid_segments",
-                )
-            await backend.clean_rooms(room_ids)
-            return
-
-        if not data.has_cloud or data.cloud_coordinator is None:
-            return
-
-        active_pmap_id = data.cloud_coordinator.active_pmap_id
-        if not active_pmap_id:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_valid_segments",
-            )
-        region_ids: list[str] = []
-        prefix = f"{active_pmap_id}_"
-        for seg_id in segment_ids:
-            # v2.4.3 PMAP-UNDERSCORE: pmap_ids may contain underscores (URL-safe
-            # base64 encoding). partition("_") splits on the first underscore and
-            # produces a wrong pmap_id for IDs like "2Bly_kGURy6OcUVTX7FN3w_19".
-            # Use a prefix check instead — region_ids are always plain integers.
-            if seg_id.startswith(prefix):
-                region_ids.append(seg_id[len(prefix):])
-
-        if not region_ids:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_valid_segments",
-            )
-
-        # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
-        # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping
-        # in async_get_segments().  Rooms are plain integers (e.g. "19").
-        _ZONE_PREFIX = "zid_"
-        raw_zone_ids = [r for r in region_ids if r.startswith(_ZONE_PREFIX)]
-        raw_room_ids = [r for r in region_ids if not r.startswith(_ZONE_PREFIX)]
-        # Extract the bare zone_id (strip "zid_" prefix)
-        bare_zone_ids = [z[len(_ZONE_PREFIX):] for z in raw_zone_ids]
-
-        # Validate + auto-heal room IDs against the current cloud map (zone IDs
-        # are stable across map retrains — no validation needed for them).
-        current_regions = data.cloud_coordinator.regions
-        current_region_ids: set[str] = {
-            str(r["id"]) for r in current_regions if r.get("id")
-        }
-        validated_room_ids = list(raw_room_ids)
-        if current_region_ids and raw_room_ids:
-            stale = [rid for rid in raw_room_ids if rid not in current_region_ids]
-            if stale:
-                # Build name → current_id lookup from live cloud data
-                name_to_current: dict[str, str] = {
-                    r["name"].casefold(): str(r["id"])
-                    for r in current_regions
-                    if r.get("name") and r.get("id")
-                }
-                zone_labels: dict[str, str] = (
-                    self._config_entry.options.get("smart_zone_labels", {})
-                    if self._config_entry else {}
-                )
-                healed: list[str] = []
-                for stale_rid in stale:
-                    label = zone_labels.get(stale_rid, "")
-                    current_id = name_to_current.get(label.casefold()) if label else None
-                    if current_id and current_id not in raw_room_ids:
-                        healed.append(current_id)
-                        _LOGGER.info(
-                            "async_clean_segments: auto-healed stale region %s → %s "
-                            "('%s') — map retrained but room name matched current map",
-                            stale_rid, current_id, label,
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "async_clean_segments: stale region %s could not be "
-                            "auto-healed (label=%r, not in current map) — skipping. "
-                            "Re-map vacuum segments to areas in HA to fix permanently.",
-                            stale_rid, label or "<unlabeled>",
-                        )
-                validated_room_ids = (
-                    [r for r in raw_room_ids if r in current_region_ids] + healed
-                )
-
-        if not validated_room_ids and not bare_zone_ids:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_valid_segments",
-            )
-
-        regions = [
-            {
-                "region_id": rid,
-                "type": "rid",
-                "params": {"noAutoPasses": False, "twoPass": False},
-            }
-            for rid in validated_room_ids
-        ] + [
-            # IA74-ZONE full (v2.7.0): zones use type "zid" with bare zone_id
-            {
-                "region_id": zid,
-                "type": "zid",
-                "params": {"noAutoPasses": False, "twoPass": False},
-            }
-            for zid in bare_zone_ids
-        ]
-
-        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
-        # Primary: cloud coordinator — always authoritative, never stale.
-        user_pmapv_id: str | None = data.cloud_coordinator.active_user_pmapv_id
-        if not user_pmapv_id:
-            user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
-        if user_pmapv_id is None:
-            _LOGGER.warning(
-                "async_clean_segments: user_pmapv_id not found in cloud or "
-                "state.pmaps for pmap %s — sending command without version ID",
-                active_pmap_id,
-            )
-
-        # Bug 5 fix (v2.7.0): per field logs, including user_pmapv_id in pure
-        # zone (zid) commands causes error 224. Omit it when no room regions
-        # are present. Mixed room+zone commands retain it for room-ID validation.
-        include_pmapv = bool(validated_room_ids)
-
-        params: dict[str, Any] = {
-            "ordered": 1,
-            "pmap_id": active_pmap_id,
-            "regions": regions,
-        }
-        if include_pmapv and user_pmapv_id is not None:
-            params["user_pmapv_id"] = user_pmapv_id
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command,
-            "start",
-            params,
+        from .room_cleaning import (  # noqa: PLC0415
+            async_get_room_cleaning_backend as _get_backend,
         )
-        # F-RB-1: best-effort state update after segment clean command.
-        # Cloud may not yet have the new state; failure is non-fatal.
-        try:
-            await data.cloud_coordinator.async_refresh()
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("async_clean_segments: post-command cloud refresh failed (non-fatal)")
+
+        backend = _get_backend(self._config_entry, self.hass)
+        if backend is None:
+            return
+        await backend.clean_segments(segment_ids)
 
     def _get_two_pass(self) -> bool:
         """Read twoPass preference from live robot state.

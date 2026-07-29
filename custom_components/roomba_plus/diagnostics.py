@@ -66,6 +66,62 @@ def _parts_report(data: Any) -> dict[str, Any]:
     }
 
 
+def _prime_token_expiry(data: Any) -> dict[str, Any]:
+    """Does this account's login carry a usable expiry?
+
+    Deliberately reports lifetime and remaining seconds, never the
+    token itself or anything derived from it.
+    """
+    robot = data.prime_robot
+    token = getattr(getattr(robot, "_mqtt", None), "_token", None)
+    if token is None:
+        return {"known": False, "note": "no MQTT token available to inspect"}
+    expires = getattr(token, "expires", None)
+    if expires is None:
+        return {
+            "known": False,
+            "note": (
+                "login response carries no 'expires' field -- proactive token "
+                "refresh cannot be scheduled on this account, which is a real "
+                "limitation rather than a bug"
+            ),
+        }
+    remaining = getattr(token, "seconds_until_expiry", lambda: None)()
+    return {
+        "known": True,
+        "seconds_remaining": None if remaining is None else round(remaining),
+        "note": "proactive refresh is schedulable against this",
+    }
+
+
+def _robot_cloud_connection(data: Any) -> dict[str, Any]:
+    """Whether the robot itself is connected to iRobot's cloud.
+
+    From the rw-constatus shadow, which the robot maintains. Distinct
+    from our own MQTT connection: ours can be perfectly healthy while
+    the robot sits offline, and then no amount of reconnecting on our
+    side produces a single message.
+    """
+    coordinator = data.prime_status_coordinator
+    if coordinator is None or not coordinator.data:
+        return {"known": False, "note": "status coordinator has no data yet"}
+    shadow = coordinator.data.get("rw-constatus") or {}
+    connected = shadow.get("connected")
+    if connected is None:
+        return {"known": False, "note": "rw-constatus carries no connected field"}
+    return {
+        "known": True,
+        "connected": bool(connected),
+        "note": (
+            "robot is online with iRobot's cloud; an empty push stream is on our side"
+            if connected else
+            "ROBOT IS OFFLINE from iRobot's cloud -- it is sending nothing, so an "
+            "empty push stream is expected. Check the robot's Wi-Fi rather than the "
+            "integration."
+        ),
+    }
+
+
 def _push_freshness(data: Any) -> dict[str, Any]:
     """How long since ANY Prime push message arrived.
 
@@ -82,10 +138,29 @@ def _push_freshness(data: Any) -> dict[str, Any]:
         return {"last_message_ts": None, "seconds_ago": None, "note": "unreadable"}
 
     if ts <= 0:
+        # DELIBERATELY NOT AN ACCUSATION (reworded this session).
+        #
+        # This used to read "the stream is not delivering", which states
+        # a fault. It is often not one: shadow deltas arrive when the
+        # shadow CHANGES, and a robot parked on a full battery changes
+        # almost nothing. After a restart with no mission since, zero
+        # messages is the expected reading.
+        #
+        # I wrote that wording, then read it back on a tester's
+        # diagnostics and believed it -- and went looking for a
+        # connection bug on a robot that simply had nothing to say. A
+        # diagnostic that draws its own conclusion gets that conclusion
+        # believed, including by its author.
         return {
             "last_message_ts": None,
             "seconds_ago": None,
-            "note": "no push message has EVER arrived -- the stream is not delivering",
+            "note": (
+                "no push message since startup. EXPECTED if the robot has been idle "
+                "since Home Assistant started -- deltas arrive on change, and a "
+                "docked robot on a full battery changes little. Only a concern if "
+                "the robot has run a mission since startup, which would certainly "
+                "have produced messages."
+            ),
         }
     age = _time_mod.time() - ts
     return {
@@ -212,6 +287,26 @@ async def async_get_config_entry_diagnostics(
             "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
             "prime": {
                 "household_id_resolved": data.prime_household_id is not None,
+                # WHETHER THE LOGIN TELLS US WHEN IT EXPIRES.
+                #
+                # The library can refresh a token before it dies, but
+                # only if the login response carries `expires`. That
+                # field is confirmed in Classic login captures and has
+                # NEVER been checked for Prime -- not because anyone
+                # missed it, but because nothing currently needs it, so
+                # it is parsed defensively and never shown.
+                #
+                # Which is the point: this value passes through on every
+                # single login, by every tester, and no tool, log line
+                # or diagnostic has ever displayed it. Same shape as the
+                # five capability flags and googleControl -- data we
+                # already hold and never look at.
+                #
+                # Reported as remaining seconds rather than a timestamp:
+                # the question is "does proactive refresh have anything
+                # to schedule against", and a raw epoch makes that a
+                # subtraction rather than an answer.
+                "token_expiry": _prime_token_expiry(data),
                 "serial_info_resolved": data.prime_serial_info is not None,
                 "model_sku": getattr(data.prime_serial_info, "sku", None),
                 "family": getattr(data.prime_serial_info, "family", None),
@@ -240,6 +335,20 @@ async def async_get_config_entry_diagnostics(
             # died". A large seconds_ago on a robot that has been
             # active means the connection is gone, whatever else says.
             "push_freshness": _push_freshness(data),
+            # THE OTHER HALF of a silent stream. push_freshness says
+            # nothing is arriving; this says whether the ROBOT is even
+            # connected to the cloud to send anything.
+            #
+            # Without it the two cases look identical from here, and
+            # they need opposite responses: a robot off the network is
+            # the owner's Wi-Fi, while a connected robot whose messages
+            # never arrive is ours.
+            #
+            # Reading shadows keeps working either way -- the cloud
+            # returns the last reported state whether or not the robot
+            # is currently online -- which is exactly why an empty push
+            # stream is not evidence of a broken integration on its own.
+            "robot_cloud_connection": _robot_cloud_connection(data),
             "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
             "capabilities": _prime_capability_report(config_entry),

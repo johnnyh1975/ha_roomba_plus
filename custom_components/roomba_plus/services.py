@@ -172,11 +172,11 @@ async def _async_clean_rooms_via_backend(
 ) -> None:
     """Room cleaning through a RoomCleaningBackend.
 
-    Currently the Prime path. The Classic one still runs inline below,
-    deliberately: its resolution step is 141 lines of pmap handling and
-    cross-map conflict rules that no Prime robot has an equivalent for,
-    and moving working code that real users depend on is a separate
-    change from adding a new generation.
+    BOTH GENERATIONS now, though Prime came first. The Classic path was
+    moved into ClassicRoomCleaning afterwards, verbatim -- its 141-line
+    resolution step, the cross-map conflict rules and the readiness
+    check all came across intact, which took four rounds of existing
+    tests to confirm.
 
     Name matching is shared, though -- match_room_names() carries the
     slug fallback that lets "kuche" find "Küche". Two different matching

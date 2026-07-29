@@ -113,6 +113,10 @@ async def _async_send_coverage_signal(hass: HomeAssistant, entry_id: str) -> Non
     async_dispatcher_send(hass, _SIGNAL_COVERAGE_UPDATED.format(entry_id))
 
 
+#: Long enough to absorb a mission's worth of frames, short enough that
+#: a map is on disk well before anyone restarts deliberately.
+_MAP_SAVE_DELAY_SECONDS = 60
+
 def _prime_map_storage_key(entry_id: str) -> str:
     """Separate from the Classic key: different contents entirely (a PNG
     rather than renderer state), and a robot never switches generation,
@@ -347,6 +351,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_map"
         self._png_bytes: bytes | None = None
         self._map_stored_at: str | None = None
+        self._map_store: Store | None = None
         self._watch_task: asyncio.Task[None] | None = None
         # NEW (this session): live-map decode statistics, kept on the
         # CONFIG ENTRY rather than on this entity, so diagnostics can
@@ -520,7 +525,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         continue
                     self._png_bytes = png_bytes
                     self._map_stored_at = None
-                    await self._async_save_png()
+                    self._async_save_png()
                     self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
                     self.async_write_ha_state()
                     backoff = 5.0  # a live update means things are healthy again
@@ -609,23 +614,50 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         self._map_stored_at = stored.get("saved_at")
         _LOGGER.debug("Prime map: restored %d bytes", len(self._png_bytes))
 
-    async def _async_save_png(self) -> None:
-        """Persist the current frame so a restart does not lose it."""
+    def _async_save_png(self) -> None:
+        """Persist the current frame, on a delay.
+
+        DELAYED, NOT IMMEDIATE. A mission produces around 26 map frames
+        (26 in one real capture), and the first version wrote all of
+        them -- roughly 670 KB of base64 JSON each time, so about 17 MB
+        per mission and 6 GB a year on a daily schedule.
+        
+        Only the LAST frame is ever read back, so 25 of those 26 writes
+        were pure flash wear. Home Assistant commonly runs from an SD
+        card or eMMC, where that is a real cost rather than a
+        theoretical one.
+
+        async_delay_save coalesces them: the callback is invoked once,
+        after the burst settles, with whatever the latest frame is by
+        then. The store is cached on the entity so the pending timer
+        survives between frames -- creating a new Store each call would
+        restart the delay and defeat it entirely.
+
+        HA also flushes pending delayed saves on shutdown, so the last
+        map is not lost to a restart.
+        """
         if not self._png_bytes:
             return
+        if self._map_store is None:
+            self._map_store = Store(
+                self.hass,
+                _MAP_STORAGE_VERSION,
+                _prime_map_storage_key(self._config_entry.entry_id),
+            )
+        self._map_store.async_delay_save(self._map_save_payload, _MAP_SAVE_DELAY_SECONDS)
+
+    def _map_save_payload(self) -> dict[str, Any]:
+        """Called by the store when the delay elapses -- so it captures
+        the frame current at THAT moment, not the one that scheduled the
+        save. That is the intended behaviour: the newest map wins."""
         import base64  # noqa: PLC0415
 
         from homeassistant.util import dt as dt_util  # noqa: PLC0415
 
-        store = Store(
-            self.hass,
-            _MAP_STORAGE_VERSION,
-            _prime_map_storage_key(self._config_entry.entry_id),
-        )
-        await store.async_save({
-            "png_b64": base64.b64encode(self._png_bytes).decode("ascii"),
+        return {
+            "png_b64": base64.b64encode(self._png_bytes or b"").decode("ascii"),
             "saved_at": dt_util.utcnow().isoformat(),
-        })
+        }
 
     @staticmethod
     def _blank_image() -> bytes:
