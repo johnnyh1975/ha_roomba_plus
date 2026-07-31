@@ -46,6 +46,19 @@ HEADING_PATTERN = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
 def slugify(heading: str) -> str:
     heading = heading.strip().lower()
     heading = re.sub(r"[^\w\s-]", "", heading)
+    # TRIM AGAIN after stripping non-word characters.
+    #
+    # An emoji heading like "## 🔌 Setup & Prerequisites" leaves a
+    # LEADING SPACE once the emoji is gone, which then becomes a leading
+    # hyphen -- so this produced "-setup--prerequisites" where GitHub
+    # produces "setup--prerequisites".
+    #
+    # The symptom was misleading: the script reported the anchor as
+    # missing, and its own error message suggested verifying emoji
+    # headings by hand. Four correct links in COMPARISON.md were
+    # "fixed" to match the script before the script turned out to be
+    # the one that was wrong.
+    heading = heading.strip()
     heading = re.sub(r" ", "-", heading)
     return heading
 

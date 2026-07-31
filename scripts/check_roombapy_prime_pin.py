@@ -23,8 +23,21 @@ MANIFEST_PATH = ROOT / "custom_components" / "roomba_plus" / "manifest.json"
 RELEASE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "release.yml"
 VALIDATE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "validate.yml"
 
+#: Matches alpha (aN), beta (bN), release candidate (rcN) and plain
+#: version pins.
+#:
+#: WIDENED 30 July 2026, when roombapy-prime reached 0.2.0b1 and this
+#: script reported "no pin found" for a pin that was right there. The
+#: original pattern ended in `a\d+`, which was correct while the library
+#: had only ever shipped alphas -- and became a false negative the day
+#: that stopped being true.
+#:
+#: Worth noting the failure mode: it did not say "the pin looks wrong",
+#: it said the pin was ABSENT. A pattern that cannot match reports the
+#: same thing as a missing line, and the two need different fixes.
 PIN_PATTERN = re.compile(
-    r"roombapy-prime(?:\[map\])?@git\+https://github\.com/johnnyh1975/roombapy-prime\.git@(v[\d.]+a\d+)"
+    r"roombapy-prime(?:\[map\])?@git\+https://github\.com/johnnyh1975/"
+    r"roombapy-prime\.git@(v[\d.]+(?:a\d+|b\d+|rc\d+)?)"
 )
 
 
