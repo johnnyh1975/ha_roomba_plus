@@ -49,7 +49,11 @@ def _ring_mm(geometry: Any) -> list[tuple[float, float]]:
     what the app does elsewhere. A room with a hole would render filled,
     and for a floor plan that is the right answer.
     """
-    coords = getattr(geometry, "coordinates", None)
+    coords = (
+        geometry.get("coordinates")
+        if isinstance(geometry, dict)
+        else getattr(geometry, "coordinates", None)
+    )
     if not coords:
         return []
     try:
@@ -149,6 +153,32 @@ async def async_build_prime_room_polygons(
         # "Room <id>" fallback for the label. Dropping unnamed rooms
         # would leave holes in the floor plan.
         names[str(room_id)] = getattr(room, "name", "") or f"Room {room_id}"
+
+    # V4's map metadata supplies room names and settings, but not the
+    # outlines needed to draw them. Those are GeoJSON features in the map
+    # bundle. This is the normal path for the Max 705 and similar robots.
+    version = getattr(map_data, "active_p2mapv_id", None)
+    if not isinstance(version, str) or not version:
+        return polygons, names, preferences
+    try:
+        parsed = await _async_get_map_bundle(robot, p2map_id, version)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: could not read room outlines for map %s", p2map_id, exc_info=True)
+        return polygons, names, preferences
+
+    for feature in (parsed.get("rooms") or {}).get("features") or []:
+        if not isinstance(feature, dict):
+            continue
+        room_id = feature.get("id")
+        if room_id is None:
+            continue
+        props = feature.get("properties") or {}
+        ring = _ring_mm(props.get("simplifiedGeometry")) or _ring_mm(feature.get("geometry"))
+        if not ring:
+            continue
+        room_id = str(room_id)
+        polygons[room_id] = ring
+        names.setdefault(room_id, props.get("name") or f"Room {room_id}")
 
     _LOGGER.debug(
         "roomba_plus: built %d Prime room polygon(s) for map %s",
@@ -318,16 +348,7 @@ async def async_build_prime_floor_plan(
         return empty
 
     try:
-        from roombapy_prime.models.map_bundle import parse_map_bundle  # noqa: PLC0415
-
-        link = await robot.get_map_geojson_link(p2map_id, p2mapv_id)
-        url = link.get("map_url") or next(
-            (v for v in link.values() if isinstance(v, str) and v.startswith("http")),
-            None,
-        )
-        if not url:
-            return empty
-        parsed = parse_map_bundle(await robot.download_map_bundle(url))
+        parsed = await _async_get_map_bundle(robot, p2map_id, p2mapv_id)
     except Exception:  # noqa: BLE001
         _LOGGER.debug(
             "roomba_plus: could not read the map bundle for %s", p2map_id, exc_info=True
@@ -345,6 +366,18 @@ async def async_build_prime_floor_plan(
         "found" if plan.dock else "absent",
     )
     return plan
+
+
+async def _async_get_map_bundle(robot: Any, p2map_id: str, p2mapv_id: str) -> dict[str, Any]:
+    """Fetch and unpack one V4 map bundle."""
+    from roombapy_prime.models.map_bundle import parse_map_bundle  # noqa: PLC0415
+
+    link = await robot.get_map_geojson_link(p2map_id, p2mapv_id)
+    url = link.get("map_url") or next(
+        (value for value in link.values() if isinstance(value, str) and value.startswith("http")),
+        None,
+    )
+    return parse_map_bundle(await robot.download_map_bundle(url)) if url else {}
 
 
 #: Operating-mode numbers to the profile names the iRobot app shows.

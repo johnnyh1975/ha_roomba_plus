@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -131,6 +132,35 @@ class TestPolygonsAndNamesAreSeparate:
         )
 
         assert min(x for x, _ in polygons["1"]) == -2000.0
+
+    @pytest.mark.asyncio
+    async def test_uses_bundle_outlines_when_metadata_only_has_names(self):
+        """Max 705 metadata has names/settings; rooms.geojson has outlines."""
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.prime_room_map import (
+            async_build_prime_room_polygons,
+        )
+
+        entry = MagicMock()
+        robot = entry.runtime_data.prime_robot
+        robot.get_map_metadata = AsyncMock(return_value=SimpleNamespace(
+            active_p2mapv_id="V1",
+            rooms_metadata=[SimpleNamespace(room_id="16", name="Study")],
+        ))
+        robot.get_map_geojson_link = AsyncMock(return_value={"map_url": "https://x"})
+        robot.download_map_bundle = AsyncMock(return_value=b"bundle")
+        parsed = {"rooms": {"features": [{
+            "id": "16",
+            "geometry": {"coordinates": [[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]]},
+            "properties": {"name": "Study"},
+        }]}}
+
+        with patch("roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed):
+            polygons, names, _prefs = await async_build_prime_room_polygons(entry, "MAP-1")
+
+        assert polygons["16"][1] == (2000.0, 0.0)
+        assert names["16"] == "Study"
 
 
 class TestRoomsThatCannotBeDrawn:
