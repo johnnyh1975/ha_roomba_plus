@@ -1481,6 +1481,19 @@ async def async_unload_entry(
                     "Roomba+ Prime: mission timer flush on unload failed",
                     exc_info=True,
                 )
+
+        # SERVICES ARE REMOVED WITH THE LAST ENTRY, whichever generation
+        # it is.
+        #
+        # The Classic path has done this since services existed; the
+        # Prime branch returns before reaching it. So somebody whose only
+        # robot was a Prime removed the integration and kept eighteen
+        # registered actions pointing at nothing.
+        #
+        # Found by the generation-parity check on its first run, which is
+        # what that check is for.
+        if not hass.config_entries.async_entries(DOMAIN):
+            async_remove_services(hass)
         return unload_ok
 
     data = config_entry.runtime_data

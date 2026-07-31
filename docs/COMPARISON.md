@@ -15,12 +15,12 @@
 
 | Theme | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| 🔌 [Setup & prerequisites](#-setup-prerequisites) | Local MQTT push, auto-discovery, no extras | Local MQTT push, built-in | HTTP poll to Docker container, cloud required |
-| 🗺️ [Map & rooms](#-map-rooms) | Live path + UMF polygons + zone overlays, automatic room detection (900-series) | None | Static UMF floor plan + zone overlays, no live path |
-| 🎮 [Control](#-controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
-| 🧠 [Intelligence](#-intelligence-scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
-| 📊 [Monitoring](#-sensors-monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#-ha-integration-quality) | Gold, 3,863 tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🔌 [Setup & prerequisites](#setup--prerequisites) | Local MQTT push, auto-discovery, no extras | Local MQTT push, built-in | HTTP poll to Docker container, cloud required |
+| 🗺️ [Map & rooms](#map--rooms) | Live path + UMF polygons + zone overlays, automatic room detection (900-series) | None | Static UMF floor plan + zone overlays, no live path |
+| 🎮 [Control](#controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
+| 🧠 [Intelligence](#intelligence--scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
+| 📊 [Monitoring](#sensors--monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
+| 🏆 [HA quality](#ha-integration-quality) | Gold, 3,863 tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 

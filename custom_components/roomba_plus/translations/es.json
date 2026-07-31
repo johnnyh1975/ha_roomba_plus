@@ -115,7 +115,11 @@
       "cannot_connect": "No se puede conectar al robot en la dirección especificada.",
       "reconfigure_successful": "Connection settings updated successfully.",
       "no_new_robots_found": "No se encontraron robots nuevos en esta cuenta de iRobot — todos los robots ya están configurados.",
-      "prime_classic_password_missing": "La contraseña de este robot no estaba incluida en la respuesta de la cuenta de iRobot. Intenta añadirlo manualmente en su lugar."
+      "prime_classic_password_missing": "La contraseña de este robot no estaba incluida en la respuesta de la cuenta de iRobot. Intenta añadirlo manualmente en su lugar.",
+      "demand_cleaning_not_supported": "Este robot no informa de los datos de detección de suciedad necesarios para la limpieza bajo demanda.",
+      "integration_not_loaded": "La integración no está cargada. Reinicia Home Assistant e inténtalo de nuevo.",
+      "room_schedule_no_rooms": "Todavía no se conocen habitaciones para este robot. Deja que complete un mapeo primero.",
+      "room_schedule_not_supported": "Las programaciones por habitación requieren un robot que informe de datos de habitaciones."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Planta (p. ej. Planta baja)",
           "correlation_entities": "Correlacionar suciedad con sensores (opcional)",
           "map_room_labels": "Dibujar los nombres de las habitaciones en el mapa",
-          "prime_favorite_buttons": "Crear un botón para cada favorito guardado"
+          "prime_favorite_buttons": "Crear un botón para cada favorito guardado",
+          "enable_schedule_calendar": "Mostrar las programaciones de limpieza como calendario"
         },
         "data_description": {
           "continuous": "Mantener una conexión MQTT persistente con el robot. Recomendado.",

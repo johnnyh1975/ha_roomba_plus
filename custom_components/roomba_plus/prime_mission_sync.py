@@ -327,12 +327,16 @@ async def _async_sync_locked(
 def _hass_of(config_entry: RoombaConfigEntry) -> Any:
     """The HomeAssistant instance, however this entry exposes it.
 
-    `config_entry.hass` is the normal route; the runtime_data fallback
-    exists because the profile-update path below already reached for it
-    that way, and the two should not disagree about where hass lives.
+    ONLY from runtime_data. `config_entry.hass` does not exist --
+    ConfigEntry carries no such attribute, and reading it raises
+    AttributeError.
+
+    Returns None when runtime_data has no reference, and every caller
+    handles that: persisting is enrichment, and a sync that cannot write
+    its result still leaves the records in memory for the next attempt.
     """
     runtime = getattr(config_entry, "runtime_data", None)
-    return getattr(runtime, "hass_ref", None) or config_entry.hass
+    return getattr(runtime, "hass_ref", None)
 
 
 async def _async_update_profile(config_entry: RoombaConfigEntry, store: Any) -> None:
@@ -360,9 +364,7 @@ async def _async_update_profile(config_entry: RoombaConfigEntry, store: Any) -> 
     try:
         if profile.update_mission_stats(store.query(days=30)):
             await profile.async_save(
-                config_entry.runtime_data.hass_ref
-                if hasattr(config_entry.runtime_data, "hass_ref")
-                else config_entry.hass,
+                _hass_of(config_entry),
                 config_entry.entry_id,
             )
     except Exception:  # noqa: BLE001

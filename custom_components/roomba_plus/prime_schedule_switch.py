@@ -37,7 +37,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import callback
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -226,7 +225,3 @@ class PrimeScheduleSwitch(SwitchEntity):
             self._attr_is_on = enabled
             self.async_write_ha_state()
             return
-
-    @callback
-    def _handle_removed(self) -> None:
-        self._attr_is_on = None

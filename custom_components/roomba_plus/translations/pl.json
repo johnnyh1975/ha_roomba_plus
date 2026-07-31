@@ -115,7 +115,11 @@
       "cannot_connect": "Nie można połączyć się z robotem pod podanym adresem.",
       "reconfigure_successful": "Ustawienia połączenia zostały pomyślnie zaktualizowane.",
       "no_new_robots_found": "Nie znaleziono nowych robotów na tym koncie iRobot — wszystkie roboty są już skonfigurowane.",
-      "prime_classic_password_missing": "Hasło tego robota nie zostało uwzględnione w odpowiedzi konta iRobot. Spróbuj zamiast tego dodać go ręcznie."
+      "prime_classic_password_missing": "Hasło tego robota nie zostało uwzględnione w odpowiedzi konta iRobot. Spróbuj zamiast tego dodać go ręcznie.",
+      "demand_cleaning_not_supported": "Ten robot nie zgłasza danych wykrywania zabrudzeń wymaganych do sprzątania na żądanie.",
+      "integration_not_loaded": "Integracja nie jest załadowana. Uruchom ponownie Home Assistant i spróbuj jeszcze raz.",
+      "room_schedule_no_rooms": "Dla tego robota nie są jeszcze znane żadne pomieszczenia. Pozwól mu najpierw ukończyć mapowanie.",
+      "room_schedule_not_supported": "Harmonogramy pomieszczeń wymagają robota zgłaszającego dane pomieszczeń."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Etykieta piętra (np. Parter)",
           "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)",
           "map_room_labels": "Rysuj nazwy pomieszczeń na obrazie mapy",
-          "prime_favorite_buttons": "Utwórz przycisk dla każdego zapisanego ulubionego"
+          "prime_favorite_buttons": "Utwórz przycisk dla każdego zapisanego ulubionego",
+          "enable_schedule_calendar": "Pokaż harmonogramy sprzątania jako kalendarz"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",

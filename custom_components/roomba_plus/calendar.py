@@ -52,6 +52,21 @@ from .schedule_parser import (
 from .select import resolve_zone_name
 
 _LOGGER = logging.getLogger(__name__)
+
+#: How often HA asks the calendar entities to update.
+#:
+#: Home Assistant's default is 30 seconds, and PrimeScheduleCalendar
+#: makes TWO cloud calls per update -- schedules and room names. That is
+#: about 5,760 requests a day for data that changes when somebody edits
+#: a schedule in the iRobot app.
+#:
+#: Fifteen minutes instead. A schedule edited in the app appears within
+#: a quarter of an hour rather than within thirty seconds, which nobody
+#: is watching for, and the daily figure drops to 192.
+#:
+#: Found by the request-budget check, not by anything failing -- the
+#: entity worked correctly the whole time.
+SCAN_INTERVAL = dt_stdlib.timedelta(minutes=15)
 PARALLEL_UPDATES = 0
 
 # How far ahead RoombaScheduleCalendar.event looks for "the next upcoming

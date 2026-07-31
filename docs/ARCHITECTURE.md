@@ -149,6 +149,22 @@ migrations and silently stop upgrading every existing install. A test guards it.
 
 ---
 
+## Guards
+
+Four checks run in CI that no test can replace, because each covers a
+class of mistake that leaves every test passing.
+
+| Check | What it catches |
+|---|---|
+| `check_generation_parity.py` | A call added to the Classic branch and not the Prime one. Found on its first run: services were never removed when the last entry was a Prime robot. |
+| `check_request_budget.py` | A polling entity making cloud calls, or the same call twice in one method. Found on its first run: the Prime calendar polling every 30 seconds with two calls, roughly 5,760 requests a day. |
+| `check_late_imports.py` | A late import with no stated reason. Established that **none** of this package's 45 late imports guards a real circular import. |
+| `list_assumed_tests.py` | Tests asserting on wire formats nobody has confirmed. `assetId` sat green for months on a key that turned out to be `robot_id`. |
+
+Each has an allowlist requiring a written reason, and a test asserting
+that the reasons are not placeholders -- ten entries reading "as above"
+failed that test on the first attempt.
+
 ## Known weaknesses
 
 Recorded because a review that stays in one person's head is not a review.

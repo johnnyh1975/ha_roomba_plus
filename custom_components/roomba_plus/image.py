@@ -195,7 +195,9 @@ async def async_setup_entry(
                     blid=data.blid,
                     config_entry=config_entry,
                 ),
-                PrimeRoomsImage(blid=data.blid, config_entry=config_entry),
+                PrimeRoomsImage(
+                    blid=data.blid, config_entry=config_entry, hass=hass
+                ),
             ])
         return
 
@@ -2874,9 +2876,15 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     _attr_translation_key  = "rooms_map"
     _attr_entity_category  = None
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, hass: Any
+    ) -> None:
         IRobotEntity.__init__(self, None, blid)
-        ImageEntity.__init__(self, config_entry.hass)
+        # hass IS PASSED IN, not read off the config entry. ConfigEntry
+        # has no `hass` attribute, so `config_entry.hass` raises
+        # AttributeError -- and an exception in a constructor means the
+        # entity is never created.
+        ImageEntity.__init__(self, hass)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)

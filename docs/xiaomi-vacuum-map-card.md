@@ -31,7 +31,7 @@ There are two ways to set up the room overlay, depending on your XVMC version:
 
 - **XVMC v2.4.1 or newer (recommended):** the native Roomba+ platform is built
   in. Pick it as the `vacuum_platform` and let XVMC generate the room config for
-  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended)**.
+  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended-once-merged)**.
 - **XVMC older than v2.4.1:** the Roomba+ platform isn't available, so you define
   `predefined_selections` manually. The coordinates come straight from the
   `rooms` attribute — no measurement needed. See
@@ -315,7 +315,7 @@ The `rooms` attribute and calibration are only accurate once UmfAligner confiden
 ## XVMC platform template (reference)
 
 The native `roomba_plus` platform template is what
-[Path A](#path-a--xvmc-v241-recommended) uses once available. **Merge status
+[Path A](#path-a--xvmc-v241-recommended-once-merged) uses once available. **Merge status
 note:** release notes for XVMC v2.4.1 credited this platform's addition, but
 as of this writing it isn't present in the upstream repository's `master`
 branch (checked directly against the source) — a PR is pending. If Path A

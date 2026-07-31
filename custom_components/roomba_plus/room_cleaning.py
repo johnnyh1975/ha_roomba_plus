@@ -42,7 +42,12 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from .const import CONF_SMART_ZONE_DATA, DOMAIN, MAP_UPDATING_NOT_READY_BIT
+from .const import (
+    CONF_FLOOR,
+    CONF_SMART_ZONE_DATA,
+    DOMAIN,
+    MAP_UPDATING_NOT_READY_BIT,
+)
 from .models import ConnectionType, MapCapability
 
 if TYPE_CHECKING:
@@ -865,7 +870,6 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         except ImportError:
             return []
 
-        from .const import CONF_FLOOR  # noqa: PLC0415
 
         if not self._data.has_cloud or self._data.cloud_coordinator is None:
             return []
@@ -1115,7 +1119,7 @@ def async_get_room_cleaning_backend(
 
     if data.connection_type == ConnectionType.CLOUD_ONLY:
         return (
-            PrimeRoomCleaning(data, config_entry, hass or config_entry.hass)
+            PrimeRoomCleaning(data, config_entry, hass)
             if data.prime_robot is not None
             else None
         )
@@ -1123,11 +1127,27 @@ def async_get_room_cleaning_backend(
     if data.map_capability == MapCapability.SMART and _classic_has_room_data(
         data, config_entry
     ):
-        # hass comes from the caller where available. config_entry.hass
+        # hass COMES FROM THE CALLER OR IS NONE. It must never be read off
+        # the config entry: ConfigEntry has no `hass` attribute, so
+        # `config_entry.hass` raises AttributeError.
+        #
+        # This factory is called from `supported_features`, a property
+        # Home Assistant evaluates while registering the entity. An
+        # exception there means the entity is never added -- which is how
+        # the vacuum entity, the single most important one in this
+        # integration, disappeared for a tester on v4.0.0a14.
+        #
+        # THE TEST SUITE COULD NOT SEE IT. Every test passes a MagicMock
+        # as the config entry, and a MagicMock answers any attribute
+        # access. All 4,577 tests stayed green against code that raises
+        # on the first real ConfigEntry it meets.
+        #
+        # hass is only needed to record the mission plan; a backend built
+        # without it still lists rooms and still cleans.
         # is the same object in production but not in tests, whose
         # fixtures prepare the one the service call carries -- and the
         # send path runs through hass.async_add_executor_job.
-        return ClassicRoomCleaning(data, config_entry, hass or config_entry.hass)
+        return ClassicRoomCleaning(data, config_entry, hass)
 
     return None
 

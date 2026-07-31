@@ -115,7 +115,11 @@
       "cannot_connect": "Der Roboter ist unter der angegebenen Adresse nicht erreichbar.",
       "reconfigure_successful": "Verbindungseinstellungen erfolgreich aktualisiert.",
       "no_new_robots_found": "Keine neuen Roboter auf diesem iRobot-Konto gefunden — alle Roboter sind bereits eingerichtet.",
-      "prime_classic_password_missing": "Das Passwort dieses Roboters war nicht in der Antwort des iRobot-Kontos enthalten. Bitte füge ihn stattdessen manuell hinzu."
+      "prime_classic_password_missing": "Das Passwort dieses Roboters war nicht in der Antwort des iRobot-Kontos enthalten. Bitte füge ihn stattdessen manuell hinzu.",
+      "demand_cleaning_not_supported": "Dieser Roboter meldet keine Verschmutzungsdaten, die für die Bedarfsreinigung nötig sind.",
+      "integration_not_loaded": "Die Integration ist nicht geladen. Starte Home Assistant neu und versuche es erneut.",
+      "room_schedule_no_rooms": "Für diesen Roboter sind noch keine Räume bekannt. Lass ihn zuerst eine Kartierungsfahrt abschließen.",
+      "room_schedule_not_supported": "Raumzeitpläne brauchen einen Roboter, der Raumdaten meldet."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Etage (z. B. Erdgeschoss)",
           "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)",
           "map_room_labels": "Raumnamen ins Kartenbild zeichnen",
-          "prime_favorite_buttons": "Für jeden gespeicherten Favoriten einen Knopf anlegen"
+          "prime_favorite_buttons": "Für jeden gespeicherten Favoriten einen Knopf anlegen",
+          "enable_schedule_calendar": "Reinigungspläne als Kalender anzeigen"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",

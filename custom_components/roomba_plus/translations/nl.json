@@ -115,7 +115,11 @@
       "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken.",
       "reconfigure_successful": "Connection settings updated successfully.",
       "no_new_robots_found": "Geen nieuwe robots gevonden op dit iRobot-account — alle robots zijn al ingesteld.",
-      "prime_classic_password_missing": "Het wachtwoord van deze robot was niet opgenomen in het antwoord van het iRobot-account. Probeer deze in plaats daarvan handmatig toe te voegen."
+      "prime_classic_password_missing": "Het wachtwoord van deze robot was niet opgenomen in het antwoord van het iRobot-account. Probeer deze in plaats daarvan handmatig toe te voegen.",
+      "demand_cleaning_not_supported": "Deze robot rapporteert geen vuildetectiegegevens die nodig zijn voor reiniging op verzoek.",
+      "integration_not_loaded": "De integratie is niet geladen. Herstart Home Assistant en probeer het opnieuw.",
+      "room_schedule_no_rooms": "Er zijn nog geen kamers bekend voor deze robot. Laat hem eerst een kartering voltooien.",
+      "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Verdieping (bijv. Begane grond)",
           "correlation_entities": "Vuil correleren met sensoren (optioneel)",
           "map_room_labels": "Kamernamen op de kaartafbeelding tekenen",
-          "prime_favorite_buttons": "Een knop maken voor elke opgeslagen favoriet"
+          "prime_favorite_buttons": "Een knop maken voor elke opgeslagen favoriet",
+          "enable_schedule_calendar": "Schoonmaakschema's als agenda tonen"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",

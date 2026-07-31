@@ -115,7 +115,11 @@
       "cannot_connect": "Impossible d'atteindre le robot à l'adresse spécifiée.",
       "reconfigure_successful": "Connection settings updated successfully.",
       "no_new_robots_found": "Aucun nouveau robot trouvé sur ce compte iRobot — tous les robots sont déjà configurés.",
-      "prime_classic_password_missing": "Le mot de passe de ce robot n'était pas inclus dans la réponse du compte iRobot. Essayez plutôt de l'ajouter manuellement."
+      "prime_classic_password_missing": "Le mot de passe de ce robot n'était pas inclus dans la réponse du compte iRobot. Essayez plutôt de l'ajouter manuellement.",
+      "demand_cleaning_not_supported": "Ce robot ne transmet pas les données de détection de saleté nécessaires au nettoyage à la demande.",
+      "integration_not_loaded": "L'intégration n'est pas chargée. Redémarrez Home Assistant et réessayez.",
+      "room_schedule_no_rooms": "Aucune pièce n'est encore connue pour ce robot. Laissez-le d'abord terminer une cartographie.",
+      "room_schedule_not_supported": "Les programmes par pièce nécessitent un robot qui transmet des données de pièces."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Étage (ex. : Rez-de-chaussée)",
           "correlation_entities": "Corréler la saleté avec des capteurs (optionnel)",
           "map_room_labels": "Afficher les noms des pièces sur l'image de la carte",
-          "prime_favorite_buttons": "Créer un bouton pour chaque favori enregistré"
+          "prime_favorite_buttons": "Créer un bouton pour chaque favori enregistré",
+          "enable_schedule_calendar": "Afficher les programmes de nettoyage dans un calendrier"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",

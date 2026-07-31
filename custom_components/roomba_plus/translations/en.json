@@ -115,7 +115,11 @@
       "cannot_connect": "Cannot reach the robot at the specified address.",
       "reconfigure_successful": "Connection settings updated successfully.",
       "no_new_robots_found": "No new robots found on this iRobot account — every robot is already configured.",
-      "prime_classic_password_missing": "This robot's password was not included in the iRobot account response. Please try adding it manually instead."
+      "prime_classic_password_missing": "This robot's password was not included in the iRobot account response. Please try adding it manually instead.",
+      "demand_cleaning_not_supported": "This robot does not report the dirt-detection data that demand cleaning needs.",
+      "integration_not_loaded": "The integration is not loaded. Restart Home Assistant and try again.",
+      "room_schedule_no_rooms": "No rooms are known for this robot yet. Let it complete a mapping run first.",
+      "room_schedule_not_supported": "Room schedules need a robot that reports room data."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Floor label (e.g. Ground Floor)",
           "correlation_entities": "Correlate dirt with sensors (optional)",
           "map_room_labels": "Draw room names on the map image",
-          "prime_favorite_buttons": "Create a button for each saved favorite"
+          "prime_favorite_buttons": "Create a button for each saved favorite",
+          "enable_schedule_calendar": "Show cleaning schedules as a calendar"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",

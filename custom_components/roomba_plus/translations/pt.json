@@ -115,7 +115,11 @@
       "cannot_connect": "Não é possível contactar o robô no endereço especificado.",
       "reconfigure_successful": "Connection settings updated successfully.",
       "no_new_robots_found": "Não foram encontrados robôs novos nesta conta iRobot — todos os robôs já estão configurados.",
-      "prime_classic_password_missing": "A palavra-passe deste robô não foi incluída na resposta da conta iRobot. Tenta adicioná-lo manualmente."
+      "prime_classic_password_missing": "A palavra-passe deste robô não foi incluída na resposta da conta iRobot. Tenta adicioná-lo manualmente.",
+      "demand_cleaning_not_supported": "Este robô não comunica os dados de deteção de sujidade necessários para a limpeza a pedido.",
+      "integration_not_loaded": "A integração não está carregada. Reinicie o Home Assistant e tente novamente.",
+      "room_schedule_no_rooms": "Ainda não são conhecidas divisões para este robô. Deixe-o concluir primeiro um mapeamento.",
+      "room_schedule_not_supported": "Os agendamentos por divisão exigem um robô que comunique dados de divisões."
     }
   },
   "options": {
@@ -153,7 +157,8 @@
           "floor_label": "Andar (ex.: Rés do chão)",
           "correlation_entities": "Correlacionar sujidade com sensores (opcional)",
           "map_room_labels": "Desenhar os nomes dos quartos na imagem do mapa",
-          "prime_favorite_buttons": "Criar um botão para cada favorito guardado"
+          "prime_favorite_buttons": "Criar um botão para cada favorito guardado",
+          "enable_schedule_calendar": "Mostrar os agendamentos de limpeza como calendário"
         },
         "data_description": {
           "continuous": "Manter uma ligação MQTT persistente com o robô. Recomendado.",
