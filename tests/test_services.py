@@ -79,6 +79,7 @@ class TestServicesRegistration:
             (DOMAIN, "reset_robot_profile"),
             # ADVANCE-ROOM-V2 (v2.8.0)
             (DOMAIN, "advance_room"),
+            (DOMAIN, "run_favorite"),
             # v3.2.0 ANOMALY-EXPLAIN
             (DOMAIN, "explain_mission"),
             # v3.3.0 ROOM-SCHED
@@ -102,7 +103,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 17
+        assert len(registered) == 18
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -113,7 +114,7 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 17
+        assert len(registered) == 18
 
         async_remove_services(hass)
         assert len(registered) == 0

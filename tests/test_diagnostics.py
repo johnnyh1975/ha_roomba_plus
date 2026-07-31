@@ -465,3 +465,174 @@ class TestPrimeConnectionDiagnostics:
             result = _robot_cloud_connection(data)
             assert result["known"] is False
             assert "connected" not in result
+
+
+class TestPrimeStoreSummary:
+    """Store state in diagnostics, because their sensors read from them
+    and nothing else reveals whether they are populated.
+
+    Three states look identical from outside: a store that was never
+    created, one that failed to load, and one that nothing writes to.
+    Prime was in all three at different points -- MissionStore was never
+    created, then created but unread by any sensor, then read but with
+    no writer. "My mission sensors are empty" has to be diagnosable
+    without guessing which."""
+
+    def _summary(self, **stores):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_store_summary
+
+        data = MagicMock()
+        for name in ("mission_store", "maintenance_store", "mission_timer_store"):
+            setattr(data, name, stores.get(name))
+        return _prime_store_summary(data)
+
+    def test_absent_stores_say_so_rather_than_reading_as_empty(self):
+        """"not created" and "created but empty" need different fixes."""
+        summary = self._summary()
+
+        assert summary["mission_store"] == "not created"
+        assert summary["maintenance_store"] == "not created"
+        assert summary["mission_timer_store"] == "not created"
+
+    def test_mission_records_are_counted_not_dumped(self):
+        """A history is hundreds of records, and the question is whether
+        it is populated -- not what is in it."""
+        from unittest.mock import MagicMock
+
+        store = MagicMock()
+        store.query = MagicMock(return_value=[{"id": "p_a"}, {"id": "p_b"}])
+
+        result = self._summary(mission_store=store)["mission_store"]
+
+        assert result["record_count"] == 2
+        assert result["latest_id"] == "p_b"
+
+    def test_an_unreadable_store_does_not_break_the_download(self):
+        """Diagnostics are read when something is already wrong; failing
+        to produce them is the worst possible moment to fail."""
+        from unittest.mock import MagicMock
+
+        store = MagicMock()
+        store.query = MagicMock(side_effect=RuntimeError("corrupt"))
+
+        assert self._summary(mission_store=store)["mission_store"] == "unreadable"
+
+    def test_the_timer_reports_elapsed_time(self):
+        """Zero elapsed on a robot that has run is the signal that phase
+        transitions are not reaching the store -- a store that exists,
+        persists, and stays empty forever. That is exactly what happened
+        to MissionStore before anything wrote to it."""
+        from unittest.mock import MagicMock
+
+        store = MagicMock(elapsed_run_min=42, current_room="Kitchen")
+
+        result = self._summary(mission_timer_store=store)["mission_timer_store"]
+
+        assert result["elapsed_run_min"] == 42
+        assert result["current_room"] == "Kitchen"
+
+    def test_pose_derived_stores_are_marked_not_applicable(self):
+        """So a reader does not go hunting for five missing stores.
+        freeze_snapshot_store in particular exists only to back up
+        pose-derived state against a firmware change that stops pose
+        delivery -- for a robot that never delivered poses it has
+        nothing to protect."""
+        assert "not applicable" in self._summary()["pose_derived_stores"]
+
+
+class TestShadowDump:
+    """The named shadows' CONTENTS, not just their names.
+
+    Until this existed, diagnostics listed which shadows had been seeded
+    and nothing about what was in them. That gap cost real time: the
+    `audio` block in rw-settings is still unknown months after a tester
+    reported its key names by hand, because he had to type them out
+    rather than send a file. And whether the settings shadow spells a
+    field `padPlate` or `pad_plate` currently blocks a pad-wetness
+    control -- a question one download answers.
+
+    Dumped rather than summarised on purpose: a summary can only show
+    what somebody already thought to look for, and the recurring problem
+    here has been the opposite. `googleControl` and five capability
+    flags were both found because a tester pasted raw output."""
+
+    def _dump(self, shadows):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_shadow_dump
+
+        data = MagicMock()
+        data.prime_status_coordinator = MagicMock(data=shadows)
+        return _prime_shadow_dump(data)
+
+    def test_settings_come_through_whole(self):
+        """The point of the whole thing: padWetness and audio are the two
+        blocks currently blocking work, and both are settings rather than
+        secrets."""
+        dump = self._dump({"rw-settings": {
+            "childLock": True,
+            "padWetness": {"disposable": 1, "padPlate": 2, "reusable": 0},
+            "audio": {"volume": 3},
+        }})
+
+        assert dump["rw-settings"]["padWetness"]["padPlate"] == 2
+        assert dump["rw-settings"]["audio"] == {"volume": 3}
+
+    def test_identifiers_are_redacted(self):
+        """Not credentials -- those never reach a shadow -- but things
+        that tie a capture to a household or a device and would follow
+        the file into a public issue."""
+        dump = self._dump({"rw-settings": {"blid": "SECRET", "mac": "aa:bb:cc"}})
+
+        assert dump["rw-settings"]["blid"] == "**REDACTED**"
+        assert dump["rw-settings"]["mac"] == "**REDACTED**"
+
+    def test_redaction_reaches_nested_keys(self):
+        """Shadows nest. A top-level filter would leave
+        state.reported.hwPartsRev, which carries a serial number, fully
+        visible."""
+        dump = self._dump({"ro-configinfo": {
+            "state": {"reported": {"hwPartsRev": {"navSerialNo": "SN1"}, "sku": "G18"}}
+        }})
+
+        reported = dump["ro-configinfo"]["state"]["reported"]
+        assert reported["hwPartsRev"] == "**REDACTED**"
+        assert reported["sku"] == "G18"
+
+    def test_lists_are_walked_too(self):
+        """p2maps is a list of dicts, and a map id belongs to a home."""
+        dump = self._dump({"ro-currentstate": {
+            "p2maps": [{"name": "Ground floor", "blid": "SECRET"}]
+        }})
+
+        assert dump["ro-currentstate"]["p2maps"][0]["blid"] == "**REDACTED**"
+        assert dump["ro-currentstate"]["p2maps"][0]["name"] == "Ground floor"
+
+    def test_no_coordinator_says_so_rather_than_raising(self):
+        """Diagnostics are read when something is already wrong; failing
+        to produce them is the worst possible moment to fail."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_shadow_dump
+
+        data = MagicMock()
+        data.prime_status_coordinator = None
+
+        result = _prime_shadow_dump(data)
+
+        assert result["available"] is False
+
+    def test_every_seeded_shadow_appears(self):
+        """A tester's capture listed nine. All nine should be dumpable --
+        withholding one would recreate exactly the blind spot this
+        replaces."""
+        names = [
+            "classic", "ro-configinfo", "ro-currentstate", "ro-services",
+            "ro-stats", "rw-constatus", "rw-schedule", "rw-settings",
+            "rw-software",
+        ]
+        dump = self._dump(dict.fromkeys(names, {"x": 1}))
+
+        assert set(dump) == set(names)

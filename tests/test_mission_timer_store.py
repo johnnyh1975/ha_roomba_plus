@@ -705,23 +705,37 @@ class TestOnPhaseOtherFlush:
         assert mts.run_sec == 60.0   # large gap rejected, run_sec unchanged
 
     def test_elapsed_does_not_drop_at_transition(self):
-        """Simulates the bounce-back pattern: elapsed stays continuous through transition."""
+        """Simulates the bounce-back pattern: elapsed stays continuous
+        through transition.
+
+        TIME IS PINNED (this session). This called time.monotonic() twice
+        -- once to build the store and once inside the code under test --
+        and asserted the difference fell in a 10-second window. Under
+        load the two calls drift, and it failed once in a full run while
+        passing three times in isolation.
+
+        Four other tests in this file had the same shape and were pinned
+        earlier today. This one was missed because it reads as a logic
+        test rather than a timing one."""
+        from unittest.mock import patch
+
         from custom_components.roomba_plus.sensor import RoombaMissionProgress
 
-        now = time.monotonic()
-        mts = self._make_mts(run_sec=120.0, last_phase_ts=now - 30)
+        now = 10_000.0
+        with patch("time.monotonic", return_value=now):
+            mts = self._make_mts(run_sec=120.0, last_phase_ts=now - 30)
 
-        # BEFORE transition: elapsed includes live delta
-        elapsed_before = RoombaMissionProgress._elapsed_sec(mts, "run")
-        assert 145 <= elapsed_before <= 155
+            # BEFORE transition: elapsed includes live delta
+            elapsed_before = RoombaMissionProgress._elapsed_sec(mts, "run")
+            assert elapsed_before == 150.0
 
-        # Transition fires — flush pending delta
-        mts.on_phase_other()
+            # Transition fires — flush pending delta
+            mts.on_phase_other()
 
-        # AFTER transition: elapsed equals flushed run_sec (no live delta, phase=hmMidMsn)
-        elapsed_after = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
-        # Should be ~150, NOT dropping back to 120
-        assert 145 <= elapsed_after <= 155
+            # AFTER transition: elapsed equals flushed run_sec (no live
+            # delta, phase=hmMidMsn). Must be 150, NOT back to 120.
+            elapsed_after = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
+            assert elapsed_after == 150.0
 
 
 class TestAdvanceRoomRemoved:

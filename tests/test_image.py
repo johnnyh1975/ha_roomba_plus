@@ -2476,3 +2476,78 @@ class TestPrimeMapSurvivesRestart:
         )
 
         assert _prime_map_storage_key("e1") != _map_storage_key("e1")
+
+
+class TestPrimeMapFlushOnRemoval:
+    """The delayed map write is flushed when the entity goes away.
+
+    async_delay_save means a reload can leave the OLD entity's pending
+    write to land after the NEW one has already loaded -- overwriting a
+    current map with a stale one, which is worse than losing an update.
+    Store.async_save cancels the pending timer as well as writing, so it
+    is both flush and guard.
+
+    Classic solved exactly this for MissionTimerStore in v3.3.0, in its
+    own bug hunt. This entity was written today with the delayed saving
+    copied from that store, and the flush was not copied with it."""
+
+    def _entity(self, *, has_store=True, has_png=True):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._watch_task = None
+        entity._png_bytes = b"PNGDATA" if has_png else None
+        entity._map_stored_at = None
+        entity._map_store = MagicMock(async_save=AsyncMock()) if has_store else None
+        entity._config_entry = MagicMock(entry_id="e1")
+        entity.hass = MagicMock()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_a_pending_write_is_flushed(self):
+        entity = self._entity()
+
+        await entity.async_will_remove_from_hass()
+
+        entity._map_store.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_without_a_map(self):
+        """Would replace a good stored map with an empty one."""
+        entity = self._entity(has_png=False)
+
+        await entity.async_will_remove_from_hass()
+
+        entity._map_store.async_save.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_store_yet_does_not_raise(self):
+        """Removal can happen before any frame arrived, so before the
+        store was ever created."""
+        entity = self._entity(has_store=False)
+
+        await entity.async_will_remove_from_hass()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_flush_does_not_block_removal(self):
+        """Unload must complete. A stale map is recoverable; a config
+        entry stuck mid-unload is not."""
+        entity = self._entity()
+        entity._map_store.async_save.side_effect = OSError("disk full")
+
+        await entity.async_will_remove_from_hass()
+
+    @pytest.mark.asyncio
+    async def test_the_watch_task_is_still_cancelled(self):
+        """The flush was inserted ahead of existing cleanup -- which must
+        still happen, or a reload leaks a background task per cycle."""
+        from unittest.mock import MagicMock
+
+        entity = self._entity()
+        entity._watch_task = MagicMock()
+
+        await entity.async_will_remove_from_hass()
+
+        entity._watch_task.cancel.assert_called_once()

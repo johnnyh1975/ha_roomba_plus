@@ -1011,3 +1011,118 @@ class TestRoomIdsAreQualifiedByTheirMap:
         payload = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()
         assert payload["p2map_id"] == "ONLY"
         assert payload["regions"][0]["region_id"] == "7"
+
+
+class TestTheMissionPlanReachesTheTimerStore:
+    """The link that was missing after the timer store was wired.
+
+    MissionTimerStore was created for Prime and fed phase transitions,
+    but nothing called set_mission_plan() -- only the Classic MQTT
+    callback path does. Four things silently depended on it:
+
+      - the advance_room service, whose planned_rooms was always empty,
+        so it did nothing at all
+      - current_room and next_room, both blank
+      - the mission progress sensor, showing elapsed time and no
+        remaining estimate
+
+    Half working and looking whole, which is the shape this project keeps
+    producing: a store created, a store filled, a store read -- each step
+    tested fine on its own."""
+
+    def _backend(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        data = MagicMock(blid="BLID")
+        data.prime_robot.get_active_map_versions = AsyncMock(
+            return_value=[{"p2map_id": "M1"}]
+        )
+        room = MagicMock(room_id="13")
+        room.name = "Salon"
+        data.prime_robot.get_map_metadata = AsyncMock(
+            return_value=MagicMock(rooms_metadata=[room])
+        )
+        data.prime_robot.send_routine_command_via_cmd_topic = AsyncMock()
+        data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": {"p2mapId": "M1"}}
+        }
+        data.mission_timer_store = MissionTimerStore()
+        data.hass_ref = MagicMock()
+        entry = MagicMock(entry_id="e1")
+        return PrimeRoomCleaning(data, entry, MagicMock()), data.mission_timer_store
+
+    @pytest.mark.asyncio
+    async def test_cleaning_records_the_planned_rooms(self):
+        from unittest.mock import patch
+
+        backend, store = self._backend()
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(["M1/13"])
+
+        assert store.planned_rooms == ["13"]
+
+    @pytest.mark.asyncio
+    async def test_the_current_room_becomes_the_first_one(self):
+        """Which is what makes advance_room able to move to a second."""
+        from unittest.mock import patch
+
+        backend, store = self._backend()
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(["M1/13"])
+
+        assert store.current_room == "13"
+
+    @pytest.mark.asyncio
+    async def test_no_timer_store_does_not_break_cleaning(self):
+        """Recording the plan is enrichment. A Prime entry whose timer
+        store failed to load must still be able to clean."""
+        from unittest.mock import patch
+
+        backend, _store = self._backend()
+        backend._data.mission_timer_store = None
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(["M1/13"])
+
+        backend._robot.send_routine_command_via_cmd_topic.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_read_only_backend_needs_no_context(self):
+        """Several call sites build this backend just to list rooms.
+        Requiring hass and the config entry would have broken them, which
+        is why both are optional."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        data = MagicMock(blid="B")
+        data.prime_robot.get_active_map_versions = AsyncMock(return_value=[])
+
+        backend = PrimeRoomCleaning(data)
+
+        assert await backend.available_rooms() == {}
+
+    def test_no_time_estimates_are_invented(self):
+        """get_time_estimates() would supply them, and its own docstring
+        says the request body's key names are unconfirmed. A progress
+        sensor that counts rooms without predicting minutes is honest;
+        guessing at the body would produce numbers with nothing behind
+        them."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        source = inspect.getsource(PrimeRoomCleaning._note_mission_plan)
+        # Strip the docstring: it MENTIONS get_time_estimates to explain
+        # why it is not used, and asserting on the whole source would
+        # therefore fail for the wrong reason. A first version of this
+        # test did exactly that.
+        code = source.split('"""')[-1]
+
+        assert "get_time_estimates" not in code
+        assert "set_mission_plan" in code

@@ -242,7 +242,15 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # 6 always-present + 4 capability-gated (unknown -> created by
         # default) + 8 ro-stats-backed + 1 ro-configinfo-backed + 1
         # error sensor (this session) = 20.
-        assert len(created) == 20
+        # 31 = 20 Prime-specific + 6 mission-history + 4 maintenance-date
+        # + 1 mission-progress sensor,
+        # the latter added once MissionStore was filled for Prime.
+        #
+        # A count assertion looks brittle and earns its keep: it fired
+        # the moment the mission sensors were wired in, which is the
+        # point at which you confirm the addition was deliberate rather
+        # than an accident of a shared code path.
+        assert len(created) == 31
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
         assert any(isinstance(e, PrimeBatterySensor) for e in created)
