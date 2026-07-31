@@ -1126,3 +1126,142 @@ class TestTheMissionPlanReachesTheTimerStore:
 
         assert "get_time_estimates" not in code
         assert "set_mission_plan" in code
+
+
+class TestTheFactoryNeverReadsHassOffTheConfigEntry:
+    """`ConfigEntry` has no `hass` attribute.
+
+    A version of this factory read `config_entry.hass` as a fallback when
+    the caller passed no hass. That raises AttributeError on a real
+    config entry -- and the factory is called from `supported_features`,
+    a property Home Assistant evaluates while registering the entity.
+
+    An exception there means the entity is never added. The vacuum
+    entity, the one that shows the robot and starts a clean, vanished for
+    a tester on v4.0.0a14 for exactly that reason.
+
+    WHY 4,577 TESTS MISSED IT. Every test passes a MagicMock as the
+    config entry, and a MagicMock answers any attribute access with
+    another MagicMock. The suite was green against code that raises on
+    the first real ConfigEntry it meets.
+
+    That is the general lesson, not a detail: a MagicMock cannot fail an
+    attribute the real object does not have."""
+
+    def test_config_entry_really_has_no_hass_attribute(self):
+        """The premise. If HA ever adds one, this test says so and the
+        rest of this class can be reconsidered."""
+        from homeassistant.config_entries import ConfigEntry
+
+        assert not hasattr(ConfigEntry, "hass")
+
+    def test_every_other_config_entry_attribute_this_code_uses_is_real(self):
+        """The general form of the bug, checked rather than assumed.
+
+        `config_entry.hass` was the one that bit. This asserts there is
+        no second one waiting: every attribute the integration reads off
+        a config entry has to be declared on ConfigEntry.
+
+        Worth doing because a MagicMock answers anything, so the test
+        suite cannot distinguish a real attribute from an invented one.
+        Every access below was green before `hass` was found, and would
+        have stayed green with five more like it."""
+        import ast
+        import inspect
+        import re
+        from pathlib import Path
+
+        from homeassistant.config_entries import ConfigEntry
+
+        source = inspect.getsource(ConfigEntry)
+        declared = set(re.findall(r"^\s{4}(\w+):\s", source, re.M))
+        declared |= set(re.findall(r"_setter\(self, [\"'](\w+)[\"']", source))
+        declared |= {a for a in dir(ConfigEntry) if not a.startswith("__")}
+
+        root = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        used: set[str] = set()
+        for path in root.glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Attribute):
+                    continue
+                value = node.value
+                if isinstance(value, ast.Name) and value.id == "config_entry":
+                    used.add(node.attr)
+                elif isinstance(value, ast.Attribute) and value.attr == "_config_entry":
+                    used.add(node.attr)
+
+        unknown = sorted(used - declared)
+
+        assert not unknown, (
+            f"read off a config entry but not declared on ConfigEntry: {unknown}"
+        )
+
+    def test_the_factory_does_not_reach_for_it(self):
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            async_get_room_cleaning_backend,
+        )
+
+        source = inspect.getsource(async_get_room_cleaning_backend)
+        code = "\n".join(
+            line for line in source.splitlines() if not line.strip().startswith("#")
+        )
+
+        assert "config_entry.hass" not in code
+
+    def test_no_module_reads_hass_off_a_config_entry(self):
+        """Broader than the factory: the same mistake anywhere else fails
+        the same way, and there is no reason to allow it."""
+        import ast
+        import re
+        from pathlib import Path
+
+        root = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for path in root.glob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            # Strip docstrings as well as comments: several of them
+            # explain WHY this attribute must not be used, and a naive
+            # text search flags the explanation as the offence.
+            docstrings = {
+                node.body[0].value.value
+                for node in ast.walk(tree)
+                if isinstance(
+                    node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+                )
+                and node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+            }
+            code = "\n".join(
+                line
+                for line in source.splitlines()
+                if not line.strip().startswith("#")
+            )
+            for doc in docstrings:
+                code = code.replace(doc, "")
+
+            assert not re.search(r"config_entry\.hass\b", code), path.name
+
+    def test_a_backend_without_hass_still_works(self):
+        """hass is only needed to record the mission plan. Callers that
+        have none -- supported_features among them -- must still get a
+        working backend, or the capability check turns into a crash."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        data = MagicMock(blid="B")
+        data.prime_robot.get_active_map_versions = AsyncMock(return_value=[])
+
+        backend = PrimeRoomCleaning(data)
+
+        assert backend is not None

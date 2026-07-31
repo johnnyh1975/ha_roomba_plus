@@ -567,6 +567,14 @@ class TestShadowDump:
         data.prime_status_coordinator = MagicMock(data=shadows)
         return _prime_shadow_dump(data)
 
+    @pytest.mark.assumed(
+        "the rw-settings shadow's padWetness spelling is borrowed from the "
+        "COMMAND domain model (mission_control.py) and has never been seen "
+        "in a real shadow capture. If the shadow uses snake_case where the "
+        "command uses camelCase -- pad_plate against padPlate -- this test "
+        "passes while the real parse silently yields None. Settled by one "
+        "diagnostics download from a robot whose ppWetLvl is nonzero."
+    )
     def test_settings_come_through_whole(self):
         """The point of the whole thing: padWetness and audio are the two
         blocks currently blocking work, and both are settings rather than
