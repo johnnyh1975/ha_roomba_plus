@@ -589,6 +589,20 @@ class TestFloorPlanFromTheMapBundle:
         assert "_compute_fit" in source
         assert ".add_pose(" not in source
 
+    def test_border_layer_does_not_mask_rooms(self):
+        """Border MultiPolygons contain holes that the ring helper omits."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage._render_png)
+        border_block = source.split(
+            "for ring in self._floor_plan.borders:", 1
+        )[1].split("for feature in", 1)[0]
+
+        assert "outline=" in border_block
+        assert "fill=" not in border_block
+
     @pytest.mark.asyncio
     async def test_only_carpet_features_are_taken(self):
         """The wire key is `type`, not `floor_type` — a GeoJSON feature

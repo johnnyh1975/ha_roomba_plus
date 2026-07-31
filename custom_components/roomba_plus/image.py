@@ -3127,7 +3127,11 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             )
 
         for ring in self._floor_plan.borders:
-            draw.polygon([to_px(x, y) for x, y in ring], fill=(90, 90, 90))
+            draw.polygon(
+                [to_px(x, y) for x, y in ring],
+                outline=(90, 90, 90),
+                width=2,
+            )
 
         for feature in (live_bundle.get("trajectories") or {}).get("features") or []:
             coords = (
