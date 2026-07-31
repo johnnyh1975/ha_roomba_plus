@@ -543,6 +543,53 @@ class TestFloorPlanFromTheMapBundle:
         assert plan.borders[0][1] == (1000.0, 0.0)
 
     @pytest.mark.asyncio
+    async def test_705_single_feature_borders_and_floor_layers_are_kept(self):
+        """The 705 uses a bare border plus floorPlan/furniture collections."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.prime_room_map import (
+            async_build_prime_floor_plan,
+        )
+
+        polygon = {
+            "type": "Polygon",
+            "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+        }
+        parsed = {
+            "borders": {
+                "geometry": {
+                    "type": "MultiPolygon",
+                    "coordinates": [polygon["coordinates"]],
+                }
+            },
+            "floorPlan": {"features": [{"geometry": polygon}]},
+            "furniture": {"features": [{"geometry": polygon}]},
+        }
+        entry = MagicMock()
+        entry.runtime_data.prime_robot.get_map_geojson_link = AsyncMock(
+            return_value={"map_url": "https://x"}
+        )
+        entry.runtime_data.prime_robot.download_map_bundle = AsyncMock(return_value=b"x")
+
+        with patch(
+            "roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed
+        ):
+            plan = await async_build_prime_floor_plan(entry, "MAP-1", "V1")
+
+        assert len(plan.borders) == len(plan.floors) == len(plan.furniture) == 1
+
+    def test_prime_map_fits_geometry_without_pose_jump_filtering(self):
+        """Polygon corners are not robot poses and can be metres apart."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage._render_png)
+
+        assert "_compute_fit" in source
+        assert ".add_pose(" not in source
+
+    @pytest.mark.asyncio
     async def test_only_carpet_features_are_taken(self):
         """The wire key is `type`, not `floor_type` — a GeoJSON feature
         already has three other `type` keys around it. And filtered
@@ -888,6 +935,21 @@ class TestLiveTrail:
         source = inspect.getsource(PrimeMapImage._feed_trail)
 
         assert "_METRES_TO_MM" in source
+
+    def test_live_geojson_bundle_drives_the_room_map(self):
+        """V4 sends coverage, trajectory and hazards beside rawmap."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeMapImage, PrimeRoomsImage
+
+        stream_source = inspect.getsource(PrimeMapImage._async_watch_live_map)
+        render_source = inspect.getsource(PrimeRoomsImage._render_png)
+
+        assert "message.livemap_url" in stream_source
+        assert "parse_map_bundle" in stream_source
+        assert "coverage" in render_source
+        assert "trajectories" in render_source
+        assert "hazard" in render_source
 
     def test_radians_are_converted_to_degrees(self):
         """Quieter version of the same mistake: the trail would be drawn

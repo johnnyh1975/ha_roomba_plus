@@ -30,7 +30,7 @@ constant rather than an inline 1000.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -260,6 +260,11 @@ class PrimeFloorPlan:
     carpet: list[list[tuple[float, float]]]
     #: Dock position and which way it faces, or None.
     dock: tuple[float, float, float] | None
+    #: Detailed floor polygons. These fill gaps not represented by a room
+    #: outline and are what make the app's base map look complete.
+    floors: list[list[tuple[float, float]]] = field(default_factory=list)
+    #: Detected furniture polygons, rendered above rooms and coverage.
+    furniture: list[list[tuple[float, float]]] = field(default_factory=list)
 
 
 def _rings_mm(features: Any) -> list[list[tuple[float, float]]]:
@@ -270,7 +275,13 @@ def _rings_mm(features: Any) -> list[list[tuple[float, float]]]:
     two functions.
     """
     rings: list[list[tuple[float, float]]] = []
-    for feature in (features or {}).get("features") or []:
+    data = features or {}
+    feature_list = (
+        [data]
+        if isinstance(data, dict) and data.get("geometry")
+        else data.get("features") or []
+    )
+    for feature in feature_list:
         geometry = feature.get("geometry") or {}
         coords = geometry.get("coordinates") or []
         kind = geometry.get("type")
@@ -359,6 +370,8 @@ async def async_build_prime_floor_plan(
         borders=_rings_mm(parsed.get("borders")),
         carpet=_carpet_rings_mm(parsed.get("floorTypes")),
         dock=_dock_from(parsed.get("dockPose")),
+        floors=_rings_mm(parsed.get("floorPlan")),
+        furniture=_rings_mm(parsed.get("furniture")),
     )
     _LOGGER.debug(
         "roomba_plus: floor plan for %s -- %d border(s), %d carpet area(s), dock %s",
