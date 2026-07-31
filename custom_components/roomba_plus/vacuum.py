@@ -559,6 +559,23 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                         attrs["current_room_area"] = current.room.area
                         attrs["current_room_pass_count"] = current.room.pass_count
 
+
+        # SAVED FAVOURITES, id and name. Prime only -- Classic has no
+        # equivalent concept.
+        #
+        # Costs no entity, and covers what buttons cannot: automations
+        # that iterate, templates that list, and the
+        # xiaomi-vacuum-map-card menu, which reads attributes.
+        #
+        # The ID is here on purpose. An automation written against it
+        # survives a rename in the iRobot app; one written against the
+        # name does not -- and a name is all a button or a select could
+        # offer.
+        favorites = getattr(
+            self._config_entry.runtime_data, "prime_favorites", None
+        )
+        if favorites:
+            attrs["favorites"] = favorites
         return attrs
 
     def _get_cleaning_status(
@@ -1110,6 +1127,7 @@ class BraavaJet(IRobotVacuum):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return Braava-specific state attributes."""
         attrs = super().extra_state_attributes
+
         state = self.vacuum_state
 
         attrs[ATTR_DETECTED_PAD] = state.get("detectedPad")

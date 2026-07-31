@@ -151,7 +151,9 @@
           "map_size_px": "Map size (pixels)",
           "map_scale_mm_per_px": "Scale (mm/pixel)",
           "floor_label": "Floor label (e.g. Ground Floor)",
-          "correlation_entities": "Correlate dirt with sensors (optional)"
+          "correlation_entities": "Correlate dirt with sensors (optional)",
+          "map_room_labels": "Draw room names on the map image",
+          "prime_favorite_buttons": "Create a button for each saved favorite"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -894,6 +896,12 @@
       },
       "map_training": {
         "name": "Action – Start map training"
+      },
+      "prime_favorite": {
+        "name": "Favourite – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Locate"
       }
     },
     "switch": {
@@ -917,6 +925,21 @@
       },
       "prime_carpet_boost": {
         "name": "Setting – Carpet boost"
+      },
+      "prime_schedule": {
+        "name": "Schedule – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Child lock"
+      },
+      "prime_eco_charge": {
+        "name": "Eco charging"
+      },
+      "prime_two_pass": {
+        "name": "Two-pass cleaning"
+      },
+      "prime_vac_high": {
+        "name": "Extra suction power"
       }
     },
     "select": {
@@ -954,6 +977,14 @@
           "automatic": "Automatic",
           "eco": "Eco",
           "performance": "Performance"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Suction level",
+        "state": {
+          "light": "Light",
+          "normal": "Normal",
+          "deep": "Deep"
         }
       }
     },
@@ -1198,6 +1229,12 @@
     },
     "unknown_rooms": {
       "message": "Unknown room(s) for {entity_id}: {rooms}. Known rooms: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite is only available for V4/Prime robots"
+    },
+    "favorite_not_found": {
+      "message": "No runnable favorite with id {favorite_id}"
     }
   },
   "selector": {

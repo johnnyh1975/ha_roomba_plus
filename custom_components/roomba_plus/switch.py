@@ -11,6 +11,7 @@ Binary on/off settings that map to set_preference() delta commands:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
@@ -24,6 +25,54 @@ from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
+
+
+async def _async_add_prime_schedule_switches(
+    config_entry: RoombaConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """One switch per schedule the robot actually has.
+
+    Awaited during setup rather than created blind: the names come from
+    the robot, and an entity with a placeholder name that later changes
+    would leave a stale entity_id behind.
+
+    A failure here adds no switches and is not fatal. Schedules are one
+    feature among many, and taking down the whole switch platform for
+    them would cost the user carpet boost and child lock too.
+    """
+    from .prime_schedule_switch import (  # noqa: PLC0415
+        PrimeScheduleSwitch,
+        async_read_schedule_containers,
+    )
+
+    try:
+        containers = await async_read_schedule_containers(config_entry)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: could not read schedules", exc_info=True)
+        return
+
+    entities: list[SwitchEntity] = []
+    for container_id, schedules in containers:
+        for schedule in schedules:
+            schedule_id = getattr(schedule, "schedule_id", None)
+            if not schedule_id:
+                continue
+            options = getattr(schedule, "options", None)
+            # A deleted schedule stays in the payload with deleted=True.
+            # Creating a switch for it would offer control over something
+            # the app no longer shows.
+            if options is not None and getattr(options, "deleted", False):
+                continue
+            entities.append(PrimeScheduleSwitch(
+                config_entry,
+                container_id,
+                str(schedule_id),
+                getattr(options, "name", "") or "",
+            ))
+
+    if entities:
+        async_add_entities(entities)
 
 
 async def async_setup_entry(
@@ -49,6 +98,33 @@ async def async_setup_entry(
                 async_add_entities([
                     PrimeCarpetBoostSwitch(data.blid, config_entry),
                 ])
+
+        # SETTING SWITCHES. Capability-gated on the same "None means
+        # unknown, only explicit 0 means absent" contract the carpet
+        # boost switch uses -- a robot that has not reported its
+        # capabilities yet should get the switch, not lose it.
+        setting_entities = [
+            PrimeSettingSwitch(data.blid, config_entry, description)
+            for description in PRIME_SETTING_SWITCHES
+            if description.cap_attr is None
+            or cap is None
+            or getattr(cap, description.cap_attr, None) != 0
+        ]
+        if setting_entities:
+            async_add_entities(setting_entities)
+
+        # SCHEDULE SWITCHES, one per schedule on the robot.
+        #
+        # Reading schedules has worked since v4.0.0a5 (the calendar);
+        # writing was field-confirmed twice and has sat in the version
+        # plan as "confirmed, not wired" since. This is that wiring.
+        #
+        # Discovered rather than fixed: how many schedules exist, and
+        # what they are called, is the user's business. A fixed set would
+        # be wrong for everyone.
+        await _async_add_prime_schedule_switches(
+            config_entry, async_add_entities
+        )
         return
 
     roomba = data.roomba
@@ -403,3 +479,146 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
         coordinator = self._config_entry.runtime_data.prime_status_coordinator
         if coordinator is not None:
             self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+@dataclass(frozen=True, kw_only=True)
+class PrimeSettingSwitchDescription(SwitchEntityDescription):
+    """One rw-settings boolean, exposed as a switch."""
+
+    #: The wire key set_setting() takes.
+    wire_key: str
+    #: The RobotSettings attribute the value is read back from. Named
+    #: separately because the two differ: swScrub/scrub, langs2/
+    #: languages_raw and others were renamed in the model, and assuming
+    #: they match has produced false "field missing" reports before.
+    model_attr: str
+    #: cap flag that must not be explicitly 0. None means "always
+    #: offer" -- see get_prime_capability_flags()'s own contract:
+    #: unknown is not absent, only an explicit 0 is.
+    cap_attr: str | None = None
+
+
+#: Settings confirmed writable AND read-back on real hardware.
+#:
+#: The project rule is to never build on unconfirmed field names, and
+#: the write-path test status records these four as write ✅ /
+#: read-back ✅ -- meaning the robot echoed the new value, which is the
+#: proof that it accepted it. childLock additionally has a confirmed
+#: PHYSICAL effect: the robot announced it audibly.
+#:
+#: DELIBERATELY ABSENT: schedHold. Write and read-back both succeed and
+#: the robot ignores it entirely -- a switch the robot accepts and does
+#: nothing about is worse than no switch, because the UI would lie.
+PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
+    PrimeSettingSwitchDescription(
+        key="prime_child_lock",
+        translation_key="prime_child_lock",
+        wire_key="childLock",
+        model_attr="child_lock",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSettingSwitchDescription(
+        key="prime_eco_charge",
+        translation_key="prime_eco_charge",
+        wire_key="ecoCharge",
+        model_attr="eco_charge",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSettingSwitchDescription(
+        key="prime_two_pass",
+        translation_key="prime_two_pass",
+        wire_key="noAutoPasses",
+        model_attr="no_auto_passes",
+        cap_attr="multi_pass",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSettingSwitchDescription(
+        key="prime_vac_high",
+        translation_key="prime_vac_high",
+        wire_key="vacHigh",
+        model_attr="vac_high",
+        cap_attr="suction_lvl",
+        entity_category=EntityCategory.CONFIG,
+    ),
+)
+
+
+class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
+    """A boolean on the rw-settings shadow.
+
+    Same mechanism PrimeCarpetBoostSwitch uses -- set_setting() to write,
+    PrimeStatusCoordinator to read back -- generalised over a description
+    rather than copied four times. Copying it would have meant four
+    places to fix when the shadow name or the read path changes.
+    """
+
+    _attr_has_entity_name = True
+    entity_description: PrimeSettingSwitchDescription
+
+    def __init__(
+        self,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        description: PrimeSettingSwitchDescription,
+    ) -> None:
+        IRobotEntity.__init__(self, None, blid)
+        self.entity_description = description
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
+
+    @property
+    def suggested_object_id(self) -> str:
+        """Locale-independent slug. has_entity_name plus translation_key
+        otherwise makes HA derive the entity_id from the TRANSLATED name,
+        producing different ids per language on first registration."""
+        return self.entity_description.key
+
+    @property
+    def is_on(self) -> bool | None:
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("rw-settings")
+        if raw is None:
+            return None
+        from roombapy_prime.models import RobotSettings  # noqa: PLC0415
+
+        return getattr(
+            RobotSettings.from_json(raw), self.entity_description.model_attr, None
+        )
+
+    @property
+    def available(self) -> bool:
+        """Unknown is not off.
+
+        A setting whose value has never been read must not render as
+        disabled -- someone would toggle it "on" and either write a value
+        that was already set, or believe child lock was off when it was
+        on.
+        """
+        return super().available and self.is_on is not None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_set(False)
+
+    async def _async_set(self, value: bool) -> None:
+        robot = self._config_entry.runtime_data.prime_robot
+        if robot is None:
+            return
+        await robot.set_setting(self.entity_description.wire_key, value)
+        # Optimistic, then corrected by the coordinator: the shadow
+        # delta arrives within a second or two, and leaving the UI on the
+        # old value until then reads as a failed command.
+        self._attr_is_on = value
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.async_write_ha_state)
+            )
+

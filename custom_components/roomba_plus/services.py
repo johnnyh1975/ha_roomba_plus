@@ -78,6 +78,15 @@ _LOGGER = logging.getLogger(__name__)
 # independent of any one store's internal naming (STORAGE_VERSION vs.
 # _HA_STORE_VERSION vary by module, the value doesn't).
 _BACKUP_STORE_VERSION = 1
+#: mission_timer_store is DELIBERATELY ABSENT.
+#:
+#: It holds the state of the mission running right now -- elapsed
+#: seconds, which room, when the phase last changed. Restoring that from
+#: a backup would reinstate a mission that finished weeks ago, and the
+#: robot would disagree within seconds.
+#:
+#: Everything else here is history or user-entered data, which is what a
+#: backup is for.
 _BACKUP_STORES: tuple[tuple[str, str], ...] = (
     ("mission_store", "roomba_plus_missions"),
     ("geometry_store", "roomba_plus_geometry"),
@@ -722,10 +731,24 @@ async def _handle_reset_service(
                 translation_key="maintenance_store_unavailable",
             )
 
-        state = data.roomba_reported_state()
-        _bbrun   = state.get("bbrun", {})
-        _runtime = state.get("runtimeStats", {})
-        current_hr: int = _bbrun.get("hr") or _runtime.get("hr") or 0
+        # The hour meter the reset is recorded against, so "hours since
+        # the filter was changed" can be computed later.
+        #
+        # Classic reads it from the MQTT state; Prime reports the same
+        # thing in a named shadow instead. Without the Prime branch this
+        # recorded 0, which would have made every interval since the
+        # reset read as the robot's entire lifetime.
+        current_hr = 0
+        if data.connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = getattr(data, "prime_status_coordinator", None)
+            shadow = (coordinator.data or {}).get("ro-stats") if coordinator else None
+            runtime = (shadow or {}).get("runtimeStats") or {}
+            current_hr = int(runtime.get("hours") or 0)
+        else:
+            state = data.roomba_reported_state()
+            _bbrun   = state.get("bbrun", {})
+            _runtime = state.get("runtimeStats", {})
+            current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
         getattr(data.maintenance_store, f"reset_{part}")(current_hr)
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
         _fire_maintenance_reset_event(hass, config_entry, part, current_hr)
@@ -1173,6 +1196,59 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.advance_room action", DOMAIN)
 
+    if not hass.services.has_service(DOMAIN, "run_favorite"):
+        hass.services.async_register(
+            DOMAIN,
+            "run_favorite",
+            async_handle_run_favorite,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Required("favorite_id"): cv.string,
+            }),
+        )
+        _LOGGER.debug("Registered %s.run_favorite action", DOMAIN)
+
+
+async def async_handle_run_favorite(call: ServiceCall) -> None:
+    """Runs a saved favorite by ID. V4/Prime only.
+
+    BY ID rather than by name. The name is what the user typed in the
+    iRobot app and can change there at any time; an automation keyed on
+    it breaks silently when it does. The IDs are published in the vacuum
+    entity's `favorites` attribute for exactly this reason.
+    """
+    hass = call.hass
+    ent_reg = er.async_get(hass)
+    favorite_id = call.data["favorite_id"]
+
+    for entity_id in call.data["entity_id"]:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None or entry.config_entry_id is None:
+            continue
+        config_entry = hass.config_entries.async_get_entry(entry.config_entry_id)
+        if config_entry is None:
+            continue
+        if config_entry.runtime_data.connection_type is not ConnectionType.CLOUD_ONLY:
+            raise ServiceValidationError(
+                "run_favorite is only available for V4/Prime robots",
+                translation_domain=DOMAIN,
+                translation_key="favorite_prime_only",
+            )
+
+        from .button_prime import async_run_favorite  # noqa: PLC0415
+
+        if not await async_run_favorite(config_entry, favorite_id):
+            # Deleted since the attribute was read, or carrying no
+            # commands. Raised rather than logged: a favourite that
+            # silently does nothing is the failure this whole feature
+            # was shaped to avoid.
+            raise ServiceValidationError(
+                f"No runnable favorite with id {favorite_id}",
+                translation_domain=DOMAIN,
+                translation_key="favorite_not_found",
+                translation_placeholders={"favorite_id": str(favorite_id)},
+            )
+
 
 async def async_handle_advance_room(call: ServiceCall) -> None:
     """Handle roomba_plus.advance_room — manual room-progress override.
@@ -1439,6 +1515,7 @@ async def async_handle_restore_backup(
 def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
     for svc in (
+        "run_favorite",
         SERVICE_CLEAN_ROOM,
         SERVICE_SMART_START,
         SERVICE_CLEAN_OVERDUE_ROOMS,

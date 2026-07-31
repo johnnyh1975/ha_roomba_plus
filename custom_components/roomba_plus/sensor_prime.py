@@ -243,6 +243,21 @@ class PrimeBatterySensor(_PrimeCurrentStateSensorBase):
 
 class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime detected mop pad type. Reads
+    UNRESOLVED (30 July 2026): this may be reporting the mounting PLATE
+    rather than the pad. One tester's robot returned `padPlate` both with
+    a mop pad fitted and without one -- two separate missions, same
+    value.
+
+    The app's own RobotPadCategory distinguishes `Plate` (7) from
+    `NoPad` (9) and from the damp/dry/wet pad types, so a robot that
+    always says `padPlate` is either reporting the holder or reporting
+    something this sensor's name does not describe.
+
+    Left as it is rather than renamed or removed: one account is not
+    enough to establish the behaviour, and a sensor renamed on a guess
+    is worse than one carrying a documented doubt. Asked the tester
+    whether the iRobot app distinguishes the two states.
+
     CurrentStateShadow.detected_pad directly (confirmed live,
     chairstacker: a plain string, e.g. "padPlate") -- the raw reported
     value, not translated into a friendlier label, since the full set

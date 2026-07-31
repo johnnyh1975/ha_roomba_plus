@@ -151,7 +151,9 @@
           "map_size_px": "Kartengröße (Pixel)",
           "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
           "floor_label": "Etage (z. B. Erdgeschoss)",
-          "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)"
+          "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)",
+          "map_room_labels": "Raumnamen ins Kartenbild zeichnen",
+          "prime_favorite_buttons": "Für jeden gespeicherten Favoriten einen Knopf anlegen"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -887,6 +889,12 @@
       },
       "map_training": {
         "name": "Aktion – Kartierungs-Scan starten"
+      },
+      "prime_favorite": {
+        "name": "Favorit – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Orten"
       }
     },
     "switch": {
@@ -910,6 +918,21 @@
       },
       "prime_carpet_boost": {
         "name": "Einstellung – Teppich-Boost"
+      },
+      "prime_schedule": {
+        "name": "Zeitplan – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Kindersicherung"
+      },
+      "prime_eco_charge": {
+        "name": "Eco-Laden"
+      },
+      "prime_two_pass": {
+        "name": "Zwei Durchgänge"
+      },
+      "prime_vac_high": {
+        "name": "Erhöhte Saugkraft"
       }
     },
     "select": {
@@ -947,6 +970,14 @@
           "automatic": "Automatisch",
           "eco": "Eco",
           "performance": "Leistung"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Saugstufe",
+        "state": {
+          "light": "Leicht",
+          "normal": "Normal",
+          "deep": "Intensiv"
         }
       }
     },
@@ -1196,6 +1227,12 @@
     },
     "unknown_rooms": {
       "message": "Unbekannte(r) Raum/Räume für {entity_id}: {rooms}. Bekannte Räume: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite ist nur für V4/Prime-Roboter verfügbar"
+    },
+    "favorite_not_found": {
+      "message": "Kein ausführbarer Favorit mit der ID {favorite_id}"
     }
   },
   "selector": {

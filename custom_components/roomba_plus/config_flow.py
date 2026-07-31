@@ -57,6 +57,8 @@ from .const import (
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
+    CONF_PRIME_FAVORITE_BUTTONS,
+    CONF_MAP_ROOM_LABELS,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
     CONF_PRESENCE_SCHEDULING_ENABLED,
@@ -72,6 +74,8 @@ from .const import (
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
+    DEFAULT_PRIME_FAVORITE_BUTTONS,
+    DEFAULT_MAP_ROOM_LABELS,
     DEFAULT_PRESENCE_MODE,
     DOMAIN,
     ROOMBA_SESSION,
@@ -1181,6 +1185,43 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                                 CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
                             ),
                         ): bool,
+                        # Room labels drawn INTO the map image.
+                        #
+                        # Off by default, which reads backwards until you
+                        # know what Classic does: it removed its own
+                        # labels in v2.7.3 because the
+                        # xiaomi-vacuum-map-card draws its own overlay
+                        # from the `rooms` attribute, and having both
+                        # doubles them up.
+                        #
+                        # So the default suits the card user, and this
+                        # option exists for everyone else -- a plain
+                        # picture-entity card shows an image and nothing
+                        # else, so for them the names have to be in the
+                        # picture or they do not exist.
+                        # One button per saved favourite, on by default.
+                        #
+                        # They are the only route that needs no setup --
+                        # tappable right after install, and usable by
+                        # voice, which a service call is not. They are
+                        # also the only one costing an entity each, so
+                        # somebody with fifteen favourites can turn them
+                        # off and use the `favorites` attribute and the
+                        # run_favorite service instead.
+                        vol.Optional(
+                            CONF_PRIME_FAVORITE_BUTTONS,
+                            default=options.get(
+                                CONF_PRIME_FAVORITE_BUTTONS,
+                                DEFAULT_PRIME_FAVORITE_BUTTONS,
+                            ),
+                        ): bool,
+                        vol.Optional(
+                            CONF_MAP_ROOM_LABELS,
+                            default=options.get(
+                                CONF_MAP_ROOM_LABELS,
+                                DEFAULT_MAP_ROOM_LABELS,
+                            ),
+                        ): bool,
                     }
                 ),
             )
@@ -1214,6 +1255,22 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         CONF_MAP_SCALE,
                         default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
                     ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
+                    # Room names drawn INTO the map image. Same option
+                    # the Prime form offers: this is a preference about
+                    # maps, not about robot generations.
+                    #
+                    # Off by default, which reads backwards until you
+                    # know that v2.7.3 removed these labels on purpose --
+                    # the xiaomi-vacuum-map-card draws its own overlay
+                    # from the `rooms` attribute, and both at once
+                    # doubles them up.
+                    vol.Optional(
+                        CONF_MAP_ROOM_LABELS,
+                        default=options.get(
+                            CONF_MAP_ROOM_LABELS,
+                            DEFAULT_MAP_ROOM_LABELS,
+                        ),
+                    ): bool,
                     vol.Optional(
                         CONF_FLOOR,
                         default=options.get(CONF_FLOOR, ""),

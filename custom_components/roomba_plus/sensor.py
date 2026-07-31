@@ -260,6 +260,7 @@ async def async_setup_entry(
         # reason: a dirt bag showing up after someone attaches a
         # self-emptying base.
         _add_discovered_parts(data, config_entry, async_add_entities)
+        _add_prime_mission_sensors(data, config_entry, async_add_entities)
         return
 
     roomba = config_entry.runtime_data.roomba
@@ -388,6 +389,107 @@ async def async_setup_entry(
         entities.append(RoombaRelocalisationRateSensor(roomba, blid, config_entry))
 
     async_add_entities(entities)
+
+
+#: Mission-history sensors that work for Prime robots.
+#:
+#: NAMED EXPLICITLY rather than filtered. The Classic path decides which
+#: sensors to create by running every description's filter_fn against
+#: roomba_reported_state(), and Prime has no such state -- so a filter
+#: would either pass everything or nothing.
+#:
+#: It is also the safer shape. All filter_fn calls happen inside one
+#: list comprehension, so a single crash takes down the entire sensor
+#: platform. An explicit list cannot crash.
+#:
+#: Each of these was checked against a real Prime mission record and
+#: returns a correct value. Deliberately absent:
+#:   - area_cleaned_today: gated on has_pose(), a Classic capability,
+#:     even though Prime does report square footage. Reachable later,
+#:     but it needs the gate rewritten rather than bypassed.
+#:   - problem_zone: reads zone data Prime has no equivalent for.
+_PRIME_MISSION_SENSOR_KEYS: frozenset[str] = frozenset({
+    # Gated on has_pose() in the shared SENSORS list, which is a Classic
+    # capability -- but that gate is about the 600-series not reporting
+    # square footage at all, and Prime does report it. The mission
+    # records carry area_sqft, so the sensor works; only the Classic-side
+    # filter would have excluded it.
+    "area_cleaned_today",
+    "last_mission",
+    "last_mission_result",
+    "last_mission_duration",
+    "clean_streak",
+    "consecutive_mission_anomalies",
+})
+
+#: Maintenance-date sensors that work for Prime robots.
+#:
+#: These record when the USER last changed a part, not anything the
+#: robot reports -- so unlike every other store, MaintenanceStore is
+#: generation-independent by nature. The reset service handler was
+#: already written without a Classic assumption; it only checked whether
+#: the store existed, and for Prime it never did.
+#:
+#: Deliberately absent:
+#:   - bin_last_cleaned, contact_last_cleaned, wheel_last_cleaned: their
+#:     reset services exist, but a Prime robot's own consumable sensors
+#:     already track the dirt bag, and the contact/wheel cleaning
+#:     reminders are 900-series concepts. Offering a date field for
+#:     something nothing prompts you about is clutter.
+#:   - consecutive_clean_skips: counts schedule skips detected from the
+#:     Classic MQTT stream. Prime has schedule data but no skip
+#:     detection, so this would sit at 0 forever and read as a fact.
+_PRIME_MAINTENANCE_SENSOR_KEYS: frozenset[str] = frozenset({
+    "filter_last_replaced",
+    "brush_last_replaced",
+    "pad_last_replaced",
+    "battery_last_replaced",
+})
+
+
+def _add_prime_mission_sensors(
+    data: Any,
+    config_entry: RoombaConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Mission-history sensors for Prime robots.
+
+    MissionStore was left at None for Prime since v4.0.0a0, so these
+    were empty even though the data was reachable over REST. Filling the
+    store was only half the fix: the Prime branch of async_setup_entry
+    returns before the mission sensors are ever created, so nothing read
+    it.
+
+    That is the same shape as two other bugs this project has had --
+    working data that no entity consumes. PrimeMapImage was unreachable
+    for a whole release because IMAGE was missing from PRIME_PLATFORMS,
+    and CLEAN_AREA was advertised without the method that supplies the
+    room list.
+    """
+    wanted: set[str] = set()
+    if getattr(data, "mission_store", None) is not None:
+        wanted |= _PRIME_MISSION_SENSOR_KEYS
+    if getattr(data, "maintenance_store", None) is not None:
+        wanted |= _PRIME_MAINTENANCE_SENSOR_KEYS
+    entities: list[Any] = [
+        RoombaSensor(None, data.blid, description, config_entry)
+        for description in SENSORS
+        if description.key in wanted
+    ]
+
+    # Mission progress: elapsed time, current room, remaining estimate.
+    # Not part of SENSORS -- it is its own entity class, and Classic
+    # gates it on map_capability == SMART plus a cloud coordinator,
+    # neither of which describes a Prime robot. What it actually needs is
+    # the timer store, and the phase transitions that feed it now come
+    # from PrimeStatusCoordinator.
+    if getattr(data, "mission_timer_store", None) is not None:
+        from .sensor_rooms import RoombaMissionProgress  # noqa: PLC0415
+
+        entities.append(RoombaMissionProgress(None, data.blid, config_entry))
+
+    if entities:
+        async_add_entities(entities)
 
 
 def _add_discovered_parts(

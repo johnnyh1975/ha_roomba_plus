@@ -151,7 +151,9 @@
           "map_size_px": "Rozmiar mapy (piksele)",
           "map_scale_mm_per_px": "Skala (mm/piksel)",
           "floor_label": "Etykieta piętra (np. Parter)",
-          "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)"
+          "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)",
+          "map_room_labels": "Rysuj nazwy pomieszczeń na obrazie mapy",
+          "prime_favorite_buttons": "Utwórz przycisk dla każdego zapisanego ulubionego"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
@@ -887,6 +889,12 @@
       },
       "map_training": {
         "name": "Akcja – Rozpocznij trening mapy"
+      },
+      "prime_favorite": {
+        "name": "Ulubione – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Zlokalizuj"
       }
     },
     "switch": {
@@ -910,6 +918,21 @@
       },
       "prime_carpet_boost": {
         "name": "Ustawienie – Wzmocnienie na dywanie"
+      },
+      "prime_schedule": {
+        "name": "Harmonogram – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Blokada rodzicielska"
+      },
+      "prime_eco_charge": {
+        "name": "Ładowanie eko"
+      },
+      "prime_two_pass": {
+        "name": "Sprzątanie w dwóch przejściach"
+      },
+      "prime_vac_high": {
+        "name": "Zwiększona siła ssania"
       }
     },
     "select": {
@@ -947,6 +970,14 @@
           "automatic": "Automatyczne",
           "eco": "Eco",
           "performance": "Wydajność"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Poziom ssania",
+        "state": {
+          "light": "Lekkie",
+          "normal": "Normalne",
+          "deep": "Dokładne"
         }
       }
     },
@@ -1196,6 +1227,12 @@
     },
     "unknown_rooms": {
       "message": "Nieznane pomieszczenia dla {entity_id}: {rooms}. Znane pomieszczenia: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite jest dostępne tylko dla robotów V4/Prime"
+    },
+    "favorite_not_found": {
+      "message": "Brak wykonywalnego ulubionego o identyfikatorze {favorite_id}"
     }
   },
   "selector": {

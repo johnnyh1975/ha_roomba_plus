@@ -115,6 +115,20 @@ class RoombaData:
     # NEW (V4/Prime): populated only for CLOUD_ONLY entries, by
     # _async_setup_entry_prime() in __init__.py.
     prime_robot: "PrimeRobot | None" = None
+    #: Saved favourites as [{id, name}], read once at setup. Exposed as
+    #: a vacuum attribute so automations and the map card can use them
+    #: without an entity each.
+    prime_favorites: list[dict[str, Any]] = field(default_factory=list)
+    #: Live positions from the Prime map stream, as (x_mm, y_mm, deg).
+    #:
+    #: Held here rather than on an entity because the two halves live in
+    #: different places: the stream is watched by PrimeMapImage, which
+    #: shows iRobot's own rendered PNG and has no renderer, while the
+    #: trail belongs on PrimeRoomsImage, which draws its own map.
+    #:
+    #: Bounded, because a long mission would otherwise grow without
+    #: limit -- a tester's single run produced 904 points.
+    prime_positions: list[tuple[float, float, float]] = field(default_factory=list)
     prime_coordinator: "PrimeCoordinator | None" = None
     prime_status_coordinator: "PrimeStatusCoordinator | None" = None
     #: Consumable parts (filter, brushes, pads, dirt bag). The only

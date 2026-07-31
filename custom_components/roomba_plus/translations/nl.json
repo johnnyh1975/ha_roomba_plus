@@ -151,7 +151,9 @@
           "map_size_px": "Kaartgrootte (pixels)",
           "map_scale_mm_per_px": "Schaal (mm/pixel)",
           "floor_label": "Verdieping (bijv. Begane grond)",
-          "correlation_entities": "Vuil correleren met sensoren (optioneel)"
+          "correlation_entities": "Vuil correleren met sensoren (optioneel)",
+          "map_room_labels": "Kamernamen op de kaartafbeelding tekenen",
+          "prime_favorite_buttons": "Een knop maken voor elke opgeslagen favoriet"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -887,6 +889,12 @@
       },
       "map_training": {
         "name": "Actie – Start kartering"
+      },
+      "prime_favorite": {
+        "name": "Favoriet – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Lokaliseren"
       }
     },
     "switch": {
@@ -910,6 +918,21 @@
       },
       "prime_carpet_boost": {
         "name": "Instelling – Tapijtboost"
+      },
+      "prime_schedule": {
+        "name": "Schema – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Kinderslot"
+      },
+      "prime_eco_charge": {
+        "name": "Eco-laden"
+      },
+      "prime_two_pass": {
+        "name": "Twee keer schoonmaken"
+      },
+      "prime_vac_high": {
+        "name": "Extra zuigkracht"
       }
     },
     "select": {
@@ -947,6 +970,14 @@
           "automatic": "Automatisch",
           "eco": "Eco",
           "performance": "Prestaties"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Zuigkracht",
+        "state": {
+          "light": "Licht",
+          "normal": "Normaal",
+          "deep": "Diep"
         }
       }
     },
@@ -1196,6 +1227,12 @@
     },
     "unknown_rooms": {
       "message": "Onbekende kamer(s) voor {entity_id}: {rooms}. Bekende kamers: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite is alleen beschikbaar voor V4/Prime-robots"
+    },
+    "favorite_not_found": {
+      "message": "Geen uitvoerbare favoriet met id {favorite_id}"
     }
   },
   "selector": {

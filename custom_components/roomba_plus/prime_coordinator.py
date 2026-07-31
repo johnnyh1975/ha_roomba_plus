@@ -89,6 +89,9 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         )
         self.blid = blid
         self.prime_robot = prime_robot
+        #: Which mission the collected trail positions belong to. A new
+        #: id clears them; the same id surviving a pause does not.
+        self._trail_mission_id: str | None = None
 
     async def async_start(self) -> None:
         """Connects and starts the background watch_mission_timeline() consumer.
@@ -183,7 +186,9 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                     # thing that distinguishes "quiet because nothing is
                     # happening" from "quiet because the stream died".
                     self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
-                    self.async_set_updated_data(MissionTimelineReport.from_json(delta.payload))
+                    report = MissionTimelineReport.from_json(delta.payload)
+                    self.async_set_updated_data(report)
+                    self._request_parts_refresh_on_mission_end(report)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
                     "roomba_plus: V4/Prime watch_mission_timeline() for %s ended without "
@@ -203,6 +208,62 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+    def _request_parts_refresh_on_mission_end(self, report: Any) -> None:
+        """Refreshes the consumable parts once a mission finishes.
+
+        WHY THIS IS NEEDED. Consumable counters only move when the robot
+        cleans, and the parts coordinator polls every six hours. So a
+        mission that ended at 06:08 showed unchanged filter and brush
+        hours until the next poll -- @chairstacker saw his four
+        maintenance sensors update at 12:14, when he restarted Home
+        Assistant, and nothing at all at six o'clock.
+        
+        Six hours of stale data on values that changed once, at a moment
+        we are told about. Polling faster would be the wrong fix: it
+        would be a cloud request every few minutes for data that moves
+        twice a day.
+
+        The mission-end event is the exact trigger. Requested rather than
+        awaited, because this runs inside the shadow stream and a cloud
+        round trip must not stall it.
+        """
+        try:
+            # THE FIELD NAMES ARE `event` AND `fin_events`, checked
+            # against the model rather than assumed. A first draft used
+            # `events`, which does not exist -- getattr would have
+            # returned None silently and this would never have fired,
+            # producing exactly the symptom it was written to fix.
+            #
+            # `fin_events` is checked first: the library separates final
+            # events out, so its presence is the most direct signal.
+            # `event` is the general list and may carry the "fin" entry
+            # instead, depending on how the delta arrived.
+            #
+            # "fin" specifically, not "evac": a self-emptying base can
+            # empty mid-mission and the robot carries on afterwards.
+            if getattr(report, "fin_events", None):
+                pass
+            elif any(
+                str(getattr(entry, "event_type", "") or "").lower() == "fin"
+                for entry in (getattr(report, "event", None) or [])
+            ):
+                pass
+            else:
+                return
+            parts = getattr(
+                self.config_entry.runtime_data, "prime_parts_coordinator", None
+            )
+            if parts is None:
+                return
+            self.hass.async_create_task(
+                parts.async_request_refresh(),
+                name=f"roomba_plus_parts_after_mission_{self.blid}",
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: parts refresh after mission end failed", exc_info=True
+            )
+
 
 
 def _deep_merge_reported(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
@@ -467,6 +528,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     updated = dict(self.data or {})
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
                     self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    self._note_phase_for_timer(updated)
                     self.async_set_updated_data(updated)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
@@ -487,6 +549,61 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+    def _note_phase_for_timer(self, shadows: dict[str, Any]) -> None:
+        """Feeds phase transitions to MissionTimerStore.
+
+        The store tracks a RUNNING mission -- elapsed time, time in the
+        current room, remaining estimate -- and it only works if
+        something tells it when running starts and stops. Classic does
+        that from its MQTT phase handler; this is the Prime equivalent.
+        
+        Creating the store without this would have been the same mistake
+        as filling MissionStore while no sensor read it: a store that
+        exists, is persisted, and stays empty forever.
+
+        Best-effort throughout: a progress estimate is not worth taking
+        down the shadow stream for.
+        """
+        try:
+            data = self.config_entry.runtime_data
+            store = getattr(data, "mission_timer_store", None)
+            if store is None:
+                return
+            status = (
+                (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus") or {}
+            )
+            phase = status.get("phase")
+            if phase is None:
+                return
+            if phase == "run":
+                mission_id = str(status.get("nMssn") or status.get("mssnM") or "prime")
+                # A NEW MISSION CLEARS THE TRAIL.
+                #
+                # Positions only ever accumulated before: the path from
+                # last night's clean stayed on the map underneath
+                # tonight's, and after a week the map was a solid block.
+                # Bounded by count, which is not the same as bounded by
+                # mission.
+                #
+                # Keyed on the mission id changing rather than on the
+                # phase, because a robot that pauses and resumes re-enters
+                # "run" with the same mission and should keep its trail.
+                if mission_id != self._trail_mission_id:
+                    self._trail_mission_id = mission_id
+                    positions = getattr(
+                        self.config_entry.runtime_data, "prime_positions", None
+                    )
+                    if positions is not None:
+                        positions.clear()
+                store.on_phase_run(mission_id, self.hass, self.config_entry.entry_id)
+            else:
+                # Anything that is not "run" ends the running segment --
+                # including charge, evac and stuck. The store flushes the
+                # elapsed delta rather than discarding it.
+                store.on_phase_other(self.hass, self.config_entry.entry_id)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("roomba_plus: mission timer phase update failed", exc_info=True)
+
 
 
 def get_prime_capability_flags(config_entry: Any) -> tuple[Any | None, Any | None]:
@@ -581,7 +698,17 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Returns {part_id: RobotPart}.
+        """Returns {part_id: RobotPart}, and syncs mission history.
+
+        MISSION HISTORY RIDES ALONG HERE rather than getting its own
+        coordinator. Both are REST reads on the same six-hour rhythm,
+        both describe things that change once or twice a day, and a
+        second timer for the same cadence is a second thing to reason
+        about for no gain.
+
+        The sync is best-effort and never affects this coordinator's
+        result: parts sensors must not go unavailable because the
+        mission endpoint had a bad day.
 
         Keyed by part_id because that is what the sensors are built
         from, and because the set of parts differs by model -- a
@@ -595,4 +722,22 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as exc:  # noqa: BLE001
             raise UpdateFailed(f"could not fetch consumable parts: {exc}") from exc
 
-        return {p.part_id: p for p in (getattr(info, "parts", None) or []) if p.part_id}
+        parts = {
+            p.part_id: p for p in (getattr(info, "parts", None) or []) if p.part_id
+        }
+
+        # Best-effort, and deliberately after `parts` is computed: a
+        # failure here must not cost the parts sensors their data.
+        if self.config_entry is not None:
+            try:
+                from .prime_mission_sync import (  # noqa: PLC0415
+                    async_sync_prime_missions,
+                )
+
+                await async_sync_prime_missions(self.config_entry)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "roomba_plus: mission history sync failed", exc_info=True
+                )
+
+        return parts

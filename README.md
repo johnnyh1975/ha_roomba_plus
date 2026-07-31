@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a13-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a14-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -75,6 +75,7 @@ deliberately not built:
 | Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](RELEASE_NOTES_v3.4.3.md))* |
 | Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
 | Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
+| Device tracker — which room the robot is in, and the matching Home Assistant **area** *(v2.9.0, areas in v4.0.0a14)* | ✅ Shipped — see [Device tracker](#device-tracker) |
 | V4/Prime support — cloud-only robots (400-series) *(v4.0.0a0)* | 🔬 Alpha — see [V4/Prime support (alpha)](#v4prime-support-alpha) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
 | Room shape / door-position export | 🔲 Backlog, not yet scheduled |
@@ -119,6 +120,43 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 V4/Prime robots are architecturally different enough (cloud-only, no local MQTT at all) that they're **not** part of the table above — see the next section for what they actually support today.
 
 ---
+
+## Device tracker
+
+A `device_tracker` entity reporting which room the robot is currently in. Present since v2.9.0 and
+never documented here, which is why you may not have noticed it.
+
+It exposes two attributes worth automating on:
+
+| Attribute | What it is |
+|---|---|
+| `room` | The robot's own name for the room — whatever you typed in the iRobot app |
+| `area_id` | The matching **Home Assistant area**, resolved through the segment-to-area mapping you configured for Clean Area, falling back to a name match |
+
+`area_id` is the better target: it survives renaming a room in the iRobot app, and it is the same
+regardless of your Home Assistant language. Home Assistant *areas* are rooms — not to be confused
+with *zones*, which are geographic and meant for presence detection.
+
+Works for Classic and V4/Prime robots. For Prime, the room comes from the mission timeline, so it is
+reported whether Home Assistant started the mission or the robot ran on its own schedule.
+
+**One deprecation to be aware of.** The entity's *state* also shows the room name, and Home Assistant
+stops supporting that mechanism in Core 2027.7. Nothing breaks today, and there is about a year — but
+if you have an automation matching on the state rather than the attributes, that is the one to move:
+
+```yaml
+# before
+condition: state
+entity_id: device_tracker.roomba
+state: "Kitchen"
+
+# after
+condition: template
+value_template: "{{ state_attr('device_tracker.roomba', 'area_id') == 'kitchen' }}"
+```
+
+The property will be removed a release *before* the deadline rather than on it, with a repair
+notification rather than only a release note.
 
 ## V4/Prime support (alpha)
 
@@ -191,11 +229,36 @@ Everything else listed below works.
   individual sensors already showing the same data correctly (a separate code path that had
   never been fixed for Prime at all)
 
+**Added in v4.0.0a14:**
+- **A room map** with room outlines and room names, plus xiaomi-vacuum-map-card calibration. Ready
+  immediately rather than after the first mission, because the cloud hands over finished polygons.
+  The existing map (iRobot's own rendered image, showing where the robot actually cleaned) stays
+  alongside it.
+- **Mission history sensors** — last mission, result, duration, clean streak, anomaly count — plus
+  maintenance dates, mission progress and long-term statistics backfilled into Home Assistant's own
+  statistics.
+- **Schedule switches**, one per schedule on the robot, so an automation can disable just the
+  weekday routine.
+- **Setting switches** — child lock, eco charging, two-pass cleaning, extra suction.
+- **A device tracker** reporting which room the robot is in, and which Home Assistant *area* that
+  maps to.
+- **Saved favorites**, three ways: a button each, a `favorites` attribute on the vacuum entity, and a
+  `run_favorite` action keyed on the favorite's ID rather than its name (a name changes when you
+  rename it in the iRobot app; an automation keyed on it breaks silently).
+- **Suction level** as a select, using the profile names the app shows.
+- **Room preferences** — profile, suction, two-pass, carpet boost per room, as set in the iRobot app —
+  exposed as a map attribute so automations can honour them instead of overriding them.
+
 **What's not there yet:**
-- A direct docked/charging boolean — charging state is available (in the mission-event sensor's
-  underlying data), but not yet surfaced as its own dedicated on/off sensor
-- Region/zone cleaning (gives a clear "not yet supported" message rather than doing nothing)
-- Everything else on this page that depends on local MQTT or the cloud room/map data model
+- **Pad wetness.** `padPlate` has its own value table, separate from the other pad types, so a control
+  writing one level across all three would be wrong for at least one — silently, since the robot
+  accepts it. Waiting on a capture from a robot whose `ppWetLvl` capability is nonzero.
+- **Evacuate, power off, spot clean, map training.** No Prime command has been identified for any of
+  them. Absent rather than non-functional.
+- **Maintenance to-do items**, which depend on the Classic consumable model.
+- **Repair issues.** All nine of Classic's are tied to the local MQTT stream, pose maps or zone
+  naming; none has a Prime equivalent. Checked rather than assumed.
+- Everything else on this page that depends on local MQTT or pose data.
   Classic robots use — room intelligence, mission history, maintenance tracking, and more are
   simply a different, not-yet-built facade for V4/Prime robots specifically
 
@@ -212,8 +275,8 @@ protocol: [Release notes →](release-notes/)
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **V4/Prime room cleaning is confirmed working** (July 2026) — an earlier version of this note said it was the one thing that did not work on Prime. It took three field sessions to establish why: `initiator` is a mandatory field a stored favorite does not carry, and the wire keys are `start`/`region_id` rather than `clean`/`id`. Two of those sessions appeared to *disprove* the explanation and were confounded by commands that never reached the broker. Prime robots also support per-room suction level, which Classic has no equivalent for.
-- **V4/Prime robot settings are confirmed but not yet exposed** — child lock is verified end to end on real hardware (it appears in the iRobot app and the robot announces it audibly); eco charge, no-auto-passes and vacuum-high write and read back cleanly but have no easily observable effect. Nothing is built on top of them in this integration yet. Schedule hold is a known exception: the write succeeds and the schedule stays active, so writing it is evidently not the mechanism the app uses.
-- **V4/Prime virtual walls can be read but not written** — keep-out and no-mop zones read correctly (both zone types confirmed against real data), but writes return HTTP 500 and the cause is not yet found. Two candidates have been ruled out by field testing.
+- **V4/Prime robot settings are exposed as switches** (v4.0.0a14) — child lock, eco charging, two-pass cleaning and extra suction. Child lock is verified end to end on real hardware: it appears in the iRobot app and the robot announces it audibly. The other three write and read back cleanly, meaning the robot echoes the new value, though their physical effect is harder to observe. Schedule hold is deliberately **not** offered: the write succeeds, the read-back confirms it, and the schedule stays active regardless — a switch the robot accepts and ignores would make the UI state something false.
+- **V4/Prime virtual walls can be read and written** (confirmed 30 July 2026) — the cause of months of HTTP 500 responses was that the `virwall` array starts with a **count** of the walls before the walls themselves. Confirmed working on four zones of two different types in one command. Worth recording how it was found: three testers between them ruled out list length, zone type mixing, map count, account, map version and every request-envelope variant — none of which mattered, because the payload failed at element zero. It took an unfiltered bytecode dump of the app's serializer, after several filtered passes had missed the four relevant lines.
 - **V4/Prime + Classic robots on the same Home Assistant instance simultaneously** — each is independently confirmed working, but running both types at once hasn't been specifically tested.
 
 ---

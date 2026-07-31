@@ -41,7 +41,7 @@ from typing import Any
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
@@ -49,6 +49,8 @@ from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    CONF_MAP_ROOM_LABELS,
+    DEFAULT_MAP_ROOM_LABELS,
     CLEANING_PHASES,
     DOMAIN,
     END_SIGNAL_DEBOUNCE_COUNT,
@@ -67,6 +69,13 @@ from .map_renderer import MapRenderer
 from .models import ConnectionType, MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+#: How many live positions to keep for the trail.
+#:
+#: A tester's single mission produced 904 points, so this holds several
+#: missions' worth. The cap exists for the robot left running all day,
+#: not for the normal case.
+_MAX_PRIME_POSITIONS = 5000
 PARALLEL_UPDATES = 0
 
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
@@ -168,7 +177,26 @@ async def async_setup_entry(
     # tracking, and dock-anchor correction that don't apply here at all.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         if data.prime_robot is not None:
-            async_add_entities([PrimeMapImage(prime_robot=data.prime_robot, blid=data.blid, config_entry=config_entry)])
+            # TWO ENTITIES, not one replacing the other.
+            #
+            # PrimeMapImage shows iRobot's own rendered PNG -- where the
+            # robot ACTUALLY CLEANED. PrimeRoomsImage shows the floor
+            # plan with room outlines and, via attributes, room names.
+            # Different information, and Classic carries three map
+            # entities for the same reason.
+            #
+            # Replacing the PNG would also lose it before the trajectory
+            # half exists: the live-map stream carries position samples
+            # too, but nobody has yet counted how many arrive, and the
+            # Classic renderer rejects poses more than 500 mm apart.
+            async_add_entities([
+                PrimeMapImage(
+                    prime_robot=data.prime_robot,
+                    blid=data.blid,
+                    config_entry=config_entry,
+                ),
+                PrimeRoomsImage(blid=data.blid, config_entry=config_entry),
+            ])
         return
 
     if data.map_capability == MapCapability.NONE:
@@ -389,9 +417,77 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             name=f"roomba_plus_prime_live_map_{self._blid}",
         )
 
+    def _feed_trail(self, message: Any) -> None:
+        """Feeds live positions into the trail renderer.
+
+        UNITS ARE THE WHOLE TRAP HERE, and the comment above this call
+        site warned about it before anything used them: Prime reports
+        METRES -- a real keep-out zone measures 2.0 by 2.0 -- while
+        MapRenderer.add_pose takes millimetres. Feeding metres straight
+        in puts every point inside the same pixel and produces a blank
+        map with no error anywhere.
+
+        ORIENTATION IS IN RADIANS on the wire and add_pose wants degrees.
+        Same class of mistake, quieter symptom: the trail would be drawn
+        correctly and only the heading marker would point wrongly.
+
+        Volume is not a concern. A tester's mission produced 904 points
+        across 451 messages -- roughly two per message -- and the
+        renderer already drops jumps over 500 mm as noise, which is what
+        keeps a relocalisation from drawing a line across the room.
+        """
+        from .prime_room_map import _METRES_TO_MM  # noqa: PLC0415
+
+        # COLLECTED, NOT DRAWN HERE. This entity shows iRobot's own
+        # rendered PNG and has no renderer of its own; the trail belongs
+        # on the rooms map, which does. A first version called
+        # self._renderer here -- which is None on this class, so every
+        # point was silently discarded.
+        data = self._config_entry.runtime_data
+        try:
+            for sample in getattr(message, "updates", None) or []:
+                point = getattr(sample, "point", None)
+                if point is None:
+                    continue
+                x_m, y_m = getattr(point, "x", None), getattr(point, "y", None)
+                if x_m is None or y_m is None:
+                    continue
+                orientation_rad = getattr(sample, "orientation", None) or 0.0
+                data.prime_positions.append((
+                    float(x_m) * _METRES_TO_MM,
+                    float(y_m) * _METRES_TO_MM,
+                    math.degrees(float(orientation_rad)),
+                ))
+            # Bounded. A mission produced 904 points on one tester's
+            # robot; a robot left running for a day would otherwise grow
+            # this without limit. The oldest go first, because a trail
+            # showing the last stretch is more useful than one showing
+            # the first.
+            if len(data.prime_positions) > _MAX_PRIME_POSITIONS:
+                del data.prime_positions[:-_MAX_PRIME_POSITIONS]
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Prime map: could not add live positions", exc_info=True)
+
     async def async_will_remove_from_hass(self) -> None:
         if self._watch_task is not None:
             self._watch_task.cancel()
+
+        # FLUSH THE DELAYED MAP WRITE.
+        #
+        # The map is persisted via async_delay_save, so a reload can
+        # leave the OLD entity's pending write to land after the NEW one
+        # has already loaded -- overwriting a current map with a stale
+        # one. Store.async_save cancels the pending timer as well as
+        # writing, which is what makes this both a flush and a guard.
+        #
+        # Exactly the problem Classic solved for MissionTimerStore in
+        # v3.3.0. This entity was written today, with delayed saving
+        # copied from that store, and the flush was not copied with it.
+        if self._map_store is not None and self._png_bytes:
+            try:
+                await self._map_store.async_save(self._map_save_payload())
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Prime map: flush on removal failed", exc_info=True)
 
     async def _async_watch_live_map(self) -> None:
         """Runs for the entity's lifetime -- watch_live_map() itself
@@ -456,6 +552,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         stats["position_points"] = (
                             stats.get("position_points", 0) + len(message.updates)
                         )
+                        self._feed_trail(message)
                         continue
 
                     if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
@@ -2218,7 +2315,6 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         # RoombaMapImage fires the signal after every successful mission end so
         # the frontend knows to re-fetch the coverage image.
         from homeassistant.helpers.dispatcher import async_dispatcher_connect
-        from homeassistant.core import callback
 
         @callback
         def _on_gridstore_updated() -> None:
@@ -2498,6 +2594,30 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             poly_px = [to_px(x, y) for x, y in resolved]
             fill = ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)]
             draw.polygon(poly_px, outline=(100, 149, 237), fill=fill)
+
+            # ROOM NAME, off by default. v2.7.3 removed these because the
+            # xiaomi-vacuum-map-card renders its own overlay from the
+            # `rooms` attribute, and drawing both doubles them up.
+            #
+            # The option restores them for everyone not using that card:
+            # a plain picture-entity shows an image and nothing else, so
+            # for those dashboards the names have to be in the picture or
+            # they do not exist. Same option as the Prime map uses --
+            # this is a preference about maps, not about robot
+            # generations.
+            if self._config_entry is not None and self._config_entry.options.get(
+                CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
+            ):
+                from .map_renderer import LABEL_FONT  # noqa: PLC0415
+
+                name = aligner.rid_to_name().get(rid)
+                if name:
+                    cx = sum(x for x, _ in poly_px) / len(poly_px)
+                    cy = sum(y for _, y in poly_px) / len(poly_px)
+                    draw.text(
+                        (cx, cy), name, fill=(230, 230, 230),
+                        anchor="mm", font=LABEL_FONT,
+                    )
             # v2.7.3: labels removed from PNG — XVMC card renders its own
             # labels from predefined_selections.label.text; drawing them here
             # produced duplicate overlapping labels in the card (veronoicc #2).
@@ -2724,3 +2844,315 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
                 b"AABjkB6QAAAABJRU5ErkJggg=="
             )
+
+class PrimeRoomsImage(IRobotEntity, ImageEntity):
+    """V4/Prime room map: polygons drawn, names exposed as attributes.
+
+    BUILT THE SAME WAY AS RoombaRoomsImage, on purpose. The canvas
+    colour, the rotating ROOM_FILL_PALETTE fill, the fixed outline
+    colour, the auto-fit transform and the attribute shape the
+    xiaomi-vacuum-map-card expects are all reused rather than
+    reimplemented.
+
+    NAMES ARE NOT DRAWN INTO THE IMAGE. That is easy to get backwards --
+    "a room map with names" sounds like labels in the picture. Classic
+    removed them in v2.7.3 precisely because the card renders its own
+    overlay from `rooms`, and drawing both doubles them up. The rotating
+    fill colours are what keep adjacent rooms distinguishable without
+    labels.
+
+    WHAT PRIME DOES NOT NEED. Classic has to fit its cloud UMF map onto
+    the robot's pose coordinate space first, which is what UmfAligner
+    and the whole `aligned` state exist for. Prime's polygons arrive
+    already in the robot's own coordinates, so there is no transform and
+    no alignment gate -- which is also why this entity is available
+    immediately rather than after the first mission.
+    """
+
+    _attr_has_entity_name  = True
+    _attr_content_type     = "image/png"
+    _attr_translation_key  = "rooms_map"
+    _attr_entity_category  = None
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, None, blid)
+        ImageEntity.__init__(self, config_entry.hass)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._polygons: dict[str, list[tuple[float, float]]] = {}
+        self._names: dict[str, str] = {}
+        self._floor_plan: Any = None
+        self._preferences: dict[str, Any] = {}
+        self._renderer: Any = None
+        self._png: bytes | None = None
+
+    @property
+    def suggested_object_id(self) -> str:
+        """Locale-independent slug. With has_entity_name plus a
+        translation_key, HA would otherwise derive the entity_id from the
+        TRANSLATED name and produce different ids per language."""
+        return "rooms_map"
+
+    @property
+    def available(self) -> bool:
+        """Unavailable until rooms have been read.
+
+        Honest rather than a blank canvas: a robot that has not finished
+        mapping has no rooms, and an empty image looks like a fault.
+        """
+        return super().available and bool(self._polygons)
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        await self._async_refresh_rooms()
+
+        # NO SUBSCRIPTION, and no re-render per image request.
+        #
+        # Both were tried and both are wrong for this entity.
+        #
+        # A status-coordinator subscription fires on every shadow change
+        # -- battery percent, phase, dock state -- and each one would
+        # trigger a get_map_metadata() call. A cloud request per battery
+        # percentage point, for data that changes when somebody renames
+        # a room.
+        #
+        # Classic's rooms map re-renders on every image request instead,
+        # which is free there: its polygons already sit in runtime_data.
+        # Prime's require a cloud call, so the same approach would hit
+        # iRobot's servers for as long as a dashboard stays open.
+        #
+        # What actually invalidates this image is the MAP VERSION. The
+        # robot re-versions its map when the geometry changes, so that is
+        # the thing worth watching -- and it is already being read for
+        # room cleaning. Checked when the image is requested, and the
+        # cloud is only called when it has actually moved.
+        self._rendered_for_map_version: str | None = None
+
+    async def _async_refresh_rooms(self) -> None:
+        """Reads the current map's rooms and renders them."""
+        from .prime_room_map import async_build_prime_room_polygons
+        from .room_cleaning import async_get_room_cleaning_backend
+
+        backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+        if backend is None:
+            return
+        map_ids = await backend._all_map_ids()  # noqa: SLF001
+        if not map_ids:
+            return
+
+        # One image per entity, so the current map wins where the robot
+        # says which one it is on; otherwise the first is as good a
+        # choice as any, since with one map there is no ambiguity.
+        current = await backend._current_map_id()  # noqa: SLF001
+        p2map_id = current if current in map_ids else map_ids[0]
+
+        (
+            self._polygons,
+            self._names,
+            self._preferences,
+        ) = await async_build_prime_room_polygons(self._config_entry, p2map_id)
+
+
+        # The floor plan is a SECOND cloud call, and a failure costs only
+        # the walls and carpet -- the rooms are what the map is for.
+        from .prime_room_map import (  # noqa: PLC0415
+            PrimeFloorPlan,
+            async_build_prime_floor_plan,
+        )
+
+        # The bundle link needs the map VERSION, which _all_map_ids()
+        # does not carry -- it returns ids. Asked for separately rather
+        # than widening that helper, whose callers all want ids.
+        version = ""
+        try:
+            robot = self._config_entry.runtime_data.prime_robot
+            for entry in await robot.get_active_map_versions() or []:
+                if entry.get("p2map_id") == p2map_id:
+                    version = entry.get("active_p2mapv_id") or ""
+                    break
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Prime map: could not read map versions", exc_info=True)
+
+        self._floor_plan = (
+            await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
+            if version
+            else PrimeFloorPlan(borders=[], carpet=[], dock=None)
+        )
+        if self._polygons:
+            self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+
+    def _render_png(self) -> bytes:
+        """Draws the polygons, reusing the Classic renderer's transform."""
+        from PIL import Image, ImageDraw  # noqa: PLC0415
+
+        from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
+
+        if self._renderer is None:
+            self._renderer = MapRenderer(RendererConfig(), None, None)
+
+        # Seed the auto-fit transform from the room extents. Classic gets
+        # this from accumulated poses; Prime has the polygons up front,
+        # which is why its map is complete before the first mission.
+        for ring in self._polygons.values():
+            for x_mm, y_mm in ring:
+                self._renderer.add_pose(x_mm, y_mm, 0.0)
+
+        size = self._renderer._cfg.size_px  # noqa: SLF001
+        img = Image.new("RGB", (size, size), (30, 30, 30))
+        draw = ImageDraw.Draw(img)
+
+        to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
+
+        # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
+        # walls, then the dock, then labels.
+        #
+        # Carpet over rooms because it is a property OF a room, and a
+        # room drawn on top would hide it. Walls over both because they
+        # bound everything. The dock over walls because it sits against
+        # one. Labels last so nothing covers them.
+        for idx, ring in enumerate(self._polygons.values()):
+            draw.polygon(
+                [to_px(x, y) for x, y in ring],
+                outline=(100, 149, 237),
+                fill=ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)],
+            )
+
+        for ring in self._floor_plan.carpet:
+            # Outline only, no fill: a filled overlay would flatten the
+            # per-room colours that keep adjacent rooms distinguishable.
+            draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
+
+        for ring in self._floor_plan.borders:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=(90, 90, 90))
+
+        # THE TRAIL, on top of the floor plan and under the labels.
+        #
+        # Fed from the live map stream, which the OTHER Prime image
+        # entity watches -- the positions are collected into
+        # runtime_data because the entity receiving them has no renderer
+        # and the one that draws has no stream.
+        #
+        # Drawn as a polyline rather than through MapRenderer.add_pose:
+        # that path maintains its own bounds and coordinate frame, and
+        # this map is already anchored on the room polygons. Two frames
+        # for one picture would misplace one of them.
+        positions = getattr(
+            self._config_entry.runtime_data, "prime_positions", None
+        ) or []
+        if len(positions) >= 2:
+            trail: list[tuple[float, float]] = []
+            previous: tuple[float, float] | None = None
+            for x_mm, y_mm, _deg in positions:
+                # Same 500 mm jump rejection the Classic renderer uses.
+                # A relocalisation would otherwise draw a straight line
+                # across the whole home.
+                if previous is not None:
+                    dx, dy = x_mm - previous[0], y_mm - previous[1]
+                    if (dx * dx + dy * dy) ** 0.5 > 500.0:
+                        if len(trail) >= 2:
+                            draw.line(trail, fill=(120, 200, 255), width=2)
+                        trail = []
+                        previous = (x_mm, y_mm)
+                        continue
+                trail.append(to_px(x_mm, y_mm))
+                previous = (x_mm, y_mm)
+            if len(trail) >= 2:
+                draw.line(trail, fill=(120, 200, 255), width=2)
+
+        if self._floor_plan.dock is not None:
+            dx, dy, _orientation = self._floor_plan.dock
+            px, py = to_px(dx, dy)
+            draw.ellipse((px - 5, py - 5, px + 5, py + 5), fill=(200, 200, 90))
+
+        # ROOM LABELS ARE OFF BY DEFAULT, which reads backwards until you
+        # know what Classic does: it removed its own in v2.7.3 because
+        # the xiaomi-vacuum-map-card draws an overlay from the `rooms`
+        # attribute, and both at once doubles them up.
+        #
+        # The option exists for everyone not using that card -- a plain
+        # picture-entity shows an image and nothing else, so for them the
+        # names have to be in the picture or they do not exist.
+        if self._config_entry.options.get(
+            CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
+        ):
+            from .map_renderer import LABEL_FONT  # noqa: PLC0415
+
+            for room_id, ring in self._polygons.items():
+                name = self._names.get(room_id)
+                if not name:
+                    continue
+                cx = sum(x for x, _ in ring) / len(ring)
+                cy = sum(y for _, y in ring) / len(ring)
+                draw.text(
+                    to_px(cx, cy), name, fill=(230, 230, 230),
+                    anchor="mm", font=LABEL_FONT,
+                )
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    async def async_image(self) -> bytes | None:
+        """Re-reads only when the robot's map version has moved.
+
+        The version check is a shadow read that is already happening for
+        other entities, so the common case costs nothing and a genuine
+        map change is picked up without a subscription.
+        """
+        await self._async_refresh_if_map_changed()
+        return self._png
+
+    async def _async_refresh_if_map_changed(self) -> None:
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        version: str | None = None
+        if coordinator is not None and coordinator.data:
+            current = coordinator.data.get("ro-currentstate") or {}
+            p2maps = current.get("p2maps") or []
+            if isinstance(p2maps, list) and p2maps:
+                first = p2maps[0]
+                if isinstance(first, dict):
+                    version = first.get("active_p2mapv_id") or first.get("last_p2mapv_ts")
+
+        if version is not None and version == self._rendered_for_map_version:
+            return
+        await self._async_refresh_rooms()
+        self._rendered_for_map_version = version
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Calibration and room outlines for xiaomi-vacuum-map-card.
+
+        Same keys and same coordinate convention as the Classic rooms
+        map, so a card configuration written for one works for the other.
+        """
+        from .prime_room_map import prime_calibration_points
+
+        if not self._polygons or self._renderer is None:
+            return {}
+
+        cal = prime_calibration_points(
+            self._polygons,
+            self._renderer._mm_to_px_fit,  # noqa: SLF001
+        )
+        rooms: dict[str, dict[str, Any]] = {}
+        for room_id, ring in self._polygons.items():
+            name = self._names.get(room_id) or f"Room {room_id}"
+            rooms[name] = {
+                "outline": [[x, y] for x, y in ring],
+                "name": name,
+                "room_id": room_id,
+            }
+
+        attrs: dict[str, Any] = {"rooms": rooms}
+        # Per-room preferences set in the iRobot app, so an automation
+        # can honour them rather than override them.
+        if self._preferences:
+            attrs["room_preferences"] = self._preferences
+        if cal:
+            attrs["calibration_points"] = cal
+        return attrs
+

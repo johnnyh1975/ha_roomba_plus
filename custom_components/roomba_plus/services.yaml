@@ -352,3 +352,22 @@ restore_backup:
       required: true
       selector:
         text:
+
+run_favorite:
+  name: Run favorite
+  description: >-
+    Runs a saved favorite by its ID. V4/Prime robots only. The IDs are in
+    the vacuum entity's `favorites` attribute -- keyed on ID rather than
+    name so an automation survives a rename in the iRobot app.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    favorite_id:
+      name: Favorite ID
+      description: The favorite's ID, from the vacuum's `favorites` attribute.
+      required: true
+      example: "01KRQ4S1RP493P1WKCG71C90D9"
+      selector:
+        text:

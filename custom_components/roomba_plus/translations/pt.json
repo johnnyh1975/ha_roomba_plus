@@ -151,7 +151,9 @@
           "map_size_px": "Tamanho do mapa (píxeis)",
           "map_scale_mm_per_px": "Escala (mm/píxel)",
           "floor_label": "Andar (ex.: Rés do chão)",
-          "correlation_entities": "Correlacionar sujidade com sensores (opcional)"
+          "correlation_entities": "Correlacionar sujidade com sensores (opcional)",
+          "map_room_labels": "Desenhar os nomes dos quartos na imagem do mapa",
+          "prime_favorite_buttons": "Criar um botão para cada favorito guardado"
         },
         "data_description": {
           "continuous": "Manter uma ligação MQTT persistente com o robô. Recomendado.",
@@ -887,6 +889,12 @@
       },
       "map_training": {
         "name": "Ação – Iniciar mapeamento"
+      },
+      "prime_favorite": {
+        "name": "Favorito – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Localizar"
       }
     },
     "switch": {
@@ -910,6 +918,21 @@
       },
       "prime_carpet_boost": {
         "name": "Configuração – Reforço para tapetes"
+      },
+      "prime_schedule": {
+        "name": "Agendamento – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Bloqueio para crianças"
+      },
+      "prime_eco_charge": {
+        "name": "Carregamento eco"
+      },
+      "prime_two_pass": {
+        "name": "Limpeza em duas passagens"
+      },
+      "prime_vac_high": {
+        "name": "Potência de sucção extra"
       }
     },
     "select": {
@@ -947,6 +970,14 @@
           "automatic": "Automático",
           "eco": "Eco",
           "performance": "Desempenho"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Nível de sucção",
+        "state": {
+          "light": "Leve",
+          "normal": "Normal",
+          "deep": "Profundo"
         }
       }
     },
@@ -1196,6 +1227,12 @@
     },
     "unknown_rooms": {
       "message": "Divisão(ões) desconhecida(s) para {entity_id}: {rooms}. Divisões conhecidas: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite só está disponível para robôs V4/Prime"
+    },
+    "favorite_not_found": {
+      "message": "Nenhum favorito executável com o ID {favorite_id}"
     }
   },
   "selector": {

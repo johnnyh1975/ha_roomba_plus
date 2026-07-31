@@ -29,7 +29,7 @@ from .const import (
     has_smart_map,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
 def resolve_zone_name(
@@ -84,6 +84,29 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up select entities."""
+    data = config_entry.runtime_data
+
+    # PRIME BRANCH. Everything below reads roomba_reported_state(), which
+    # a Prime robot has no equivalent for -- the Classic descriptions
+    # would all evaluate against an empty dict and either all appear or
+    # none would.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
+        from .select_prime import PRIME_SELECTS, PrimeSettingSelect  # noqa: PLC0415
+
+        cap, _dock_cap = get_prime_capability_flags(config_entry)
+        async_add_entities([
+            PrimeSettingSelect(data.blid, config_entry, description)
+            for description in PRIME_SELECTS
+            # Same "None means unknown, only an explicit 0 means absent"
+            # contract the switches use: a robot that has not reported
+            # its capabilities yet should get the entity, not lose it.
+            if description.cap_attr is None
+            or cap is None
+            or getattr(cap, description.cap_attr, None) != 0
+        ])
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)

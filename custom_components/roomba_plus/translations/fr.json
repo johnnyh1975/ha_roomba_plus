@@ -151,7 +151,9 @@
           "map_size_px": "Taille de la carte (pixels)",
           "map_scale_mm_per_px": "Échelle (mm/pixel)",
           "floor_label": "Étage (ex. : Rez-de-chaussée)",
-          "correlation_entities": "Corréler la saleté avec des capteurs (optionnel)"
+          "correlation_entities": "Corréler la saleté avec des capteurs (optionnel)",
+          "map_room_labels": "Afficher les noms des pièces sur l'image de la carte",
+          "prime_favorite_buttons": "Créer un bouton pour chaque favori enregistré"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
@@ -887,6 +889,12 @@
       },
       "map_training": {
         "name": "Action – Démarrer cartographie"
+      },
+      "prime_favorite": {
+        "name": "Favori – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Localiser"
       }
     },
     "switch": {
@@ -910,6 +918,21 @@
       },
       "prime_carpet_boost": {
         "name": "Réglage – Boost tapis"
+      },
+      "prime_schedule": {
+        "name": "Programme – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Sécurité enfant"
+      },
+      "prime_eco_charge": {
+        "name": "Charge éco"
+      },
+      "prime_two_pass": {
+        "name": "Nettoyage en deux passages"
+      },
+      "prime_vac_high": {
+        "name": "Puissance d'aspiration accrue"
       }
     },
     "select": {
@@ -947,6 +970,14 @@
           "automatic": "Automatique",
           "eco": "Éco",
           "performance": "Performance"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Puissance d'aspiration",
+        "state": {
+          "light": "Léger",
+          "normal": "Normal",
+          "deep": "Intensif"
         }
       }
     },
@@ -1196,6 +1227,12 @@
     },
     "unknown_rooms": {
       "message": "Pièce(s) inconnue(s) pour {entity_id} : {rooms}. Pièces connues : {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite n'est disponible que pour les robots V4/Prime"
+    },
+    "favorite_not_found": {
+      "message": "Aucun favori exécutable avec l'ID {favorite_id}"
     }
   },
   "selector": {

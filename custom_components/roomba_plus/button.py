@@ -42,7 +42,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -140,6 +140,19 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up all button entities for this Roomba."""
+    data = config_entry.runtime_data
+
+    # PRIME BRANCH. Everything below is Classic: the buttons act through
+    # roomba.send_command() on a local MQTT connection Prime does not
+    # have, and most have no identified Prime equivalent at all.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .button_prime import async_build_prime_buttons  # noqa: PLC0415
+
+        entities = await async_build_prime_buttons(config_entry)
+        if entities:
+            async_add_entities(entities)
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)

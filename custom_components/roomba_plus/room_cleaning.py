@@ -39,6 +39,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import CONF_SMART_ZONE_DATA, DOMAIN, MAP_UPDATING_NOT_READY_BIT
@@ -211,6 +212,28 @@ class RoomCleaningBackend(ABC):
         cannot determine invites a service call that is silently
         rejected, or worse, accepted and wrong. It stays out until
         somebody establishes what the values mean.
+
+        UPDATE (30 July 2026): the values are now known, from a
+        chairstacker map-edit response that returned the full
+        p2map_metadata. Each room carries operating_mode_defaults keyed
+        by mode, plus a last_operating_mode:
+
+            2   -> profile "normal"
+            4   -> profile "normal" (seen only with carpetBoost + swScrub)
+            32  -> profile "light"
+            512 -> profile "deep"  (suctionLevel 4, twoPass, swScrub 1)
+
+        Still not offered, and the reason has changed. It is no longer
+        "we do not know the range" but "the robot already stores a
+        per-room default for each mode, including which one was used
+        last". Overriding that from a service call would discard a
+        preference the user set in the iRobot app, per room, and there is
+        no way to put it back.
+
+        The useful feature here is not an operating_mode parameter -- it
+        is READING these defaults, so a service call can honour what the
+        user configured rather than replace it. Not built yet, and
+        deliberately noted rather than guessed at.
         """
 
 
@@ -237,9 +260,19 @@ class PrimeRoomCleaning(RoomCleaningBackend):
     none at all.
     """
 
-    def __init__(self, data: RoombaData) -> None:
+    def __init__(
+        self,
+        data: RoombaData,
+        config_entry: RoombaConfigEntry | None = None,
+        hass: HomeAssistant | None = None,
+    ) -> None:
         self._data = data
         self._robot = data.prime_robot
+        # Optional, and only needed to record the mission plan. Kept
+        # optional rather than required because several call sites build
+        # this backend for read-only use -- listing rooms needs neither.
+        self._config_entry = config_entry
+        self._hass = hass
 
     async def _all_map_ids(self) -> list[str]:
         """Every visible map on this robot, in whatever order the server
@@ -566,6 +599,67 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             ],
         )
         await self._robot.send_routine_command_via_cmd_topic(command)
+        self._note_mission_plan(p2map_id, room_ids)
+
+    def _note_mission_plan(self, p2map_id: str, room_ids: list[str]) -> None:
+        """Tells MissionTimerStore which rooms this mission will visit.
+
+        THE LINK THAT WAS MISSING. The store was created for Prime and
+        fed phase transitions, but nothing ever called set_mission_plan()
+        -- only the Classic MQTT callback path does. Four things depend
+        on it:
+
+          - the advance_room service, whose planned_rooms was always
+            empty, so it silently did nothing
+          - current_room and next_room, both blank
+          - the mission progress sensor, which showed elapsed time and no
+            remaining estimate -- half working, and looking whole
+
+        ESTIMATES COME FROM MEASURED HISTORY, not from the cloud.
+        get_time_estimates() would supply predictions, and an APK pass
+        established that its request body is assembled in native code --
+        the key names are not determinable, and guessing them is what
+        cost three testers weeks on virtual walls.
+
+        So the estimate is the median of how long this robot has actually
+        taken in that room, from past missions. Better than a model
+        value, and None for a room never cleaned -- which
+        set_mission_plan already accepts per room, because Classic has
+        the same gap for a newly named room.
+
+        ONLY COVERS MISSIONS HOME ASSISTANT STARTED. A robot cleaning on
+        its own schedule still has no plan here -- the timeline reports
+        rooms as it enters them, but not the list up front. That is a
+        real limitation and not one this can fix.
+        """
+        try:
+            store = getattr(self._data, "mission_timer_store", None)
+            hass = getattr(self._data, "hass_ref", None) or self._hass
+            entry_id = getattr(self._config_entry, "entry_id", None)
+            if store is None or hass is None or not entry_id:
+                return
+            from .prime_mission_sync import estimate_room_seconds  # noqa: PLC0415
+
+            per_room = estimate_room_seconds(
+                getattr(self._data, "mission_store", None), list(room_ids)
+            )
+            known = [s for s in per_room if s is not None]
+            store.set_mission_plan(
+                f"{p2map_id}:{'+'.join(room_ids)}",
+                list(room_ids),
+                # Total only when EVERY room has a measurement. A partial
+                # sum would read as the whole mission and be short by
+                # however many rooms are missing -- worse than showing
+                # nothing, because nothing is visibly nothing.
+                sum(known) if len(known) == len(room_ids) else None,
+                hass,
+                entry_id,
+                room_estimates_sec=per_room,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not record the mission plan", exc_info=True
+            )
 
 
 class ClassicRoomCleaning(RoomCleaningBackend):
@@ -1020,7 +1114,11 @@ def async_get_room_cleaning_backend(
     data: RoombaData = config_entry.runtime_data
 
     if data.connection_type == ConnectionType.CLOUD_ONLY:
-        return PrimeRoomCleaning(data) if data.prime_robot is not None else None
+        return (
+            PrimeRoomCleaning(data, config_entry, hass or config_entry.hass)
+            if data.prime_robot is not None
+            else None
+        )
 
     if data.map_capability == MapCapability.SMART and _classic_has_room_data(
         data, config_entry

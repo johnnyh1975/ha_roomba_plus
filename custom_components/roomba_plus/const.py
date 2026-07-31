@@ -62,6 +62,32 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
     Platform.BINARY_SENSOR,
     Platform.SWITCH,
     Platform.IMAGE,
+    # DEVICE_TRACKER (this session). Reports which room the robot is in,
+    # resolved from the mission timeline's room events -- and, through the
+    # segment-to-area mapping, which Home Assistant AREA that is.
+    #
+    # The entity's own state comes from location_name, which Home
+    # Assistant deprecates in 2027.7. That was an argument against wiring
+    # this for Prime at all, and it was a weak one: the value lives in the
+    # `room` and `area_id` attributes, and neither is deprecated. The
+    # state going away does not remove the entity's usefulness.
+    Platform.DEVICE_TRACKER,
+    # SELECT (this session). Graduated settings a switch cannot express
+    # -- today just suction level.
+    #
+    # It also lights up the xiaomi-vacuum-map-card's menu icons, which
+    # read a select entity's `options` attribute and offer them as a
+    # map-side menu. A select is both the right entity type and the one
+    # that card knows how to use.
+    Platform.SELECT,
+    # BUTTON (this session). Saved favourites, one button each, plus
+    # locate.
+    #
+    # Classic's other buttons -- evacuate, power off, sleep, spot clean,
+    # map training -- are deliberately absent: no Prime command has been
+    # identified for any of them, and a button that does nothing when
+    # pressed is worse than one that is not there.
+    Platform.BUTTON,
 ]
 # Platform.CALENDAR moved out of this list too (this session) -- same
 # gating as LOCAL_PLATFORMS, see the comment there.
@@ -95,6 +121,46 @@ CONF_CERT: Final = "certificate"
 CONF_CONNECTION_TYPE: Final = "connection_type"
 
 # Options keys (Phase 2+)
+#: Whether to draw room names INTO the room map image.
+#:
+#: BOTH GENERATIONS. Briefly named prime_* while only the Prime map
+#: existed, and renamed the same day -- it had never shipped, so there
+#: was no preference to preserve and no reason to keep a name that
+#: describes half of what it does.
+#:
+#: Defaults to False, which looks backwards until you know what Classic
+#: does: it removed its own labels in v2.7.3 precisely because the
+#: xiaomi-vacuum-map-card renders its own overlay from the `rooms`
+#: attribute, and drawing both doubles them up.
+#:
+#: So the default suits the card user, and the option exists for
+#: everyone else -- somebody using a plain picture-entity card, or a
+#: dashboard where the map is just an image, gets nothing from an
+#: attribute nobody reads. For them the labels have to be in the picture
+#: or they do not exist.
+#:
+#: The attributes are published either way -- for Classic through
+#: `rid_to_name()`, for Prime through the map metadata. This only
+#: controls the image.
+#: Whether to create one button per saved favourite.
+#:
+#: On by default. The buttons are the only route that needs no
+#: configuration at all -- after installing, a favourite is there and
+#: tappable, and it works with voice assistants, which a service call
+#: does not.
+#:
+#: The option exists because they are also the only route that costs an
+#: entity each. An account with fifteen favourites gets fifteen entities
+#: on the device page, and someone driving everything from automations
+#: has the `favorites` attribute and the run_favorite service instead --
+#: both of which key on the favourite ID and therefore survive a rename
+#: in the iRobot app.
+CONF_PRIME_FAVORITE_BUTTONS: Final = "prime_favorite_buttons"
+DEFAULT_PRIME_FAVORITE_BUTTONS: Final = True
+
+CONF_MAP_ROOM_LABELS: Final = "map_room_labels"
+DEFAULT_MAP_ROOM_LABELS: Final = False
+
 CONF_MAP_ENABLED: Final = "map_enabled"
 CONF_MAP_SIZE_PX: Final = "map_size_px"
 CONF_MAP_SCALE: Final = "map_scale_mm_per_px"

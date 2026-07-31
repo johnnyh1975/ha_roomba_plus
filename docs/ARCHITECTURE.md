@@ -81,7 +81,36 @@ not a second reconnect layer. If one fires, something unusual happened.
 every entity.
 
 It is **large** — 47 fields — mixing Classic-only health tracking, Prime-only runtime state and
-shared infrastructure (coordinators, six stores).
+shared infrastructure (coordinators, ten stores).
+
+### Which stores each generation gets, and why
+
+Ten persistent stores exist. Classic robots get all of them; Prime robots get four, and the split is
+not arbitrary.
+
+| Store | Prime | Reason |
+|---|---|---|
+| `mission_store` | yes | Filled from the cloud's mission history over REST |
+| `maintenance_store` | yes | Records when the USER changed a part — never generation-specific |
+| `mission_timer_store` | yes | Driven by phase transitions, which Prime reports |
+| `robot_profile_store` | yes | Its `update_mission_stats` half works on plain mission records |
+| `geometry_store` | no | Derived from pose data |
+| `grid_store` | no | Derived from pose data |
+| `room_seg_store` | no | Derived from pose data |
+| `outline_store` | no | Derived from pose data |
+| `trajectory_store` | no | Derived from pose data |
+| `freeze_snapshot_store` | no | Exists solely to back up the pose-derived stores against a firmware change that stops pose delivery. For a robot that never delivered poses it has nothing to protect. |
+
+All four Prime stores were left at `None` from v4.0.0a0 until v4.0.0a14 — around 30 sensor lookups
+read from nothing while the data was available. **Creating a store was only half of each fix**: the
+Prime branch of `sensor.async_setup_entry` returns before the mission sensors are built, so a filled
+store still had no reader; and `mission_timer_store` needed phase transitions fed to it or it would
+have persisted an empty file forever.
+
+That shape — working data that no entity consumes — has appeared three times in this project.
+`PrimeMapImage` was unreachable for a whole release because `IMAGE` was missing from
+`PRIME_PLATFORMS`, and `CLEAN_AREA` was advertised without the method that supplies the room list.
+It is hard to diagnose because every individual piece tests fine.
 
 **Size alone turned out not to be the problem.** A review looked for the usual suspects and found
 none: no mutable-default bugs, no paired fields drifting apart, and each writer coherent within its
@@ -123,6 +152,40 @@ migrations and silently stop upgrading every existing install. A test guards it.
 ## Known weaknesses
 
 Recorded because a review that stays in one person's head is not a review.
+
+- **Delayed saves need an explicit flush on unload, and it is easy to forget.** Both
+  `MissionTimerStore` and the Prime map PNG persist via `Store.async_delay_save`, which coalesces a
+  burst of writes into one. Without a matching `async_save` on unload, a RELOAD can have the old
+  instance's pending write land after the new instance has already loaded — overwriting fresh state
+  with stale, which is worse than losing the update.
+
+  Classic solved this for `MissionTimerStore` in v3.3.0. The Prime unload path was written later and
+  did not inherit it: its short `CLOUD_ONLY` branch returns before that code is reached. The Prime
+  map then reproduced it a third time, having copied the delayed-save pattern from that very store
+  without copying the flush. Any new delayed-save store needs the flush added deliberately; nothing
+  enforces it.
+
+- **The Prime and Classic branches diverge silently.** `async_setup_entry`, `async_unload_entry` and
+  most platform setups have a `CLOUD_ONLY` branch that returns early. Anything added to the Classic
+  path afterwards is not inherited, and nothing flags it. Three separate gaps were found this way in
+  one session: the timer flush above, the long-term statistics backfill, and the hour meter a
+  maintenance reset is recorded against — which recorded 0 for Prime, making every interval since a
+  reset read as the robot's entire lifetime.
+
+  The useful question when touching either path: *what does the other branch do here that this one
+  does not?*
+
+- **Entities cost cloud requests, and nothing measures that.** Two bugs in one session came from the
+  same question — *what does this cost per day?* — rather than from anything failing.
+
+  `SwitchEntity` polls every 30 seconds by default. The schedule switches read from the cloud in
+  `async_update`, so three schedules meant roughly 8,600 requests a day for data that changes when
+  somebody edits a schedule in the iRobot app. And the Prime room map called `get_map_metadata()`
+  twice per refresh — for identical data, while the comment beside the second call claimed it reused
+  the first.
+
+  Neither shows up in a test. Both were found by counting requests per entity per day, which is
+  worth doing whenever a new entity or a new refresh path is added.
 
 - **`image.py`, 2,546 lines, and `_handle_mission_end()` inside it.** Eight releases have patched
   that one method, and **four of those were ordering fixes** — each shipped as a real bug first.

@@ -1248,12 +1248,140 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
             config_entry.options[CONF_BLOCKING_SENSORS],
         )
 
+    # MISSION STORE FOR PRIME (this session).
+    #
+    # Every store was left at None since v4.0.0a0, so around 30 sensor
+    # lookups that read MissionStore -- mission statistics, dirt-spike
+    # and excessive-recharge detection, rolling means, cleaning
+    # intervals -- have been empty for Prime robots while the underlying
+    # data sat available over REST the whole time.
+    #
+    # Only this one store is created. grid_store, outline_store,
+    # trajectory_store and geometry_store all derive from pose data,
+    # and how many pose samples a Prime robot actually delivers is still
+    # unmeasured -- creating them would be building on an unknown.
+    # MAINTENANCE STORE FOR PRIME (this session).
+    #
+    # Unlike every other store, this one holds NOTHING the robot
+    # reports: it records when the USER last changed a filter, brush,
+    # pad or battery. So it is generation-independent by nature, and the
+    # reset service handler was already written without any Classic
+    # assumption -- it only checked whether the store existed, and for
+    # Prime it never did.
+    prime_maintenance_store = MaintenanceStore()
+    try:
+        await prime_maintenance_store.async_load(hass, config_entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Roomba+ Prime: could not load maintenance store; maintenance dates "
+            "will start empty",
+            exc_info=True,
+        )
+
+    # MISSION TIMER FOR PRIME (this session).
+    #
+    # Tracks a RUNNING mission -- elapsed time, time in the current
+    # room, remaining estimate -- and everything it needs Prime reports:
+    # a mission id, phase transitions, and get_time_estimates() for the
+    # planned durations.
+    #
+    # This is the last store worth wiring. The remaining five
+    # (geometry, grid, room_seg, outline, trajectory) all derive from
+    # pose data, and freeze_snapshot_store exists solely to back THOSE
+    # up against a firmware change that stops pose delivery -- so for a
+    # robot that never delivered poses it has nothing to protect.
+    # robot_profile_store is left out too: its useful half needs
+    # per-room dirt and zone data Prime has no equivalent for.
+    # ROBOT PROFILE STORE FOR PRIME (this session).
+    #
+    # Reversal of an earlier decision in the same session, worth
+    # recording rather than quietly changing. It was skipped because half
+    # of what it does -- coverage baselines and per-room dirt indices --
+    # needs zone data Prime has no equivalent for.
+    #
+    # But the OTHER half, update_mission_stats(), works on plain mission
+    # records: rolling means and standard deviations over a 30-day
+    # window. Those records now exist for Prime, and the statistics were
+    # verified to compute from them.
+    #
+    # It surfaced from a bug hunt: the sync path was already calling an
+    # update function for this store, which returned immediately because
+    # the store was None. Dead code that read as working functionality --
+    # anyone reading its docstring would have believed profile
+    # statistics were live.
+    # SAVED FAVOURITES, read once at setup.
+    #
+    # They change only when somebody creates one in the iRobot app, so
+    # re-reading on every coordinator update would be a cloud call per
+    # battery percent. Exposed as a vacuum attribute and used by the
+    # run_favorite service; the buttons read the same list.
+    prime_favorites: list[dict[str, Any]] = []
+
+    prime_profile_store = RobotProfileStore()
+    try:
+        await prime_profile_store.async_load(hass, config_entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Roomba+ Prime: could not load robot profile store; mission "
+            "statistics will start empty",
+            exc_info=True,
+        )
+
+    prime_timer_store = MissionTimerStore()
+    try:
+        await prime_timer_store.async_load(hass, config_entry.entry_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Roomba+ Prime: could not load mission timer store; progress will "
+            "start empty",
+            exc_info=True,
+        )
+
+    prime_mission_store = MissionStore()
+    try:
+        await prime_mission_store.async_load(hass, config_entry.entry_id)
+        # HA LONG-TERM STATISTICS, same as the Classic path does.
+        #
+        # Injects three external statistic series -- daily cleaned area,
+        # daily mission duration, completion count -- so a statistics
+        # graph card shows history rather than starting from today.
+        #
+        # Applies to Prime unmodified: the store's own docstring notes
+        # that duration and completion count work for all robots, and
+        # the area series needs `area_sqft`, which the Prime translation
+        # maps from square_feet_covered.
+        #
+        # Fire-and-forget on purpose: it walks the whole history, and
+        # setup must not wait for it. async_add_external_statistics is
+        # idempotent, so a repeat on every restart is harmless.
+        hass.async_create_task(
+            prime_mission_store.async_backfill_statistics(
+                hass, config_entry.entry_id, config_entry.title or "Roomba"
+            ),
+            name="roomba_plus_prime_statistics_backfill",
+        )
+    except Exception:  # noqa: BLE001
+        # Mission history is enrichment, not a dependency. A corrupt or
+        # unreadable store must not stop the robot from being set up --
+        # an empty store degrades some sensors, a raised exception costs
+        # the user their whole integration.
+        _LOGGER.warning(
+            "Roomba+ Prime: could not load mission history store; statistics "
+            "sensors will start empty",
+            exc_info=True,
+        )
+
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
         connection_type=ConnectionType.CLOUD_ONLY,
         prime_robot=prime_robot,
         prime_coordinator=coordinator,
+        mission_store=prime_mission_store,
+        maintenance_store=prime_maintenance_store,
+        mission_timer_store=prime_timer_store,
+        robot_profile_store=prime_profile_store,
+        prime_favorites=prime_favorites,
         prime_status_coordinator=status_coordinator,
         prime_parts_coordinator=parts_coordinator,
         prime_household_id=household_id,
@@ -1276,6 +1404,18 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     config_entry.async_on_unload(
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
+
+    # FAVOURITES, read once now that runtime_data exists.
+    #
+    # Before the platforms load, because the button platform reads the
+    # same list -- and after runtime_data is set, because the read needs
+    # the robot object from it.
+    try:
+        from .button_prime import async_favorites_attribute  # noqa: PLC0415
+
+        prime_favorites.extend(await async_favorites_attribute(config_entry))
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Roomba+ Prime: could not read favorites", exc_info=True)
 
     from .const import PRIME_PLATFORMS
     platforms = list(PRIME_PLATFORMS)
@@ -1320,6 +1460,27 @@ async def async_unload_entry(
             prime_robot = config_entry.runtime_data.prime_robot
             if prime_robot is not None:
                 await prime_robot.disconnect()
+
+        # FLUSH THE DEBOUNCED TIMER WRITE, same as the Classic path does.
+        #
+        # MissionTimerStore saves via async_delay_save, and Store's own
+        # async_save cancels any pending delayed write. Without this a
+        # RELOAD can have the OLD instance's delayed write land after the
+        # NEW instance already loaded -- overwriting fresh state with
+        # stale, which is worse than losing the update.
+        #
+        # Classic has done this since v3.3.0, found in its own bug hunt.
+        # The Prime path was written later and did not inherit it: the
+        # short CLOUD_ONLY branch returns before that code is reached.
+        mts = config_entry.runtime_data.mission_timer_store
+        if mts is not None:
+            try:
+                await mts.async_save(hass, config_entry.entry_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Roomba+ Prime: mission timer flush on unload failed",
+                    exc_info=True,
+                )
         return unload_ok
 
     data = config_entry.runtime_data

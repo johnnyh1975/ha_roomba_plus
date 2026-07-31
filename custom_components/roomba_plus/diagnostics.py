@@ -8,7 +8,7 @@ from __future__ import annotations
 import time as _time_mod
 
 import dataclasses
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
@@ -69,6 +69,21 @@ def _parts_report(data: Any) -> dict[str, Any]:
 def _prime_token_expiry(data: Any) -> dict[str, Any]:
     """Does this account's login carry a usable expiry?
 
+    ANSWERED 30 July 2026 (jayjay13011): yes, and the token lasts about
+    an hour. Two downloads twenty minutes apart reported 3217 and 1998
+    seconds remaining.
+
+    That was worth confirming rather than assuming: PrimeFactory is
+    already called with auto_refresh=True, which refreshes proactively
+    shortly before expiry AND reactively on an HTTP 403. Until this
+    capture nobody had established that there was anything to schedule
+    against -- the mechanism was in place and its input unverified.
+
+    The "no expiry" branch below still matters: not every account's
+    login response is guaranteed to carry the field, and a robot whose
+    token has no stated lifetime falls back to blind periodic renewal
+    inside the library.
+
     Deliberately reports lifetime and remaining seconds, never the
     token itself or anything derived from it.
     """
@@ -92,6 +107,104 @@ def _prime_token_expiry(data: Any) -> dict[str, Any]:
         "seconds_remaining": None if remaining is None else round(remaining),
         "note": "proactive refresh is schedulable against this",
     }
+
+
+#: Shadow keys withheld from the dump.
+#:
+#: Not credentials -- those never reach a shadow -- but identifiers that
+#: tie a capture to a household or a device, and would follow the file
+#: into a public issue.
+#:
+#: `mac` and `blid` in particular: a diagnostics file gets pasted into
+#: GitHub, and a MAC address is not something a tester intends to
+#: publish. The BLID appears elsewhere in this file already, but adding
+#: more copies is not a reason to add more.
+_SHADOW_REDACT: Final[set[str]] = {
+    "blid", "mac", "wifi", "ssid", "bssid", "sn", "serial",
+    "navSerialNo", "hwPartsRev", "softwareVer", "uuid", "userId",
+    "householdId", "household_id", "cloudEnv", "svcEndpoints",
+}
+
+
+def _prime_shadow_dump(data: Any) -> dict[str, Any]:
+    """Every named shadow's contents, minus identifying fields.
+
+    Dumped rather than summarised on purpose. A summary can only show
+    what someone already thought to look for, and the recurring problem
+    with this integration has been the opposite: fields nobody modelled,
+    silently dropped, invisible until a tester pasted raw output.
+    `googleControl` and five capability flags were both found that way.
+
+    Redaction is by key NAME at every depth, because shadows nest and a
+    top-level filter would miss `state.reported.hwPartsRev`.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    if coordinator is None or not coordinator.data:
+        return {"available": False}
+
+    def _clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                k: ("**REDACTED**" if k in _SHADOW_REDACT else _clean(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_clean(v) for v in value]
+        return value
+
+    return {name: _clean(shadow) for name, shadow in coordinator.data.items()}
+
+
+def _prime_store_summary(data: Any) -> dict[str, Any]:
+    """Whether each Prime-relevant store exists and holds anything.
+
+    Deliberately counts rather than dumps: a mission history is hundreds
+    of records, and the question being answered is "is this populated",
+    not "what is in it".
+    """
+    summary: dict[str, Any] = {}
+
+    store = getattr(data, "mission_store", None)
+    if store is None:
+        summary["mission_store"] = "not created"
+    else:
+        try:
+            records = store.query()
+            summary["mission_store"] = {
+                "record_count": len(records),
+                "latest_id": records[-1].get("id") if records else None,
+            }
+        except Exception:  # noqa: BLE001
+            summary["mission_store"] = "unreadable"
+
+    store = getattr(data, "maintenance_store", None)
+    summary["maintenance_store"] = "not created" if store is None else {
+        "filter_resets": len(getattr(store, "filter_reset_history", None) or []),
+        "brush_resets": len(getattr(store, "brush_reset_history", None) or []),
+    }
+
+    store = getattr(data, "mission_timer_store", None)
+    summary["mission_timer_store"] = "not created" if store is None else {
+        # Zero elapsed on a robot that has run is the signal that phase
+        # transitions are not reaching the store -- the failure mode that
+        # would otherwise be invisible.
+        "elapsed_run_min": getattr(store, "elapsed_run_min", None),
+        "current_room": getattr(store, "current_room", None),
+    }
+
+    #: The five pose-derived stores plus freeze_snapshot_store are
+    #: deliberately absent for Prime, so their absence is expected rather
+    #: than a fault. Stated here so a reader does not go looking.
+    store = getattr(data, "robot_profile_store", None)
+    summary["robot_profile_store"] = "not created" if store is None else {
+        # Needs at least five missions before it produces means at all,
+        # so "has_stats: false" on a fresh install is correct rather than
+        # a fault.
+        "has_stats": bool(getattr(store, "mission_count", 0) or 0),
+    }
+
+    summary["pose_derived_stores"] = "not applicable to Prime (no pose data)"
+    return summary
 
 
 def _robot_cloud_connection(data: Any) -> dict[str, Any]:
@@ -313,6 +426,21 @@ async def async_get_config_entry_diagnostics(
                 # serial_number itself is device-identifying -- deliberately
                 # omitted, same reasoning as BLID redaction above.
             },
+            # THE SHADOW CONTENTS, not just their names.
+            #
+            # Until now this listed which shadows had been seeded and
+            # nothing about what was in them. That gap has cost real
+            # time: the `audio` block in rw-settings is still unknown
+            # months after a tester reported its key names by hand,
+            # because he had to type them out rather than send a file.
+            # And whether the settings shadow spells a field `padPlate`
+            # or `pad_plate` is currently blocking a pad-wetness control
+            # -- a question one download would answer.
+            #
+            # These are robot SETTINGS and STATE: child lock, eco
+            # charging, suction level, schedules, firmware version, dock
+            # status. Nothing here is a credential.
+            "shadows": _prime_shadow_dump(data),
             "status_coordinator": {
                 "started": status_coordinator is not None,
                 "last_update_success": getattr(status_coordinator, "last_update_success", None),
@@ -349,6 +477,15 @@ async def async_get_config_entry_diagnostics(
             # is currently online -- which is exactly why an empty push
             # stream is not evidence of a broken integration on its own.
             "robot_cloud_connection": _robot_cloud_connection(data),
+            # THE STORES, because their sensors read from them and
+            # nothing else would show whether they are populated.
+            #
+            # Without this, "my mission sensors are empty" is
+            # undiagnosable: an empty store, a store that never loaded,
+            # and a store nothing writes to all look identical from
+            # outside. Prime had all three of those states at various
+            # points today.
+            "stores": _prime_store_summary(data),
             "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
             "capabilities": _prime_capability_report(config_entry),
