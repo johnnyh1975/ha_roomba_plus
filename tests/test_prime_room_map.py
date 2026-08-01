@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1086,6 +1087,46 @@ class TestLiveBundleUpdatesTheRoomsMap:
         source = inspect.getsource(PrimeRoomsImage._async_render_live_bundle)
 
         assert "async_add_executor_job" in source
+
+    def test_live_coverage_is_rendered_without_changing_the_room_fit(self):
+        """The live bundle is a layer, not a second coordinate system."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._renderer = None
+        entity._polygons = {
+            "room": [
+                (0.0, 0.0),
+                (2000.0, 0.0),
+                (2000.0, 2000.0),
+                (0.0, 2000.0),
+            ]
+        }
+        entity._floor_plan = SimpleNamespace(carpet=[], borders=[], dock=None)
+        entity._live_bundle = {
+            "coverage": {
+                "features": [{
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
+                        ],
+                    }
+                }]
+            }
+        }
+        entity._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(prime_positions=[]), options={}
+        )
+
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+        px, py = entity._renderer._mm_to_px_fit(1000.0, 1000.0)  # noqa: SLF001
+
+        assert image.getpixel((round(px), round(py))) == (120, 190, 145)
 
 
 class TestPolygonVerticesAreNotPoses:

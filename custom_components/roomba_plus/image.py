@@ -82,7 +82,8 @@ _LOGGER = logging.getLogger(__name__)
 #: not for the normal case.
 _MAX_PRIME_POSITIONS = 5000
 
-#: Dispatcher signal carrying a freshly parsed live map bundle.
+#: Dispatcher signal carrying a freshly parsed live map bundle, or a
+#: position-only invalidation.
 #:
 #: The two Prime image entities are split by what they can do: one
 #: watches the map stream and shows iRobot's rendered PNG, the other
@@ -584,6 +585,17 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                             stats.get("position_points", 0) + len(message.updates)
                         )
                         self._feed_trail(message)
+                        # Position packets arrive independently of map bundles.
+                        # Re-render the sibling Rooms Map now, otherwise its
+                        # trail remains stale until a later bundle happens to
+                        # arrive. None preserves the most recent bundle.
+                        async_dispatcher_send(
+                            self.hass,
+                            _SIGNAL_PRIME_LIVE_BUNDLE.format(
+                                self._config_entry.entry_id
+                            ),
+                            None,
+                        )
                         continue
 
                     if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
@@ -3075,6 +3087,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw  # noqa: PLC0415
 
         from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
+        from .prime_room_map import _rings_mm  # noqa: PLC0415
 
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
@@ -3102,6 +3115,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         draw = ImageDraw.Draw(img)
 
         to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
+        live_bundle = self._live_bundle or {}
+        live_coverage = _rings_mm(live_bundle.get("coverage"))
 
         # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
         # walls, then the dock, then labels.
@@ -3122,6 +3137,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # per-room colours that keep adjacent rooms distinguishable.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
 
+        # The live bundle is the data the app uses for cleaned coverage,
+        # trajectories and hazards. Keep the static-map fit: these layers
+        # share its coordinate frame and must not move the room layout.
+        for ring in live_coverage:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
+
         for ring in self._floor_plan.borders:
             # OUTLINE ONLY, for the reason written two lines above about
             # carpet and then not applied here.
@@ -3134,6 +3155,26 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # The wall is the outline. Drawing it as one shows the same
             # geometry without covering anything.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
+
+        for feature in (live_bundle.get("trajectories") or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                points = [
+                    to_px(float(x) * 1000.0, float(y) * 1000.0)
+                    for x, y in coords
+                ]
+            except (TypeError, ValueError):
+                continue
+            if len(points) >= 2:
+                draw.line(points, fill=(80, 150, 235), width=2)
+
+        for feature in (live_bundle.get("hazard") or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                px, py = to_px(float(coords[0]) * 1000.0, float(coords[1]) * 1000.0)
+            except (TypeError, ValueError, IndexError):
+                continue
+            draw.regular_polygon((px, py, 8), 3, fill=(240, 150, 60))
 
         # THE TRAIL, on top of the floor plan and under the labels.
         #
@@ -3168,6 +3209,16 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 previous = (x_mm, y_mm)
             if len(trail) >= 2:
                 draw.line(trail, fill=(120, 200, 255), width=2)
+
+        if positions:
+            x_mm, y_mm, heading = positions[-1]
+            px, py = to_px(x_mm, y_mm)
+            draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(60, 170, 255))
+            radians = math.radians(heading)
+            draw.line(
+                (px, py, px + math.cos(radians) * 12, py - math.sin(radians) * 12),
+                fill=(255, 255, 255), width=2,
+            )
 
         if self._floor_plan.dock is not None:
             dx, dy, _orientation = self._floor_plan.dock
@@ -3265,7 +3316,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         return attrs
 
     @callback
-    def _on_live_bundle(self, bundle: Any) -> None:
+    def _on_live_bundle(self, bundle: Any | None) -> None:
         """Redraws the rooms map when a live bundle arrives.
 
         THE MAP NOW UPDATES DURING A MISSION rather than only when the
@@ -3281,7 +3332,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         callback: rendering a PNG inline blocks the event loop for as
         long as PIL takes.
         """
-        self._live_bundle = bundle
+        if bundle is not None:
+            self._live_bundle = bundle
         if not self._polygons:
             return
         self._config_entry.async_create_background_task(
@@ -3296,4 +3348,3 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self.async_write_ha_state()
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Prime rooms map: live re-render failed", exc_info=True)
-
