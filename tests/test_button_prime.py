@@ -318,21 +318,38 @@ class TestDockButtons:
     worse than an absent button, and that is why `schedHold` never
     shipped."""
 
-    def test_the_three_commands_are_the_confirmed_ones(self):
+    def test_the_commands_are_the_confirmed_ones(self):
         from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
 
         assert {c.command for c in PRIME_DOCK_COMMANDS} == {
-            "evac", "washpad", "stoppaddry",
+            "evac", "washpad", "stoppaddry", "drypad",
         }
 
-    def test_drying_has_no_start_button(self):
-        """`drypad` exists in the same enum, and the app does not offer
-        it: drying starts on its own after mopping. A button for
-        something the app never triggers manually would be guessing at a
-        workflow rather than mirroring one."""
+    def test_drying_can_be_started(self):
+        """REVERSED after @DaRealGuGu explained the cost.
+
+        `drypad` was excluded because the app does not offer it. But
+        stopping the drying leaves no way to restart it except another
+        full wash -- a tank of water for nothing.
+
+        The original reasoning conflated two things: guessing at a
+        COMMAND is what this project refuses to do, while offering a
+        WORKFLOW the app does not is a separate question. `drypad` is a
+        confirmed wire string from the same enum as the three a tester
+        has now pressed successfully."""
         from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
 
-        assert "drypad" not in {c.command for c in PRIME_DOCK_COMMANDS}
+        assert "drypad" in {c.command for c in PRIME_DOCK_COMMANDS}
+
+    def test_the_read_and_plumbing_commands_stay_out(self):
+        """`flushsluice`, `flrefill` and `querydock` are in the same
+        enum. Nobody has asked for them, none has an effect a user could
+        verify, and querydock is a read dressed as a command."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        commands = {c.command for c in PRIME_DOCK_COMMANDS}
+        for absent in ("flushsluice", "flrefill", "querydock"):
+            assert absent not in commands
 
     def test_washing_has_no_stop_button(self):
         """There is no `stopwashpad` in the enum at all, so washing
@@ -351,7 +368,7 @@ class TestDockButtons:
 
         entities = await async_build_prime_buttons(_entry(dock=True))
 
-        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 3
+        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 4
 
     @pytest.mark.asyncio
     async def test_a_dock_that_cannot_do_something_gets_no_button(self):
@@ -383,7 +400,7 @@ class TestDockButtons:
 
         entities = await async_build_prime_buttons(entry)
 
-        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 3
+        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 4
 
     @pytest.mark.asyncio
     async def test_pressing_sends_the_wire_string(self):

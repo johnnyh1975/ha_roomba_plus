@@ -1885,3 +1885,137 @@ class TestVacuumSubscribesToTheStatusCoordinator:
 
         with patch.object(IRobotVacuum.__bases__[0], "async_added_to_hass", AsyncMock()):
             asyncio.run(v.async_added_to_hass())
+
+
+class TestDockActivityAttribute:
+    """What the dock is doing, alongside the vacuum's own state.
+
+    Requested by @DaRealGuGu: a robot having its pad washed shows as
+    "docked", which is true and unhelpful -- the dock is busy and he
+    wants that visible on the entity people look at.
+
+    AN ATTRIBUTE, NOT A STATE. VacuumActivity has exactly six members --
+    cleaning, docked, idle, paused, returning, error -- and a vacuum
+    entity reporting anything else is broken rather than extended. So
+    "pad washing" cannot be a state however much it deserves to be one.
+
+    As an attribute it feeds a template sensor, a card's secondary line
+    or an automation condition, which is what the request is for."""
+
+    def _activity(self, dock):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"dock": dock}
+        }
+        vacuum._config_entry = entry
+        return vacuum._prime_dock_activity()
+
+    def test_pad_washing_is_reported(self):
+        assert self._activity({"pwState": 602}) == "pad_washing"
+
+    def test_pad_drying_is_reported(self):
+        assert self._activity({"pdState": 702}) == "pad_drying"
+
+    def test_evacuating_is_reported(self):
+        assert self._activity({"state": 302}) == "evacuating"
+
+    def test_an_idle_dock_reports_nothing(self):
+        """601/701/301 are the "okay" states -- the dock is well and
+        doing nothing, which the vacuum's own "docked" already says.
+        Repeating it as an attribute would be noise."""
+        assert self._activity({"pwState": 601, "pdState": 701, "state": 301}) is None
+
+    def test_a_classic_robot_gets_no_attribute(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        vacuum._config_entry = entry
+
+        assert vacuum._prime_dock_activity() is None
+
+    def test_the_values_are_slugs_not_prose(self):
+        """An attribute is read by templates and automations. A value
+        that changes with the user's language breaks both."""
+        for dock, expected in (
+            ({"pwState": 602}, "pad_washing"),
+            ({"pdState": 702}, "pad_drying"),
+            ({"state": 302}, "evacuating"),
+        ):
+            value = self._activity(dock)
+            assert value == expected
+            assert value == value.lower()
+            assert " " not in value
+
+
+class TestCleaningModeAttribute:
+    """Vacuuming or mopping, from cleanMissionStatus.operatingMode.
+
+    `cycle` stays "clean" for an entire vacuum-then-mop job, so this is
+    the only field that distinguishes the two halves.
+
+    CONFIRMED across four captures from one Combo (@DaRealGuGu),
+    including the mopping half of a scheduled vacuum-then-mop run --
+    which is the capture that had been missing for two days:
+
+        docked          2   vacuum
+        combo running   6   2|4, both together
+        mopping half    4   mop only
+
+    THE COMMAND USES THE SAME NAME FOR DIFFERENT NUMBERS. A command asks
+    for 512 (vacuum then mop) or 32 (combined); neither appears in the
+    status. Reading one table against the other made 6 look impossible
+    for two days."""
+
+    def _mode(self, status):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status}
+        }
+        vacuum._config_entry = entry
+        return vacuum._prime_cleaning_mode()
+
+    def test_vacuuming(self):
+        assert self._mode({"cycle": "clean", "operatingMode": 2}) == "vacuuming"
+
+    def test_mopping(self):
+        """The value from the capture that settled this."""
+        assert self._mode({"cycle": "clean", "operatingMode": 4}) == "mopping"
+
+    def test_both_at_once(self):
+        assert (
+            self._mode({"cycle": "clean", "operatingMode": 6})
+            == "vacuuming_and_mopping"
+        )
+
+    def test_a_docked_robot_reports_nothing(self):
+        """A docked robot still carries a mode, describing the last or
+        next job. Reporting that as current activity would be worse than
+        reporting nothing -- and it is what made an earlier reading of
+        this field look static."""
+        assert self._mode({"cycle": "none", "operatingMode": 2}) is None
+
+    def test_a_command_number_is_not_reported(self):
+        """512 and 32 are command values. If one ever turned up in the
+        status field, guessing at it would put a wrong word in front of
+        the user."""
+        assert self._mode({"cycle": "clean", "operatingMode": 512}) is None
+        assert self._mode({"cycle": "clean", "operatingMode": 32}) is None

@@ -646,3 +646,58 @@ class TestShadowDump:
         dump = self._dump(dict.fromkeys(names, {"x": 1}))
 
         assert set(dump) == set(names)
+
+
+class TestCredentialsNeverReachTheDump:
+    """A password hash was leaving in diagnostics exports.
+
+    @jouwdan found `ro-configinfo.passwordHash` in his own file and
+    redacted it by hand before attaching it to a public issue. The
+    redaction set had been assembled from fields somebody happened to
+    notice -- never from asking what a CATEGORY of secret looks like.
+
+    That is the worst kind of gap: the file says **REDACTED** in several
+    places, so it reads as safe."""
+
+    def _dump(self, shadows, blid="B"):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_shadow_dump
+
+        data = MagicMock(blid=blid)
+        data.prime_status_coordinator = MagicMock(data=shadows)
+        return _prime_shadow_dump(data)
+
+    def test_the_reported_field_is_redacted(self):
+        dump = self._dump({"ro-configinfo": {"passwordHash": "$2a$10$real"}})
+
+        assert dump["ro-configinfo"]["passwordHash"] == "**REDACTED**"
+
+    def test_unseen_credential_shapes_are_redacted_too(self):
+        """The point of the substring check. None of these has appeared
+        in any capture -- which is exactly why a named list cannot be
+        trusted to cover them."""
+        dump = self._dump({"rw-settings": {
+            "wifiPasswd": "hunter2",
+            "authToken": "eyJhbGci",
+            "deviceSecret": "s3cr3t",
+            "someApiKey": "k",
+        }})
+
+        for key in ("wifiPasswd", "authToken", "deviceSecret", "someApiKey"):
+            assert dump["rw-settings"][key] == "**REDACTED**", key
+
+    def test_ordinary_fields_still_come_through(self):
+        """A redaction pass that eats everything is useless -- the dump
+        exists to answer questions."""
+        dump = self._dump({"rw-settings": {"childLock": True, "suctionLevel": 2}})
+
+        assert dump["rw-settings"] == {"childLock": True, "suctionLevel": 2}
+
+    def test_hash_alone_does_not_trigger(self):
+        """`hash` is deliberately not a marker: it would catch map and
+        asset identifiers that are useful for debugging and are not
+        secrets."""
+        dump = self._dump({"ro-currentstate": {"hashedMapId": "abc"}})
+
+        assert dump["ro-currentstate"]["hashedMapId"] == "abc"

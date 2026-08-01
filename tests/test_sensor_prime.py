@@ -253,7 +253,7 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # the moment the mission sensors were wired in, which is the
         # point at which you confirm the addition was deliberate rather
         # than an accident of a shared code path.
-        assert len(created) == 31
+        assert len(created) == 32
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
         assert any(isinstance(e, PrimeBatterySensor) for e in created)
@@ -679,3 +679,214 @@ class TestDetectedPadStatesAreTranslated:
         from custom_components.roomba_plus.sensor_prime import _PAD_STATE_SLUGS
 
         assert _PAD_STATE_SLUGS["NoPad"] == _PAD_STATE_SLUGS["noPad"] == "no_pad"
+
+
+class TestDockCapabilityGating:
+    """A present `dock.cap` without a key means the dock cannot do it.
+
+    That is different from having no `dock.cap` at all, and the
+    difference cost @jouwdan two useless entities: his vacuum-only
+    Roomba Max 705 has an evacuation-only dock reporting
+    `cap: {"evac": 1}`, and got a pad-wash sensor and a pad-dry sensor.
+
+    His own diagnostics named the reasoning: "created (capability
+    unknown -- failing open)". The object was there; the absence of `pw`
+    inside it was a statement, not a gap.
+
+    THE FAIL-OPEN CONTRACT IS STILL RIGHT FOR THE ROBOT capabilities,
+    where a missing cap object means the shadow has not arrived yet.
+    Applying the same rule to a nested object that IS present was the
+    mistake."""
+
+    def test_an_evac_only_dock_gets_no_pad_sensors(self):
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+
+        # None and 0 both suppress; only a real capability creates.
+        assert "pad_wash not in (0, None)" in source
+        assert "pad_dry not in (0, None)" in source
+
+    def test_a_missing_dock_cap_still_fails_open(self):
+        """A robot whose shadow has not arrived must not silently lose
+        entities it should have -- that is the case the contract was
+        written for."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+
+        assert "dock_cap_known" in source
+        assert "not dock_cap_known or" in source
+
+    def test_the_robot_capability_contract_is_untouched(self):
+        """`cap.scrub` and `cap.suction_lvl` keep the original rule:
+        None means unknown, only an explicit 0 means absent."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+
+        assert "cap is None or cap.scrub != 0" in source
+        assert "cap is None or cap.suction_lvl != 0" in source
+
+
+class TestCapabilityGatesHandleNone:
+    """`None` and `0` mean different things, and the difference has
+    already cost one bug.
+
+    THE ROBOT RULE: a missing `cap` object means the shadow has not
+    arrived, so entities are created rather than silently lost. Within a
+    present cap, every key this project gates on has always arrived with
+    a value.
+
+    THE DOCK RULE IS THE OPPOSITE, and that is what broke: @jouwdan's
+    evac-only dock reports `cap: {"evac": 1}`. The object is present, so
+    "no cap means unknown" does not apply -- the absence of `pw` inside
+    it says the dock cannot wash. Failing open gave a vacuum-only robot
+    two pad sensors.
+
+    FIVE ROBOT CAPABILITY FIELDS DO ARRIVE AS None on every account seen
+    so far -- cmds, e_cmd, mop_lift, odoa, p2maps_editv2_feats. None of
+    them currently gates anything, which is why this has not bitten
+    twice. This test exists so that adding a gate on one of them is a
+    deliberate act."""
+
+    _ALWAYS_NONE = ("cmds", "e_cmd", "mop_lift", "p2maps_editv2_feats")
+
+    def test_no_gate_uses_a_field_that_always_arrives_none(self):
+        """These five have been None in every capture. A gate written as
+        `cap.mop_lift != 0` would pass for every robot ever made, which
+        is not a capability check -- it is a no-op that looks like one."""
+        import re
+        from pathlib import Path
+
+        root = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for path in root.glob("*.py"):
+            code = "\n".join(
+                line for line in path.read_text(encoding="utf-8").splitlines()
+                if not line.strip().startswith("#")
+            )
+            for field in self._ALWAYS_NONE:
+                assert not re.search(rf"cap\.{field}\s*[!=]=\s*0", code), (
+                    f"{path.name}: gating on cap.{field}, which is always None"
+                )
+
+    def test_dock_gates_treat_none_as_absent(self):
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+
+        for field in ("pad_wash", "pad_dry"):
+            assert f"{field} not in (0, None)" in source, field
+
+    def test_robot_gates_treat_none_as_unknown(self):
+        """Deliberately the other way round, and it must stay that way:
+        a robot whose shadow has not arrived should keep its entities."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+
+        assert "cap is None or cap.scrub != 0" in source
+
+
+class TestPrimeCleaningModeSensor:
+    """Vacuuming or mopping, as a visible entity.
+
+    @DaRealGuGu asked for this as a vacuum sub-state. VacuumActivity has
+    six members and none of them is "mopping", so a vacuum entity
+    reporting it would be broken rather than extended -- a sensor is as
+    far as this can honestly go, plus the same value as a
+    `cleaning_mode` attribute for templates.
+
+    The values were confirmed by his own captures, including one taken
+    during the mopping half of a scheduled vacuum-then-mop run:
+
+        2  vacuuming
+        4  mopping
+        6  both engaged together"""
+
+    def _value(self, cycle, mode):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeCleaningModeSensor,
+        )
+
+        state = MagicMock()
+        state.clean_mission_status.cycle = cycle
+        state.clean_mission_status.operating_mode = mode
+
+        class _Stub(PrimeCleaningModeSensor):
+            _current_state = property(lambda self: state)
+
+        return PrimeCleaningModeSensor.native_value.fget(object.__new__(_Stub))
+
+    def test_mopping(self):
+        """The value from the capture that settled this after two
+        days."""
+        assert self._value("clean", 4) == "mopping"
+
+    def test_vacuuming(self):
+        assert self._value("clean", 2) == "vacuuming"
+
+    def test_both_together(self):
+        assert self._value("clean", 6) == "vacuuming_and_mopping"
+
+    def test_docked_reports_nothing(self):
+        """A docked robot still carries a mode, describing the last or
+        next job. Reporting it as current activity is the misreading
+        that made an earlier look at this field conclude it never
+        moves."""
+        assert self._value("none", 2) is None
+
+    def test_command_values_are_not_translated(self):
+        """512 asks for vacuum-then-mop and 32 for a combined run. They
+        belong to the command table and never appear here -- reading one
+        against the other made 6 look impossible for two days."""
+        assert self._value("clean", 512) is None
+        assert self._value("clean", 32) is None
+
+    def test_the_states_are_slugs_and_translated_everywhere(self):
+        import json
+        from pathlib import Path
+
+        base = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            data = json.loads(locale_file.read_text(encoding="utf-8"))
+            states = data["entity"]["sensor"]["prime_cleaning_mode"]["state"]
+
+            assert set(states) == {"vacuuming", "mopping", "vacuuming_and_mopping"}, (
+                locale_file.name
+            )
+
+    def test_it_is_created_for_every_prime_robot(self):
+        """No capability gate: every robot vacuums, so the sensor is
+        meaningful even on one that cannot mop -- it just never reports
+        "mopping". Gating on scrub would hide the vacuum half from
+        exactly the robots where it is the only half."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor
+
+        source = inspect.getsource(sensor.async_setup_entry)
+        line = next(
+            line for line in source.splitlines()
+            if "PrimeCleaningModeSensor(" in line
+        )
+
+        assert "if " not in line

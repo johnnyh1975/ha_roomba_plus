@@ -332,3 +332,56 @@ class TestHealthScoreDropTrigger:
             )
         assert detach() is None
         hass.bus.async_listen.assert_not_called()
+
+
+class TestUnknownTriggerTypeDoesNotCrash:
+    """A stored automation can name a trigger this version does not have.
+
+    `trigger_type` comes from whatever was written when the automation
+    was created. Rename or remove a trigger in a later release and that
+    string arrives here unchanged -- and a KeyError inside the attach
+    step breaks the user's automation with a traceback rather than a
+    message.
+
+    THIS IS THE THIRD INSTANCE of the same shape today. A status lookup
+    in the tooling raised KeyError on "FAIL", then again on "SKIP" after
+    the first was fixed at the call site instead of at the lookup. Found
+    here by grepping for the pattern rather than waiting for it to
+    happen -- and here the other end is somebody's automation."""
+
+    def test_the_lookup_has_a_fallback(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        assert "}.get(trigger_type)" in source
+        assert "if event_type is None" in source
+
+    def test_it_warns_rather_than_failing_silently(self):
+        """Returning a no-op detach without a word would leave somebody
+        with an automation that never fires and no way to find out
+        why."""
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        assert "_LOGGER.warning" in source
+        assert "unknown trigger type" in source
+
+    def test_the_known_triggers_still_map(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        for name in (
+            "TRIGGER_ROOM_COMPLETED",
+            "TRIGGER_MAP_RETRAIN_STARTED",
+            "TRIGGER_MAP_RETRAIN_COMPLETED",
+        ):
+            assert name in source

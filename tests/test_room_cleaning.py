@@ -669,6 +669,17 @@ class TestConsumablePartNaming:
         "72": "prime_part_filter",
         "147": "prime_part_dirt_bag",
         "148": "prime_part_mop_pads",
+        # 213 added after @arielgr put the app's maintenance list beside
+        # Home Assistant's: four values agreed in sequence -- 14
+        # routines, 19, 92 hr, 300 hr -- so the one showing 19 is Cliff
+        # Sensors.
+        #
+        # That method needs two screenshots and settles an id outright.
+        # It is how 202 and 212 should be named, if anyone ever finds
+        # them in the app at all.
+        "213": "prime_part_cliff_sensors",
+        "202": "prime_part_pad_wash_cleaning",
+        "212": "prime_part_pad_wash_replacement",
     }
 
     def test_the_named_parts_match_the_field_reports(self):
@@ -683,8 +694,35 @@ class TestConsumablePartNaming:
         made-up label gets believed; a bare number invites a question."""
         from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
 
-        assert "202" not in _KNOWN_PARTS
-        assert "212" not in _KNOWN_PARTS
+        # 202 and 212 ARE named now -- but for the counter and the
+        # action, never for the physical part.
+        #
+        # The app names two candidate dock components, a "pad washing
+        # roller" and a "pad washing basin", and the data does not say
+        # which is which: one part with two thresholds and two parts with
+        # one each fit equally well. Calling 202 "roller cleaning" would
+        # send someone to scrub the wrong component.
+        #
+        # What IS proven, on two accounts: counter `pad_washes_used`,
+        # thresholds 50 and 300, categories maintenance and replacement.
+        for key in ("prime_part_pad_wash_cleaning", "prime_part_pad_wash_replacement"):
+            assert key in _KNOWN_PARTS.values()
+
+        import json
+        from pathlib import Path as _Path
+
+        base = (
+            _Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        english = json.loads(
+            (base / "translations" / "en.json").read_text(encoding="utf-8")
+        )["entity"]["sensor"]
+
+        for key in ("prime_part_pad_wash_cleaning", "prime_part_pad_wash_replacement"):
+            label = english[key]["name"].lower()
+            assert "roller" not in label, label
+            assert "basin" not in label, label
 
     def test_every_named_part_is_translated_in_every_locale(self):
         """A translation_key with no entry renders as the raw key."""

@@ -1494,3 +1494,127 @@ class TestTankSensorGatedOnTheField:
         source = inspect.getsource(binary_sensor)
 
         assert "cap is None or cap.scrub != 0" not in source
+
+
+class TestTankSensorNamesTheRobotNotTheDock:
+    """`tankPresent` is the ROBOT's tank (issue #27, resolved).
+
+    @chairstacker removed both DOCK tanks on a Roomba 405 and the sensor
+    kept reading "present". It was right to: the app keeps three
+    separate values -- the robot's tank, the dock's clean water, the
+    dock's grey water -- and this field is the first.
+
+    The app's error strings are specific where the pad strings were
+    generic ("Dock Clean Tank: missing" versus "%s's tank is missing"),
+    which is what settled it.
+
+    NOTHING WAS BROKEN. The name was: "mop tank present" on a robot
+    whose dock holds two tanks reads as though it covers them."""
+
+    def test_the_label_says_robot_in_every_locale(self):
+        import json
+        from pathlib import Path
+
+        base = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            data = json.loads(locale_file.read_text(encoding="utf-8"))
+            name = data["entity"]["binary_sensor"]["mop_tank_present"]["name"]
+
+            assert name.strip(), locale_file.name
+            # Not asserting a specific word -- eight languages phrase it
+            # differently. Asserting it is no longer the bare "tank"
+            # label that caused the confusion.
+            assert len(name.split()) >= 2, f"{locale_file.name}: {name}"
+
+    def test_no_dock_tank_entity_is_invented(self):
+        """Dock clean and grey water would be separate entities fed by
+        `gwTankLvl` and a sibling. Neither appears in any capture yet --
+        including from the dock that physically has both tanks.
+
+        Building them from the field names alone would put two entities
+        in front of users that permanently read "unknown"."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor)
+        code = "\n".join(
+            line for line in source.splitlines()
+            if not line.strip().startswith("#")
+        )
+
+        assert 'wire_key="gwTankLvl"' not in code
+        assert 'key="dock_clean_tank"' not in code
+
+
+class TestDockErrorNamesTheReason:
+    """A missing dock water tank is reported as an ERROR, not as an
+    absent presence flag.
+
+    The dock state model has thirteen fields and none of them is a
+    `tankPresent` equivalent -- a targeted search for
+    *Tank*(Present|Missing|Installed|Detected) found nothing. The app
+    reads the error code instead:
+
+        650  PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR   clean water
+        653  PAD_WASH_GREY_WATER_TANK_MISSING_ERROR    grey water
+        450  FLUID_REPLENISHMENT_TANK_MISSING_ERROR
+
+    THIS CLOSES ISSUE #27. @chairstacker removed both dock tanks and
+    watched `tankPresent` stay true -- correctly, because that field is
+    the ROBOT's tank. What he was looking for would have been here, and
+    the sensor was showing the number without the word."""
+
+    def _attrs(self, error_code):
+        """Builds the attributes without touching the real class.
+
+        A first version assigned a property onto the class itself, which
+        leaked into every other test using that sensor -- two of them
+        failed on the next run. Patching the instance's own lookup keeps
+        it local."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeDockErrorSensor,
+        )
+
+        state = MagicMock()
+        state.dock.error = error_code
+        sensor = object.__new__(PrimeDockErrorSensor)
+
+        with patch.object(
+            PrimeDockErrorSensor,
+            "_current_state",
+            new_callable=lambda: property(lambda self: state),
+        ):
+            return PrimeDockErrorSensor.extra_state_attributes.fget(sensor)
+
+    def test_a_missing_clean_water_tank_is_named(self):
+        attrs = self._attrs(650)
+
+        assert attrs["raw_error_code"] == 650
+        assert attrs["error_name"] == "PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR"
+
+    def test_a_missing_grey_water_tank_is_named(self):
+        attrs = self._attrs(653)
+
+        assert attrs["error_name"] == "PAD_WASH_GREY_WATER_TANK_MISSING_ERROR"
+
+    def test_no_error_carries_no_name(self):
+        """Zero maps to DOCK_NO_COMMON_ERROR. Putting that beside a
+        sensor already reading "off" adds a word, not information."""
+        attrs = self._attrs(0)
+
+        assert attrs == {"raw_error_code": 0}
+
+    def test_an_unlisted_code_keeps_the_number_and_no_name(self):
+        """86 values are confirmed; a robot reporting an 87th must not
+        get a guessed label. A wrong name on an error attribute is worse
+        than a bare number."""
+        attrs = self._attrs(99999)
+
+        assert attrs["raw_error_code"] == 99999
+        assert "error_name" not in attrs

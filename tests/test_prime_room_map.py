@@ -591,53 +591,6 @@ class TestFloorPlanFromTheMapBundle:
         assert plan.borders == [] and plan.carpet == [] and plan.dock is None
 
 
-class TestPrimeRoomsRendering:
-    @staticmethod
-    def _entity(room, border):
-        from types import SimpleNamespace
-        from unittest.mock import MagicMock
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        entity = object.__new__(PrimeRoomsImage)
-        entity._renderer = None
-        entity._polygons = {"1": room}
-        entity._names = {"1": "Room"}
-        entity._floor_plan = SimpleNamespace(
-            borders=[border] if border else [], carpet=[], dock=None
-        )
-        entity._config_entry = MagicMock(
-            options={}, runtime_data=MagicMock(prime_positions=[])
-        )
-        return entity
-
-    def test_border_does_not_mask_room_fill(self):
-        """A border outer ring must not become a solid grey floor mask."""
-        import io
-
-        from PIL import Image
-
-        from custom_components.roomba_plus.image import ROOM_FILL_PALETTE
-
-        room = [(-1000, -1000), (1000, -1000), (1000, 1000), (-1000, 1000)]
-        border = [(-5000, -5000), (5000, -5000), (5000, 5000), (-5000, 5000)]
-        entity = self._entity(room, border)
-
-        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
-
-        assert image.getpixel((300, 300)) == ROOM_FILL_PALETTE[0]
-
-    def test_all_polygon_vertices_drive_auto_fit(self):
-        """Static geometry bypasses the 500 mm robot-pose jump filter."""
-        room = [(-5000, -5000), (5000, -5000), (5000, 5000), (-5000, 5000)]
-        entity = self._entity(room, [])
-
-        entity._render_png()
-
-        assert len(entity._renderer._points) == len(room)
-        assert entity._renderer._fit_scale > entity._renderer._cfg.scale
-
-
 class TestRoomLabelOption:
     """Labels in the image are OFF by default, and that reads backwards
     until you know what Classic does.
@@ -1133,3 +1086,171 @@ class TestLiveBundleUpdatesTheRoomsMap:
         source = inspect.getsource(PrimeRoomsImage._async_render_live_bundle)
 
         assert "async_add_executor_job" in source
+
+
+class TestPolygonVerticesAreNotPoses:
+    """Room corners are static geometry, not consecutive robot poses.
+
+    `add_pose` applies a 500 mm jump rejection meant for telemetry from
+    a driving robot. A 4 x 4 metre room has corners 4000 mm apart, so
+    three of its four vertices were discarded as noise and the map was
+    fitted to whatever survived.
+
+    @jouwdan reported this against a13 and I could not reproduce it. He
+    came back with before/after screenshots (PR #64). He was right; my
+    check looked at the trail path, where the filter belongs, and not at
+    this one -- twice, because he had also said outlines live in the map
+    bundle before three testers confirmed it.
+
+    The fix is his: seed the fit directly and compute it, bypassing the
+    telemetry path entirely."""
+
+    def _fitted(self, rings):
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        renderer = MapRenderer(RendererConfig(), None, None)
+        renderer._points = [
+            renderer._mm_to_px(x, y) for ring in rings for x, y in ring
+        ]
+        _, _, _, scale, cx, cy = renderer._compute_fit()
+        renderer._fit_scale, renderer._fit_cx, renderer._fit_cy = scale, cx, cy
+        return renderer, [
+            renderer._mm_to_px_fit(x, y) for ring in rings for x, y in ring
+        ]
+
+    def test_every_corner_survives(self):
+        """The regression in one line: four in, four out."""
+        room = [(0.0, 0.0), (4000.0, 0.0), (4000.0, 4000.0), (0.0, 4000.0)]
+
+        renderer, _ = self._fitted([room])
+
+        assert len(renderer._points) == 4
+
+    def test_add_pose_would_have_dropped_them(self):
+        """Asserting the premise, so this test explains itself if the
+        renderer's filter ever changes."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        renderer = MapRenderer(RendererConfig(), None, None)
+        for x, y in [(0, 0), (4000, 0), (4000, 4000), (0, 4000)]:
+            renderer.add_pose(x, y, 0.0)
+
+        assert renderer.point_count < 4
+
+    def test_the_room_fills_the_canvas(self):
+        room = [(0.0, 0.0), (4000.0, 0.0), (4000.0, 4000.0), (0.0, 4000.0)]
+
+        renderer, points = self._fitted([room])
+        size = renderer._cfg.size_px
+        xs = [p[0] for p in points]
+
+        # Inside the canvas, and using most of it rather than a corner.
+        assert 0 <= min(xs) and max(xs) <= size
+        assert (max(xs) - min(xs)) > size * 0.5
+
+    def test_borders_outside_the_rooms_still_fit(self):
+        """The fit uses rooms, carpet AND borders. A wall beyond every
+        room would otherwise be drawn off-canvas."""
+        room = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]
+        border = [(-2000.0, -2000.0), (3000.0, -2000.0), (3000.0, 3000.0)]
+
+        renderer, points = self._fitted([room, border])
+        size = renderer._cfg.size_px
+
+        assert all(0 <= x <= size and 0 <= y <= size for x, y in points)
+
+    def test_borders_are_drawn_as_outlines(self):
+        """Borders are MultiPolygon AREAS. Filling them paints a solid
+        slab over the rooms underneath -- which is what @jouwdan's
+        "before" screenshot showed."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage._render_png)
+        # The DRAW loop, not the fit list -- borders appear in both, and
+        # the fit list comes first. An earlier version of this test
+        # matched the wrong one and failed for the right reason.
+        border_line = next(
+            line for line in source.splitlines()
+            if "for ring in self._floor_plan.borders:" in line
+        )
+        after = source[source.index(border_line):]
+
+        # A generous window: the explanation above the draw call is
+        # longer than the call itself, which is the point of it.
+        window = after[:1200]
+
+        assert "outline=(90, 90, 90)" in window
+        assert "fill=(90, 90, 90)" not in window
+
+
+class TestTheFitChangeDoesNotTouchClassic:
+    """The fit fix writes `_points` directly on a MapRenderer, which is
+    the same class Classic robots use for their coverage map.
+
+    Worth checking rather than assuming: bypassing a filter is exactly
+    the kind of change that works for the case it was written for and
+    breaks the one it was not."""
+
+    def test_the_two_paths_use_separate_renderer_instances(self):
+        """Classic builds its renderer during setup; PrimeRoomsImage
+        builds its own. Neither can see the other's points."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        classic = MapRenderer(RendererConfig(), None, None)
+        for x in range(0, 1000, 100):
+            classic.add_pose(x, 0, 0.0)
+        before = classic.point_count
+
+        prime = MapRenderer(RendererConfig(), None, None)
+        prime._points = [prime._mm_to_px(x, y) for x, y in [(0, 0), (4000, 4000)]]
+
+        assert classic.point_count == before
+
+    def test_add_pose_still_filters_for_telemetry(self):
+        """The filter is right for a driving robot and must stay. This
+        change removes it from the polygon path only."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        renderer = MapRenderer(RendererConfig(), None, None)
+        renderer.add_pose(0, 0, 0.0)
+        renderer.add_pose(9000, 9000, 0.0)
+
+        assert renderer.point_count == 1
+
+    def test_the_prime_rooms_map_is_built_on_the_prime_branch_only(self):
+        """A Classic entry must never reach this renderer usage at
+        all."""
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image.async_setup_entry)
+        branch = source[: source.index("PrimeRoomsImage(")]
+
+        assert "ConnectionType.CLOUD_ONLY" in branch
+
+    def test_only_one_place_constructs_a_renderer_in_image_py(self):
+        """If a second one appears, the isolation above stops being
+        something this test can vouch for."""
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus" / "image.py"
+        ).read_text(encoding="utf-8")
+
+        assert source.count("MapRenderer(RendererConfig()") == 1

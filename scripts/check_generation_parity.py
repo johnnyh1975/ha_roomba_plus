@@ -88,6 +88,33 @@ DELIBERATE: dict[str, dict[str, str]] = {
             "Classic's roombapy is synchronous and needs the executor"
         ),
     },
+    "vacuum.py::_prime_cleaning_mode": {
+        "get": (
+            "INVERTED BRANCH, as _prime_dock_activity below. Prime-only "
+            "method with an early return for everything else, so the "
+            "checker reads the Prime body as the Classic tail"
+        ),
+        "getattr": (
+            "fetches runtime_data and the coordinator defensively, on the "
+            "same Prime-only path"
+        ),
+    },
+    "vacuum.py::_prime_dock_activity": {
+        "DockState": (
+            "INVERTED BRANCH. This method is Prime-only and returns early "
+            "for everything else, so what the checker reads as 'the "
+            "Classic tail' is the Prime body. Nothing here is missing "
+            "from Classic -- Classic has no dock state to report"
+        ),
+        "get": (
+            "reads the dock object out of the shadow, on the same "
+            "Prime-only path as DockState above"
+        ),
+        "getattr": (
+            "fetches runtime_data and the coordinator defensively, again "
+            "on the Prime-only path"
+        ),
+    },
     "vacuum.py::activity": {
         "warning": "logs an unmapped Classic MQTT phase; Prime maps its own",
     },
@@ -230,6 +257,10 @@ def _returns_early(branch: ast.If) -> bool:
 _DIFFERENCE_IS_EXPECTED: tuple[str, ...] = (
     "async_setup_entry",
     "async_get_config_entry_diagnostics",
+    # Same function, renamed when a credential sweep was wrapped around
+    # it. A diagnostics builder exists to report each generation
+    # differently -- that IS the difference.
+    "_build_diagnostics",
 )
 
 
