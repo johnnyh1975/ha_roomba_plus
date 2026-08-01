@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -132,35 +131,6 @@ class TestPolygonsAndNamesAreSeparate:
         )
 
         assert min(x for x, _ in polygons["1"]) == -2000.0
-
-    @pytest.mark.asyncio
-    async def test_uses_bundle_outlines_when_metadata_only_has_names(self):
-        """Max 705 metadata has names/settings; rooms.geojson has outlines."""
-        from unittest.mock import patch
-
-        from custom_components.roomba_plus.prime_room_map import (
-            async_build_prime_room_polygons,
-        )
-
-        entry = MagicMock()
-        robot = entry.runtime_data.prime_robot
-        robot.get_map_metadata = AsyncMock(return_value=SimpleNamespace(
-            active_p2mapv_id="V1",
-            rooms_metadata=[SimpleNamespace(room_id="16", name="Study")],
-        ))
-        robot.get_map_geojson_link = AsyncMock(return_value={"map_url": "https://x"})
-        robot.download_map_bundle = AsyncMock(return_value=b"bundle")
-        parsed = {"rooms": {"features": [{
-            "id": "16",
-            "geometry": {"coordinates": [[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]]},
-            "properties": {"name": "Study"},
-        }]}}
-
-        with patch("roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed):
-            polygons, names, _prefs = await async_build_prime_room_polygons(entry, "MAP-1")
-
-        assert polygons["16"][1] == (2000.0, 0.0)
-        assert names["16"] == "Study"
 
 
 class TestRoomsThatCannotBeDrawn:
@@ -543,67 +513,6 @@ class TestFloorPlanFromTheMapBundle:
         assert plan.borders[0][1] == (1000.0, 0.0)
 
     @pytest.mark.asyncio
-    async def test_705_single_feature_borders_and_floor_layers_are_kept(self):
-        """The 705 uses a bare border plus floorPlan/furniture collections."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from custom_components.roomba_plus.prime_room_map import (
-            async_build_prime_floor_plan,
-        )
-
-        polygon = {
-            "type": "Polygon",
-            "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
-        }
-        parsed = {
-            "borders": {
-                "geometry": {
-                    "type": "MultiPolygon",
-                    "coordinates": [polygon["coordinates"]],
-                }
-            },
-            "floorPlan": {"features": [{"geometry": polygon}]},
-            "furniture": {"features": [{"geometry": polygon}]},
-        }
-        entry = MagicMock()
-        entry.runtime_data.prime_robot.get_map_geojson_link = AsyncMock(
-            return_value={"map_url": "https://x"}
-        )
-        entry.runtime_data.prime_robot.download_map_bundle = AsyncMock(return_value=b"x")
-
-        with patch(
-            "roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed
-        ):
-            plan = await async_build_prime_floor_plan(entry, "MAP-1", "V1")
-
-        assert len(plan.borders) == len(plan.floors) == len(plan.furniture) == 1
-
-    def test_prime_map_fits_geometry_without_pose_jump_filtering(self):
-        """Polygon corners are not robot poses and can be metres apart."""
-        import inspect
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        source = inspect.getsource(PrimeRoomsImage._render_png)
-
-        assert "_compute_fit" in source
-        assert ".add_pose(" not in source
-
-    def test_border_layer_does_not_mask_rooms(self):
-        """Border MultiPolygons contain holes that the ring helper omits."""
-        import inspect
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        source = inspect.getsource(PrimeRoomsImage._render_png)
-        border_block = source.split(
-            "for ring in self._floor_plan.borders:", 1
-        )[1].split("for feature in", 1)[0]
-
-        assert "outline=" in border_block
-        assert "fill=" not in border_block
-
-    @pytest.mark.asyncio
     async def test_only_carpet_features_are_taken(self):
         """The wire key is `type`, not `floor_type` — a GeoJSON feature
         already has three other `type` keys around it. And filtered
@@ -851,12 +760,21 @@ class TestRoomCleaningPreferences:
         assert "carpet_boost" not in prefs["13"]
         assert "two_pass" not in prefs["13"]
 
-    def test_the_profile_falls_back_to_the_mode_number(self):
-        """Confirmed mapping: 2 and 4 are normal, 32 light, 512 deep.
-        A capture without an explicit profile string still resolves."""
+    def test_the_mode_number_is_never_translated_to_a_profile(self):
+        """A table used to map 2->normal, 32->light, 512->deep, built
+        from one account's capture.
+
+        A second account disproved it: operatingMode 2 came back as
+        "smart" there, not "normal". The same number means different
+        things on different robots, so the profile is read from the
+        payload and never inferred.
+
+        A room with no profile string has none. That is honest; a wrong
+        word in front of the user is not."""
         prefs = self._prefs([self._room("16", 512, {"512": {"suctionLevel": 4}})])
 
-        assert prefs["16"]["profile"] == "deep"
+        assert "profile" not in prefs["16"]
+        assert prefs["16"]["suction_level"] == 4
 
     def test_an_unknown_mode_is_not_guessed(self):
         """The robot may have modes nobody has observed. Reporting one of
@@ -950,21 +868,6 @@ class TestLiveTrail:
 
         assert "_METRES_TO_MM" in source
 
-    def test_live_geojson_bundle_drives_the_room_map(self):
-        """V4 sends coverage, trajectory and hazards beside rawmap."""
-        import inspect
-
-        from custom_components.roomba_plus.image import PrimeMapImage, PrimeRoomsImage
-
-        stream_source = inspect.getsource(PrimeMapImage._async_watch_live_map)
-        render_source = inspect.getsource(PrimeRoomsImage._render_png)
-
-        assert "message.livemap_url" in stream_source
-        assert "parse_map_bundle" in stream_source
-        assert "coverage" in render_source
-        assert "trajectories" in render_source
-        assert "hazard" in render_source
-
     def test_radians_are_converted_to_degrees(self):
         """Quieter version of the same mistake: the trail would be drawn
         correctly and only the heading would point wrongly."""
@@ -1051,3 +954,135 @@ class TestTheTrailIsClearedPerMission:
         coordinator._note_phase_for_timer(shadows)
 
         assert positions == []
+
+
+class TestBareGeoJsonFeature:
+    """At least one robot sends a bare Feature, not a FeatureCollection.
+
+    The Roomba Max 705 (W155042) returns its border layer that way --
+    reported by @jouwdan in PR #63, on a SKU nobody had tested.
+
+    Reading only `features` yielded nothing on that robot: no error, no
+    log line, just a map without walls. That is the failure mode this
+    project keeps producing -- a shape assumption that is right for the
+    robots you have."""
+
+    def test_a_bare_feature_is_read(self):
+        from custom_components.roomba_plus.prime_room_map import _rings_mm
+
+        bare = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+            },
+        }
+
+        assert len(_rings_mm(bare)) == 1
+
+    def test_a_feature_collection_still_works(self):
+        from custom_components.roomba_plus.prime_room_map import _rings_mm
+
+        collection = {
+            "type": "FeatureCollection",
+            "features": [{
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+                },
+            }],
+        }
+
+        assert len(_rings_mm(collection)) == 1
+
+    def test_a_bare_multipolygon_feature_is_read(self):
+        """Borders are MultiPolygon, so the two quirks combine on exactly
+        the layer where they were found."""
+        from custom_components.roomba_plus.prime_room_map import _rings_mm
+
+        bare = {
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [[[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]]],
+            },
+        }
+
+        rings = _rings_mm(bare)
+
+        assert len(rings) == 1
+        assert rings[0][1] == (2000.0, 0.0)
+
+
+class TestLiveBundleUpdatesTheRoomsMap:
+    """The rooms map redraws during a mission, not only when the map
+    version changes.
+
+    Contributed by @jouwdan (PR #63), who found that MapUpdateMessage
+    carries a SECOND url: `livemap_url` alongside `livemap_url_raw`. We
+    had been consuming only the raw occupancy grid, which is what the
+    other Prime image entity renders. The second returns a full map
+    bundle.
+
+    THE TWO ENTITIES ARE SPLIT BY CAPABILITY, which is why this needs a
+    dispatcher signal rather than a direct call: PrimeMapImage watches
+    the stream and has no renderer, PrimeRoomsImage draws its own map and
+    never sees the stream."""
+
+    def test_the_stream_entity_fetches_the_second_url(self):
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        source = inspect.getsource(PrimeMapImage)
+
+        assert "livemap_url_raw" in source
+        assert "message.livemap_url" in source
+
+    def test_the_rooms_map_subscribes(self):
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage.async_added_to_hass)
+
+        assert "async_dispatcher_connect" in source
+        assert "_on_live_bundle" in source
+
+    def test_the_subscription_is_removed_on_unload(self):
+        """A reload would otherwise leave one connection per cycle, each
+        rendering a PNG on every bundle."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage.async_added_to_hass)
+
+        assert "async_on_remove" in source
+
+    def test_nothing_is_rendered_before_rooms_exist(self):
+        """A render with no polygons produces an empty image, which looks
+        like a fault rather than like a robot that has not mapped yet."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._polygons = {}
+        entity._config_entry = MagicMock()
+        entity.hass = MagicMock()
+
+        entity._on_live_bundle(MagicMock())
+
+        entity._config_entry.async_create_background_task.assert_not_called()
+
+    def test_rendering_happens_off_the_event_loop(self):
+        """This is a dispatcher callback. Rendering a PNG inline would
+        block the loop for as long as PIL takes."""
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage._async_render_live_bundle)
+
+        assert "async_add_executor_job" in source

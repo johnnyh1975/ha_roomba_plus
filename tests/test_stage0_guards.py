@@ -141,10 +141,17 @@ class TestAssumedInventory:
 
         assert "assumed(reason)" in content
 
-    def test_at_least_one_test_is_marked(self):
-        """If nothing is marked, either the codebase has no unconfirmed
-        wire formats -- which is not true today -- or the convention is
-        unused."""
+    def test_an_empty_inventory_is_a_valid_state(self):
+        """An earlier version of this test required at least one marked
+        test, on the grounds that an empty inventory meant an unused
+        convention.
+
+        It failed the day the last assumption was confirmed: a tester's
+        capture settled the padWetness spelling, the marker came off, and
+        a guard that was supposed to encourage honesty started demanding
+        that something stay uncertain.
+
+        The inventory being empty is the goal, not a fault."""
         result = _run("list_assumed_tests.py")
 
-        assert "assert on values that are not field-confirmed" in result.stdout
+        assert result.returncode == 0

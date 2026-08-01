@@ -18,9 +18,23 @@ def _favorite(fav_id="f1", name="Evening", commands=None, deleted=False, hidden=
     return favorite
 
 
-def _entry(favorites=None, raises=False):
+def _entry(favorites=None, raises=False, dock=False):
+    """Dock buttons are off by default in these fixtures.
+
+    They are counted separately in TestDockButtons. Leaving them on here
+    would make every favourite-count assertion depend on how many dock
+    commands exist, which is a different question."""
     entry = MagicMock()
     entry.runtime_data.blid = "BLID"
+    entry.runtime_data.prime_status_coordinator.data = {
+        "ro-currentstate": {
+            "dock": {"cap": {"evac": 0, "pw": 0, "pd": 0}}
+        }
+    } if not dock else {
+        "ro-currentstate": {
+            "dock": {"cap": {"evac": 1, "pw": 1, "pd": 2}}
+        }
+    }
     # Buttons build from the list setup already read, not from a second
     # cloud call -- so the fixture has to provide both shapes.
     entry.runtime_data.prime_favorites = [
@@ -290,3 +304,118 @@ class TestFavoriteButtonsAreOptional:
         )
 
         assert DEFAULT_PRIME_FAVORITE_BUTTONS is True
+
+
+class TestDockButtons:
+    """The three dock controls the iRobot app shows.
+
+    Requested by @chairstacker, who screenshotted the app's dock panel:
+    Empty Bin, Wash mop / rinse dock, Stop mop dry.
+
+    The wire strings were then confirmed from CommandType's @SerialName
+    annotations -- the same source as `find`, which already works. Not
+    guessed, which matters: a command the robot accepts and ignores is
+    worse than an absent button, and that is why `schedHold` never
+    shipped."""
+
+    def test_the_three_commands_are_the_confirmed_ones(self):
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        assert {c.command for c in PRIME_DOCK_COMMANDS} == {
+            "evac", "washpad", "stoppaddry",
+        }
+
+    def test_drying_has_no_start_button(self):
+        """`drypad` exists in the same enum, and the app does not offer
+        it: drying starts on its own after mopping. A button for
+        something the app never triggers manually would be guessing at a
+        workflow rather than mirroring one."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        assert "drypad" not in {c.command for c in PRIME_DOCK_COMMANDS}
+
+    def test_washing_has_no_stop_button(self):
+        """There is no `stopwashpad` in the enum at all, so washing
+        evidently runs to completion. `evac`/`stopevac` and
+        `drypad`/`stoppaddry` do come in pairs."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        assert "stopwashpad" not in {c.command for c in PRIME_DOCK_COMMANDS}
+
+    @pytest.mark.asyncio
+    async def test_buttons_appear_when_the_dock_supports_them(self):
+        from custom_components.roomba_plus.button_prime import (
+            PrimeDockButton,
+            async_build_prime_buttons,
+        )
+
+        entities = await async_build_prime_buttons(_entry(dock=True))
+
+        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_dock_that_cannot_do_something_gets_no_button(self):
+        """A robot without a self-emptying base still reports its own
+        capabilities happily -- the DOCK flags are what say whether a
+        base is there."""
+        from custom_components.roomba_plus.button_prime import (
+            PrimeDockButton,
+            async_build_prime_buttons,
+        )
+
+        entities = await async_build_prime_buttons(_entry(dock=False))
+
+        assert not any(isinstance(e, PrimeDockButton) for e in entities)
+
+    @pytest.mark.asyncio
+    async def test_unknown_capabilities_still_get_buttons(self):
+        """Only an explicit 0 means absent. A robot that has not reported
+        its dock yet must not silently lose the controls."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeDockButton,
+            async_build_prime_buttons,
+        )
+
+        entry = _entry()
+        entry.runtime_data.prime_status_coordinator.data = None
+
+        entities = await async_build_prime_buttons(entry)
+
+        assert sum(isinstance(e, PrimeDockButton) for e in entities) == 3
+
+    @pytest.mark.asyncio
+    async def test_pressing_sends_the_wire_string(self):
+        from custom_components.roomba_plus.button_prime import (
+            PrimeDockButton,
+            async_build_prime_buttons,
+        )
+
+        entry = _entry(dock=True)
+        buttons = await async_build_prime_buttons(entry)
+        empty = next(
+            b for b in buttons
+            if isinstance(b, PrimeDockButton) and b._command.command == "evac"
+        )
+
+        await empty.async_press()
+
+        entry.runtime_data.prime_robot.send_simple_command.assert_awaited_once_with(
+            "evac"
+        )
+
+    def test_all_three_are_translated_everywhere(self):
+        import json
+        from pathlib import Path
+
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        base = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            buttons = json.loads(locale_file.read_text(encoding="utf-8"))["entity"]["button"]
+            for command in PRIME_DOCK_COMMANDS:
+                assert command.key in buttons, f"{locale_file.name}: {command.key}"

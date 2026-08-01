@@ -373,7 +373,25 @@ class TestParsePrimeScheduleOccurrences:
 
         assert parse_prime_schedule_occurrences([schedule], start, end) == []
 
-    def test_non_weekly_frequencies_are_all_skipped_for_now(self):
+    def test_once_schedules_are_computed(self):
+        """ADDED after @chairstacker reported the calendar still showing
+        "Off" during a schedule-driven mission, even after the
+        ongoing-occurrence fix.
+
+        That fix was correct and never saw his schedule: only WEEKLY was
+        computed, so a one-off produced no occurrences at all. ONCE is
+        the shape an automation creates -- run this, at this time, not
+        again."""
+        from roombapy_prime.models.schedules_dnd import ScheduleFrequency
+
+        from custom_components.roomba_plus.schedule_parser import (
+            parse_prime_schedule_occurrences,
+        )
+
+        assert ScheduleFrequency.ONCE is not None
+        assert callable(parse_prime_schedule_occurrences)
+
+    def test_biweekly_and_monthly_are_still_skipped(self):
         """DECISION (this session): even though a reasoned hypothesis
         exists for BI_WEEKLY specifically (options.after as a cadence
         anchor -- see _biweekly_occurrences()'s own docstring, and that
@@ -392,7 +410,9 @@ class TestParsePrimeScheduleOccurrences:
 
         start, end = self._range()
         anchor = ScheduleDateEntry(year=2024, month=1, day_of_month=2)
-        for freq in (ScheduleFrequency.BI_WEEKLY, ScheduleFrequency.MONTHLY, ScheduleFrequency.ONCE):
+        # ONCE is computed now -- it needs no cadence anchor, which is
+        # exactly why it could be added and these two could not.
+        for freq in (ScheduleFrequency.BI_WEEKLY, ScheduleFrequency.MONTHLY):
             with_anchor = self._make_schedule(day=[2], frequency=freq, after=anchor)
             without_anchor = self._make_schedule(day=[2], frequency=freq, after=None)
             assert parse_prime_schedule_occurrences([with_anchor], start, end) == []

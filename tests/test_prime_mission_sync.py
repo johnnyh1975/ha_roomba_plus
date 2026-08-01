@@ -861,3 +861,89 @@ class TestRoomEstimates:
         source = inspect.getsource(PrimeRoomCleaning._note_mission_plan)
 
         assert "len(known) == len(room_ids)" in source
+
+
+class TestQueryIsCalledWithItsRequiredArgument:
+    """`MissionStore.query(days, result=None)` requires `days`.
+
+    Three call sites omitted it. Every one raised TypeError before doing
+    any work:
+
+      - the mission sync's duplicate check, so EVERY sync since the
+        feature shipped failed at the first line and logged at debug
+        level. The store stayed empty and nothing said why.
+      - the same sync's statistics update.
+      - the diagnostics store summary, which caught the TypeError and
+        reported `mission_store: unreadable` -- a store that was fine,
+        described as broken.
+
+    A tester's diagnostics download surfaced it (@DaRealGuGu, a15). The
+    test suite could not: every test replaces `query` with a MagicMock,
+    and a MagicMock accepts any signature. Same shape as the
+    `config_entry.hass` bug two hours earlier -- mocks cannot fail a
+    contract the real object enforces."""
+
+    def test_the_real_signature_requires_days(self):
+        """The premise, asserted rather than assumed. If the library ever
+        gives `days` a default, this test says so."""
+        import inspect
+
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        days = inspect.signature(MissionStore.query).parameters["days"]
+
+        assert days.default is inspect.Parameter.empty
+
+    def test_no_production_call_omits_it(self):
+        """Broader than the three known sites: any future `query()` with
+        no arguments fails the same way."""
+        import ast
+        import re
+        from pathlib import Path
+
+        root = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for path in root.glob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            # Docstrings too, not just comments: one of them writes
+            # "MissionStore.query()'s contract" while describing that
+            # contract, and a text search reads the description as the
+            # offence. Third time today that a guard flagged its own
+            # explanation.
+            docstrings = {
+                node.body[0].value.value
+                for node in ast.walk(tree)
+                if isinstance(
+                    node,
+                    (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+                )
+                and node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+            }
+            code = "\n".join(
+                line
+                for line in source.splitlines()
+                if not line.strip().startswith("#")
+            )
+            for doc in docstrings:
+                code = code.replace(doc, "")
+
+            assert not re.search(r"\.query\(\s*\)", code), path.name
+
+    def test_the_sync_uses_a_window_wide_enough_to_dedupe(self):
+        """A narrow window would let a mission older than the window be
+        re-added on every run -- the duplicate check would stop seeing
+        it."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync.async_sync_prime_missions)
+        source += inspect.getsource(prime_mission_sync._async_sync_locked)
+
+        assert "days=3650" in source

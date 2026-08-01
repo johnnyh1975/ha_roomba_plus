@@ -586,3 +586,59 @@ class TestPrimeErrorSensor:
 
         assert sensor.native_value is None
         assert sensor.extra_state_attributes == {}
+
+
+class TestDetectedPadStatesAreTranslated:
+    """`padPlate` and `NoPad` are wire values, not user-facing words.
+
+    @chairstacker ran a deliberate sequence -- both pads on, left off,
+    left back, right off, right back -- and the sensor tracked it
+    exactly. The sensor was never wrong; only its output was raw.
+
+    THIS ALSO CORRECTED A WRONG CONCLUSION. An earlier report showed
+    `padPlate` across two missions where the tester believed no pad was
+    fitted, and this project recorded a doubt that the sensor might be
+    reporting the mounting plate rather than the pad. It is not. A
+    deliberate sequence from one account beat two incidental
+    observations from another."""
+
+    def test_the_sensor_declares_its_options(self):
+        """Without device_class ENUM and an options list, Home Assistant
+        shows the raw value and the state translations are ignored."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_prime import PrimeDetectedPadSensor
+
+        source = inspect.getsource(PrimeDetectedPadSensor)
+
+        assert "SensorDeviceClass.ENUM" in source
+        assert '"padPlate"' in source and '"NoPad"' in source
+        # The types too, not just what this project has observed.
+        assert '"reusableWet"' in source and '"dispDry"' in source
+
+    def test_both_states_are_translated_in_every_locale(self):
+        import json
+        from pathlib import Path
+
+        base = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            data = json.loads(locale_file.read_text(encoding="utf-8"))
+            states = data["entity"]["sensor"]["prime_detected_pad"]["state"]
+
+            # ALL SEVEN RobotPadCategory values, plus both spellings of
+            # "no pad". An ENUM sensor renders anything outside its
+            # options list as a raw string, so a robot reporting
+            # `reusableWet` would show that word to the user.
+            #
+            # APK analysis found six type-specific UI strings in the app
+            # ("Reusable Wet Mopping Pad attached", ...), so the types
+            # exist -- pad-plate robots simply never report them.
+            assert set(states) >= {
+                "padPlate", "NoPad", "noPad",
+                "dispDry", "dispWet", "reusableDry", "reusableWet", "invalid",
+            }, locale_file.name
+            for value in states.values():
+                assert value.strip(), locale_file.name
