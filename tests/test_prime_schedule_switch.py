@@ -1,30 +1,51 @@
-"""Enabling and disabling Prime cleaning schedules."""
+"""Enabling and disabling Prime cleaning schedules.
+
+THESE FIXTURES BUILD THEIR DATA THROUGH THE LIBRARY, NOT BY HAND, AND
+THAT IS THE POINT OF THIS FILE.
+
+An earlier version declared its own `_Schedule` dataclass with
+`schedule_id` and `options` as ATTRIBUTES. The library does not return
+that: `SchedulesList.schedules` is `list[dict]`, as its own docstring
+says. Every test here passed against a shape no server has ever sent,
+while the feature created zero switches for every real user for its
+entire life.
+
+The test did not merely miss the bug. It recorded the wrong shape as
+correct, so anyone checking "is this covered?" got yes.
+
+So the fixtures below start from real server JSON and go through
+`SchedulesResponse.from_json()` -- the same call the integration makes.
+If the library's shape changes, these fail, which is what a test is
+for.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
-@dataclass
-class _Options:
-    name: str = "Weekdays"
-    enabled: bool = True
-    deleted: bool = False
+from roombapy_prime.models.schedules_dnd import SchedulesResponse
 
 
-@dataclass
-class _Schedule:
-    schedule_id: str = "s1"
-    options: _Options | None = field(default_factory=_Options)
+def _schedule_json(schedule_id="s1", name="Weekdays", enabled=True, deleted=False,
+                   with_options=True):
+    """One schedule exactly as the server sends it."""
+    entry = {"schedule_id": schedule_id}
+    if with_options:
+        entry["options"] = {
+            "name": name, "enabled": enabled, "deleted": deleted,
+            "frequency": "WEEKLY", "start": {"day": [1], "hour": 9, "min": 0},
+        }
+    return entry
 
 
-@dataclass
-class _Container:
-    household_schedule_id: str = "c1"
-    schedules: list = field(default_factory=list)
+def _response(containers):
+    """containers: list of (household_schedule_id, [schedule json, ...])."""
+    return SchedulesResponse.from_json({"household_schedules": [
+        {"household_schedule_id": container_id, "schedules": list(schedules)}
+        for container_id, schedules in containers
+    ]})
 
 
 def _entry(containers=None, raises=False):
@@ -36,7 +57,7 @@ def _entry(containers=None, raises=False):
         robot.get_schedules = AsyncMock(side_effect=RuntimeError("boom"))
     else:
         robot.get_schedules = AsyncMock(
-            return_value=MagicMock(household_schedules=containers or [])
+            return_value=_response(containers or [])
         )
     robot.update_schedules = AsyncMock()
     return entry
@@ -57,7 +78,7 @@ class TestReadingScheduleContainers:
             async_read_schedule_containers,
         )
 
-        entry = _entry([_Container("c1", [_Schedule("s1")])])
+        entry = _entry([("c1", [_schedule_json("s1")])])
 
         containers = await async_read_schedule_containers(entry)
 
@@ -65,12 +86,14 @@ class TestReadingScheduleContainers:
         assert containers[0][1][0].schedule_id == "s1"
 
     @pytest.mark.asyncio
-    async def test_a_failing_call_yields_nothing(self):
+    async def test_a_failing_call_is_distinguishable_from_an_empty_one(self):
+        """None, not [] -- see TestAFailedReadIsNotAnEmptyOne below for
+        what depended on telling the two apart."""
         from custom_components.roomba_plus.prime_schedule_switch import (
             async_read_schedule_containers,
         )
 
-        assert await async_read_schedule_containers(_entry(raises=True)) == []
+        assert await async_read_schedule_containers(_entry(raises=True)) is None
 
     @pytest.mark.asyncio
     async def test_no_household_id_yields_nothing(self):
@@ -79,10 +102,12 @@ class TestReadingScheduleContainers:
             async_read_schedule_containers,
         )
 
-        entry = _entry([_Container()])
+        entry = _entry([("c1", [])])
         entry.runtime_data.prime_household_id = None
 
-        assert await async_read_schedule_containers(entry) == []
+        # None: without a household id nothing was asked, so "no
+        # schedules" would be a claim this never checked.
+        assert await async_read_schedule_containers(entry) is None
 
 
 class TestTogglingASchedule:
@@ -106,9 +131,9 @@ class TestTogglingASchedule:
     async def test_turning_off_writes_the_whole_list(self):
         """Two schedules in, two schedules out -- the untouched one must
         survive."""
-        entry = _entry([_Container("c1", [
-            _Schedule("s1", _Options(enabled=True)),
-            _Schedule("s2", _Options("Saturday", enabled=True)),
+        entry = _entry([("c1", [
+            _schedule_json("s1", enabled=True),
+            _schedule_json("s2", name="Saturday", enabled=True),
         ])])
 
         await self._switch(entry).async_turn_off()
@@ -121,7 +146,7 @@ class TestTogglingASchedule:
 
     @pytest.mark.asyncio
     async def test_turning_on_sets_the_flag(self):
-        entry = _entry([_Container("c1", [_Schedule("s1", _Options(enabled=False))])])
+        entry = _entry([("c1", [_schedule_json("s1", enabled=False)])])
 
         await self._switch(entry).async_turn_on()
 
@@ -130,7 +155,7 @@ class TestTogglingASchedule:
 
     @pytest.mark.asyncio
     async def test_the_container_id_is_passed_not_guessed(self):
-        entry = _entry([_Container("c-real", [_Schedule("s1")])])
+        entry = _entry([("c-real", [_schedule_json("s1")])])
 
         await self._switch(entry, container="c-real").async_turn_off()
 
@@ -142,17 +167,17 @@ class TestTogglingASchedule:
     async def test_a_schedule_deleted_since_setup_is_not_written(self):
         """Writing the list without it would delete it a second time,
         and writing it back unchanged is pointless."""
-        entry = _entry([_Container("c1", [_Schedule("s2")])])
+        entry = _entry([("c1", [_schedule_json("s2")])])
 
         await self._switch(entry, schedule="s1").async_turn_off()
 
         entry.runtime_data.prime_robot.update_schedules.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_schedule_without_options_is_left_alone(self):
+    async def test_a_schedule_whose_state_was_never_sent_is_left_alone(self):
         """Inventing an options object would write defaults for every
         other field of that schedule -- its name, days and commands."""
-        entry = _entry([_Container("c1", [_Schedule("s1", None)])])
+        entry = _entry([("c1", [_schedule_json("s1", with_options=False)])])
 
         await self._switch(entry).async_turn_off()
 
@@ -169,7 +194,7 @@ class TestSwitchState:
 
     @pytest.mark.asyncio
     async def test_the_state_is_read_from_the_robot(self):
-        entry = _entry([_Container("c1", [_Schedule("s1", _Options(enabled=False))])])
+        entry = _entry([("c1", [_schedule_json("s1", enabled=False)])])
         switch = self._switch(entry)
 
         await switch.async_update()
@@ -185,7 +210,7 @@ class TestSwitchState:
 
     @pytest.mark.asyncio
     async def test_it_becomes_available_once_read(self):
-        entry = _entry([_Container("c1", [_Schedule("s1", _Options(enabled=True))])])
+        entry = _entry([("c1", [_schedule_json("s1", enabled=True)])])
         switch = self._switch(entry)
 
         await switch.async_update()
@@ -299,15 +324,289 @@ class TestScheduleSwitchesDoNotPoll:
 
         assert "async_update" in source
 
-    def test_writing_refreshes_the_state(self):
+    @pytest.mark.asyncio
+    async def test_writing_refreshes_the_state(self):
         """The other half: after this integration changes the flag, the
-        UI must reflect it without waiting for a reload."""
-        import inspect
+        UI must reflect it without waiting for a reload.
+
+        Asserted on behaviour, not on the source text. The previous
+        version grepped `_async_set_enabled` for "async_write_ha_state"
+        and broke the moment that body moved into the locked helper --
+        a test that tracks where code lives rather than what it does.
+        """
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        entry = _entry([("c1", [_schedule_json("s1", enabled=True)])])
+        switch = PrimeScheduleSwitch(entry, "c1", "s1", "Weekdays")
+        switch.async_write_ha_state = MagicMock()
+
+        await switch.async_turn_off()
+
+        assert switch._attr_is_on is False
+        switch.async_write_ha_state.assert_called_once()
+
+
+class TestTheSchedulesAreParsedNotReadOffDicts:
+    """The bug this whole file's fixtures were rewritten for.
+
+    `SchedulesList.schedules` is `list[dict]`. `async_read_schedule_containers`
+    used to pass those dicts straight through, and every caller read
+    `.schedule_id` / `.options` off them -- which returns None on a dict.
+
+    Three consequences, one cause:
+      - switch.py skipped every schedule, so NO SWITCH WAS EVER CREATED
+        for any user, for the entire life of this feature
+      - async_update read the enabled flag as False
+      - the write path would have handed dicts to update_schedules(),
+        which does `[s.to_json() for s in schedules]` -> AttributeError
+
+    None of it raised. The feature was simply absent, and its tests were
+    green against a shape no server sends.
+    """
+
+    @pytest.mark.asyncio
+    async def test_containers_carry_parsed_schedules(self):
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            async_read_schedule_containers,
+        )
+
+        containers = await async_read_schedule_containers(
+            _entry([("c1", [_schedule_json("s1", name="Weekdays")])])
+        )
+
+        schedule = containers[0][1][0]
+        assert isinstance(schedule, HouseholdSchedule)
+        assert schedule.options.name == "Weekdays"
+
+    @pytest.mark.asyncio
+    async def test_the_switch_platform_creates_one_switch_per_schedule(self):
+        """The end of the chain, and the thing a user would have noticed:
+        entities. Asserted through switch.py's own setup, not through the
+        reader, because the reader was never the visible symptom."""
+        from custom_components.roomba_plus import switch as switch_module
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = _entry([("c1", [
+            _schedule_json("s1", name="Weekdays"),
+            _schedule_json("s2", name="Saturday", enabled=False),
+        ])])
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_status_coordinator.data = {}
+
+        created: list = []
+        await switch_module.async_setup_entry(MagicMock(), entry, created.extend)
+
+        names = [type(e).__name__ for e in created]
+        assert names.count("PrimeScheduleSwitch") == 2
+
+    @pytest.mark.asyncio
+    async def test_writing_back_produces_objects_update_schedules_can_serialise(self):
+        """update_schedules() calls .to_json() on every element. Dicts
+        raise there -- after the request has already been decided on, so
+        the failure would land mid-write rather than at read time."""
+        entry = _entry([("c1", [
+            _schedule_json("s1"), _schedule_json("s2", name="Saturday"),
+        ])])
+
+        await self._turn_off(entry)
+
+        sent = entry.runtime_data.prime_robot.update_schedules.await_args.args[2]
+        assert [s.to_json()["schedule_id"] for s in sent] == ["s1", "s2"]
+        assert sent[0].to_json()["options"]["enabled"] is False
+        assert sent[1].to_json()["options"]["enabled"] is True
+
+    async def _turn_off(self, entry):
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        switch = PrimeScheduleSwitch(entry, "c1", "s1", "Weekdays")
+        switch.async_write_ha_state = MagicMock()
+        await switch.async_turn_off()
+
+
+class TestAFailedReadIsNotAnEmptyOne:
+    """Found in the a18 bug hunt.
+
+    `async_read_schedule_containers` returned [] both when the cloud call
+    failed and when it succeeded with nothing to report. Two very
+    different situations, one value -- the recurring shape of every bug
+    this feature has had.
+
+    The consequences were real:
+      - a schedule deleted in the app left its switch showing "on"
+        forever, available and doing nothing when pressed
+      - a write could have been built on a list that was never read
+    """
+
+    def _switch(self, entry):
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        switch = PrimeScheduleSwitch(entry, "c1", "s1", "Weekdays")
+        switch.async_write_ha_state = MagicMock()
+        switch._attr_is_on = True
+        return switch
+
+    @pytest.mark.asyncio
+    async def test_a_failed_read_is_reported_as_failure_not_emptiness(self):
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            async_read_schedule_containers,
+        )
+
+        assert await async_read_schedule_containers(_entry(raises=True)) is None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_account_is_reported_as_empty(self):
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            async_read_schedule_containers,
+        )
+
+        assert await async_read_schedule_containers(_entry([])) == []
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_schedule_makes_its_switch_unavailable(self):
+        """The read succeeded and this schedule was not in it. Showing
+        the last known state would keep offering a control for something
+        that no longer exists."""
+        switch = self._switch(_entry([("c1", [_schedule_json("other")])]))
+
+        await switch.async_update()
+
+        assert switch._attr_is_on is None
+        assert switch.available is False
+
+    @pytest.mark.asyncio
+    async def test_a_failed_read_keeps_the_last_known_state(self):
+        """Deliberately different: a cloud hiccup must not flicker the
+        entity out."""
+        switch = self._switch(_entry(raises=True))
+
+        await switch.async_update()
+
+        assert switch._attr_is_on is True
+        assert switch.available is True
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_when_the_read_before_it_failed(self):
+        """update_schedules() replaces the whole list, so writing one
+        built from a failed read deletes schedules."""
+        entry = _entry(raises=True)
+
+        await self._switch(entry).async_turn_off()
+
+        entry.runtime_data.prime_robot.update_schedules.assert_not_awaited()
+
+
+class TestTheSwitchBelongsToTheRobotDevice:
+    """Found in the a18 bug hunt: PrimeScheduleSwitch was the only Prime
+    entity in the integration that did not inherit IRobotEntity, so it
+    had no device_info. The switches would have shown up outside the
+    robot's device page, and with has_entity_name and no device to
+    prefix them, two robots' schedules would have been
+    indistinguishable.
+
+    Nothing surfaced it because no instance was ever created.
+    """
+
+    def _switch(self):
+        from tests import prime_fixtures
 
         from custom_components.roomba_plus.prime_schedule_switch import (
             PrimeScheduleSwitch,
         )
 
-        source = inspect.getsource(PrimeScheduleSwitch._async_set_enabled)
+        entry = prime_fixtures.cloud_only_config_entry()
+        return PrimeScheduleSwitch(entry, "HS-1", "S-1", "Weekdays")
 
-        assert "async_write_ha_state" in source
+    def test_it_carries_device_info(self):
+        assert self._switch().device_info is not None
+
+    def test_it_uses_the_same_device_as_every_other_prime_entity(self):
+        """Identifiers, specifically -- a different one would put these
+        switches on a device of their own."""
+        from custom_components.roomba_plus.const import DOMAIN
+
+        switch = self._switch()
+
+        assert switch.device_info["identifiers"] == {
+            (DOMAIN, f"roomba_plus_{switch._blid}")
+        }
+
+
+class TestConcurrentTogglesDoNotOverwriteEachOther:
+    """Found in the a18 bug hunt.
+
+    Toggling is a read-modify-write of the WHOLE container --
+    update_schedules() replaces the list, so there is no way to send one
+    schedule alone. Two switches in the same container toggled at once
+    both read the same state and both wrote it back carrying only their
+    own change, so the second write silently reverted the first while
+    Home Assistant showed both as changed.
+
+    Not an exotic interleaving: `switch.turn_off` against a group, or an
+    automation disabling several schedules, does exactly this.
+    """
+
+    def _setup(self):
+        from unittest.mock import AsyncMock
+
+        from roombapy_prime.models.schedules_dnd import SchedulesResponse
+
+        state = {"s1": True, "s2": True}
+        writes: list[dict] = []
+
+        async def slow_read(_household_id):
+            import asyncio
+
+            await asyncio.sleep(0.01)  # cloud latency is what opens the window
+            return SchedulesResponse.from_json({"household_schedules": [{
+                "household_schedule_id": "c1",
+                "schedules": [
+                    {"schedule_id": key, "options": {"enabled": value, "name": key}}
+                    for key, value in state.items()
+                ],
+            }]})
+
+        async def record(_household_id, _container_id, schedules):
+            for schedule in schedules:
+                state[schedule.schedule_id] = schedule.options.enabled
+            writes.append(dict(state))
+
+        entry = MagicMock()
+        entry.entry_id = "E1"
+        entry.runtime_data.blid = "BLID"
+        entry.runtime_data.prime_household_id = "HH"
+        entry.runtime_data.prime_robot.get_schedules = AsyncMock(side_effect=slow_read)
+        entry.runtime_data.prime_robot.update_schedules = AsyncMock(side_effect=record)
+        return entry, state, writes
+
+    def _switch(self, entry, schedule_id):
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        switch = PrimeScheduleSwitch(entry, "c1", schedule_id, schedule_id)
+        switch.async_write_ha_state = MagicMock()
+        return switch
+
+    @pytest.mark.asyncio
+    async def test_both_changes_survive(self):
+        import asyncio
+
+        entry, state, writes = self._setup()
+
+        await asyncio.gather(
+            self._switch(entry, "s1").async_turn_off(),
+            self._switch(entry, "s2").async_turn_off(),
+        )
+
+        assert state == {"s1": False, "s2": False}
+        # The second write must have been built on the first one's result,
+        # not on the state both read at the start.
+        assert writes[-1] == {"s1": False, "s2": False}

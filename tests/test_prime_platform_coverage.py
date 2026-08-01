@@ -149,3 +149,154 @@ class TestBackwardEveryCloudOnlyModuleIsListed:
             f"(binary_sensor.py/switch.py had real CLOUD_ONLY code that was never "
             f"actually reachable). Add the corresponding Platform to PRIME_PLATFORMS."
         )
+
+
+class TestEveryPlatformWorksOnDataTheLibraryActuallyReturns:
+    """The MagicMock run above answers "is this platform wired at all".
+    It cannot answer "does it work", and the difference cost a feature.
+
+    `getattr(m, "anything")` on a MagicMock returns a truthy MagicMock.
+    So code reading `.schedule_id` off what is really a dict passes here
+    and produces nothing in the field. PrimeScheduleSwitch did exactly
+    that for its entire life: green in this file, zero entities for
+    every real user, found by manual review rather than by any test.
+
+    This run uses the library's own parsers (tests/prime_fixtures.py).
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("platform", PRIME_PLATFORMS)
+    async def test_platform_creates_entities_from_real_library_data(
+        self, platform: Platform
+    ) -> None:
+        from tests import prime_fixtures
+
+        module = importlib.import_module(
+            f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+        )
+        created: list = []
+
+        await module.async_setup_entry(
+            MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+        )
+
+        assert created, (
+            f"Platform.{platform.name} produces entities for a MagicMock but NONE "
+            f"for data the library actually returns. Something in its setup path "
+            f"is reading attributes off a value that is a plain dict at runtime."
+        )
+
+
+class TestNoPrimeEntityClassIsNeverBuilt:
+    """The third direction, and the one the two above cannot see.
+
+    Both existing checks compare what a run produces. A class that is
+    never instantiated in ANY run is absent from every comparison --
+    which is the exact shape of the schedule-switch bug: nothing was
+    missing from a list, nothing failed, a class simply never got built
+    and no test was looking for it.
+
+    So this asks the code what Prime entity classes exist, and the
+    platforms what they actually build.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_prime_entity_class_is_reachable(self) -> None:
+        import ast
+
+        from tests import prime_fixtures
+
+        declared: dict[str, str] = {}
+        for path in sorted(INTEGRATION_DIR.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (isinstance(node, ast.ClassDef)
+                        and node.name.startswith("Prime")):
+                    continue
+                bases = [
+                    base.id if isinstance(base, ast.Name)
+                    else getattr(base, "attr", "")
+                    for base in node.bases
+                ]
+                if any(b.endswith(("Entity", "Sensor", "Switch", "Button",
+                                   "Select", "Image", "Tracker", "Vacuum",
+                                   "Calendar"))
+                       for b in bases):
+                    declared[node.name] = path.name
+
+        built: set[str] = set()
+        for platform in list(PRIME_PLATFORMS) + [Platform.CALENDAR]:
+            module = importlib.import_module(
+                f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+            )
+            created: list = []
+            await module.async_setup_entry(
+                MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+            )
+            built |= {type(entity).__name__ for entity in created}
+
+        never_built = sorted(set(declared) - built)
+
+        assert not never_built, (
+            "These Prime entity classes exist but no platform builds them for a "
+            "realistic CLOUD_ONLY entry: "
+            + ", ".join(f"{name} ({declared[name]})" for name in never_built)
+            + ". Either the class is dead code, or its setup path drops it "
+            "silently -- which is how PrimeScheduleSwitch shipped without ever "
+            "creating a single entity. If a class is genuinely gated on data "
+            "this fixture does not carry, add that data to tests/prime_fixtures.py "
+            "rather than removing the class from this check."
+        )
+
+
+class TestEveryPrimeEntityBelongsToTheRobotDevice:
+    """A device-metadata fix that was applied to some entities and not
+    others -- and nothing noticed for two releases.
+
+    `IRobotEntity.__init__` takes an optional config_entry, and for a
+    Prime entity it is the ONLY source of model, serial and the device
+    name (there is no roombapy state to read them from). Its own
+    docstring records this being fixed after an architecture review.
+    Six Prime classes across four files never got the argument:
+    PrimeFavoriteButton, PrimeLocateButton, PrimeDockButton,
+    PrimeSettingSelect, PrimeSettingSwitch, PrimeRoomsImage. Their
+    device pages carried model=None, serial=None, and a device name
+    that depended on which entity happened to register first.
+
+    A textual check on the call sites would drift with the next
+    refactor. This asks the entities.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("platform", list(PRIME_PLATFORMS) + [Platform.CALENDAR])
+    async def test_entities_carry_complete_device_info(
+        self, platform: Platform
+    ) -> None:
+        from custom_components.roomba_plus.const import DOMAIN
+        from tests import prime_fixtures
+
+        module = importlib.import_module(
+            f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+        )
+        created: list = []
+        await module.async_setup_entry(
+            MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+        )
+
+        incomplete = []
+        for entity in created:
+            info = getattr(entity, "device_info", None)
+            if not info or not info.get("identifiers"):
+                incomplete.append((type(entity).__name__, "no device_info"))
+            elif info["identifiers"] != {(DOMAIN, f"roomba_plus_{entity._blid}")}:
+                incomplete.append((type(entity).__name__, "wrong device"))
+            elif info.get("model") is None:
+                # For a Prime entity this means config_entry was not passed
+                # to IRobotEntity.__init__ -- there is no other source.
+                incomplete.append((type(entity).__name__, "model=None"))
+
+        assert not incomplete, (
+            f"Platform.{platform.name} built entities with incomplete device "
+            f"info: {sorted(set(incomplete))}. For Prime entities model and "
+            "serial come only from config_entry -- pass it to "
+            "IRobotEntity.__init__."
+        )

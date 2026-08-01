@@ -701,3 +701,145 @@ class TestCredentialsNeverReachTheDump:
         dump = self._dump({"ro-currentstate": {"hashedMapId": "abc"}})
 
         assert dump["ro-currentstate"]["hashedMapId"] == "abc"
+
+
+class TestThePrimeScheduleProbe:
+    """The probe that exists to answer "does this robot report a
+    schedule at all", and could not.
+
+    Two faults, both silent:
+      - it read `data.household_id`; the field is `prime_household_id`
+        (models.py), and this same file reads it correctly elsewhere.
+        The probe returned None unconditionally, on every install.
+      - `SchedulesList.schedules` is `list[dict]`, so
+        `getattr(schedule, "options")` was None for every schedule --
+        a robot WITH schedules would have been reported as one whose
+        schedules cannot be read.
+
+    Worse than absent: the probe answered "cannot read" while looking
+    like "has none", which is precisely the distinction it was added
+    for.
+    """
+
+    _RAW = {"household_schedules": [{
+        "household_schedule_id": "HS-1",
+        "schedules": [
+            {"schedule_id": "S-1", "options": {
+                "enabled": True, "deleted": False, "frequency": "WEEKLY",
+                "start": {"day": [1, 2], "hour": 9, "min": 30},
+                "commands": [{"command": "start"}]}},
+            {"schedule_id": "S-2", "options": {
+                "enabled": False, "deleted": False, "frequency": "WEEKLY",
+                "start": {"day": [6], "hour": 15, "min": 45}}},
+        ],
+    }]}
+
+    def _data(self, raw=None, household_id="HH-1"):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        robot = AsyncMock()
+        robot.get_schedules_raw.return_value = self._RAW if raw is None else raw
+        return SimpleNamespace(prime_robot=robot, prime_household_id=household_id)
+
+    def _run(self, data):
+        import asyncio
+
+        from custom_components.roomba_plus.diagnostics import (
+            _prime_schedule_summary,
+        )
+
+        return asyncio.run(_prime_schedule_summary(data))
+
+    def test_real_schedules_are_read(self):
+        result = self._run(self._data())
+
+        assert result["count"] == 2
+        assert result["schedules"][0]["enabled"] is True
+        assert result["schedules"][0]["days"] == [1, 2]
+        assert result["schedules"][0]["hour"] == 9
+        assert result["schedules"][0]["has_commands"] is True
+        assert result["schedules"][1]["enabled"] is False
+
+    def test_it_reads_the_field_name_that_exists(self):
+        """`prime_household_id`, not `household_id`. The wrong name is
+        not an error -- it is an unconditional None."""
+        result = self._run(self._data())
+
+        assert result["household_id_resolved"] is True
+
+    def test_no_household_id_says_so_instead_of_returning_nothing(self):
+        result = self._run(self._data(household_id=None))
+
+        assert result["household_id_resolved"] is False
+        assert "note" in result
+
+    def test_a_parser_disagreement_is_reported(self):
+        """The server sent schedules and this project read none. Saying
+        "0 schedules" there reports our bug as the account's."""
+        result = self._run(self._data(raw={"household_schedules": [
+            {"household_schedule_id": "HS-1", "schedules": ["unparsable"]},
+        ]}))
+
+        assert result["raw_count"] == 1
+        assert result["count"] == 0
+        assert result["parser_disagrees"] is True
+
+    def test_a_genuinely_empty_account_does_not_flag_a_disagreement(self):
+        result = self._run(self._data(raw={"household_schedules": []}))
+
+        assert result["count"] == 0
+        assert result["parser_disagrees"] is False
+
+    def test_no_schedule_names_or_room_ids_reach_the_file(self):
+        """This section deliberately omits them -- the file is generated
+        and attached, not reviewed line by line before pasting."""
+        import json
+
+        raw = {"household_schedules": [{
+            "household_schedule_id": "HS-1",
+            "schedules": [{"schedule_id": "S-1", "options": {
+                "enabled": True, "name": "Guillaume's kitchen",
+                "asset_id": "ROBOTID", "frequency": "WEEKLY",
+                "commands": [{"regions": [{"region_id": "12"}]}]}}],
+        }]}
+
+        text = json.dumps(self._run(self._data(raw=raw)))
+
+        assert "Guillaume" not in text
+        assert "ROBOTID" not in text
+        assert "HS-1" not in text
+
+
+class TestThePrimeScheduleProbeSurvivesAnUnexpectedShape:
+    """Found in the a18 bug hunt. A response that is not a dict at all
+    produced count 0 / raw_count 0 -- indistinguishable from an account
+    with no schedules, which is the exact ambiguity this probe exists to
+    remove."""
+
+    def _run(self, raw):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.diagnostics import (
+            _prime_schedule_summary,
+        )
+
+        robot = AsyncMock()
+        robot.get_schedules_raw.return_value = raw
+        return asyncio.run(_prime_schedule_summary(
+            SimpleNamespace(prime_robot=robot, prime_household_id="HH-1")
+        ))
+
+    def test_a_non_dict_response_is_named_as_such(self):
+        for raw in ([{"a": 1}], "nope", None, 7):
+            result = self._run(raw)
+            assert result["response_shape_recognised"] is False, raw
+            assert result["response_shape"] == type(raw).__name__
+
+    def test_a_normal_response_is_marked_recognised(self):
+        result = self._run({"household_schedules": []})
+
+        assert result["response_shape_recognised"] is True
+        assert result["count"] == 0
