@@ -95,7 +95,7 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 | **s-series** | s9+ | ✅ **S9+** |
 | **j-series** | j7, j7+ | ✅ **j-series** |
 | **Braava** | m6 | ✅ **Braava jet m6** |
-| **V4/Prime** *(alpha, v4.0.0a0)* | Combo/Plus 400-series | ✅ multiple field testers — see below |
+| **V4/Prime** *(alpha, v4.0.0a0)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
 
 **What works on your robot** — the fast answer to the most common setup question:
 
@@ -160,7 +160,7 @@ notification rather than only a release note.
 
 ## V4/Prime support (alpha)
 
-iRobot's newer-generation robots (Combo/Plus 400-series and similar, on the "Prime" cloud
+iRobot's newer-generation robots (Combo/Plus 400-series, Roomba Max 705 Vac / W15-series, and similar, on the "Prime" cloud
 protocol) don't speak the local MQTT protocol every other feature on this page is built on —
 they're cloud-only. Support for them was added in **v4.0.0a0** as a genuinely separate code
 path, not an extension of the existing one, using the companion
