@@ -3009,11 +3009,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         current = await backend._current_map_id()  # noqa: SLF001
         p2map_id = current if current in map_ids else map_ids[0]
 
-        (
-            self._polygons,
-            self._names,
-            self._preferences,
-        ) = await async_build_prime_room_polygons(self._config_entry, p2map_id)
+        polygons, names, preferences = await async_build_prime_room_polygons(
+            self._config_entry, p2map_id
+        )
 
 
         # The floor plan is a SECOND cloud call, and a failure costs only
@@ -3036,7 +3034,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Prime map: could not read map versions", exc_info=True)
 
-        self._floor_plan = (
+        floor_plan = (
             await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
             if version
             else PrimeFloorPlan(
@@ -3055,9 +3053,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # three accounts, and the bundle layer is not guaranteed to
         # exist. Only a name actually present in the bundle replaces one,
         # so a robot without that layer is unaffected.
-        for room_id, name in (self._floor_plan.room_names or {}).items():
-            if room_id in self._names:
-                self._names[room_id] = name
+        for room_id, name in (floor_plan.room_names or {}).items():
+            if room_id in names:
+                names[room_id] = name
 
         # OUTLINES FROM THE BUNDLE, where the metadata has none.
         #
@@ -3072,12 +3070,25 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # Metadata geometry still wins where it exists: it is what this
         # entity was built on and is confirmed working elsewhere. The
         # bundle fills the gap rather than replacing the source.
-        for room_id, ring in (self._floor_plan.room_polygons or {}).items():
-            self._polygons.setdefault(room_id, ring)
-            self._names.setdefault(
+        for room_id, ring in (floor_plan.room_polygons or {}).items():
+            polygons.setdefault(room_id, ring)
+            names.setdefault(
                 room_id,
-                (self._floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
+                (floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
             )
+        if not polygons:
+            # A post-mission shadow can announce a new map version before
+            # its bundle is available. Do not turn a working map unavailable
+            # just because this transient refresh has no geometry.
+            _LOGGER.debug(
+                "Prime rooms map: refresh returned no geometry; keeping cached map"
+            )
+            return
+
+        self._polygons = polygons
+        self._names = names
+        self._preferences = preferences
+        self._floor_plan = floor_plan
         if self._polygons:
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)

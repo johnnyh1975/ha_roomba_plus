@@ -335,6 +335,38 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
 
         assert "async_add_listener" not in source
 
+    @pytest.mark.asyncio
+    async def test_empty_post_mission_refresh_keeps_the_last_map(self):
+        """Max 705 metadata has no geometry, so a transient bundle miss
+        must not make an already rendered Rooms Map unavailable."""
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+        entity = object.__new__(PrimeRoomsImage)
+        entity.hass = MagicMock()
+        entity._polygons = {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
+        entity._names = {"room": "Kitchen"}
+        entity._preferences = {"room": {"profile": "normal"}}
+        entity._floor_plan = SimpleNamespace(borders=[[(0.0, 0.0)]])
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.prime_robot.get_active_map_versions = AsyncMock(
+            return_value=[]
+        )
+        backend = MagicMock()
+        backend._all_map_ids = AsyncMock(return_value=["MAP-1"])
+        backend._current_map_id = AsyncMock(return_value="MAP-1")
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch(
+            "custom_components.roomba_plus.prime_room_map.async_build_prime_room_polygons",
+            new=AsyncMock(return_value=({}, {}, {})),
+        ):
+            await entity._async_refresh_rooms()
+
+        assert entity._polygons == {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
+
 
 class TestRoomsWithoutNames:
     """Two real captures disagree about whether rooms_metadata carries a
