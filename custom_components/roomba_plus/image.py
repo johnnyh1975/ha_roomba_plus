@@ -3079,12 +3079,23 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
 
-        # Seed the auto-fit transform from the room extents. Classic gets
-        # this from accumulated poses; Prime has the polygons up front,
-        # which is why its map is complete before the first mission.
-        for ring in self._polygons.values():
-            for x_mm, y_mm in ring:
-                self._renderer.add_pose(x_mm, y_mm, 0.0)
+        # Polygon vertices are static geometry, not consecutive robot poses.
+        # Seed the fit directly so the telemetry jump filter cannot discard
+        # corners more than 500 mm apart.
+        rings = [
+            *self._polygons.values(),
+            *self._floor_plan.carpet,
+            *self._floor_plan.borders,
+        ]
+        self._renderer._points = [  # noqa: SLF001
+            self._renderer._mm_to_px(x, y)  # noqa: SLF001
+            for ring in rings
+            for x, y in ring
+        ]
+        _, _, _, fit_scale, fit_cx, fit_cy = self._renderer._compute_fit()  # noqa: SLF001
+        self._renderer._fit_scale = fit_scale  # noqa: SLF001
+        self._renderer._fit_cx = fit_cx  # noqa: SLF001
+        self._renderer._fit_cy = fit_cy  # noqa: SLF001
 
         size = self._renderer._cfg.size_px  # noqa: SLF001
         img = Image.new("RGB", (size, size), (30, 30, 30))
@@ -3112,7 +3123,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
 
         for ring in self._floor_plan.borders:
-            draw.polygon([to_px(x, y) for x, y in ring], fill=(90, 90, 90))
+            # _rings_mm keeps outer rings only. Filling one would erase its
+            # interior holes and mask every room and live layer beneath it.
+            draw.polygon(
+                [to_px(x, y) for x, y in ring],
+                outline=(90, 90, 90),
+                width=2,
+            )
 
         # THE TRAIL, on top of the floor plan and under the labels.
         #
@@ -3275,4 +3292,3 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self.async_write_ha_state()
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Prime rooms map: live re-render failed", exc_info=True)
-

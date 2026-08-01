@@ -591,6 +591,53 @@ class TestFloorPlanFromTheMapBundle:
         assert plan.borders == [] and plan.carpet == [] and plan.dock is None
 
 
+class TestPrimeRoomsRendering:
+    @staticmethod
+    def _entity(room, border):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._renderer = None
+        entity._polygons = {"1": room}
+        entity._names = {"1": "Room"}
+        entity._floor_plan = SimpleNamespace(
+            borders=[border] if border else [], carpet=[], dock=None
+        )
+        entity._config_entry = MagicMock(
+            options={}, runtime_data=MagicMock(prime_positions=[])
+        )
+        return entity
+
+    def test_border_does_not_mask_room_fill(self):
+        """A border outer ring must not become a solid grey floor mask."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import ROOM_FILL_PALETTE
+
+        room = [(-1000, -1000), (1000, -1000), (1000, 1000), (-1000, 1000)]
+        border = [(-5000, -5000), (5000, -5000), (5000, 5000), (-5000, 5000)]
+        entity = self._entity(room, border)
+
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+
+        assert image.getpixel((300, 300)) == ROOM_FILL_PALETTE[0]
+
+    def test_all_polygon_vertices_drive_auto_fit(self):
+        """Static geometry bypasses the 500 mm robot-pose jump filter."""
+        room = [(-5000, -5000), (5000, -5000), (5000, 5000), (-5000, 5000)]
+        entity = self._entity(room, [])
+
+        entity._render_png()
+
+        assert len(entity._renderer._points) == len(room)
+        assert entity._renderer._fit_scale > entity._renderer._cfg.scale
+
+
 class TestRoomLabelOption:
     """Labels in the image are OFF by default, and that reads backwards
     until you know what Classic does.
