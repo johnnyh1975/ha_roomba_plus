@@ -437,7 +437,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         renderer already drops jumps over 500 mm as noise, which is what
         keeps a relocalisation from drawing a line across the room.
         """
-        from .prime_room_map import _METRES_TO_MM  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM  # noqa: PLC0415
 
         # COLLECTED, NOT DRAWN HERE. This entity shows iRobot's own
         # rendered PNG and has no renderer of its own; the trail belongs
@@ -455,8 +455,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     continue
                 orientation_rad = getattr(sample, "orientation", None) or 0.0
                 data.prime_positions.append((
-                    float(x_m) * _METRES_TO_MM,
-                    float(y_m) * _METRES_TO_MM,
+                    float(x_m) * METRES_TO_MM,
+                    float(y_m) * METRES_TO_MM,
                     math.degrees(float(orientation_rad)),
                 ))
             # Bounded. A mission produced 904 points on one tester's
@@ -3098,7 +3098,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw  # noqa: PLC0415
 
         from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
-        from .prime_room_map import _rings_mm  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM, rings_mm  # noqa: PLC0415
 
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
@@ -3127,7 +3127,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
 
         to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
         live_bundle = self._live_bundle or {}
-        live_coverage = _rings_mm(live_bundle.get("coverage"))
+        live_coverage = rings_mm(live_bundle.get("coverage"))
 
         # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
         # walls, then the dock, then labels.
@@ -3171,7 +3171,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             coords = (feature.get("geometry") or {}).get("coordinates")
             try:
                 points = [
-                    to_px(float(x) * 1000.0, float(y) * 1000.0)
+                    to_px(float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
                     for x, y in coords
                 ]
             except (TypeError, ValueError):
@@ -3182,7 +3182,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         for feature in (live_bundle.get("hazard") or {}).get("features") or []:
             coords = (feature.get("geometry") or {}).get("coordinates")
             try:
-                px, py = to_px(float(coords[0]) * 1000.0, float(coords[1]) * 1000.0)
+                px, py = to_px(
+                    float(coords[0]) * METRES_TO_MM,
+                    float(coords[1]) * METRES_TO_MM,
+                )
             except (TypeError, ValueError, IndexError):
                 continue
             draw.regular_polygon((px, py, 8), 3, fill=(240, 150, 60))

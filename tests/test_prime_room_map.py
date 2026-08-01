@@ -899,7 +899,7 @@ class TestLiveTrail:
 
         source = inspect.getsource(PrimeMapImage._feed_trail)
 
-        assert "_METRES_TO_MM" in source
+        assert "METRES_TO_MM" in source
 
     def test_radians_are_converted_to_degrees(self):
         """Quieter version of the same mistake: the trail would be drawn
@@ -1001,7 +1001,7 @@ class TestBareGeoJsonFeature:
     robots you have."""
 
     def test_a_bare_feature_is_read(self):
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         bare = {
             "type": "Feature",
@@ -1011,10 +1011,10 @@ class TestBareGeoJsonFeature:
             },
         }
 
-        assert len(_rings_mm(bare)) == 1
+        assert len(rings_mm(bare)) == 1
 
     def test_a_feature_collection_still_works(self):
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         collection = {
             "type": "FeatureCollection",
@@ -1026,12 +1026,12 @@ class TestBareGeoJsonFeature:
             }],
         }
 
-        assert len(_rings_mm(collection)) == 1
+        assert len(rings_mm(collection)) == 1
 
     def test_a_bare_multipolygon_feature_is_read(self):
         """Borders are MultiPolygon, so the two quirks combine on exactly
         the layer where they were found."""
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         bare = {
             "type": "Feature",
@@ -1041,7 +1041,7 @@ class TestBareGeoJsonFeature:
             },
         }
 
-        rings = _rings_mm(bare)
+        rings = rings_mm(bare)
 
         assert len(rings) == 1
         assert rings[0][1] == (2000.0, 0.0)
@@ -1120,7 +1120,7 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_add_executor_job" in source
 
-    def test_live_coverage_is_rendered_without_changing_the_room_fit(self):
+    def test_live_layers_are_rendered_without_changing_the_room_fit(self):
         """The live bundle is a layer, not a second coordinate system."""
         import io
 
@@ -1149,16 +1149,33 @@ class TestLiveBundleUpdatesTheRoomsMap:
                         ],
                     }
                 }]
-            }
+            },
+            "trajectories": {
+                "features": [{
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[0.25, 0.25], [0.75, 0.25]],
+                    }
+                }]
+            },
+            "hazard": {
+                "features": [{
+                    "geometry": {"type": "Point", "coordinates": [1.75, 1.75]}
+                }]
+            },
         }
         entity._config_entry = SimpleNamespace(
             runtime_data=SimpleNamespace(prime_positions=[]), options={}
         )
 
         image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
-        px, py = entity._renderer._mm_to_px_fit(1000.0, 1000.0)  # noqa: SLF001
+        coverage_px = entity._renderer._mm_to_px_fit(1000.0, 1000.0)  # noqa: SLF001
+        trajectory_px = entity._renderer._mm_to_px_fit(500.0, 250.0)  # noqa: SLF001
+        hazard_px = entity._renderer._mm_to_px_fit(1750.0, 1750.0)  # noqa: SLF001
 
-        assert image.getpixel((round(px), round(py))) == (120, 190, 145)
+        assert image.getpixel(tuple(map(round, coverage_px))) == (120, 190, 145)
+        assert image.getpixel(tuple(map(round, trajectory_px))) == (80, 150, 235)
+        assert image.getpixel(tuple(map(round, hazard_px))) == (240, 150, 60)
 
 
 class TestPolygonVerticesAreNotPoses:

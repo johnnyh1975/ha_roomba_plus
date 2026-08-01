@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 #: Prime coordinates are metres, the renderer works in millimetres.
-_METRES_TO_MM = 1000.0
+METRES_TO_MM = 1000.0
 
 
 def _ring_mm(geometry: Any) -> list[tuple[float, float]]:
@@ -54,7 +54,7 @@ def _ring_mm(geometry: Any) -> list[tuple[float, float]]:
         return []
     try:
         ring = [
-            (float(x) * _METRES_TO_MM, float(y) * _METRES_TO_MM)
+            (float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
             for x, y in coords[0]
         ]
     except (TypeError, ValueError, IndexError):
@@ -302,13 +302,13 @@ def _room_polygons_from_bundle(
         )
         if room_id is None:
             continue
-        rings = _rings_mm({"features": [feature]})
+        rings = rings_mm({"features": [feature]})
         if rings:
             polygons[str(room_id)] = rings[0]
     return polygons
 
 
-def _rings_mm(features: Any) -> list[list[tuple[float, float]]]:
+def rings_mm(features: Any) -> list[list[tuple[float, float]]]:
     """Every outer ring in a GeoJSON FeatureCollection, in millimetres.
 
     Handles Polygon and MultiPolygon in one pass, because borders use the
@@ -339,7 +339,7 @@ def _rings_mm(features: Any) -> list[list[tuple[float, float]]]:
                 continue
             try:
                 ring = [
-                    (float(x) * _METRES_TO_MM, float(y) * _METRES_TO_MM)
+                    (float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
                     for x, y in polygon[0]
                 ]
             except (TypeError, ValueError, IndexError):
@@ -366,7 +366,7 @@ def _carpet_rings_mm(features: Any) -> list[list[tuple[float, float]]]:
     for feature in (features or {}).get("features") or []:
         if (feature.get("properties") or {}).get("type") != "carpet":
             continue
-        carpet.extend(_rings_mm({"features": [feature]}))
+        carpet.extend(rings_mm({"features": [feature]}))
     return carpet
 
 
@@ -382,8 +382,8 @@ def _dock_from(features: Any) -> tuple[float, float, float] | None:
             continue
         orientation = (feature.get("properties") or {}).get("orientation")
         return (
-            x * _METRES_TO_MM,
-            y * _METRES_TO_MM,
+            x * METRES_TO_MM,
+            y * METRES_TO_MM,
             float(orientation) if orientation is not None else 0.0,
         )
     return None
@@ -427,7 +427,7 @@ async def async_build_prime_floor_plan(
     plan = PrimeFloorPlan(
         room_names=_room_names_from_bundle(parsed.get("rooms")),
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),
-        borders=_rings_mm(parsed.get("borders")),
+        borders=rings_mm(parsed.get("borders")),
         carpet=_carpet_rings_mm(parsed.get("floorTypes")),
         dock=_dock_from(parsed.get("dockPose")),
     )
