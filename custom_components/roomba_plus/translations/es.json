@@ -712,7 +712,17 @@
         "name": "Estado de la conexión"
       },
       "prime_detected_pad": {
-        "name": "Almohadilla detectada"
+        "name": "Almohadilla detectada",
+        "state": {
+          "padPlate": "Todas las mopas colocadas",
+          "NoPad": "Falta una mopa",
+          "noPad": "Falta una mopa",
+          "dispDry": "Mopa desechable seca",
+          "dispWet": "Mopa desechable húmeda",
+          "reusableDry": "Mopa reutilizable seca",
+          "reusableWet": "Mopa reutilizable húmeda",
+          "invalid": "Mopa no reconocida"
+        }
       },
       "prime_runtime_hours": {
         "name": "Tiempo de funcionamiento total"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Localizar"
+      },
+      "prime_empty_bin": {
+        "name": "Vaciar depósito"
+      },
+      "prime_wash_pad": {
+        "name": "Lavar la mopa"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Detener el secado"
       }
     },
     "switch": {

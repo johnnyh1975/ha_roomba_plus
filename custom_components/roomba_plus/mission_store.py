@@ -23,7 +23,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import SQFT_TO_M2
+from .const import extract_region_id, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -488,20 +488,16 @@ class MissionStore:
         return [region_map.get(rid, rid) for rid in rid_list]
 
     @staticmethod
-    def extract_rid(item: Any) -> str:
-        """Extract a region ID from a plan.upcoming entry.
+    @staticmethod
+    def extract_rid(region: Any) -> str | None:
+        """Delegates to const.extract_region_id.
 
-        Handles two confirmed formats:
-        - String (some firmware/app versions): "23"
-        - Object (lewis 22.52.10+): {"type": "rid", "rid": "23"}
-          Also accepts {"region_id": "23"} as a fallback.
-
-        Returns an empty string when neither format is recognisable so the
-        caller can filter it out.
+        The two were byte-identical for a long time. Kept as a
+        forwarder rather than deleted because callbacks.py calls it
+        through the class in three places, and a rename there would
+        touch code that has nothing to do with this cleanup.
         """
-        if isinstance(item, dict):
-            return str(item.get("rid") or item.get("region_id") or "")
-        return str(item) if item is not None else ""
+        return extract_region_id(region)
 
     # v3.3.0 STORE-ENCAP — deprecated private alias. 18 test call sites
     # still use the old name; removal earmarked for SENSOR-SPLIT (v3.4.0)

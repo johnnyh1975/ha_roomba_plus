@@ -712,7 +712,17 @@
         "name": "Verbindungsstatus"
       },
       "prime_detected_pad": {
-        "name": "Erkannter Wischpad"
+        "name": "Erkannter Wischpad",
+        "state": {
+          "padPlate": "Alle Wischtücher eingesetzt",
+          "NoPad": "Wischtuch fehlt",
+          "noPad": "Wischtuch fehlt",
+          "dispDry": "Einwegtuch trocken",
+          "dispWet": "Einwegtuch feucht",
+          "reusableDry": "Mehrwegtuch trocken",
+          "reusableWet": "Mehrwegtuch feucht",
+          "invalid": "Wischtuch nicht erkannt"
+        }
       },
       "prime_runtime_hours": {
         "name": "Lebenslaufzeit"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Orten"
+      },
+      "prime_empty_bin": {
+        "name": "Behälter leeren"
+      },
+      "prime_wash_pad": {
+        "name": "Wischtuch waschen"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Trocknen beenden"
       }
     },
     "switch": {

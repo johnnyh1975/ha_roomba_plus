@@ -1241,3 +1241,31 @@ ROOM_SCHEDULE_INTERVALS: dict[str, float] = {
     "three_per_week": 7.0 / 3.0,
     "weekly": 7.0,
 }
+
+
+def room_slug(value: str) -> str:
+    """ASCII slug for a room name: "Küche" -> "kuche".
+
+    ONE DEFINITION, because the two sides have to agree. The map entity
+    publishes room ids as slugs for the xiaomi-vacuum-map-card, and the
+    card sends them back to clean_room, which resolves them against room
+    names. Two rules that differ by a single character mean a room that
+    can be tapped and not cleaned.
+
+    They previously lived in image.py and room_cleaning.py separately,
+    and had already drifted: one collapsed repeated underscores and fell
+    back to "room" for a name with no letters, the other did neither.
+    The stricter behaviour is kept, because a room id must never be
+    empty -- the card rejects that outright.
+
+    Non-ASCII goes through NFD decomposition rather than being stripped:
+    the card validates ids and rejects umlauts and accents, and German
+    and Italian testers have both hit that.
+    """
+    import re as _re  # noqa: PLC0415
+    import unicodedata as _ud  # noqa: PLC0415
+
+    decomposed = _ud.normalize("NFD", value)
+    ascii_only = "".join(c for c in decomposed if not _ud.combining(c))
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
+    return _re.sub(r"_+", "_", slug) or "room"

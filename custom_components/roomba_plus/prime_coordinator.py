@@ -393,9 +393,21 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         "ro-currentstate", "ro-stats", "ro-services", "ro-configinfo",
     )
 
-    # NEW (this session): the classic/unnamed shadow (get_state(), NOT
-    # get_named_shadow()) is now ALSO seeded once at startup, under this
-    # key in coordinator.data -- carries CapabilityFlags (cap) and
+    # THE UNNAMED SHADOW. Read with get_state() rather than
+    # get_named_shadow(), which is the whole difference: a Prime robot
+    # has nine shadows, eight named and one without a name.
+    #
+    # THE KEY IS CALLED "classic" AND THAT NAME IS MISLEADING. It
+    # describes the shadow's FORMAT -- the same shape a Classic robot's
+    # state object has -- not the robot. This is a V4/Prime shadow on a
+    # V4/Prime robot, and nothing here touches Classic hardware.
+    #
+    # Kept as-is because the string appears in every diagnostics
+    # download testers have sent, and renaming it would make older
+    # reports harder to compare against newer ones. The confusion is
+    # real: it prompted "why classic shadows? we are on prime robots".
+    #
+    # It carries CapabilityFlags (cap) and
     # DockCapabilities (nested under ro-currentstate.dock.cap instead),
     # the only per-device hardware-capability data found anywhere in
     # this project so far (see ClassicShadowState's own docstring,

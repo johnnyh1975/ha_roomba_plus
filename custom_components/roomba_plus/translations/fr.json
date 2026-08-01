@@ -712,7 +712,17 @@
         "name": "État de la connexion"
       },
       "prime_detected_pad": {
-        "name": "Tampon détecté"
+        "name": "Tampon détecté",
+        "state": {
+          "padPlate": "Toutes les lingettes en place",
+          "NoPad": "Lingette manquante",
+          "noPad": "Lingette manquante",
+          "dispDry": "Lingette jetable sèche",
+          "dispWet": "Lingette jetable humide",
+          "reusableDry": "Lingette lavable sèche",
+          "reusableWet": "Lingette lavable humide",
+          "invalid": "Lingette non reconnue"
+        }
       },
       "prime_runtime_hours": {
         "name": "Durée de fonctionnement totale"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Localiser"
+      },
+      "prime_empty_bin": {
+        "name": "Vider le bac"
+      },
+      "prime_wash_pad": {
+        "name": "Laver la lingette"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Arrêter le séchage"
       }
     },
     "switch": {

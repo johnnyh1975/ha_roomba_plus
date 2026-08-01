@@ -712,7 +712,17 @@
         "name": "Estado da conexão"
       },
       "prime_detected_pad": {
-        "name": "Almofada detectada"
+        "name": "Almofada detectada",
+        "state": {
+          "padPlate": "Todos os panos colocados",
+          "NoPad": "Falta um pano",
+          "noPad": "Falta um pano",
+          "dispDry": "Pano descartável seco",
+          "dispWet": "Pano descartável húmido",
+          "reusableDry": "Pano reutilizável seco",
+          "reusableWet": "Pano reutilizável húmido",
+          "invalid": "Pano não reconhecido"
+        }
       },
       "prime_runtime_hours": {
         "name": "Tempo de funcionamento total"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Localizar"
+      },
+      "prime_empty_bin": {
+        "name": "Esvaziar depósito"
+      },
+      "prime_wash_pad": {
+        "name": "Lavar o pano"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Parar a secagem"
       }
     },
     "switch": {

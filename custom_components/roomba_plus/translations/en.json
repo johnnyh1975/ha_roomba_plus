@@ -712,7 +712,17 @@
         "name": "Connection health"
       },
       "prime_detected_pad": {
-        "name": "Detected pad"
+        "name": "Detected pad",
+        "state": {
+          "padPlate": "All pads fitted",
+          "NoPad": "Pad missing",
+          "noPad": "Pad missing",
+          "dispDry": "Single-use dry pad",
+          "dispWet": "Single-use wet pad",
+          "reusableDry": "Reusable dry pad",
+          "reusableWet": "Reusable wet pad",
+          "invalid": "Pad not recognised"
+        }
       },
       "prime_runtime_hours": {
         "name": "Lifetime runtime"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Locate"
+      },
+      "prime_empty_bin": {
+        "name": "Empty bin"
+      },
+      "prime_wash_pad": {
+        "name": "Wash pad"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Stop pad drying"
       }
     },
     "switch": {

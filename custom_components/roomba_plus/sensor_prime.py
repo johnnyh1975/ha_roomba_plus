@@ -243,20 +243,59 @@ class PrimeBatterySensor(_PrimeCurrentStateSensorBase):
 
 class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime detected mop pad type. Reads
-    UNRESOLVED (30 July 2026): this may be reporting the mounting PLATE
-    rather than the pad. One tester's robot returned `padPlate` both with
-    a mop pad fitted and without one -- two separate missions, same
-    value.
+    RESOLVED 31 July 2026 (@chairstacker), and the doubt recorded here
+    before was wrong. He ran the sequence deliberately:
 
-    The app's own RobotPadCategory distinguishes `Plate` (7) from
-    `NoPad` (9) and from the damp/dry/wet pad types, so a robot that
-    always says `padPlate` is either reporting the holder or reporting
-    something this sensor's name does not describe.
+        both pads fitted    -> padPlate
+        left pad removed    -> NoPad
+        left pad refitted   -> padPlate
+        right pad removed   -> NoPad
+        right pad refitted  -> padPlate
 
-    Left as it is rather than renamed or removed: one account is not
-    enough to establish the behaviour, and a sensor renamed on a guess
-    is worse than one carrying a documented doubt. Asked the tester
-    whether the iRobot app distinguishes the two states.
+    The sensor tracks pad presence correctly. `padPlate` is the value
+    for "a pad is detected", not a report about the mounting plate.
+
+    An earlier tester saw `padPlate` on two missions and believed one of
+    them had no pad fitted -- which produced the wrong conclusion here.
+    Two data points from separate accounts beat one, and a deliberate
+    sequence beats both.
+
+    WHAT REMAINS is the wording: `padPlate` and `NoPad` are wire values,
+    not something to show a user. Translated below -- but the chosen
+    words carry two assumptions that are NOT established:
+
+    1. WHICH pad is missing cannot be known -- CLOSED, negative.
+
+       @chairstacker's robot takes two pads, and removing either one
+       flipped the sensor to NoPad while the other stayed mounted. An
+       APK pass then confirmed the app cannot do better: there is no
+       left/right field in the shadow, no count constant, the readiness
+       values are all global (NoPad, InvalidPad, PadDetectionTimeout),
+       and every pad error string is generic --
+
+           "Mop pad missing"
+           "%s's pad is missing."
+
+       -- while the same app IS specific about other parts ("Dock: pad
+       washing roller missing", "The Clean Base bag is missing"). It
+       phrases precisely when it has the information. For pads it does
+       not have it.
+
+       So "All pads fitted" / "Pad missing" is exactly what the app
+       itself shows. Nothing to change, and nothing to look for.
+
+    2. TYPES EXIST, this robot just never reports them -- options list
+       widened accordingly.
+
+       The app carries six type-specific strings ("Reusable Wet Mopping
+       Pad attached", "Single-Use Damp Sweeping Pad attached", ...),
+       matching the PadCategory wire values. A pad-plate robot reports
+       `padPlate` and no type; a robot that takes a pad directly
+       presumably reports the type instead.
+
+       Nobody has sent a capture from such a robot, so all seven values
+       are listed and translated rather than waiting for one -- an ENUM
+       sensor renders an unlisted value as a raw string.
 
     CurrentStateShadow.detected_pad directly (confirmed live,
     chairstacker: a plain string, e.g. "padPlate") -- the raw reported
@@ -267,6 +306,39 @@ class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     entity_description = SensorEntityDescription(
         key="prime_detected_pad",
         translation_key="prime_detected_pad",
+        # ENUM so Home Assistant translates the state. Without it the
+        # user sees the wire values -- `padPlate` and `NoPad` -- which
+        # are neither English nor descriptive, as @chairstacker pointed
+        # out after confirming the sensor itself works correctly.
+        device_class=SensorDeviceClass.ENUM,
+        # ALL SEVEN RobotPadCategory VALUES, not just the two this
+        # project has observed.
+        #
+        # An ENUM sensor shows a value outside its options list as a raw
+        # string, so a robot reporting `reusableWet` would display
+        # "reusableWet" to the user.
+        #
+        # APK analysis found six type-specific UI strings ("Reusable Wet
+        # Mopping Pad attached", "Single-Use Damp Sweeping Pad
+        # attached", ...), so the types are real. Robots with a pad
+        # plate report `padPlate` and never a type; robots that take a
+        # pad directly presumably report the type instead. Nobody has
+        # sent a capture from one of those.
+        #
+        # BOTH SPELLINGS OF "no pad" are listed. The library's enum says
+        # `noPad`; a real robot reported `NoPad`. Until a capture settles
+        # which the wire uses, accepting one and rendering the other raw
+        # is the avoidable failure.
+        options=[
+            "padPlate",
+            "NoPad",
+            "noPad",
+            "dispDry",
+            "dispWet",
+            "reusableDry",
+            "reusableWet",
+            "invalid",
+        ],
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 

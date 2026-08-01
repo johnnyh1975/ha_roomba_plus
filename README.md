@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a15-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a16-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -160,7 +160,7 @@ notification rather than only a release note.
 
 ## V4/Prime support (alpha)
 
-iRobot's newer-generation robots (Combo/Plus 400-series, Roomba Max 705 Vac / W15-series, and similar, on the "Prime" cloud
+iRobot's newer-generation robots (Combo/Plus 400-series and similar, on the "Prime" cloud
 protocol) don't speak the local MQTT protocol every other feature on this page is built on —
 they're cloud-only. Support for them was added in **v4.0.0a0** as a genuinely separate code
 path, not an extension of the existing one, using the companion
@@ -442,7 +442,11 @@ Roomba+ is maintained by one person — field-tester reports and pull requests a
 
 ## Credits
 
-**Field testing** — real-device reports from these community members have directly driven bug fixes, cancelled features that didn't hold up, and shaped the version plan: **Thonno** (i7+), **veronoicc** (i7+, i8+), **boutXIII** (Braava jet m6), **ronluna** (S9+), **KingAntDesigns** (Braava jet m6, j7+), **mdarocha** (i3+). Thank you all.
+**Field testing** — real-device reports from these community members have directly driven bug fixes, cancelled features that didn't hold up, and shaped the version plan: **Thonno** (i7+), **veronoicc** (i7+, i8+), **boutXIII** (Braava jet m6), **ronluna** (S9+), **KingAntDesigns** (Braava jet m6, j7+), **mdarocha** (i3+), **chairstacker**, **jayjay13011**, **DaRealGuGu**, **arielgr**, **utkjmitch**, **jadestar1864** (V4/Prime). Thank you all.
+
+Some findings were only possible because two people reported the same thing differently: a mode number that meant "normal" on one robot and "smart" on another, or a room name the app showed and the API did not. Neither would have been caught from a single account.
+
+**Code** — **[@jouwdan](https://github.com/jouwdan)** found that the V4/Prime map stream carries a second URL alongside the raw occupancy grid, and that room outlines live in the map bundle rather than in the metadata endpoint — which fixed a rooms map that was unavailable on three separate models. Also brought the Roomba Max 705 (W155042) into the tested set.
 
 **Translation** — **mdarocha** contributed the Polish (`pl`) translation, **boutXIII** contributed the French (`fr`) translation.
 

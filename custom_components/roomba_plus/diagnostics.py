@@ -5,6 +5,8 @@ Accessible via Settings → Devices & Services → Roomba+ → Download diagnost
 """
 from __future__ import annotations
 
+import re
+
 import time as _time_mod
 
 import dataclasses
@@ -126,6 +128,45 @@ _SHADOW_REDACT: Final[set[str]] = {
 }
 
 
+#: A MAC address in any of the usual separators.
+#:
+#: Matched on VALUES, not on key names. Reported by @chairstacker: the
+#: dump contained several unredacted MAC addresses, because they sat
+#: under keys this code had never seen -- redacting a key called `mac`
+#: does nothing for one called `wlan0HwAddr`.
+_MAC_PATTERN = re.compile(r"\b[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}\b")
+
+
+def _redact_values(value: Any, blid: str | None) -> Any:
+    """Redacts identifying CONTENT, wherever it appears.
+
+    Key-based redaction is not enough, and a tester found both gaps
+    within a day of the dump shipping:
+
+      - `blid` was redacted, but `p2map_id` is literally
+        "<BLID>-<epoch>" and was not. So was `smart_map_id`, and
+        `robot_id` inside REST responses.
+      - MAC addresses appeared under keys this code did not know.
+
+    A diagnostics file gets pasted into a public issue. Redacting the
+    field that happens to be called `blid` while leaving five copies of
+    the same value in other fields is worse than not claiming to redact
+    at all, because it invites trust the output does not earn.
+
+    So: substring for the blid, pattern for MAC addresses, applied to
+    every string at every depth.
+    """
+    if isinstance(value, str):
+        if blid and blid in value:
+            value = value.replace(blid, "**REDACTED_BLID**")
+        return _MAC_PATTERN.sub("**REDACTED_MAC**", value)
+    if isinstance(value, dict):
+        return {k: _redact_values(v, blid) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_values(v, blid) for v in value]
+    return value
+
+
 def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     """Every named shadow's contents, minus identifying fields.
 
@@ -142,6 +183,12 @@ def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     if coordinator is None or not coordinator.data:
         return {"available": False}
 
+    # STRING OR NOTHING. `blid in value` raises TypeError on anything
+    # else, and diagnostics failing to produce is the worst possible
+    # moment to fail -- they are read when something is already wrong.
+    blid = getattr(data, "blid", None)
+    blid = blid if isinstance(blid, str) and blid else None
+
     def _clean(value: Any) -> Any:
         if isinstance(value, dict):
             return {
@@ -152,7 +199,13 @@ def _prime_shadow_dump(data: Any) -> dict[str, Any]:
             return [_clean(v) for v in value]
         return value
 
-    return {name: _clean(shadow) for name, shadow in coordinator.data.items()}
+    # KEY-BASED FIRST, THEN VALUE-BASED. The two catch different things:
+    # a key called `svcEndpoints` has no recognisable value pattern, and
+    # a blid embedded in `p2map_id` has no recognisable key.
+    return {
+        name: _redact_values(_clean(shadow), blid)
+        for name, shadow in coordinator.data.items()
+    }
 
 
 def _prime_store_summary(data: Any) -> dict[str, Any]:
@@ -169,7 +222,10 @@ def _prime_store_summary(data: Any) -> dict[str, Any]:
         summary["mission_store"] = "not created"
     else:
         try:
-            records = store.query()
+            # `days` is REQUIRED. Calling query() without it raises
+            # TypeError, which this except turned into "unreadable" --
+            # a store that was fine, reported as broken.
+            records = store.query(days=3650)
             summary["mission_store"] = {
                 "record_count": len(records),
                 "latest_id": records[-1].get("id") if records else None,

@@ -22,6 +22,7 @@ worse than an absent one.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.button import ButtonEntity
@@ -29,6 +30,7 @@ from homeassistant.const import EntityCategory
 
 from .const import CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
 from .entity import IRobotEntity
+from .prime_coordinator import get_prime_capability_flags
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -94,6 +96,80 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
             )
 
 
+@dataclass(frozen=True, kw_only=True)
+class PrimeDockCommand:
+    """One dock action, its wire command and the flag that gates it."""
+
+    key: str
+    command: str
+    #: Attribute on the DOCK capability object, not the robot one. A
+    #: robot without a self-emptying base still reports robot caps.
+    dock_cap_attr: str
+
+
+#: The dock controls the iRobot app shows, as confirmed wire strings.
+#:
+#: All three come from CommandType's @SerialName annotations -- the same
+#: source as `find`, which works. Not guessed:
+#:
+#:     Empty Bin              -> evac
+#:     Wash mop / rinse dock  -> washpad
+#:     Stop mop dry           -> stoppaddry
+#:
+#: DELIBERATELY ABSENT: `drypad` (starts drying), `flushsluice`,
+#: `flrefill` and `querydock` exist in the same enum. The app does not
+#: offer drying as a button -- it starts on its own after mopping -- and
+#: a button for something the app never triggers manually would be this
+#: project guessing at a workflow rather than mirroring one.
+#:
+#: `stoppaddry` has no counterpart button for the same reason: stopping
+#: is the action a user wants, starting is not.
+#:
+#: There is no `stopwashpad` in the enum at all, so washing evidently
+#: runs to completion.
+PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
+    PrimeDockCommand(key="prime_empty_bin", command="evac", dock_cap_attr="evac"),
+    PrimeDockCommand(key="prime_wash_pad", command="washpad", dock_cap_attr="pad_wash"),
+    PrimeDockCommand(
+        key="prime_stop_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry"
+    ),
+)
+
+
+class PrimeDockButton(IRobotEntity, ButtonEntity):
+    """A dock action -- empty the bin, wash the pad, stop drying.
+
+    GATED ON DOCK CAPABILITIES, not robot ones. A robot without a
+    self-emptying base still reports its own caps happily; the dock flags
+    are what say whether a base is there and what it can do.
+
+    A real Combo reports `{"evac": 1, "pad_dry": 2, "pad_wash": 1}`, so
+    the flags are graduated rather than boolean -- 2 is not "twice as
+    true". Only an explicit 0 means absent, the same contract the other
+    Prime capability checks use.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, command: PrimeDockCommand
+    ) -> None:
+        IRobotEntity.__init__(self, None, blid)
+        self._config_entry = config_entry
+        self._command = command
+        self._attr_translation_key = command.key
+        self._attr_unique_id = f"{self.robot_unique_id}_{command.key}"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return self._command.key
+
+    async def async_press(self) -> None:
+        robot = self._config_entry.runtime_data.prime_robot
+        if robot is not None:
+            await robot.send_simple_command(self._command.command)
+
+
 class PrimeLocateButton(IRobotEntity, ButtonEntity):
     """Makes the robot announce where it is.
 
@@ -137,6 +213,20 @@ async def async_build_prime_buttons(
         return []
 
     entities: list[ButtonEntity] = [PrimeLocateButton(data.blid, config_entry)]
+
+    # DOCK CONTROLS, matching what the iRobot app offers.
+    #
+    # Requested by @chairstacker, who screenshotted the app's dock panel.
+    # The wire strings were then confirmed from CommandType's
+    # @SerialName annotations rather than guessed.
+    _cap, dock_cap = get_prime_capability_flags(config_entry)
+    for command in PRIME_DOCK_COMMANDS:
+        # None means unknown, only an explicit 0 means absent -- so a
+        # robot that has not reported its dock yet still gets the
+        # buttons rather than silently losing them.
+        if dock_cap is not None and getattr(dock_cap, command.dock_cap_attr, None) == 0:
+            continue
+        entities.append(PrimeDockButton(data.blid, config_entry, command))
 
     # Locate is always offered; favourite buttons are optional.
     #

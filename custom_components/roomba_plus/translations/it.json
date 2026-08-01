@@ -712,7 +712,17 @@
         "name": "Stato della connessione"
       },
       "prime_detected_pad": {
-        "name": "Panno rilevato"
+        "name": "Panno rilevato",
+        "state": {
+          "padPlate": "Tutti i panni inseriti",
+          "NoPad": "Panno mancante",
+          "noPad": "Panno mancante",
+          "dispDry": "Panno monouso asciutto",
+          "dispWet": "Panno monouso umido",
+          "reusableDry": "Panno riutilizzabile asciutto",
+          "reusableWet": "Panno riutilizzabile umido",
+          "invalid": "Panno non riconosciuto"
+        }
       },
       "prime_runtime_hours": {
         "name": "Tempo di funzionamento totale"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Localizza"
+      },
+      "prime_empty_bin": {
+        "name": "Svuotare il contenitore"
+      },
+      "prime_wash_pad": {
+        "name": "Lavare il panno"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Interrompere l'asciugatura"
       }
     },
     "switch": {

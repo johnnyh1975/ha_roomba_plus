@@ -343,7 +343,23 @@ def parse_prime_schedule_occurrences(
         options = getattr(schedule, "options", None)
         if options is None or not options.enabled or options.deleted:
             continue
-        if options.frequency != ScheduleFrequency.WEEKLY:
+        # WEEKLY AND ONCE. Only WEEKLY was computed, so a one-off
+        # schedule produced no occurrences and the calendar stayed "Off"
+        # while it ran -- reported by @chairstacker after the ongoing-
+        # occurrence fix, which was correct but never saw his schedule.
+        #
+        # ONCE is the shape an automation creates: run this, at this
+        # time, not again.
+        #
+        # BI_WEEKLY and MONTHLY stay out. Both need a cadence anchor
+        # nothing in the payload supplies -- for BI_WEEKLY, which of two
+        # weeks is "this" one -- and neither has ever been seen on a real
+        # account. Guessing an anchor would put a mission on the calendar
+        # on a day the robot does not clean.
+        if options.frequency not in (
+            ScheduleFrequency.WEEKLY,
+            ScheduleFrequency.ONCE,
+        ):
             continue
         schedule_start = options.start
         if schedule_start is None:

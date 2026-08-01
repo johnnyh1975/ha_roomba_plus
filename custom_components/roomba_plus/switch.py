@@ -516,6 +516,17 @@ PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
         model_attr="child_lock",
         entity_category=EntityCategory.CONFIG,
     ),
+    # NO CAPABILITY GATE, and that is correct rather than an omission.
+    #
+    # A tester reported "I'm pretty sure Eco Charging does not exist on
+    # my device", which read like a missing check. An APK pass settled
+    # it: the app's Capability enum has 113 entries -- SuctionLevel,
+    # MultiCleaningPasses, PadPlateWetnessLevel, PadWashing, ChildLock
+    # and so on -- and NOT ONE of them mentions Eco, Charge or Charging.
+    #
+    # The app cannot gate this setting either. It shows it to everyone,
+    # and a robot without the feature ignores the write. Adding a check
+    # here would mean inventing a capability the vendor does not model.
     PrimeSettingSwitchDescription(
         key="prime_eco_charge",
         translation_key="prime_eco_charge",

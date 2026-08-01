@@ -257,7 +257,14 @@ async def _async_sync_locked(
         _LOGGER.debug("roomba_plus: could not read mission history", exc_info=True)
         return 0
 
-    known = {rec.get("id") for rec in store.query()}
+    # `days` is REQUIRED, and omitting it raised TypeError before the
+    # first record was ever compared. Every sync since the feature
+    # shipped failed here, silently: the caller catches broadly and logs
+    # at debug level, so nothing ever surfaced.
+    #
+    # A wide window on purpose -- this is a duplicate check, and a
+    # mission older than the window would be re-added on every run.
+    known = {rec.get("id") for rec in store.query(days=3650)}
     added = 0
     # Oldest first, so the store's own ordering assumptions and any
     # rolling statistics see missions in the order they happened.
@@ -396,7 +403,7 @@ def estimate_room_seconds(
         return [None] * len(room_ids)
 
     try:
-        records = store.query()
+        records = store.query(days=3650)
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: could not read mission history", exc_info=True)
         return [None] * len(room_ids)

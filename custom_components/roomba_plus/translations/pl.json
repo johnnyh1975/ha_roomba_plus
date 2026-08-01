@@ -712,7 +712,17 @@
         "name": "Stan połączenia"
       },
       "prime_detected_pad": {
-        "name": "Wykryta nakładka"
+        "name": "Wykryta nakładka",
+        "state": {
+          "padPlate": "Wszystkie nakładki założone",
+          "NoPad": "Brak nakładki",
+          "noPad": "Brak nakładki",
+          "dispDry": "Nakładka jednorazowa sucha",
+          "dispWet": "Nakładka jednorazowa mokra",
+          "reusableDry": "Nakładka wielorazowa sucha",
+          "reusableWet": "Nakładka wielorazowa mokra",
+          "invalid": "Nakładka nierozpoznana"
+        }
       },
       "prime_runtime_hours": {
         "name": "Łączny czas pracy"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Zlokalizuj"
+      },
+      "prime_empty_bin": {
+        "name": "Opróżnij pojemnik"
+      },
+      "prime_wash_pad": {
+        "name": "Umyj nakładkę"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Zatrzymaj suszenie"
       }
     },
     "switch": {

@@ -43,6 +43,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import (
+    room_slug,
     CONF_FLOOR,
     CONF_SMART_ZONE_DATA,
     DOMAIN,
@@ -82,13 +83,13 @@ def match_room_names(
     the wrong room is worse than reporting an honest miss.
     """
     by_name = {name.casefold(): rid for name, rid in available.items()}
-    by_slug = {_slug(name): rid for name, rid in available.items()}
+    by_slug = {room_slug(name): rid for name, rid in available.items()}
 
     matched: list[str] = []
     unmatched: list[str] = []
     for raw in requested:
         wanted = raw.strip()
-        rid = by_name.get(wanted.casefold()) or by_slug.get(_slug(wanted))
+        rid = by_name.get(wanted.casefold()) or by_slug.get(room_slug(wanted))
         if rid is None:
             unmatched.append(raw)
         elif rid not in matched:
@@ -96,21 +97,6 @@ def match_room_names(
     return matched, unmatched
 
 
-def _slug(value: str) -> str:
-    """ASCII slug: "Küche" -> "kuche", "Salle à manger" -> "salle_a_manger".
-
-    Same transformation services.py uses, so a name that resolves for a
-    Classic robot resolves identically for a Prime one. Two different
-    slug rules across generations would be a confusing bug to report and
-    a worse one to find.
-    """
-    import re  # noqa: PLC0415
-    import unicodedata  # noqa: PLC0415
-
-    decomposed = unicodedata.normalize("NFD", value)
-    ascii_only = "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
-    return re.sub(r"_+", "_", slug) or "room"
 
 
 def _per_room(values: list | None, index: int):
@@ -1241,24 +1227,21 @@ def _resolve_rooms(
 
     # v2.7.3 (ROOM-SLUG): XVMC sends room_id (ASCII slug) as [[selection]].
     # Build a secondary slug index so "kuche" resolves to "Küche".
-    import unicodedata as _ud
-    import re as _re
 
-    def _slug(s: str) -> str:
-        nfd = _ud.normalize("NFD", s)
-        a = "".join(c for c in nfd if _ud.category(c) != "Mn")
-        slug = _re.sub(r"[^a-zA-Z0-9]+", "_", a).strip("_").lower()
-        return _re.sub(r"_+", "_", slug) or "room"
+    # Uses the shared room_slug from const.py. A THIRD copy of this rule
+    # lived here as a nested function, invisible to a module-level scan --
+    # and it used a different unicode test (`category(c) != "Mn"` rather
+    # than `combining(c)`), which agree for accents but not for every mark.
 
     slug_index: dict[str, tuple[str, str]] = {
-        _slug(meta["name"]): val
+        room_slug(meta["name"]): val
         for val in [index[k] for k in index]
         for meta in zone_data.values()
         if meta.get("name") and index.get(meta["name"].casefold()) == val
     }
     # Simpler rebuild: slug → (rid, pmap_id) from the name index
     slug_index = {
-        _slug(display_name): match_val
+        room_slug(display_name): match_val
         for display_name, match_val in (
             (meta["name"], index.get(meta["name"].casefold()))
             for meta in zone_data.values()
@@ -1268,7 +1251,7 @@ def _resolve_rooms(
     }
 
     for name in room_names:
-        match = index.get(name.casefold()) or slug_index.get(_slug(name))
+        match = index.get(name.casefold()) or slug_index.get(room_slug(name))
         if match is None:
             unknown.append(name)
         else:

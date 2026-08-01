@@ -712,7 +712,17 @@
         "name": "Verbindingsstatus"
       },
       "prime_detected_pad": {
-        "name": "Gedetecteerde pad"
+        "name": "Gedetecteerde pad",
+        "state": {
+          "padPlate": "Alle doeken geplaatst",
+          "NoPad": "Doek ontbreekt",
+          "noPad": "Doek ontbreekt",
+          "dispDry": "Wegwerpdoek droog",
+          "dispWet": "Wegwerpdoek nat",
+          "reusableDry": "Herbruikbare doek droog",
+          "reusableWet": "Herbruikbare doek nat",
+          "invalid": "Doek niet herkend"
+        }
       },
       "prime_runtime_hours": {
         "name": "Levensduur bedrijfstijd"
@@ -900,6 +910,15 @@
       },
       "prime_locate": {
         "name": "Lokaliseren"
+      },
+      "prime_empty_bin": {
+        "name": "Bak legen"
+      },
+      "prime_wash_pad": {
+        "name": "Doek wassen"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Drogen stoppen"
       }
     },
     "switch": {

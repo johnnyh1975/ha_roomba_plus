@@ -42,6 +42,10 @@ from typing import Any
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
@@ -49,6 +53,7 @@ from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    room_slug,
     CONF_MAP_ROOM_LABELS,
     DEFAULT_MAP_ROOM_LABELS,
     CLEANING_PHASES,
@@ -76,6 +81,19 @@ _LOGGER = logging.getLogger(__name__)
 #: missions' worth. The cap exists for the robot left running all day,
 #: not for the normal case.
 _MAX_PRIME_POSITIONS = 5000
+
+#: Dispatcher signal carrying a freshly parsed live map bundle.
+#:
+#: The two Prime image entities are split by what they can do: one
+#: watches the map stream and shows iRobot's rendered PNG, the other
+#: draws its own map and never sees the stream. A dispatcher signal is
+#: how the second learns that the first has new data.
+#:
+#: Contributed by @jouwdan (PR #63), who found that MapUpdateMessage
+#: carries a SECOND url -- `livemap_url` alongside `livemap_url_raw` --
+#: and that it returns a full map bundle rather than the raw occupancy
+#: grid. We had been consuming only the raw one.
+_SIGNAL_PRIME_LIVE_BUNDLE = "roomba_plus_prime_live_bundle_{}"
 PARALLEL_UPDATES = 0
 
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
@@ -114,7 +132,6 @@ def _mission_checkpoint_storage_key(entry_id: str) -> str:
 # v2.6.3 E — dispatcher signal fired by RoombaMapImage after GridStore update.
 # RoombaCoverageImage listens to bump image_last_updated so the frontend re-fetches.
 _SIGNAL_COVERAGE_UPDATED = "roomba_plus_coverage_updated_{}"
-_SIGNAL_PRIME_LIVE_BUNDLE_UPDATED = "roomba_plus_prime_live_bundle_updated_{}"
 
 
 async def _async_send_coverage_signal(hass: HomeAssistant, entry_id: str) -> None:
@@ -138,26 +155,6 @@ def _map_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_{entry_id}"
 
 
-def _room_slug(name: str) -> str:
-    """Return an ASCII-safe slug suitable for use as an XVMC predefined_selection id.
-
-    XVMC validates id values and rejects non-ASCII characters (e.g. German umlauts,
-    Italian accents).  This helper performs NFD decomposition to strip combining
-    diacritics, then replaces any remaining non-alphanumeric characters with
-    underscores and collapses runs.
-
-    Examples:
-        "Küche"        → "kuche"
-        "Büro"         → "buro"
-        "Bad & Küche"  → "bad_kuche"
-        "Living Room"  → "living_room"
-    """
-    import unicodedata
-    import re as _re
-    nfd = unicodedata.normalize("NFD", name)
-    ascii_only = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
-    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
-    return _re.sub(r"_+", "_", slug) or "room"
 
 
 async def async_setup_entry(
@@ -549,6 +546,37 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     # MapRenderer.add_pose takes millimetres. Feeding metres
                     # straight in puts every point in the same pixel and
                     # produces a blank map with no error.
+                    if isinstance(message, MapUpdateMessage) and message.livemap_url:
+                        # THE SECOND URL. `livemap_url_raw` is the
+                        # occupancy grid this entity renders; this one is
+                        # a full bundle with the layers the app draws.
+                        #
+                        # Fetched here because this is where the stream
+                        # is, and handed to the rooms map by signal
+                        # because that is where the renderer is.
+                        try:
+                            from roombapy_prime.models.map_bundle import (  # noqa: PLC0415
+                                parse_map_bundle,
+                            )
+
+                            async with session.get(message.livemap_url) as resp:
+                                if resp.status == 200:
+                                    raw = await resp.read()
+                                    bundle = await self.hass.async_add_executor_job(
+                                        parse_map_bundle, raw
+                                    )
+                                    async_dispatcher_send(
+                                        self.hass,
+                                        _SIGNAL_PRIME_LIVE_BUNDLE.format(
+                                            self._config_entry.entry_id
+                                        ),
+                                        bundle,
+                                    )
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug(
+                                "Prime map: live bundle fetch failed", exc_info=True
+                            )
+
                     if isinstance(message, PositionUpdateMessage):
                         stats = self._config_entry.runtime_data.live_map_stats
                         stats["position_messages"] = stats.get("position_messages", 0) + 1
@@ -628,32 +656,6 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     self._async_save_png()
                     self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
                     self.async_write_ha_state()
-
-                    # The sibling URL is the app's live GeoJSON bundle. It
-                    # carries coverage, trajectory and hazards; rawmap above
-                    # only carries the occupancy grid used by Cleaning map.
-                    if message.livemap_url:
-                        try:
-                            from homeassistant.helpers.dispatcher import async_dispatcher_send
-                            from roombapy_prime.models.map_bundle import parse_map_bundle
-
-                            async with session.get(message.livemap_url) as resp:
-                                bundle_bytes = await resp.read()
-                            if resp.status == 200:
-                                bundle = await self.hass.async_add_executor_job(
-                                    parse_map_bundle, bundle_bytes
-                                )
-                                async_dispatcher_send(
-                                    self.hass,
-                                    _SIGNAL_PRIME_LIVE_BUNDLE_UPDATED.format(
-                                        self._config_entry.entry_id
-                                    ),
-                                    bundle,
-                                )
-                        except Exception:  # noqa: BLE001
-                            # The raw image remains useful if a single live
-                            # bundle download expires or is incomplete.
-                            _LOGGER.debug("Prime map: could not read live GeoJSON bundle", exc_info=True)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
                     "roomba_plus: watch_live_map() for %s ended without an exception "
@@ -1076,7 +1078,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
-                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -2779,7 +2781,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
-                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -2918,10 +2920,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._polygons: dict[str, list[tuple[float, float]]] = {}
         self._names: dict[str, str] = {}
         self._floor_plan: Any = None
+        self._live_bundle: Any = None
         self._preferences: dict[str, Any] = {}
         self._renderer: Any = None
         self._png: bytes | None = None
-        self._live_bundle: dict[str, Any] | None = None
 
     @property
     def suggested_object_id(self) -> str:
@@ -2942,6 +2944,18 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
         await self._async_refresh_rooms()
+
+        # LIVE BUNDLES from the other Prime image entity, which watches
+        # the map stream. The two are split by capability: that one has
+        # the stream and no renderer, this one has the renderer and no
+        # stream.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                _SIGNAL_PRIME_LIVE_BUNDLE.format(self._config_entry.entry_id),
+                self._on_live_bundle,
+            )
+        )
 
         # NO SUBSCRIPTION, and no re-render per image request.
         #
@@ -2964,32 +2978,6 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # room cleaning. Checked when the image is requested, and the
         # cloud is only called when it has actually moved.
         self._rendered_for_map_version: str | None = None
-
-        from homeassistant.helpers.dispatcher import async_dispatcher_connect
-
-        @callback
-        def _on_live_bundle(bundle: dict[str, Any]) -> None:
-            self._live_bundle = bundle
-            if self._polygons:
-                self._config_entry.async_create_background_task(
-                    self.hass,
-                    self._async_render_live_bundle(),
-                    name=f"roomba_plus_prime_live_bundle_{self._blid}",
-                )
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                _SIGNAL_PRIME_LIVE_BUNDLE_UPDATED.format(self._config_entry.entry_id),
-                _on_live_bundle,
-            )
-        )
-
-    async def _async_render_live_bundle(self) -> None:
-        """Redraw the room map after a live coverage bundle arrives."""
-        self._png = await self.hass.async_add_executor_job(self._render_png)
-        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
-        self.async_write_ha_state()
 
     async def _async_refresh_rooms(self) -> None:
         """Reads the current map's rooms and renders them."""
@@ -3039,8 +3027,45 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._floor_plan = (
             await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
             if version
-            else PrimeFloorPlan(borders=[], carpet=[], dock=None)
+            else PrimeFloorPlan(
+                room_names={}, room_polygons={}, borders=[], carpet=[], dock=None
+            )
         )
+
+        # BUNDLE NAMES WIN where present.
+        #
+        # get_map_metadata() is not always complete: one tester's robot
+        # returns four rooms with only three names, while his iRobot app
+        # shows all four. The bundle's rooms layer is what the app
+        # appears to read.
+        #
+        # Metadata names stay as the fallback -- they are confirmed on
+        # three accounts, and the bundle layer is not guaranteed to
+        # exist. Only a name actually present in the bundle replaces one,
+        # so a robot without that layer is unaffected.
+        for room_id, name in (self._floor_plan.room_names or {}).items():
+            if room_id in self._names:
+                self._names[room_id] = name
+
+        # OUTLINES FROM THE BUNDLE, where the metadata has none.
+        #
+        # On several robots get_map_metadata() returns names and cleaning
+        # defaults per room but no geometry at all -- so `_polygons`
+        # stayed empty and the rooms map reported itself unavailable,
+        # permanently and without explanation.
+        #
+        # Confirmed on three models by three testers, each arriving at
+        # rooms.geojson independently.
+        #
+        # Metadata geometry still wins where it exists: it is what this
+        # entity was built on and is confirmed working elsewhere. The
+        # bundle fills the gap rather than replacing the source.
+        for room_id, ring in (self._floor_plan.room_polygons or {}).items():
+            self._polygons.setdefault(room_id, ring)
+            self._names.setdefault(
+                room_id,
+                (self._floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
+            )
         if self._polygons:
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
@@ -3054,32 +3079,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
 
-        from .prime_room_map import _rings_mm  # noqa: PLC0415
-
-        live_bundle = self._live_bundle or {}
-        live_coverage = _rings_mm(live_bundle.get("coverage"))
-
-        # MapRenderer.add_pose() rejects jumps over 500 mm, which is right
-        # for robot telemetry and wrong for unrelated polygon vertices. It
-        # also does not calculate the fit until render(). Seed its fit input
-        # directly from every map layer, then apply the calculated transform.
-        all_rings = [
-            *self._polygons.values(),
-            *self._floor_plan.floors,
-            *self._floor_plan.carpet,
-            *self._floor_plan.borders,
-            *self._floor_plan.furniture,
-            *live_coverage,
-        ]
-        self._renderer._points = [  # noqa: SLF001
-            self._renderer._mm_to_px(x, y)  # noqa: SLF001
-            for ring in all_rings
-            for x, y in ring
-        ]
-        _, _, _, fit_scale, fit_cx, fit_cy = self._renderer._compute_fit()  # noqa: SLF001
-        self._renderer._fit_scale = fit_scale  # noqa: SLF001
-        self._renderer._fit_cx = fit_cx  # noqa: SLF001
-        self._renderer._fit_cy = fit_cy  # noqa: SLF001
+        # Seed the auto-fit transform from the room extents. Classic gets
+        # this from accumulated poses; Prime has the polygons up front,
+        # which is why its map is complete before the first mission.
+        for ring in self._polygons.values():
+            for x_mm, y_mm in ring:
+                self._renderer.add_pose(x_mm, y_mm, 0.0)
 
         size = self._renderer._cfg.size_px  # noqa: SLF001
         img = Image.new("RGB", (size, size), (30, 30, 30))
@@ -3087,20 +3092,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
 
         to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
 
-        # LAYER ORDER MATTERS, bottom to top: floor plan, rooms, cleaned
-        # coverage, furniture, walls, dock, robot and labels.
+        # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
+        # walls, then the dock, then labels.
         #
         # Carpet over rooms because it is a property OF a room, and a
         # room drawn on top would hide it. Walls over both because they
         # bound everything. The dock over walls because it sits against
         # one. Labels last so nothing covers them.
-        for ring in self._floor_plan.floors:
-            draw.polygon(
-                [to_px(x, y) for x, y in ring],
-                outline=(185, 185, 180),
-                fill=(205, 203, 192),
-            )
-
         for idx, ring in enumerate(self._polygons.values()):
             draw.polygon(
                 [to_px(x, y) for x, y in ring],
@@ -3113,53 +3111,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # per-room colours that keep adjacent rooms distinguishable.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
 
-        # iRobot's live GeoJSON bundle is the missing half of the map:
-        # it provides where the robot has cleaned, its path, and detected
-        # hazards in the same coordinate frame as the room polygons.
-        for ring in live_coverage:
-            draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
-
-        for ring in self._floor_plan.furniture:
-            draw.polygon(
-                [to_px(x, y) for x, y in ring],
-                outline=(190, 190, 190),
-                fill=(225, 225, 225),
-            )
-
         for ring in self._floor_plan.borders:
-            draw.polygon(
-                [to_px(x, y) for x, y in ring],
-                outline=(90, 90, 90),
-                width=2,
-            )
-
-        for feature in (live_bundle.get("trajectories") or {}).get("features") or []:
-            coords = (
-                (feature.get("geometry") or {}).get("coordinates")
-                if isinstance(feature, dict)
-                else None
-            )
-            try:
-                points = [
-                    to_px(float(x) * 1000.0, float(y) * 1000.0)
-                    for x, y in coords
-                ]
-            except (TypeError, ValueError):
-                continue
-            if len(points) >= 2:
-                draw.line(points, fill=(80, 150, 235), width=2)
-
-        for feature in (live_bundle.get("hazard") or {}).get("features") or []:
-            coords = (
-                (feature.get("geometry") or {}).get("coordinates")
-                if isinstance(feature, dict)
-                else None
-            )
-            try:
-                px, py = to_px(float(coords[0]) * 1000.0, float(coords[1]) * 1000.0)
-            except (TypeError, ValueError, IndexError):
-                continue
-            draw.regular_polygon((px, py, 8), 3, fill=(240, 150, 60))
+            draw.polygon([to_px(x, y) for x, y in ring], fill=(90, 90, 90))
 
         # THE TRAIL, on top of the floor plan and under the labels.
         #
@@ -3194,16 +3147,6 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 previous = (x_mm, y_mm)
             if len(trail) >= 2:
                 draw.line(trail, fill=(120, 200, 255), width=2)
-
-        if positions:
-            x_mm, y_mm, heading = positions[-1]
-            px, py = to_px(x_mm, y_mm)
-            draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(60, 170, 255))
-            radians = math.radians(heading)
-            draw.line(
-                (px, py, px + math.cos(radians) * 12, py - math.sin(radians) * 12),
-                fill=(255, 255, 255), width=2,
-            )
 
         if self._floor_plan.dock is not None:
             dx, dy, _orientation = self._floor_plan.dock
@@ -3299,3 +3242,37 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         if cal:
             attrs["calibration_points"] = cal
         return attrs
+
+    @callback
+    def _on_live_bundle(self, bundle: Any) -> None:
+        """Redraws the rooms map when a live bundle arrives.
+
+        THE MAP NOW UPDATES DURING A MISSION rather than only when the
+        map version changes. Contributed by @jouwdan (PR #63), who found
+        the second url on MapUpdateMessage.
+
+        Only redraws once room polygons exist -- before that there is
+        nothing to draw on, and a render would produce an empty image
+        that looks like a fault rather than like a robot that has not
+        mapped yet.
+
+        The work goes to a background task because this is a dispatcher
+        callback: rendering a PNG inline blocks the event loop for as
+        long as PIL takes.
+        """
+        self._live_bundle = bundle
+        if not self._polygons:
+            return
+        self._config_entry.async_create_background_task(
+            self.hass, self._async_render_live_bundle(), "roomba_plus_live_bundle"
+        )
+
+    async def _async_render_live_bundle(self) -> None:
+        """Re-renders and publishes, off the event loop."""
+        try:
+            self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._attr_image_last_updated = dt_util.utcnow()
+            self.async_write_ha_state()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Prime rooms map: live re-render failed", exc_info=True)
+
