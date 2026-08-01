@@ -789,6 +789,14 @@
       },
       "prime_part_pad_wash_replacement": {
         "name": "Manutenção – Lavagem, substituição necessária"
+      },
+      "prime_cleaning_mode": {
+        "name": "Modo de limpeza",
+        "state": {
+          "vacuuming": "A aspirar",
+          "mopping": "A lavar",
+          "vacuuming_and_mopping": "A aspirar e lavar"
+        }
       }
     },
     "binary_sensor": {

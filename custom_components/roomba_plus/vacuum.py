@@ -247,6 +247,48 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     # ── Activity ──────────────────────────────────────────────────────────
 
+    #: Mission-status operatingMode -> what the robot is doing now.
+    #:
+    #: CONFIRMED across four captures from one Combo (@DaRealGuGu),
+    #: including one taken during the mopping half of a scheduled
+    #: vacuum-then-mop run:
+    #:
+    #:     docked          2   vacuum
+    #:     combo running   6   2|4, vacuuming and mopping together
+    #:     mopping half    4   mop only
+    #:
+    #: NOT THE COMMAND NUMBERS. A command asks for 512 (vacuum then mop)
+    #: or 32 (combined), and neither ever appears here. Reading one
+    #: table against the other is what made 6 look impossible for two
+    #: days.
+    #:
+    #: Anything outside these three is left unreported rather than
+    #: guessed: the bitmask may carry values nobody has seen.
+    _PRIME_CLEANING_MODES: dict[int, str] = {
+        2: "vacuuming",
+        4: "mopping",
+        6: "vacuuming_and_mopping",
+    }
+
+    def _prime_cleaning_mode(self) -> str | None:
+        """Vacuuming, mopping, or both -- while a mission is running.
+
+        Only during a mission. A docked robot still reports a mode, and
+        it describes the last or next job rather than anything happening
+        now -- reporting that would be worse than reporting nothing.
+        """
+        data = getattr(self._config_entry, "runtime_data", None)
+        if data is None or data.connection_type is not ConnectionType.CLOUD_ONLY:
+            return None
+
+        coordinator = getattr(data, "prime_status_coordinator", None)
+        shadows = getattr(coordinator, "data", None) or {}
+        status = (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus") or {}
+
+        if status.get("cycle") in (None, "none"):
+            return None
+        return self._PRIME_CLEANING_MODES.get(status.get("operatingMode"))
+
     def _prime_dock_activity(self) -> str | None:
         """What the dock is doing right now, or None if nothing.
 
@@ -637,6 +679,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         dock_activity = self._prime_dock_activity()
         if dock_activity is not None:
             attrs["dock_activity"] = dock_activity
+
+        # WHAT THE ROBOT IS DOING, when a mission is running.
+        #
+        # `cycle` stays "clean" for a whole vacuum-then-mop job, so this
+        # is the only way to tell the two halves apart. Same reasoning
+        # as dock_activity above: an attribute, because VacuumActivity
+        # has six members and none of them is "mopping".
+        cleaning_mode = self._prime_cleaning_mode()
+        if cleaning_mode is not None:
+            attrs["cleaning_mode"] = cleaning_mode
         return attrs
 
     def _get_cleaning_status(

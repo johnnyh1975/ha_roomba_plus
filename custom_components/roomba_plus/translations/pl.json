@@ -789,6 +789,14 @@
       },
       "prime_part_pad_wash_replacement": {
         "name": "Konserwacja – Mycie nakładki, wymiana"
+      },
+      "prime_cleaning_mode": {
+        "name": "Tryb sprzątania",
+        "state": {
+          "vacuuming": "Odkurzanie",
+          "mopping": "Mycie",
+          "vacuuming_and_mopping": "Odkurzanie i mycie"
+        }
       }
     },
     "binary_sensor": {

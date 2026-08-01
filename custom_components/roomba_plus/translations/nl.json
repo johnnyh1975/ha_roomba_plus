@@ -789,6 +789,14 @@
       },
       "prime_part_pad_wash_replacement": {
         "name": "Onderhoud – Doekwas, vervanging nodig"
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigingsmodus",
+        "state": {
+          "vacuuming": "Stofzuigen",
+          "mopping": "Dweilen",
+          "vacuuming_and_mopping": "Stofzuigen en dweilen"
+        }
       }
     },
     "binary_sensor": {

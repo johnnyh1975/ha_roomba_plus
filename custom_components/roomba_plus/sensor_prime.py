@@ -241,6 +241,77 @@ class PrimeBatterySensor(_PrimeCurrentStateSensorBase):
         return state.bat_pct if state is not None else None
 
 
+class PrimeCleaningModeSensor(_PrimeCurrentStateSensorBase):
+    """Vacuuming, mopping, or both -- while a mission is running.
+
+    `cycle` stays "clean" for an entire vacuum-then-mop job, so nothing
+    in the vacuum entity's own state distinguishes the two halves. This
+    reads `cleanMissionStatus.operatingMode`, which does.
+
+    CONFIRMED across four captures from one Combo (@DaRealGuGu),
+    including one taken during the mopping half of a scheduled
+    vacuum-then-mop run -- the capture that had been missing:
+
+        docked          2   vacuum
+        combo running   6   2|4, both engaged together
+        mopping half    4   mop only
+
+    WHY A SENSOR RATHER THAN A VACUUM STATE. VacuumActivity has exactly
+    six members and none of them is "mopping". A vacuum entity reporting
+    anything else is broken rather than extended, so the distinction has
+    to live somewhere else. The same value is also on the vacuum as a
+    `cleaning_mode` attribute, for templates that want it there.
+
+    THE COMMAND USES THE SAME FIELD NAME FOR DIFFERENT NUMBERS -- 512
+    asks for vacuum-then-mop, 32 for a combined run -- and neither
+    appears in the status. Reading one table against the other made 6
+    look impossible for two days, which is why anything outside the
+    three confirmed values is reported as unknown rather than guessed.
+    """
+
+    #: Wire value -> Home Assistant state slug.
+    #:
+    #: Slugs because HA requires [a-z0-9-_]+ for translated ENUM states.
+    _MODES: dict[int, str] = {
+        2: "vacuuming",
+        4: "mopping",
+        6: "vacuuming_and_mopping",
+    }
+
+    entity_description = SensorEntityDescription(
+        key="prime_cleaning_mode",
+        translation_key="prime_cleaning_mode",
+        device_class=SensorDeviceClass.ENUM,
+        options=["vacuuming", "mopping", "vacuuming_and_mopping"],
+    )
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_mode"
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "cleaning_mode"
+
+    @property
+    def native_value(self) -> str | None:
+        """None while docked, on purpose.
+
+        A docked robot still reports a mode, and it describes the last
+        or the next job rather than anything happening now. Showing that
+        as the current activity is exactly the misreading that made an
+        earlier look at this field conclude it never moves.
+        """
+        state = self._current_state
+        status = getattr(state, "clean_mission_status", None) if state else None
+        if status is None:
+            return None
+        cycle = getattr(status, "cycle", None)
+        if cycle in (None, "none"):
+            return None
+        return self._MODES.get(getattr(status, "operating_mode", None))
+
+
 class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime detected mop pad type. Reads
     RESOLVED 31 July 2026 (@chairstacker), and the doubt recorded here

@@ -3079,9 +3079,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
 
-        # Polygon vertices are static geometry, not consecutive robot poses.
-        # Seed the fit directly so the telemetry jump filter cannot discard
-        # corners more than 500 mm apart.
+        # Seed the auto-fit transform from the room extents. Classic gets
+        # this from accumulated poses; Prime has the polygons up front,
+        # which is why its map is complete before the first mission.
         rings = [
             *self._polygons.values(),
             *self._floor_plan.carpet,
@@ -3123,13 +3123,17 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
 
         for ring in self._floor_plan.borders:
-            # _rings_mm keeps outer rings only. Filling one would erase its
-            # interior holes and mask every room and live layer beneath it.
-            draw.polygon(
-                [to_px(x, y) for x, y in ring],
-                outline=(90, 90, 90),
-                width=2,
-            )
+            # OUTLINE ONLY, for the reason written two lines above about
+            # carpet and then not applied here.
+            #
+            # Borders are MultiPolygon AREAS, not thin walls. Filling
+            # them paints a solid grey slab over the rooms underneath --
+            # @jouwdan sent before/after screenshots of exactly that
+            # (PR #64), with the room colours completely hidden.
+            #
+            # The wall is the outline. Drawing it as one shows the same
+            # geometry without covering anything.
+            draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
 
         # THE TRAIL, on top of the floor plan and under the labels.
         #
@@ -3292,3 +3296,4 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self.async_write_ha_state()
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Prime rooms map: live re-render failed", exc_info=True)
+

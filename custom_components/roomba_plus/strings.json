@@ -791,6 +791,14 @@
       },
       "prime_part_pad_wash_replacement": {
         "name": "Maintenance – Pad washing, replacement due"
+      },
+      "prime_cleaning_mode": {
+        "name": "Cleaning mode",
+        "state": {
+          "vacuuming": "Vacuuming",
+          "mopping": "Mopping",
+          "vacuuming_and_mopping": "Vacuuming and mopping"
+        }
       }
     },
     "device_tracker": {

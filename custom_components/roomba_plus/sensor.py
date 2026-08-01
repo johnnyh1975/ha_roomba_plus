@@ -66,6 +66,7 @@ from .sensor_prime import (
     PrimeChargeCyclesErrorSensor,
     PrimeChargeCyclesOkSensor,
     PrimeConnectionHealthSensor,
+    PrimeCleaningModeSensor,
     PrimeDetectedPadSensor,
     PrimeDockStatusSensor,
     PrimeErrorSensor,
@@ -230,6 +231,11 @@ async def async_setup_entry(
         # NEW (this session): capability-gated -- see
         # get_prime_capability_flags()'s own docstring for the "None
         # means unknown, only explicit 0 means absent" contract.
+        # NO CAPABILITY GATE. Every robot vacuums, so the sensor is
+        # meaningful even on one that cannot mop -- it just never
+        # reports "mopping". Gating on scrub would hide the vacuum half
+        # from exactly the robots where it is the only half.
+        entities.append(PrimeCleaningModeSensor(data.blid, config_entry))
         if cap is None or cap.scrub != 0:
             entities.append(PrimeDetectedPadSensor(data.blid, config_entry))
         if cap is None or cap.suction_lvl != 0:

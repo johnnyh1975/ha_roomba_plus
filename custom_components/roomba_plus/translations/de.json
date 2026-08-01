@@ -789,6 +789,14 @@
       },
       "prime_part_pad_wash_replacement": {
         "name": "Wartung – Tuchwäsche, Austausch fällig"
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigungsmodus",
+        "state": {
+          "vacuuming": "Saugen",
+          "mopping": "Wischen",
+          "vacuuming_and_mopping": "Saugen und Wischen"
+        }
       }
     },
     "binary_sensor": {
