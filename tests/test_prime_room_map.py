@@ -1081,6 +1081,7 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_dispatcher_connect" in source
         assert "_on_live_bundle" in source
+        assert "_on_live_position" in source
 
     def test_the_subscription_is_removed_on_unload(self):
         """A reload would otherwise leave one connection per cycle, each
@@ -1093,21 +1094,21 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_on_remove" in source
 
-    def test_nothing_is_rendered_before_rooms_exist(self):
-        """A render with no polygons produces an empty image, which looks
-        like a fault rather than like a robot that has not mapped yet."""
+    def test_live_updates_mark_the_image_dirty_without_rendering(self):
+        """The dispatcher path must not spend CPU when nobody is viewing."""
         from unittest.mock import MagicMock
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        entity._polygons = {}
-        entity._config_entry = MagicMock()
-        entity.hass = MagicMock()
+        entity._live_dirty = False
+        entity._last_live_state_write = float("inf")
+        entity.async_write_ha_state = MagicMock()
 
         entity._on_live_bundle(MagicMock())
 
-        entity._config_entry.async_create_background_task.assert_not_called()
+        assert entity._live_dirty
+        entity.async_write_ha_state.assert_not_called()
 
     def test_rendering_happens_off_the_event_loop(self):
         """This is a dispatcher callback. Rendering a PNG inline would
@@ -1116,9 +1117,28 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
-        source = inspect.getsource(PrimeRoomsImage._async_render_live_bundle)
+        source = inspect.getsource(PrimeRoomsImage.async_image)
 
         assert "async_add_executor_job" in source
+
+    def test_live_state_updates_are_throttled(self):
+        """A dashboard should not refetch the image for every pose packet."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._live_dirty = False
+        entity._last_live_state_write = 0.0
+        entity.async_write_ha_state = MagicMock()
+
+        with patch("custom_components.roomba_plus.image._time_mod.monotonic", side_effect=(10.0, 11.0, 12.0)):
+            entity._on_live_position()
+            entity._on_live_position()
+            entity._on_live_position()
+
+        assert entity._live_dirty
+        assert entity.async_write_ha_state.call_count == 2
 
     def test_live_layers_are_rendered_without_changing_the_room_fit(self):
         """The live bundle is a layer, not a second coordinate system."""
