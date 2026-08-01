@@ -79,7 +79,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.2.0b1"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.2.0b2"
 
       - name: Run full test suite with coverage
         run: |
@@ -213,3 +213,23 @@ jobs:
       - name: Check relative markdown links
         continue-on-error: true
         run: python3 scripts/check_markdown_links.py
+
+      # STAGE 0 GUARDS. Each was written after a real bug of its own
+      # shape, and each found another on its first run.
+      - name: Check generation parity
+        run: python3 scripts/check_generation_parity.py
+
+      - name: Check cloud request budget
+        run: python3 scripts/check_request_budget.py
+
+      # Every late import either guards a real cycle or states another
+      # reason. Established on its first run that NONE of them guards a
+      # cycle -- the opposite of what the refactoring plan assumed.
+      - name: Check late imports
+        run: python3 scripts/check_late_imports.py
+
+      # An inventory rather than a gate: prints which tests assert on
+      # values nobody has confirmed. Fails only if a marker carries no
+      # reason.
+      - name: List assumed tests
+        run: python3 scripts/list_assumed_tests.py
