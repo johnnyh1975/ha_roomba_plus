@@ -69,7 +69,10 @@ class TestPrimeDetectedPadSensor:
         config_entry = _make_status_config_entry({"detectedPad": "padPlate"})
         sensor = PrimeDetectedPadSensor("BLID123", config_entry)
 
-        assert sensor.native_value == "padPlate"
+        # SLUG, not the wire value. Home Assistant requires
+        # [a-z0-9-_]+ for translated ENUM states, so  is
+        # mapped to  before publishing.
+        assert sensor.native_value == "pad_plate"
 
 
 class TestPrimeRuntimeHoursSensor:
@@ -612,9 +615,9 @@ class TestDetectedPadStatesAreTranslated:
         source = inspect.getsource(PrimeDetectedPadSensor)
 
         assert "SensorDeviceClass.ENUM" in source
-        assert '"padPlate"' in source and '"NoPad"' in source
+        assert '"pad_plate"' in source and '"no_pad"' in source
         # The types too, not just what this project has observed.
-        assert '"reusableWet"' in source and '"dispDry"' in source
+        assert '"reusable_wet"' in source and '"disp_dry"' in source
 
     def test_both_states_are_translated_in_every_locale(self):
         import json
@@ -636,9 +639,43 @@ class TestDetectedPadStatesAreTranslated:
             # APK analysis found six type-specific UI strings in the app
             # ("Reusable Wet Mopping Pad attached", ...), so the types
             # exist -- pad-plate robots simply never report them.
+            # SLUGS, not wire values. Home Assistant requires
+            # [a-z0-9-_]+ for translated ENUM states and rejects
+            # camelCase at validation time -- which is how the first
+            # attempt at this was caught, in CI, after a release.
+            #
+            # Both observed spellings of "no pad" collapse onto `no_pad`,
+            # which incidentally settles a question nobody could answer:
+            # one robot reported `NoPad`, the library's enum says
+            # `noPad`.
             assert set(states) >= {
-                "padPlate", "NoPad", "noPad",
-                "dispDry", "dispWet", "reusableDry", "reusableWet", "invalid",
+                "pad_plate", "no_pad", "disp_dry", "disp_wet",
+                "reusable_dry", "reusable_wet", "invalid",
             }, locale_file.name
             for value in states.values():
                 assert value.strip(), locale_file.name
+
+    def test_wire_values_map_onto_declared_options(self):
+        """Every wire value the robot can send must land on a slug the
+        sensor declares. A value outside the options list renders raw.
+
+        This is the pairing that broke: the map and the list were edited
+        separately, and nothing checked they agreed."""
+        from custom_components.roomba_plus.sensor_prime import (
+            _PAD_STATE_SLUGS,
+            PrimeDetectedPadSensor,
+        )
+        import inspect
+
+        source = inspect.getsource(PrimeDetectedPadSensor)
+
+        for slug in set(_PAD_STATE_SLUGS.values()):
+            assert f'"{slug}"' in source, slug
+
+    def test_both_no_pad_spellings_collapse(self):
+        """One robot reported `NoPad`, the library's enum says `noPad`,
+        and nobody knows which the wire uses. Mapping both onto one slug
+        makes the question stop mattering."""
+        from custom_components.roomba_plus.sensor_prime import _PAD_STATE_SLUGS
+
+        assert _PAD_STATE_SLUGS["NoPad"] == _PAD_STATE_SLUGS["noPad"] == "no_pad"
