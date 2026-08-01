@@ -779,7 +779,16 @@
         "name": "Mantenimiento – Bolsa de suciedad"
       },
       "prime_part_mop_pads": {
-        "name": "Mantenimiento – Mopas DualClean"
+        "name": "Mantenimiento – Mopa lavable"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Mantenimiento – Sensores de desnivel"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Mantenimiento – Lavado, limpieza pendiente"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Mantenimiento – Lavado, sustitución pendiente"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Problema de fregona"
       },
       "mop_tank_present": {
-        "name": "Depósito de fregona presente"
+        "name": "Depósito de agua del robot"
       },
       "prime_dock_error": {
         "name": "Error de la base"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Detener el secado"
+      },
+      "prime_start_pad_dry": {
+        "name": "Iniciar el secado"
       }
     },
     "switch": {

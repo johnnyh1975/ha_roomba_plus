@@ -779,7 +779,16 @@
         "name": "Manutenzione – Sacchetto raccoglipolvere"
       },
       "prime_part_mop_pads": {
-        "name": "Manutenzione – Panni DualClean"
+        "name": "Manutenzione – Panno lavabile"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Manutenzione – Sensori di dislivello"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Manutenzione – Lavaggio, pulizia necessaria"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Manutenzione – Lavaggio, sostituzione necessaria"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Problema lavapavimenti"
       },
       "mop_tank_present": {
-        "name": "Serbatoio lavapavimenti presente"
+        "name": "Serbatoio dell'acqua del robot"
       },
       "prime_dock_error": {
         "name": "Errore base"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Interrompere l'asciugatura"
+      },
+      "prime_start_pad_dry": {
+        "name": "Avviare l'asciugatura"
       }
     },
     "switch": {

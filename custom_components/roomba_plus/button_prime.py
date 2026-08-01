@@ -116,14 +116,26 @@ class PrimeDockCommand:
 #:     Wash mop / rinse dock  -> washpad
 #:     Stop mop dry           -> stoppaddry
 #:
-#: DELIBERATELY ABSENT: `drypad` (starts drying), `flushsluice`,
-#: `flrefill` and `querydock` exist in the same enum. The app does not
-#: offer drying as a button -- it starts on its own after mopping -- and
-#: a button for something the app never triggers manually would be this
-#: project guessing at a workflow rather than mirroring one.
+#: `drypad` IS INCLUDED, and that reverses an earlier decision.
 #:
-#: `stoppaddry` has no counterpart button for the same reason: stopping
-#: is the action a user wants, starting is not.
+#: It was left out because the app does not offer it -- drying starts on
+#: its own after a wash. @DaRealGuGu pointed out what that costs: stop
+#: the drying and the only way to restart it is another full wash,
+#: wasting a tank of water for nothing.
+#:
+#: The original reasoning conflated two things. Guessing at a COMMAND is
+#: what this project refuses to do; offering a WORKFLOW the app does not
+#: is a different question, and here it is plainly better. `drypad` is a
+#: confirmed @SerialName wire string from the same enum as `evac`,
+#: `washpad` and `stoppaddry` -- all three of which a tester has now
+#: pressed with the dock responding within a second.
+#:
+#: Worst case the robot ignores it, which is visible immediately in the
+#: pad-dry sensor.
+#:
+#: STILL ABSENT: `flushsluice`, `flrefill`, `querydock`. Nobody has
+#: asked for them, none has an observable effect a user could check, and
+#: `querydock` is a read dressed as a command.
 #:
 #: There is no `stopwashpad` in the enum at all, so washing evidently
 #: runs to completion.
@@ -132,6 +144,9 @@ PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
     PrimeDockCommand(key="prime_wash_pad", command="washpad", dock_cap_attr="pad_wash"),
     PrimeDockCommand(
         key="prime_stop_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry"
+    ),
+    PrimeDockCommand(
+        key="prime_start_pad_dry", command="drypad", dock_cap_attr="pad_dry"
     ),
 )
 

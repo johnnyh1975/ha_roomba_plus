@@ -247,6 +247,48 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     # ── Activity ──────────────────────────────────────────────────────────
 
+    def _prime_dock_activity(self) -> str | None:
+        """What the dock is doing right now, or None if nothing.
+
+        Reads the same two fields the dedicated pad-wash and pad-dry
+        sensors use -- this is a convenience view of them on the entity
+        people actually look at, not a new source of truth.
+
+        Returns a stable slug rather than a translated string: an
+        attribute is consumed by templates and automations, and a value
+        that changes with the user's language breaks both.
+        """
+        data = getattr(self._config_entry, "runtime_data", None)
+        if data is None or data.connection_type is not ConnectionType.CLOUD_ONLY:
+            return None
+
+        coordinator = getattr(data, "prime_status_coordinator", None)
+        shadows = getattr(coordinator, "data", None) or {}
+        dock = (shadows.get("ro-currentstate") or {}).get("dock") or {}
+
+        try:
+            from roombapy_prime.models.robot_info import DockState  # noqa: PLC0415
+
+            # IN PROGRESS ONLY. The "okay" states mean the dock is idle
+            # and well, which the vacuum's own "docked" already says.
+            in_progress = {
+                DockState.PAD_WASH_IN_PROGRESS: "pad_washing",
+                DockState.PAD_DRY_IN_PROGRESS: "pad_drying",
+                DockState.DOCK_EVACUATION_IN_PROGRESS: "evacuating",
+            }
+            for raw in (dock.get("pwState"), dock.get("pdState"), dock.get("state")):
+                if raw is None:
+                    continue
+                try:
+                    activity = in_progress.get(DockState(raw))
+                except ValueError:
+                    continue
+                if activity is not None:
+                    return activity
+        except ImportError:
+            return None
+        return None
+
     @property
     def activity(self) -> VacuumActivity:
         """Map the current cleanMissionStatus phase to a VacuumActivity.
@@ -576,6 +618,25 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         )
         if favorites:
             attrs["favorites"] = favorites
+
+        # WHAT THE DOCK IS DOING, alongside the vacuum's own state.
+        #
+        # Requested by @DaRealGuGu: a robot having its pad washed shows
+        # as "docked", which is true and unhelpful -- the dock is busy
+        # and he wants to see that on the main entity.
+        #
+        # AN ATTRIBUTE, NOT A STATE. Home Assistant's VacuumActivity has
+        # exactly six members -- cleaning, docked, idle, paused,
+        # returning, error -- and a vacuum entity reporting anything
+        # else is broken, not extended. So "pad washing" cannot be a
+        # state no matter how much it deserves to be one.
+        #
+        # As an attribute it drives a template sensor, a card's
+        # secondary line, or an automation condition, which is what he
+        # actually wants it for.
+        dock_activity = self._prime_dock_activity()
+        if dock_activity is not None:
+            attrs["dock_activity"] = dock_activity
         return attrs
 
     def _get_cleaning_status(

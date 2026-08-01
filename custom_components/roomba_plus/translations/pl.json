@@ -779,7 +779,16 @@
         "name": "Konserwacja – Worek na zanieczyszczenia"
       },
       "prime_part_mop_pads": {
-        "name": "Konserwacja – Nakładki DualClean"
+        "name": "Konserwacja – Nakładka do prania"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Konserwacja – Czujniki krawędzi"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Konserwacja – Mycie nakładki, czyszczenie"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Konserwacja – Mycie nakładki, wymiana"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Problem z mopem"
       },
       "mop_tank_present": {
-        "name": "Zbiornik mopa obecny"
+        "name": "Zbiornik wody w robocie"
       },
       "prime_dock_error": {
         "name": "Błąd stacji dokującej"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Zatrzymaj suszenie"
+      },
+      "prime_start_pad_dry": {
+        "name": "Rozpocznij suszenie"
       }
     },
     "switch": {

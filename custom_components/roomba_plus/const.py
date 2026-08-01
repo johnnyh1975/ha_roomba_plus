@@ -533,6 +533,30 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
     "": VacuumActivity.IDLE,
     "charge": VacuumActivity.DOCKED,
     "evac": VacuumActivity.RETURNING,
+    # padWash CONFIRMED LIVE (@DaRealGuGu, 1 Aug 2026): pressing the new
+    # "wash pad" button put the robot into `phase: "padWash"`, which
+    # this map did not know. An unmapped phase logs a warning and leaves
+    # the vacuum entity showing its previous activity -- so the robot
+    # sat on the dock being washed while Home Assistant said whatever it
+    # had said before.
+    #
+    # DOCKED, not CLEANING: the robot is on the dock and not moving.
+    # RETURNING would be wrong for the same reason -- it has arrived.
+    #
+    # The dedicated pad-wash sensor carries the detail; this map only
+    # has to keep the vacuum entity honest.
+    "padWash": VacuumActivity.DOCKED,
+    # NOT ADDED ON THE SAME REASONING: `padDry` and `refilling`.
+    #
+    # The app's RobotMissionPhase has twelve values and this map now
+    # knows eleven, so at least one is still out there. `padDry` looks
+    # like the obvious sibling -- the same tester triggered drying in
+    # the same session -- but his capture never showed that string, and
+    # a phase invented from a plausible pattern is how wrong values get
+    # into a map that HA reads on every state change.
+    #
+    # An unmapped phase costs a log warning and a stale activity, which
+    # is recoverable. A wrongly mapped one is silently wrong forever.
     "hmMidMsn": VacuumActivity.CLEANING,
     "hmPostMsn": VacuumActivity.RETURNING,
     "hmUsrDock": VacuumActivity.RETURNING,

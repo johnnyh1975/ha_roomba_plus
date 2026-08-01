@@ -779,7 +779,16 @@
         "name": "Maintenance – Sac d'élimination de la saleté"
       },
       "prime_part_mop_pads": {
-        "name": "Maintenance – Lingettes de lavage DualClean"
+        "name": "Entretien – Lingette lavable"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Entretien – Capteurs de vide"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Entretien – Lavage, nettoyage requis"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Entretien – Lavage, remplacement requis"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Problème de lavage"
       },
       "mop_tank_present": {
-        "name": "Réservoir de lavage présent"
+        "name": "Réservoir d'eau du robot"
       },
       "prime_dock_error": {
         "name": "Erreur de la station"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Arrêter le séchage"
+      },
+      "prime_start_pad_dry": {
+        "name": "Démarrer le séchage"
       }
     },
     "switch": {

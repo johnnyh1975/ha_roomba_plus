@@ -1003,6 +1003,75 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
 #: in the app (values seen: 0 and 165, and 268 elsewhere). Naming them
 #: on a guess would be worse than leaving them numeric -- a wrong label
 #: gets believed, a number invites a question.
+#:
+#: APK ANALYSIS CANNOT SUPPLY THEM, and that is now established rather
+#: than assumed. The app has no compiled id->name table at all: it
+#: fetches a parts CATALOGUE from the server (`MaintenancePartV2`, with
+#: partId, partName, cleanInterval, replaceInterval, guideUrl, buyUrl)
+#: and joins it to the counter data for display.
+#:
+#: So the names for 67 and 71 could never have come from the code
+#: either -- they came from screenshots, and that is the only route this
+#: project has used.
+#:
+#: THE PROPER FIX is that catalogue endpoint. `/v1/robots/{blid}/parts`
+#: returns counters only; RobotPart has part_id, count_type, counters
+#: and no name field. Whatever serves MaintenancePartV2 is a different
+#: call and is not identified.
+#:
+#: A PLAUSIBLE READING EXISTS AND IS NOT USED: 202 carries
+#: `count_type: pad_washes_used` with category `maintenance`, 212 the
+#: same counter with category `replacement`, and the app has UI strings
+#: for a pad washing roller ("Remove pad washing roller", "Clean the pad
+#: washing basin"). Clean-it versus replace-it on one roller fits
+#: perfectly. It is still a deduction from two hints, and a maintenance
+#: label that is wrong sends someone to replace the wrong part.
+#:
+#: THE NUMBER-MATCHING ROUTE HAS BEEN TRIED AND FAILED HERE. It named
+#: part 213 outright, but @DaRealGuGu reports no matching values in his
+#: app at all for 202 and 212 -- so they are not in the maintenance list
+#: the app shows.
+#:
+#: THAT ABSENCE IS ITSELF EVIDENCE, and it points the same way as
+#: everything else:
+#:
+#:   - the app's maintenance list covers ROBOT parts -- mop pad, cliff
+#:     sensors, edge brush, multi-surface brush, filter
+#:   - a pad washing roller sits in the DOCK, and the app's strings for
+#:     it are dock instructions: "Remove pad washing roller", "Clean the
+#:     pad washing basin"
+#:   - both testers' docks report pad washing capability (pw=1)
+#:
+#: AND THE NUMBERS AGREE ACROSS TWO ACCOUNTS. Thresholds are identical:
+#:
+#:     202  used +  remaining =  50 washes   maintenance
+#:     212  used +  remaining = 300 washes   replacement
+#:
+#: 35+15 on one robot, 208+(-158) and 208+92 on the other. One counter,
+#: clean it every 50 washes, replace it every 300. That is exactly what
+#: a washable roller needs.
+#:
+#: NAMED FOR WHAT IS PROVEN, NOT FOR THE PART.
+#:
+#: The physical component stays ambiguous, and the app's own strings are
+#: why: it names TWO dock parts, a "pad washing roller" and a "pad
+#: washing basin". One part with two thresholds and two parts with one
+#: each fit the data equally well:
+#:
+#:     one part:  clean the roller every 50, replace it every 300
+#:     two parts: clean the basin every 50, replace the roller every 300
+#:
+#: Calling 202 "pad washing roller cleaning" would send someone to scrub
+#: the wrong component.
+#:
+#: WHAT IS NOT AMBIGUOUS is everything else: the counter is
+#: `pad_washes_used` on both accounts, the thresholds are 50 and 300 on
+#: both, and the categories are `maintenance` and `replacement`. So the
+#: labels say pad washing, and say which action is due, and stop there.
+#:
+#: That is strictly better than a bare number -- "Pad washing, cleaning
+#: due" tells a user something actionable -- and it claims nothing the
+#: data does not carry.
 #: Each known part gets its OWN translation key rather than being
 #: substituted into a generic one. A placeholder cannot be translated:
 #: "Consommable - Edge sweeping brush" is worse than plain English,
@@ -1028,6 +1097,26 @@ _KNOWN_PARTS: dict[str, str] = {
     "72": "prime_part_filter",
     "147": "prime_part_dirt_bag",
     "148": "prime_part_mop_pads",
+    # 213 CONFIRMED BY VALUE MATCH (@arielgr, Roomba 115).
+    #
+    # He put the app's maintenance list beside Home Assistant's and the
+    # numbers lined up in order:
+    #
+    #     Washable Mop Pad      14 routines   = part 148
+    #     Cliff Sensors         19 routines   = part 213  <- this one
+    #     Edge Sweeping Brush   92 hr         = part 67
+    #     Multi-Surface Brush   300 hr        = part 71
+    #
+    # Four values agreeing in sequence is not coincidence. This is the
+    # method that works for unnamed part ids, and it needs nothing but
+    # two screenshots -- worth remembering for 202 and 212, which are
+    # still unnamed because nobody has found them in the app at all.
+    "213": "prime_part_cliff_sensors",
+    # See the block above: named for the counter and the action, not for
+    # the physical part, because the app names two candidate dock parts
+    # and nothing distinguishes them.
+    "202": "prime_part_pad_wash_cleaning",
+    "212": "prime_part_pad_wash_replacement",
     # 202 and 212 both report count_type "pad_washes_used" and differ
     # only by category (maintenance vs replacement). Two testers saw
     # them and neither could find either in the app, so they stay

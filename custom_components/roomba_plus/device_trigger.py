@@ -33,6 +33,8 @@ roombapy internals.
 """
 from __future__ import annotations
 
+import logging
+
 import voluptuous as vol
 
 from homeassistant.components.device_automation import DEVICE_TRIGGER_BASE_SCHEMA
@@ -61,6 +63,8 @@ from .const import (
     EVENT_ROOM_COMPLETED,
     HEALTH_BAND_RANK,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # ── Trigger type constants ────────────────────────────────────────────────────
 
@@ -336,11 +340,31 @@ async def async_attach_trigger(
         entry_id = _entry_id_for_device(hass, device_id)
         if not entry_id:
             return lambda: None
+        # NO KeyError ON AN UNKNOWN TRIGGER TYPE.
+        #
+        # `trigger_type` comes from a stored automation, so it is
+        # whatever was written when that automation was created. A
+        # trigger renamed or removed in a later version arrives here as
+        # a string this dict does not have, and a KeyError inside an
+        # automation's attach step breaks the automation with a
+        # traceback rather than a message.
+        #
+        # The same lookup-without-a-fallback pattern crashed a tester's
+        # tooling run twice in one day, once for "FAIL" and once for
+        # "SKIP". Worth not repeating where a user's automation is on
+        # the other end.
         event_type = {
             TRIGGER_ROOM_COMPLETED: EVENT_ROOM_COMPLETED,
             TRIGGER_MAP_RETRAIN_STARTED: EVENT_MAP_RETRAIN_STARTED,
             TRIGGER_MAP_RETRAIN_COMPLETED: EVENT_MAP_RETRAIN_COMPLETED,
-        }[trigger_type]
+        }.get(trigger_type)
+        if event_type is None:
+            _LOGGER.warning(
+                "roomba_plus: automation uses unknown trigger type %r -- "
+                "it will never fire. Recreate the trigger.",
+                trigger_type,
+            )
+            return lambda: None
         event_config = event_trigger.TRIGGER_SCHEMA(
             {
                 CONF_PLATFORM: "event",
@@ -366,6 +390,7 @@ async def async_attach_trigger(
             return lambda: None
 
         from homeassistant.core import HassJob
+
 
         trigger_data = trigger_info["trigger_data"]
         job = HassJob(action, f"health_score_drop device trigger {trigger_info}")

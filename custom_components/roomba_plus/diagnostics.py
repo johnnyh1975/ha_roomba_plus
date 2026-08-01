@@ -125,6 +125,30 @@ _SHADOW_REDACT: Final[set[str]] = {
     "blid", "mac", "wifi", "ssid", "bssid", "sn", "serial",
     "navSerialNo", "hwPartsRev", "softwareVer", "uuid", "userId",
     "householdId", "household_id", "cloudEnv", "svcEndpoints",
+    # CREDENTIALS. Reported by @jouwdan, who found `passwordHash` in his
+    # own export and redacted it by hand before attaching it to a public
+    # issue.
+    #
+    # That is exactly the failure this set exists to prevent, and it got
+    # through because the set was assembled from fields somebody
+    # happened to notice -- never from asking what a CATEGORY of secret
+    # looks like.
+    #
+    # So: anything hash-, token-, key- or password-shaped, whether or
+    # not it has been seen in a capture. A field nobody has observed is
+    # precisely the one nobody will check before pasting a file into an
+    # issue.
+    "passwordHash",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "accessToken",
+    "refreshToken",
+    "idToken",
+    "apiKey",
+    "privateKey",
+    "certificate",
 }
 
 
@@ -135,6 +159,34 @@ _SHADOW_REDACT: Final[set[str]] = {
 #: under keys this code had never seen -- redacting a key called `mac`
 #: does nothing for one called `wlan0HwAddr`.
 _MAC_PATTERN = re.compile(r"\b[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}\b")
+
+
+#: Substrings that make a key a secret regardless of its exact name.
+#:
+#: The named set above lists fields somebody noticed. This catches the
+#: ones nobody has -- `wifiPasswd`, `authToken`, `deviceSecret` and
+#: whatever the next firmware invents.
+#:
+#: Matched case-insensitively against the whole key, so `passwordHash`
+#: and `hashedPassword` both go.
+_SECRET_SUBSTRINGS: Final[tuple[str, ...]] = (
+    "password", "passwd", "secret", "token", "apikey", "privatekey",
+    "credential", "passphrase",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    """Whether a key names something that must never leave the machine.
+
+    DELIBERATELY BROAD. A false positive redacts a harmless field and
+    costs a question in an issue thread; a false negative puts a
+    credential in a file somebody attaches publicly.
+
+    `hash` is NOT in the substring list on its own -- it would catch
+    `hashedMapId` and similar. `passwordHash` is covered by "password".
+    """
+    lowered = key.lower()
+    return any(marker in lowered for marker in _SECRET_SUBSTRINGS)
 
 
 def _redact_values(value: Any, blid: str | None) -> Any:
@@ -167,6 +219,43 @@ def _redact_values(value: Any, blid: str | None) -> Any:
     return value
 
 
+async def _prime_schedule_summary(data: Any) -> Any:
+    """What get_schedules() returns, reduced to the deciding fields.
+
+    The calendar reads this call, not a shadow. When it shows nothing,
+    the question is whether the robot reports a schedule at all -- and
+    until now the diagnostics could not say.
+    """
+    robot = getattr(data, "prime_robot", None)
+    household_id = getattr(data, "household_id", None)
+    if robot is None or not household_id:
+        return None
+
+    try:
+        response = await robot.get_schedules(household_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+    summary: list[dict[str, Any]] = []
+    for container in getattr(response, "household_schedules", None) or []:
+        for schedule in getattr(container, "schedules", None) or []:
+            options = getattr(schedule, "options", None)
+            if options is None:
+                summary.append({"options": None})
+                continue
+            start = getattr(options, "start", None)
+            summary.append({
+                "enabled": getattr(options, "enabled", None),
+                "deleted": getattr(options, "deleted", None),
+                "frequency": str(getattr(options, "frequency", None)),
+                "days": getattr(start, "day", None) if start else None,
+                "hour": getattr(start, "hour", None) if start else None,
+                "min": getattr(start, "min", None) if start else None,
+                "has_commands": bool(getattr(options, "commands", None)),
+            })
+    return {"count": len(summary), "schedules": summary}
+
+
 def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     """Every named shadow's contents, minus identifying fields.
 
@@ -192,7 +281,11 @@ def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     def _clean(value: Any) -> Any:
         if isinstance(value, dict):
             return {
-                k: ("**REDACTED**" if k in _SHADOW_REDACT else _clean(v))
+                k: (
+                    "**REDACTED**"
+                    if k in _SHADOW_REDACT or _is_secret_key(k)
+                    else _clean(v)
+                )
                 for k, v in value.items()
             }
         if isinstance(value, list):
@@ -422,6 +515,37 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
 ) -> dict[str, Any]:
+    """Diagnostics, with a final credential sweep over everything.
+
+    THE SWEEP IS THE POINT. Redaction used to be applied per section --
+    the config entry here, the shadow dump there -- and a section that
+    forgot to ask leaked. That is how `passwordHash` reached a public
+    issue (@jouwdan, who caught it by hand).
+
+    Anything hash-, token-, key- or password-shaped is removed on the
+    way out, wherever it sits and however deep. A new section added
+    later is covered without its author having to remember.
+    """
+    payload = await _build_diagnostics(hass, config_entry)
+    return _redact_secrets_everywhere(payload)
+
+
+def _redact_secrets_everywhere(value: Any) -> Any:
+    """Removes secret-shaped keys at every depth of the payload."""
+    if isinstance(value, dict):
+        return {
+            k: ("**REDACTED**" if _is_secret_key(k) else _redact_secrets_everywhere(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secrets_everywhere(v) for v in value]
+    return value
+
+
+async def _build_diagnostics(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+) -> dict[str, Any]:
     """Return diagnostics for a config entry.
 
     Sensitive keys (BLID, password, credentials) are redacted.
@@ -546,11 +670,45 @@ async def async_get_config_entry_diagnostics(
             "live_map": data.live_map_stats,
             "capabilities": _prime_capability_report(config_entry),
             "mission_status": _prime_mission_status(config_entry),
+            # SCHEDULES AS THE ROBOT REPORTS THEM, from the REST call
+            # the calendar actually uses.
+            #
+            # Neither shadow carries them: `rw-schedule.cleanSchedule2`
+            # is empty and the classic one holds a placeholder with no
+            # days and midnight as the time. So a tester saying "I have
+            # a weekly schedule and the calendar shows nothing" produced
+            # a diagnostics file with no way to tell whether the
+            # schedule arrives at all.
+            #
+            # Redacted down to the fields that decide whether the parser
+            # computes an occurrence: enabled, deleted, frequency, and
+            # the days and time. Names and commands are left out --
+            # room ids and schedule names are not needed to answer this
+            # and would widen what a public paste contains.
+            "prime_schedules": await _prime_schedule_summary(data),
             "mission_coordinator": {
                 "started": mission_coordinator is not None,
                 "last_update_success": getattr(mission_coordinator, "last_update_success", None),
                 "has_mission_data": (
                     mission_coordinator is not None and mission_coordinator.data is not None
+                ),
+                # WHY IT CAN BE FALSE ON A WORKING SETUP.
+                #
+                # The timeline arrives by push and is held in memory
+                # only. After a restart it is empty until the robot
+                # runs a mission -- so False on a docked robot that has
+                # not cleaned since startup is expected, not a fault.
+                #
+                # A tester saw True in one capture and False in the
+                # next, from the same robot, with an update and restart
+                # in between. Without this note that reads like a
+                # regression.
+                "mission_data_note": (
+                    "the timeline arrives by push and is not persisted; "
+                    "empty until the robot runs a mission after startup"
+                    if mission_coordinator is not None
+                    and mission_coordinator.data is None
+                    else None
                 ),
             },
         }

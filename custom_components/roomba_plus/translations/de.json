@@ -779,7 +779,16 @@
         "name": "Wartung – Staubbeutel"
       },
       "prime_part_mop_pads": {
-        "name": "Wartung – DualClean Wischtücher"
+        "name": "Wartung – Waschbares Wischtuch"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Wartung – Absturzsensoren"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Wartung – Tuchwäsche, Reinigung fällig"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Wartung – Tuchwäsche, Austausch fällig"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Wischroboter-Problem"
       },
       "mop_tank_present": {
-        "name": "Wischwassertank eingesetzt"
+        "name": "Wassertank im Roboter"
       },
       "prime_dock_error": {
         "name": "Dock-Fehler"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Trocknen beenden"
+      },
+      "prime_start_pad_dry": {
+        "name": "Trocknen starten"
       }
     },
     "switch": {

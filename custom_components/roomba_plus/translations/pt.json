@@ -779,7 +779,16 @@
         "name": "Manutenção – Saco de sujidade"
       },
       "prime_part_mop_pads": {
-        "name": "Manutenção – Panos DualClean"
+        "name": "Manutenção – Pano lavável"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Manutenção – Sensores de precipício"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Manutenção – Lavagem, limpeza necessária"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Manutenção – Lavagem, substituição necessária"
       }
     },
     "binary_sensor": {
@@ -796,7 +805,7 @@
         "name": "Problema de esfregona"
       },
       "mop_tank_present": {
-        "name": "Depósito de esfregona presente"
+        "name": "Depósito de água do robô"
       },
       "prime_dock_error": {
         "name": "Erro da base"
@@ -918,6 +927,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Parar a secagem"
+      },
+      "prime_start_pad_dry": {
+        "name": "Iniciar a secagem"
       }
     },
     "switch": {

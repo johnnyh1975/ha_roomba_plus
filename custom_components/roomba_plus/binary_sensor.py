@@ -1365,7 +1365,35 @@ class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
 
 
 class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
-    """V4/Prime equivalent of RoombaMopTankPresentStatus above -- same
+    """THE ROBOT's water tank -- NOT the dock's (issue #27, RESOLVED).
+
+    @chairstacker removed both DOCK tanks on a Roomba 405 and this
+    sensor kept reading "present". It was right to: the app keeps three
+    separate values, and `tankPresent` is the first of them.
+
+        kTankLevel             the robot's own tank   <- this sensor
+        kDockStateTankLevel    dock clean water
+        kDockStateGWTankLevel  dock grey (dirty) water
+
+    The app's own error strings confirm the split, and are specific
+    where the pad strings were generic:
+
+        "Dock Clean Tank: missing / low / drain issue / possible leak"
+        "Dock Dirty Tank: missing / full / clog / pump issue"
+        "%s's tank is missing."            <- the robot's
+        "Tank missing: switched to vacuum only"
+
+    So nothing here was broken, and the name was the whole problem: a
+    sensor called "mop tank present" on a robot whose dock has two tanks
+    reads as though it covers them.
+
+    RENAMED accordingly. Dock tank levels would be separate entities
+    fed by `gwTankLvl` and a clean-water sibling -- neither appears in
+    any capture yet, including from the dock that has them. Whether that
+    dock does not report them or they arrive somewhere this integration
+    does not read is the open question now, and it is a different one.
+
+    V4/Prime equivalent of RoombaMopTankPresentStatus above -- same
     entity_description/device_class/translation_key. Reads
     CurrentStateShadow.tank_present directly (confirmed live,
     chairstacker: a plain boolean, genuinely distinct from any numeric
@@ -1402,6 +1430,7 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         return state.tank_present
 
 
+
 class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     """V4/Prime dock error indicator. Reads
     CurrentStateShadow.dock.error (confirmed live as an int, chairstacker
@@ -1436,7 +1465,43 @@ class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         state = self._current_state
         if state is None or state.dock is None:
             return {}
-        return {"raw_error_code": state.dock.error}
+        attrs: dict[str, Any] = {"raw_error_code": state.dock.error}
+
+        # THE NAMED REASON, where the code is one of the 86 confirmed
+        # DockState members.
+        #
+        # This is how a dock reports a missing water tank -- there is no
+        # presence field for it. The dock state model has thirteen
+        # fields and none of them is a tankPresent equivalent; the app
+        # reads the error instead:
+        #
+        #     650  PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR   clean water
+        #     653  PAD_WASH_GREY_WATER_TANK_MISSING_ERROR    grey water
+        #     450  FLUID_REPLENISHMENT_TANK_MISSING_ERROR
+        #
+        # That resolves issue #27 completely. A tester removed both dock
+        # tanks and watched `tankPresent` stay true -- correctly, since
+        # that field is the ROBOT's tank. What he was looking for would
+        # have appeared here.
+        # ONLY WHEN THERE IS AN ERROR. Zero maps to
+        # DOCK_NO_COMMON_ERROR, and putting that beside a sensor already
+        # reading "off" adds a word without adding information.
+        if not state.dock.error:
+            return attrs
+
+        try:
+            from roombapy_prime.models.robot_info import (  # noqa: PLC0415
+                DockState,
+            )
+
+            attrs["error_name"] = DockState(state.dock.error).name
+        except (ValueError, ImportError):
+            # An unlisted code. Deliberately not guessed at -- the raw
+            # value above is still there, and a wrong name in an error
+            # attribute is worse than none.
+            pass
+
+        return attrs
 
 
 class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):

@@ -781,7 +781,16 @@
         "name": "Maintenance – Dirt disposal bag"
       },
       "prime_part_mop_pads": {
-        "name": "Maintenance – DualClean mop pads"
+        "name": "Maintenance – Washable mop pad"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Maintenance – Cliff sensors"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Maintenance – Pad washing, cleaning due"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Maintenance – Pad washing, replacement due"
       }
     },
     "device_tracker": {
@@ -803,7 +812,7 @@
         "name": "Mop problem"
       },
       "mop_tank_present": {
-        "name": "Mop tank present"
+        "name": "Robot water tank"
       },
       "prime_dock_error": {
         "name": "Dock error"
@@ -925,6 +934,9 @@
       },
       "prime_stop_pad_dry": {
         "name": "Stop pad drying"
+      },
+      "prime_start_pad_dry": {
+        "name": "Start pad drying"
       }
     },
     "switch": {

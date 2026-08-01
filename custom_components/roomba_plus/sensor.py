@@ -234,9 +234,23 @@ async def async_setup_entry(
             entities.append(PrimeDetectedPadSensor(data.blid, config_entry))
         if cap is None or cap.suction_lvl != 0:
             entities.append(PrimeSuctionLevelSensor(data.blid, config_entry))
-        if dock_cap is None or dock_cap.pad_wash != 0:
+        # A PRESENT dock.cap WITHOUT the key means the dock cannot do
+        # it -- which is different from having no dock.cap at all.
+        #
+        # The "None means unknown" contract above is right for the ROBOT
+        # capabilities, where a missing cap object means the shadow has
+        # not arrived. It is wrong here: @jouwdan's evac-only dock
+        # reports `cap: {"evac": 1}` -- the object is there, and the
+        # absence of `pw` inside it is a statement, not a gap.
+        #
+        # Failing open gave a vacuum-only Roomba Max 705 a pad-wash and
+        # a pad-dry sensor, both permanently meaningless. His own
+        # diagnostics said so: "created (capability unknown -- failing
+        # open)".
+        dock_cap_known = dock_cap is not None
+        if not dock_cap_known or dock_cap.pad_wash not in (0, None):
             entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
-        if dock_cap is None or dock_cap.pad_dry != 0:
+        if not dock_cap_known or dock_cap.pad_dry not in (0, None):
             entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
 
         async_add_entities(entities)
