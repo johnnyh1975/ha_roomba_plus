@@ -123,7 +123,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise with roombapy Roomba object and BLID."""
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
         # NEW (V4/Prime): read connection type / prime_robot from
         # runtime_data when available. Defaults (LOCAL_PUSH/None)

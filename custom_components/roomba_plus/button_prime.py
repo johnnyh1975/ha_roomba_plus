@@ -56,7 +56,9 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
         favorite_id: str,
         name: str,
     ) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         self._config_entry = config_entry
         self._favorite_id = favorite_id
         self._attr_translation_key = "prime_favorite"
@@ -169,7 +171,9 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
     def __init__(
         self, blid: str, config_entry: RoombaConfigEntry, command: PrimeDockCommand
     ) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         self._config_entry = config_entry
         self._command = command
         self._attr_translation_key = command.key
@@ -199,7 +203,9 @@ class PrimeLocateButton(IRobotEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_locate"
 

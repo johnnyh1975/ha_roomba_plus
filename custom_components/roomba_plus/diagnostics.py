@@ -225,35 +225,95 @@ async def _prime_schedule_summary(data: Any) -> Any:
     The calendar reads this call, not a shadow. When it shows nothing,
     the question is whether the robot reports a schedule at all -- and
     until now the diagnostics could not say.
+
+    IT STILL COULD NOT SAY, for two reasons, both fixed here:
+
+      - it read `data.household_id`. The field is `prime_household_id`
+        (models.py), and this same file reads it correctly one screen
+        further down. The wrong name meant an unconditional None: the
+        probe never ran, on any install.
+      - `SchedulesList.schedules` is `list[dict]`, so `getattr(schedule,
+        "options")` returned None for every schedule. Even with the
+        household id fixed, every entry would have summarised as
+        `{"options": None}` -- a robot with schedules reported as a
+        robot whose schedules cannot be read.
+
+    Which is worse than nothing: this probe exists specifically to
+    distinguish "the robot has no schedule" from "we cannot read it",
+    and it answered the second while looking like the first.
+
+    Both fixed here. The probe also now reports a SECOND count, taken
+    from the raw response without the parser -- so a disagreement
+    between what the server sent and what this project read is visible
+    in the file itself, rather than needing another round trip.
+
+    Deliberately NOT the raw response. The tooling in roombapy-prime
+    prints that, and there the tester sees it and chooses to paste it.
+    This file is generated and attached, so it keeps to the existing
+    rule for this section: no schedule names, no room ids, no household
+    id -- only the fields that decide whether an occurrence is computed.
     """
     robot = getattr(data, "prime_robot", None)
-    household_id = getattr(data, "household_id", None)
+    household_id = getattr(data, "prime_household_id", None)
     if robot is None or not household_id:
-        return None
+        return {
+            "household_id_resolved": bool(household_id),
+            "note": (
+                "no household id resolved for this robot -- the schedule "
+                "endpoint is per-household and cannot be queried without one"
+            ),
+        }
 
     try:
-        response = await robot.get_schedules(household_id)
+        raw = await robot.get_schedules_raw(household_id)
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        return {"household_id_resolved": True, "error": f"{type(exc).__name__}: {exc}"}
+
+    from roombapy_prime.models.schedules_dnd import (  # noqa: PLC0415
+        HouseholdSchedule,
+        SchedulesResponse,
+    )
+
+    raw_count = 0
+    recognised_shape = isinstance(raw, dict)
+    if isinstance(raw, dict):
+        containers = raw.get("household_schedules")
+        for container in containers if isinstance(containers, list) else []:
+            if isinstance(container, dict):
+                inner = container.get("schedules")
+                raw_count += len(inner) if isinstance(inner, list) else 0
 
     summary: list[dict[str, Any]] = []
-    for container in getattr(response, "household_schedules", None) or []:
-        for schedule in getattr(container, "schedules", None) or []:
-            options = getattr(schedule, "options", None)
-            if options is None:
-                summary.append({"options": None})
+    for container in SchedulesResponse.from_json(raw).household_schedules:
+        for entry in container.schedules:
+            if not isinstance(entry, dict):
                 continue
-            start = getattr(options, "start", None)
+            options = HouseholdSchedule.from_json(entry).options
+            start = options.start
             summary.append({
-                "enabled": getattr(options, "enabled", None),
-                "deleted": getattr(options, "deleted", None),
-                "frequency": str(getattr(options, "frequency", None)),
-                "days": getattr(start, "day", None) if start else None,
-                "hour": getattr(start, "hour", None) if start else None,
-                "min": getattr(start, "min", None) if start else None,
-                "has_commands": bool(getattr(options, "commands", None)),
+                "enabled": options.enabled,
+                "deleted": options.deleted,
+                "frequency": str(options.frequency),
+                "days": start.day if start else None,
+                "hour": start.hour if start else None,
+                "min": start.min if start else None,
+                "has_commands": bool(options.commands),
             })
-    return {"count": len(summary), "schedules": summary}
+    return {
+        "household_id_resolved": True,
+        # Found in the a18 bug hunt: a response that is not a dict at all
+        # produced count 0 / raw_count 0, indistinguishable from an
+        # account with no schedules. The type name carries no content,
+        # so it is safe to include here.
+        "response_shape": type(raw).__name__ if not recognised_shape else "dict",
+        "response_shape_recognised": recognised_shape,
+        # count is this project's reading; raw_count is what the server
+        # sent, counted without the parser. They should match.
+        "count": len(summary),
+        "raw_count": raw_count,
+        "parser_disagrees": raw_count != len(summary),
+        "schedules": summary,
+    }
 
 
 def _prime_shadow_dump(data: Any) -> dict[str, Any]:

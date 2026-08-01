@@ -361,7 +361,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     _attr_entity_category = None  # main entity — visible on device page
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_mission_progress"
 

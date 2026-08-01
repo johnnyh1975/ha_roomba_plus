@@ -1398,7 +1398,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         description: RoombaSensorDescription,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"

@@ -108,7 +108,9 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         config_entry: RoombaConfigEntry,
         description: PrimeSelectDescription,
     ) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"

@@ -2908,7 +2908,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     def __init__(
         self, blid: str, config_entry: RoombaConfigEntry, hass: Any
     ) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         # hass IS PASSED IN, not read off the config entry. ConfigEntry
         # has no `hass` attribute, so `config_entry.hass` raises
         # AttributeError -- and an exception in a constructor means the

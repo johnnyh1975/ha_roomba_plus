@@ -99,7 +99,7 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
     def __init__(
         self, roomba: Any, blid: str, config_entry: RoombaConfigEntry
     ) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_position"
         #: Prime room names, {name: qualified_id}. Empty for Classic,

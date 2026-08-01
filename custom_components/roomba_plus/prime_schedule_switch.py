@@ -33,51 +33,130 @@ read-modify-write is unavoidable: the endpoint takes the whole list.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
+
+from .entity import IRobotEntity
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
+#: One lock per (config entry, schedule container).
+#:
+#: FOUND IN THE a18 BUG HUNT. Toggling is a read-modify-write of the
+#: WHOLE container, because update_schedules() replaces the list. Two
+#: switches in the same container toggled at once both read the same
+#: state and both write it back with only their own change -- so the
+#: second write silently reverts the first, while Home Assistant shows
+#: both as changed.
+#:
+#: Not a rare interleaving: `switch.turn_off` against a group, or an
+#: automation disabling several schedules, does exactly this. Reproduced
+#: with two concurrent turn_off calls and 10ms of read latency.
+#:
+#: Keyed per container rather than one global lock: two containers have
+#: no shared state to lose, and serialising them would make a
+#: multi-container account slower for no reason. Keyed by entry_id so a
+#: second robot never waits on the first.
+_CONTAINER_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _container_lock(entry_id: str, container_id: str) -> asyncio.Lock:
+    return _CONTAINER_LOCKS.setdefault((entry_id, container_id), asyncio.Lock())
+
 
 async def async_read_schedule_containers(
     config_entry: RoombaConfigEntry,
-) -> list[tuple[str, list[Any]]]:
+) -> list[tuple[str, list[Any]]] | None:
     """Schedule containers as (household_schedule_id, schedules).
 
     Returns the outer structure rather than a flat schedule list,
     because the write endpoint addresses the container.
+
+    THE SCHEDULES ARE PARSED HERE, and that is the whole point of this
+    function existing rather than each caller reading the response.
+
+    `SchedulesList.schedules` is `list[dict]` -- raw dicts, not
+    HouseholdSchedule instances, as its own docstring in roombapy-prime
+    says. This used to hand those dicts straight to its callers, and
+    every one of them read `.schedule_id` / `.options` off them. On a
+    dict that returns None, so:
+
+      - switch.py skipped every schedule -> NO SWITCH WAS EVER CREATED,
+        on any account, for the entire life of this feature
+      - async_update read enabled=False for whatever it found
+      - _async_set_enabled would have passed dicts to update_schedules(),
+        which does `[s.to_json() for s in schedules]` -> AttributeError
+
+    Three broken paths, one cause. calendar.py already parses (its own
+    docstring records finding the same bug), so this brings the two
+    readers of the same endpoint into agreement instead of leaving one
+    right and one wrong.
+
+    RETURNS None WHEN THE READ FAILED, [] WHEN IT SUCCEEDED AND FOUND
+    NOTHING. Found in the a18 bug hunt: these used to be the same value,
+    so a caller could not tell "this schedule was deleted in the app"
+    from "the cloud call did not come back". async_update needs exactly
+    that difference -- one means the switch should go unavailable, the
+    other means keep showing what was last known and try again.
+
+    Collapsing a failure into an empty result is the recurring shape of
+    every bug this feature has had.
     """
     data = config_entry.runtime_data
     robot = getattr(data, "prime_robot", None)
     household_id = getattr(data, "prime_household_id", None)
     if robot is None or not household_id:
-        return []
+        return None
 
     try:
         response = await robot.get_schedules(household_id)
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: get_schedules() failed", exc_info=True)
-        return []
+        return None
 
-    return [
-        (container.household_schedule_id, list(container.schedules or []))
-        for container in (getattr(response, "household_schedules", None) or [])
-        if getattr(container, "household_schedule_id", None)
-    ]
+    from roombapy_prime.models.schedules_dnd import (  # noqa: PLC0415
+        HouseholdSchedule,
+    )
+
+    containers: list[tuple[str, list[Any]]] = []
+    for container in getattr(response, "household_schedules", None) or []:
+        container_id = getattr(container, "household_schedule_id", None)
+        if not container_id:
+            continue
+        containers.append((
+            container_id,
+            [
+                HouseholdSchedule.from_json(raw)
+                for raw in (getattr(container, "schedules", None) or [])
+                if isinstance(raw, dict)
+            ],
+        ))
+    return containers
 
 
-class PrimeScheduleSwitch(SwitchEntity):
+class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
     """One robot schedule, on or off.
 
     Identified by its schedule_id rather than its position in the list:
     a schedule deleted in the iRobot app shifts every index after it,
     and an index-keyed switch would silently start controlling a
     different routine.
+
+    INHERITS IRobotEntity FOR DeviceInfo. Found in the a18 bug hunt:
+    this was the only Prime entity in the integration that did not, so
+    it carried no device_info at all -- the switches would have appeared
+    outside the robot's device page, and with has_entity_name and no
+    device to prefix them, two robots' schedules would have been
+    indistinguishable in the entity list.
+
+    Invisible until now for the same reason everything else about this
+    class was: no instance was ever created.
     """
 
     _attr_has_entity_name = True
@@ -101,6 +180,12 @@ class PrimeScheduleSwitch(SwitchEntity):
         schedule_id: str,
         name: str,
     ) -> None:
+        IRobotEntity.__init__(
+            self,
+            roomba=None,
+            blid=config_entry.runtime_data.blid,
+            config_entry=config_entry,
+        )
         self._config_entry = config_entry
         self._container_id = container_id
         self._schedule_id = schedule_id
@@ -150,21 +235,43 @@ class PrimeScheduleSwitch(SwitchEntity):
         return self._attr_is_on is not None
 
     async def async_added_to_hass(self) -> None:
+        # IRobotEntity's own async_added_to_hass registers the roombapy
+        # callback and refreshes the device name; it is guarded for
+        # roomba=None (Prime), so it is safe and must not be skipped --
+        # skipping it is what would leave the device name generic.
+        await super().async_added_to_hass()
         await self.async_update()
 
     async def async_update(self) -> None:
-        """Re-reads the enabled flag for this one schedule."""
-        for container_id, schedules in await async_read_schedule_containers(
-            self._config_entry
-        ):
+        """Re-reads the enabled flag for this one schedule.
+
+        A schedule deleted in the iRobot app leaves this switch behind.
+        Found in the a18 bug hunt: it used to keep reporting whatever it
+        last read, so a deleted schedule went on showing "on"
+        indefinitely, and pressing it did nothing but log a warning.
+        Now the state goes unknown, which `available` renders as
+        unavailable -- visibly not a working control.
+
+        A FAILED read is deliberately not the same thing: it keeps the
+        last known state rather than making the entity flicker out on
+        every cloud hiccup.
+        """
+        containers = await async_read_schedule_containers(self._config_entry)
+        if containers is None:
+            return
+        for container_id, schedules in containers:
             if container_id != self._container_id:
                 continue
             for schedule in schedules:
-                if getattr(schedule, "schedule_id", None) != self._schedule_id:
+                if schedule.schedule_id != self._schedule_id:
                     continue
-                options = getattr(schedule, "options", None)
-                self._attr_is_on = bool(getattr(options, "enabled", False))
+                # None stays None -- `available` reads exactly this to
+                # decide whether the state has ever been read. bool(None)
+                # would render an unknown schedule as off.
+                self._attr_is_on = schedule.options.enabled
                 return
+        # Read succeeded and this schedule was not in it.
+        self._attr_is_on = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_set_enabled(True)
@@ -189,7 +296,28 @@ class PrimeScheduleSwitch(SwitchEntity):
         if robot is None or not household_id:
             return
 
+        # THE READ AND THE WRITE MUST NOT BE SEPARATED. See
+        # _CONTAINER_LOCKS for the lost update this prevents. The lock is
+        # held across both, so the second caller re-reads state that
+        # already includes the first one's change.
+        async with _container_lock(
+            self._config_entry.entry_id, self._container_id
+        ):
+            await self._async_set_enabled_locked(robot, household_id, enabled, replace)
+
+    async def _async_set_enabled_locked(
+        self, robot: Any, household_id: str, enabled: bool, replace: Any
+    ) -> None:
         containers = await async_read_schedule_containers(self._config_entry)
+        if containers is None:
+            # Never write a container list built from a read that failed:
+            # update_schedules() replaces the whole list, so a partial or
+            # stale one deletes schedules.
+            _LOGGER.warning(
+                "roomba_plus: could not read schedules before writing -- "
+                "schedule %s not changed", self._schedule_id,
+            )
+            return
         for container_id, schedules in containers:
             if container_id != self._container_id:
                 continue
@@ -197,9 +325,9 @@ class PrimeScheduleSwitch(SwitchEntity):
             found = False
             updated: list[Any] = []
             for schedule in schedules:
-                if getattr(schedule, "schedule_id", None) == self._schedule_id:
-                    options = getattr(schedule, "options", None)
-                    if options is None:
+                if schedule.schedule_id == self._schedule_id:
+                    options = schedule.options
+                    if options.enabled is None:
                         # Nothing to toggle, and inventing an options
                         # object would write defaults for every other
                         # field of this schedule.

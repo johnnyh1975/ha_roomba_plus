@@ -51,6 +51,14 @@ async def _async_add_prime_schedule_switches(
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: could not read schedules", exc_info=True)
         return
+    if containers is None:
+        # The read failed rather than finding nothing. Creating no
+        # switches is the same outcome either way here, but saying which
+        # happened is the difference between "this account has no
+        # schedules" and "the cloud call did not come back" -- a
+        # distinction this feature has been bitten by repeatedly.
+        _LOGGER.debug("roomba_plus: schedules unreadable, no switches added")
+        return
 
     entities: list[SwitchEntity] = []
     for container_id, schedules in containers:
@@ -58,11 +66,29 @@ async def _async_add_prime_schedule_switches(
             schedule_id = getattr(schedule, "schedule_id", None)
             if not schedule_id:
                 continue
-            options = getattr(schedule, "options", None)
+            options = schedule.options
             # A deleted schedule stays in the payload with deleted=True.
             # Creating a switch for it would offer control over something
             # the app no longer shows.
-            if options is not None and getattr(options, "deleted", False):
+            if options.deleted:
+                continue
+            # NO SWITCH FOR A SCHEDULE WHOSE STATE THE SERVER DID NOT SEND.
+            #
+            # This replaces an `options is None` check that became
+            # unreachable when the schedules started being parsed:
+            # HouseholdSchedule.from_json() always builds a ScheduleOptions,
+            # so a payload entry carrying no options at all now arrives as
+            # an object full of Nones rather than as None.
+            #
+            # The old check's reasoning still holds and is why this is
+            # here rather than defaulting to off: toggling writes the
+            # WHOLE container back, so offering a switch for a schedule we
+            # know nothing about means re-serialising it from defaults --
+            # writing over settings the user has and we never saw.
+            #
+            # `enabled is None` is the honest form of that question. False
+            # is a real answer and gets a switch; None means unanswered.
+            if options.enabled is None:
                 continue
             entities.append(PrimeScheduleSwitch(
                 config_entry,
@@ -571,7 +597,9 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
         config_entry: RoombaConfigEntry,
         description: PrimeSettingSwitchDescription,
     ) -> None:
-        IRobotEntity.__init__(self, None, blid)
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
