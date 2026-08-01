@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Gedetecteerde pad",
         "state": {
-          "padPlate": "Alle doeken geplaatst",
-          "NoPad": "Doek ontbreekt",
-          "noPad": "Doek ontbreekt",
-          "dispDry": "Wegwerpdoek droog",
-          "dispWet": "Wegwerpdoek nat",
-          "reusableDry": "Herbruikbare doek droog",
-          "reusableWet": "Herbruikbare doek nat",
+          "pad_plate": "Alle doeken geplaatst",
+          "no_pad": "Doek ontbreekt",
+          "disp_dry": "Wegwerpdoek droog",
+          "disp_wet": "Wegwerpdoek nat",
+          "reusable_dry": "Herbruikbare doek droog",
+          "reusable_wet": "Herbruikbare doek nat",
           "invalid": "Doek niet herkend"
         }
       },

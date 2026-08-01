@@ -329,14 +329,15 @@ class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
         # `noPad`; a real robot reported `NoPad`. Until a capture settles
         # which the wire uses, accepting one and rendering the other raw
         # is the avoidable failure.
+        # SLUGS, not wire values -- HA requires [a-z0-9-_]+ here and
+        # rejects camelCase at validation time. See _PAD_STATE_SLUGS.
         options=[
-            "padPlate",
-            "NoPad",
-            "noPad",
-            "dispDry",
-            "dispWet",
-            "reusableDry",
-            "reusableWet",
+            "pad_plate",
+            "no_pad",
+            "disp_dry",
+            "disp_wet",
+            "reusable_dry",
+            "reusable_wet",
             "invalid",
         ],
     )
@@ -348,8 +349,44 @@ class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
 
     @property
     def native_value(self) -> str | None:
+        """The wire value as a Home Assistant state slug.
+
+        HA REQUIRES `[a-z0-9-_]+` for translated ENUM states, and the
+        wire values are camelCase -- `padPlate`, `dispDry`, `reusableWet`.
+        Publishing them directly fails hassfest outright, which is how
+        this was caught.
+
+        The mapping also settles a spelling question: one robot reported
+        `NoPad`, the library's enum says `noPad`, and nobody knows which
+        the wire actually uses. Both map to `no_pad`, so it stops
+        mattering.
+
+        An unmapped value falls through as-is rather than being dropped.
+        It renders as a raw string, which is ugly and visible -- better
+        than a sensor that silently reads "unknown" on a robot reporting
+        something new.
+        """
         state = self._current_state
-        return state.detected_pad if state is not None else None
+        raw = state.detected_pad if state is not None else None
+        if raw is None:
+            return None
+        return _PAD_STATE_SLUGS.get(str(raw), str(raw))
+
+
+#: Wire value -> Home Assistant state slug.
+#:
+#: All seven RobotPadCategory values, plus both observed spellings of
+#: "no pad" collapsing onto one slug.
+_PAD_STATE_SLUGS: dict[str, str] = {
+    "padPlate": "pad_plate",
+    "NoPad": "no_pad",
+    "noPad": "no_pad",
+    "dispDry": "disp_dry",
+    "dispWet": "disp_wet",
+    "reusableDry": "reusable_dry",
+    "reusableWet": "reusable_wet",
+    "invalid": "invalid",
+}
 
 
 def _dock_state_label(raw_value: Any) -> str | None:

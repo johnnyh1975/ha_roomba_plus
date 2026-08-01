@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Detected pad",
         "state": {
-          "padPlate": "All pads fitted",
-          "NoPad": "Pad missing",
-          "noPad": "Pad missing",
-          "dispDry": "Single-use dry pad",
-          "dispWet": "Single-use wet pad",
-          "reusableDry": "Reusable dry pad",
-          "reusableWet": "Reusable wet pad",
+          "pad_plate": "All pads fitted",
+          "no_pad": "Pad missing",
+          "disp_dry": "Single-use dry pad",
+          "disp_wet": "Single-use wet pad",
+          "reusable_dry": "Reusable dry pad",
+          "reusable_wet": "Reusable wet pad",
           "invalid": "Pad not recognised"
         }
       },

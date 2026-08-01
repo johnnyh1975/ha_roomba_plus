@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Erkannter Wischpad",
         "state": {
-          "padPlate": "Alle Wischtücher eingesetzt",
-          "NoPad": "Wischtuch fehlt",
-          "noPad": "Wischtuch fehlt",
-          "dispDry": "Einwegtuch trocken",
-          "dispWet": "Einwegtuch feucht",
-          "reusableDry": "Mehrwegtuch trocken",
-          "reusableWet": "Mehrwegtuch feucht",
+          "pad_plate": "Alle Wischtücher eingesetzt",
+          "no_pad": "Wischtuch fehlt",
+          "disp_dry": "Einwegtuch trocken",
+          "disp_wet": "Einwegtuch feucht",
+          "reusable_dry": "Mehrwegtuch trocken",
+          "reusable_wet": "Mehrwegtuch feucht",
           "invalid": "Wischtuch nicht erkannt"
         }
       },

@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Wykryta nakładka",
         "state": {
-          "padPlate": "Wszystkie nakładki założone",
-          "NoPad": "Brak nakładki",
-          "noPad": "Brak nakładki",
-          "dispDry": "Nakładka jednorazowa sucha",
-          "dispWet": "Nakładka jednorazowa mokra",
-          "reusableDry": "Nakładka wielorazowa sucha",
-          "reusableWet": "Nakładka wielorazowa mokra",
+          "pad_plate": "Wszystkie nakładki założone",
+          "no_pad": "Brak nakładki",
+          "disp_dry": "Nakładka jednorazowa sucha",
+          "disp_wet": "Nakładka jednorazowa mokra",
+          "reusable_dry": "Nakładka wielorazowa sucha",
+          "reusable_wet": "Nakładka wielorazowa mokra",
           "invalid": "Nakładka nierozpoznana"
         }
       },

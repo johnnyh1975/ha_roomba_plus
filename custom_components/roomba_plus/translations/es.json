@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Almohadilla detectada",
         "state": {
-          "padPlate": "Todas las mopas colocadas",
-          "NoPad": "Falta una mopa",
-          "noPad": "Falta una mopa",
-          "dispDry": "Mopa desechable seca",
-          "dispWet": "Mopa desechable húmeda",
-          "reusableDry": "Mopa reutilizable seca",
-          "reusableWet": "Mopa reutilizable húmeda",
+          "pad_plate": "Todas las mopas colocadas",
+          "no_pad": "Falta una mopa",
+          "disp_dry": "Mopa desechable seca",
+          "disp_wet": "Mopa desechable húmeda",
+          "reusable_dry": "Mopa reutilizable seca",
+          "reusable_wet": "Mopa reutilizable húmeda",
           "invalid": "Mopa no reconocida"
         }
       },

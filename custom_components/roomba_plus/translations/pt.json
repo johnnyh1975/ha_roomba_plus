@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Almofada detectada",
         "state": {
-          "padPlate": "Todos os panos colocados",
-          "NoPad": "Falta um pano",
-          "noPad": "Falta um pano",
-          "dispDry": "Pano descartável seco",
-          "dispWet": "Pano descartável húmido",
-          "reusableDry": "Pano reutilizável seco",
-          "reusableWet": "Pano reutilizável húmido",
+          "pad_plate": "Todos os panos colocados",
+          "no_pad": "Falta um pano",
+          "disp_dry": "Pano descartável seco",
+          "disp_wet": "Pano descartável húmido",
+          "reusable_dry": "Pano reutilizável seco",
+          "reusable_wet": "Pano reutilizável húmido",
           "invalid": "Pano não reconhecido"
         }
       },

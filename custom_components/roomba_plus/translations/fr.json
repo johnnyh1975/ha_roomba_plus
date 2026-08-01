@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Tampon détecté",
         "state": {
-          "padPlate": "Toutes les lingettes en place",
-          "NoPad": "Lingette manquante",
-          "noPad": "Lingette manquante",
-          "dispDry": "Lingette jetable sèche",
-          "dispWet": "Lingette jetable humide",
-          "reusableDry": "Lingette lavable sèche",
-          "reusableWet": "Lingette lavable humide",
+          "pad_plate": "Toutes les lingettes en place",
+          "no_pad": "Lingette manquante",
+          "disp_dry": "Lingette jetable sèche",
+          "disp_wet": "Lingette jetable humide",
+          "reusable_dry": "Lingette lavable sèche",
+          "reusable_wet": "Lingette lavable humide",
           "invalid": "Lingette non reconnue"
         }
       },

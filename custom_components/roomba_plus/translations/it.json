@@ -714,13 +714,12 @@
       "prime_detected_pad": {
         "name": "Panno rilevato",
         "state": {
-          "padPlate": "Tutti i panni inseriti",
-          "NoPad": "Panno mancante",
-          "noPad": "Panno mancante",
-          "dispDry": "Panno monouso asciutto",
-          "dispWet": "Panno monouso umido",
-          "reusableDry": "Panno riutilizzabile asciutto",
-          "reusableWet": "Panno riutilizzabile umido",
+          "pad_plate": "Tutti i panni inseriti",
+          "no_pad": "Panno mancante",
+          "disp_dry": "Panno monouso asciutto",
+          "disp_wet": "Panno monouso umido",
+          "reusable_dry": "Panno riutilizzabile asciutto",
+          "reusable_wet": "Panno riutilizzabile umido",
           "invalid": "Panno non riconosciuto"
         }
       },
