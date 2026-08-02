@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -333,6 +334,38 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
         source = inspect.getsource(PrimeRoomsImage)
 
         assert "async_add_listener" not in source
+
+    @pytest.mark.asyncio
+    async def test_empty_post_mission_refresh_keeps_the_last_map(self):
+        """Max 705 metadata has no geometry, so a transient bundle miss
+        must not make an already rendered Rooms Map unavailable."""
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+        entity = object.__new__(PrimeRoomsImage)
+        entity.hass = MagicMock()
+        entity._polygons = {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
+        entity._names = {"room": "Kitchen"}
+        entity._preferences = {"room": {"profile": "normal"}}
+        entity._floor_plan = SimpleNamespace(borders=[[(0.0, 0.0)]])
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.prime_robot.get_active_map_versions = AsyncMock(
+            return_value=[]
+        )
+        backend = MagicMock()
+        backend._all_map_ids = AsyncMock(return_value=["MAP-1"])
+        backend._current_map_id = AsyncMock(return_value="MAP-1")
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch(
+            "custom_components.roomba_plus.prime_room_map.async_build_prime_room_polygons",
+            new=AsyncMock(return_value=({}, {}, {})),
+        ):
+            await entity._async_refresh_rooms()
+
+        assert entity._polygons == {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
 
 
 class TestRoomsWithoutNames:
@@ -866,7 +899,7 @@ class TestLiveTrail:
 
         source = inspect.getsource(PrimeMapImage._feed_trail)
 
-        assert "_METRES_TO_MM" in source
+        assert "METRES_TO_MM" in source
 
     def test_radians_are_converted_to_degrees(self):
         """Quieter version of the same mistake: the trail would be drawn
@@ -968,7 +1001,7 @@ class TestBareGeoJsonFeature:
     robots you have."""
 
     def test_a_bare_feature_is_read(self):
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         bare = {
             "type": "Feature",
@@ -978,10 +1011,10 @@ class TestBareGeoJsonFeature:
             },
         }
 
-        assert len(_rings_mm(bare)) == 1
+        assert len(rings_mm(bare)) == 1
 
     def test_a_feature_collection_still_works(self):
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         collection = {
             "type": "FeatureCollection",
@@ -993,12 +1026,12 @@ class TestBareGeoJsonFeature:
             }],
         }
 
-        assert len(_rings_mm(collection)) == 1
+        assert len(rings_mm(collection)) == 1
 
     def test_a_bare_multipolygon_feature_is_read(self):
         """Borders are MultiPolygon, so the two quirks combine on exactly
         the layer where they were found."""
-        from custom_components.roomba_plus.prime_room_map import _rings_mm
+        from custom_components.roomba_plus.prime_room_map import rings_mm
 
         bare = {
             "type": "Feature",
@@ -1008,7 +1041,7 @@ class TestBareGeoJsonFeature:
             },
         }
 
-        rings = _rings_mm(bare)
+        rings = rings_mm(bare)
 
         assert len(rings) == 1
         assert rings[0][1] == (2000.0, 0.0)
@@ -1048,6 +1081,7 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_dispatcher_connect" in source
         assert "_on_live_bundle" in source
+        assert "_on_live_position" in source
 
     def test_the_subscription_is_removed_on_unload(self):
         """A reload would otherwise leave one connection per cycle, each
@@ -1060,21 +1094,21 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_on_remove" in source
 
-    def test_nothing_is_rendered_before_rooms_exist(self):
-        """A render with no polygons produces an empty image, which looks
-        like a fault rather than like a robot that has not mapped yet."""
+    def test_live_updates_mark_the_image_dirty_without_rendering(self):
+        """The dispatcher path must not spend CPU when nobody is viewing."""
         from unittest.mock import MagicMock
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        entity._polygons = {}
-        entity._config_entry = MagicMock()
-        entity.hass = MagicMock()
+        entity._live_dirty = False
+        entity._last_live_state_write = float("inf")
+        entity.async_write_ha_state = MagicMock()
 
         entity._on_live_bundle(MagicMock())
 
-        entity._config_entry.async_create_background_task.assert_not_called()
+        assert entity._live_dirty
+        entity.async_write_ha_state.assert_not_called()
 
     def test_rendering_happens_off_the_event_loop(self):
         """This is a dispatcher callback. Rendering a PNG inline would
@@ -1083,9 +1117,85 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
-        source = inspect.getsource(PrimeRoomsImage._async_render_live_bundle)
+        source = inspect.getsource(PrimeRoomsImage.async_image)
 
         assert "async_add_executor_job" in source
+
+    def test_live_state_updates_are_throttled(self):
+        """A dashboard should not refetch the image for every pose packet."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._live_dirty = False
+        entity._last_live_state_write = 0.0
+        entity.async_write_ha_state = MagicMock()
+
+        with patch("custom_components.roomba_plus.image._time_mod.monotonic", side_effect=(10.0, 11.0, 12.0)):
+            entity._on_live_position()
+            entity._on_live_position()
+            entity._on_live_position()
+
+        assert entity._live_dirty
+        assert entity.async_write_ha_state.call_count == 2
+
+    def test_live_layers_are_rendered_without_changing_the_room_fit(self):
+        """The live bundle is a layer, not a second coordinate system."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._renderer = None
+        entity._polygons = {
+            "room": [
+                (0.0, 0.0),
+                (2000.0, 0.0),
+                (2000.0, 2000.0),
+                (0.0, 2000.0),
+            ]
+        }
+        entity._floor_plan = SimpleNamespace(carpet=[], borders=[], dock=None)
+        entity._live_bundle = {
+            "coverage": {
+                "features": [{
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
+                        ],
+                    }
+                }]
+            },
+            "trajectories": {
+                "features": [{
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[0.25, 0.25], [0.75, 0.25]],
+                    }
+                }]
+            },
+            "hazard": {
+                "features": [{
+                    "geometry": {"type": "Point", "coordinates": [1.75, 1.75]}
+                }]
+            },
+        }
+        entity._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(prime_positions=[]), options={}
+        )
+
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+        coverage_px = entity._renderer._mm_to_px_fit(1000.0, 1000.0)  # noqa: SLF001
+        trajectory_px = entity._renderer._mm_to_px_fit(500.0, 250.0)  # noqa: SLF001
+        hazard_px = entity._renderer._mm_to_px_fit(1750.0, 1750.0)  # noqa: SLF001
+
+        assert image.getpixel(tuple(map(round, coverage_px))) == (120, 190, 145)
+        assert image.getpixel(tuple(map(round, trajectory_px))) == (80, 150, 235)
+        assert image.getpixel(tuple(map(round, hazard_px))) == (240, 150, 60)
 
 
 class TestPolygonVerticesAreNotPoses:

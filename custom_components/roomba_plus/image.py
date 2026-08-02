@@ -82,7 +82,7 @@ _LOGGER = logging.getLogger(__name__)
 #: not for the normal case.
 _MAX_PRIME_POSITIONS = 5000
 
-#: Dispatcher signal carrying a freshly parsed live map bundle.
+#: Dispatcher signals for the two independent live-map message shapes.
 #:
 #: The two Prime image entities are split by what they can do: one
 #: watches the map stream and shows iRobot's rendered PNG, the other
@@ -94,6 +94,8 @@ _MAX_PRIME_POSITIONS = 5000
 #: and that it returns a full map bundle rather than the raw occupancy
 #: grid. We had been consuming only the raw one.
 _SIGNAL_PRIME_LIVE_BUNDLE = "roomba_plus_prime_live_bundle_{}"
+_SIGNAL_PRIME_LIVE_POSITION = "roomba_plus_prime_live_position_{}"
+_LIVE_MAP_STATE_UPDATE_INTERVAL = 2.0
 PARALLEL_UPDATES = 0
 
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
@@ -436,7 +438,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         renderer already drops jumps over 500 mm as noise, which is what
         keeps a relocalisation from drawing a line across the room.
         """
-        from .prime_room_map import _METRES_TO_MM  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM  # noqa: PLC0415
 
         # COLLECTED, NOT DRAWN HERE. This entity shows iRobot's own
         # rendered PNG and has no renderer of its own; the trail belongs
@@ -454,8 +456,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     continue
                 orientation_rad = getattr(sample, "orientation", None) or 0.0
                 data.prime_positions.append((
-                    float(x_m) * _METRES_TO_MM,
-                    float(y_m) * _METRES_TO_MM,
+                    float(x_m) * METRES_TO_MM,
+                    float(y_m) * METRES_TO_MM,
                     math.degrees(float(orientation_rad)),
                 ))
             # Bounded. A mission produced 904 points on one tester's
@@ -584,6 +586,14 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                             stats.get("position_points", 0) + len(message.updates)
                         )
                         self._feed_trail(message)
+                        # Position packets carry no bundle. The Rooms Map
+                        # already reads positions from runtime_data.
+                        async_dispatcher_send(
+                            self.hass,
+                            _SIGNAL_PRIME_LIVE_POSITION.format(
+                                self._config_entry.entry_id
+                            )
+                        )
                         continue
 
                     if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
@@ -2926,6 +2936,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._preferences: dict[str, Any] = {}
         self._renderer: Any = None
         self._png: bytes | None = None
+        self._live_dirty = False
+        self._last_live_state_write = 0.0
 
     @property
     def suggested_object_id(self) -> str:
@@ -2956,6 +2968,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 self.hass,
                 _SIGNAL_PRIME_LIVE_BUNDLE.format(self._config_entry.entry_id),
                 self._on_live_bundle,
+            )
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                _SIGNAL_PRIME_LIVE_POSITION.format(self._config_entry.entry_id),
+                self._on_live_position,
             )
         )
 
@@ -2999,11 +3018,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         current = await backend._current_map_id()  # noqa: SLF001
         p2map_id = current if current in map_ids else map_ids[0]
 
-        (
-            self._polygons,
-            self._names,
-            self._preferences,
-        ) = await async_build_prime_room_polygons(self._config_entry, p2map_id)
+        polygons, names, preferences = await async_build_prime_room_polygons(
+            self._config_entry, p2map_id
+        )
 
 
         # The floor plan is a SECOND cloud call, and a failure costs only
@@ -3026,7 +3043,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Prime map: could not read map versions", exc_info=True)
 
-        self._floor_plan = (
+        floor_plan = (
             await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
             if version
             else PrimeFloorPlan(
@@ -3045,9 +3062,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # three accounts, and the bundle layer is not guaranteed to
         # exist. Only a name actually present in the bundle replaces one,
         # so a robot without that layer is unaffected.
-        for room_id, name in (self._floor_plan.room_names or {}).items():
-            if room_id in self._names:
-                self._names[room_id] = name
+        for room_id, name in (floor_plan.room_names or {}).items():
+            if room_id in names:
+                names[room_id] = name
 
         # OUTLINES FROM THE BUNDLE, where the metadata has none.
         #
@@ -3062,12 +3079,25 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # Metadata geometry still wins where it exists: it is what this
         # entity was built on and is confirmed working elsewhere. The
         # bundle fills the gap rather than replacing the source.
-        for room_id, ring in (self._floor_plan.room_polygons or {}).items():
-            self._polygons.setdefault(room_id, ring)
-            self._names.setdefault(
+        for room_id, ring in (floor_plan.room_polygons or {}).items():
+            polygons.setdefault(room_id, ring)
+            names.setdefault(
                 room_id,
-                (self._floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
+                (floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
             )
+        if not polygons:
+            # A post-mission shadow can announce a new map version before
+            # its bundle is available. Do not turn a working map unavailable
+            # just because this transient refresh has no geometry.
+            _LOGGER.debug(
+                "Prime rooms map: refresh returned no geometry; keeping cached map"
+            )
+            return
+
+        self._polygons = polygons
+        self._names = names
+        self._preferences = preferences
+        self._floor_plan = floor_plan
         if self._polygons:
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
@@ -3077,6 +3107,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw  # noqa: PLC0415
 
         from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM, rings_mm  # noqa: PLC0415
 
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
@@ -3104,6 +3135,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         draw = ImageDraw.Draw(img)
 
         to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
+        live_bundle = self._live_bundle or {}
+        live_coverage = rings_mm(live_bundle.get("coverage"))
 
         # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
         # walls, then the dock, then labels.
@@ -3124,6 +3157,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # per-room colours that keep adjacent rooms distinguishable.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
 
+        # The live bundle is the data the app uses for cleaned coverage,
+        # trajectories and hazards. Keep the static-map fit: these layers
+        # share its coordinate frame and must not move the room layout.
+        for ring in live_coverage:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
+
         for ring in self._floor_plan.borders:
             # OUTLINE ONLY, for the reason written two lines above about
             # carpet and then not applied here.
@@ -3136,6 +3175,29 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # The wall is the outline. Drawing it as one shows the same
             # geometry without covering anything.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
+
+        for feature in (live_bundle.get("trajectories") or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                points = [
+                    to_px(float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
+                    for x, y in coords
+                ]
+            except (TypeError, ValueError):
+                continue
+            if len(points) >= 2:
+                draw.line(points, fill=(80, 150, 235), width=2)
+
+        for feature in (live_bundle.get("hazard") or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                px, py = to_px(
+                    float(coords[0]) * METRES_TO_MM,
+                    float(coords[1]) * METRES_TO_MM,
+                )
+            except (TypeError, ValueError, IndexError):
+                continue
+            draw.regular_polygon((px, py, 8), 3, fill=(240, 150, 60))
 
         # THE TRAIL, on top of the floor plan and under the labels.
         #
@@ -3170,6 +3232,16 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 previous = (x_mm, y_mm)
             if len(trail) >= 2:
                 draw.line(trail, fill=(120, 200, 255), width=2)
+
+        if positions:
+            x_mm, y_mm, heading = positions[-1]
+            px, py = to_px(x_mm, y_mm)
+            draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(60, 170, 255))
+            radians = math.radians(heading)
+            draw.line(
+                (px, py, px + math.cos(radians) * 12, py - math.sin(radians) * 12),
+                fill=(255, 255, 255), width=2,
+            )
 
         if self._floor_plan.dock is not None:
             dx, dy, _orientation = self._floor_plan.dock
@@ -3212,6 +3284,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         map change is picked up without a subscription.
         """
         await self._async_refresh_if_map_changed()
+        if self._live_dirty and self._polygons:
+            self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._live_dirty = False
         return self._png
 
     async def _async_refresh_if_map_changed(self) -> None:
@@ -3268,34 +3343,37 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
 
     @callback
     def _on_live_bundle(self, bundle: Any) -> None:
-        """Redraws the rooms map when a live bundle arrives.
+        """Marks the Rooms Map dirty when a new live bundle arrives.
 
         THE MAP NOW UPDATES DURING A MISSION rather than only when the
         map version changes. Contributed by @jouwdan (PR #63), who found
         the second url on MapUpdateMessage.
 
-        Only redraws once room polygons exist -- before that there is
-        nothing to draw on, and a render would produce an empty image
-        that looks like a fault rather than like a robot that has not
-        mapped yet.
+        If room geometry has not arrived yet, the initial room refresh renders
+        the already-cached live data. This avoids a blank entity while the
+        static map is loading.
 
-        The work goes to a background task because this is a dispatcher
-        callback: rendering a PNG inline blocks the event loop for as
-        long as PIL takes.
+        Rendering happens only when Home Assistant fetches the image.
+        This keeps an idle dashboard from consuming CPU for updates it
+        will never display.
         """
         self._live_bundle = bundle
-        if not self._polygons:
-            return
-        self._config_entry.async_create_background_task(
-            self.hass, self._async_render_live_bundle(), "roomba_plus_live_bundle"
-        )
+        self._mark_live_dirty()
 
-    async def _async_render_live_bundle(self) -> None:
-        """Re-renders and publishes, off the event loop."""
-        try:
-            self._png = await self.hass.async_add_executor_job(self._render_png)
+    @callback
+    def _on_live_position(self) -> None:
+        """Marks the Rooms Map dirty when a live position arrives."""
+        self._mark_live_dirty()
+
+    @callback
+    def _mark_live_dirty(self) -> None:
+        """Advertise new live data at a bounded frontend update rate."""
+        self._live_dirty = True
+        now = _time_mod.monotonic()
+        if (
+            now - getattr(self, "_last_live_state_write", 0.0)
+            >= _LIVE_MAP_STATE_UPDATE_INTERVAL
+        ):
+            self._last_live_state_write = now
             self._attr_image_last_updated = dt_util.utcnow()
             self.async_write_ha_state()
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("Prime rooms map: live re-render failed", exc_info=True)
-
