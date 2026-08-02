@@ -31,7 +31,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 CURRENT_STATE: dict[str, Any] = {
     "batPct": 84,
-    "dock": {"known": True, "state": 1, "tankLvl": 90, "gwTankLvl": 10},
+    # tankLvl present: only some docks report it (fwVer 24 / pd 3 does,
+    # fwVer 20 / pd 2 does not), and the tank sensor gates on presence.
+    # gwTankLvl is deliberately absent -- it appears in no real capture
+    # and is not modelled.
+    "dock": {"known": True, "state": 301, "pwState": 601, "pdState": 701,
+             "tankLvl": 90, "cap": {"evac": 1, "pd": 3, "pw": 1, "pwo": 1}},
     "cleanMissionStatus": {"phase": "charge", "cycle": "none", "mssnM": 0,
                            "expireM": 0},
     "bin": {"present": True, "full": False},
@@ -129,6 +134,23 @@ def favorites_attribute() -> list[dict[str, str]]:
             for raw in FAVORITES_JSON]
 
 
+def schedule_containers():
+    """What PrimeScheduleCoordinator.data holds: (container_id, [parsed]).
+
+    Parsed HouseholdSchedule objects, not the raw dicts the library
+    returns from SchedulesList.schedules -- reading attributes off those
+    dicts is the bug that left the schedule switches with zero entities
+    for their entire life.
+    """
+    from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+    return [
+        (container.household_schedule_id,
+         [HouseholdSchedule.from_json(raw) for raw in container.schedules])
+        for container in schedules_response().household_schedules
+    ]
+
+
 def prime_robot() -> AsyncMock:
     """A robot double whose methods return what the library returns."""
     robot = AsyncMock()
@@ -167,4 +189,13 @@ def cloud_only_config_entry() -> MagicMock:
     data.prime_status_coordinator.data = dict(SHADOWS)
     data.prime_parts_coordinator = MagicMock()
     data.prime_parts_coordinator.data = dict(PARTS)
+
+    # The schedule switches read their state from here and, since the
+    # entity list follows the schedule list, are also BUILT from it.
+    data.prime_schedule_coordinator = MagicMock()
+    data.prime_schedule_coordinator.data = schedule_containers()
+    data.prime_schedule_coordinator.async_config_entry_first_refresh = AsyncMock()
+    data.prime_schedule_coordinator.async_add_listener = MagicMock(
+        return_value=lambda: None
+    )
     return config_entry

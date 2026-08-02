@@ -549,10 +549,36 @@ class TestPrimeErrorSensor:
         }
         return PrimeErrorSensor("BLID123", config_entry)
 
-    def test_reports_the_label_during_an_active_mission(self):
-        sensor = self._entity(cycle="clean", phase="run", error=671)
+    def test_reports_the_code_during_an_active_mission(self):
+        """The CODE, not a label. APK analysis found no error-code table
+        in the app at all -- for either generation -- and a field
+        capture contradicts the Classic reading outright: error 46 on a
+        physically stuck robot at 55% battery, which ERROR_CODE_LABELS
+        calls "Low battery".
 
-        assert sensor.native_value == ERROR_CODE_LABELS[671]
+        Same reasoning as consumable parts 202/212: a wrong label gets
+        believed, a number invites a question."""
+        sensor = self._entity(cycle="clean", phase="run", error=46)
+
+        assert sensor.native_value == "Error 46"
+
+    def test_the_classic_reading_survives_as_a_flagged_attribute(self):
+        """Thrown away would be wrong too -- it is probably right more
+        often than not. It just must not be asserted, and the attribute
+        name has to say so."""
+        sensor = self._entity(cycle="clean", phase="run", error=46)
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["error_code"] == 46
+        assert attrs["classic_label_unconfirmed"] == ERROR_CODE_LABELS[46]
+
+    def test_an_unknown_code_still_reports_something_useful(self):
+        """234-style values that map to nothing used to render as
+        "None", which reads as "no error" for a robot that has one."""
+        sensor = self._entity(cycle="clean", phase="run", error=9999)
+
+        assert sensor.native_value == "Error 9999"
+        assert "classic_label_unconfirmed" not in sensor.extra_state_attributes
 
     def test_suppresses_a_stale_error_while_charging(self):
         """THE trap this sensor exists to avoid -- error 671 still set
@@ -933,3 +959,124 @@ class TestFieldObservedDockStates:
 
         with pytest.raises(ValueError):
             DockState(671)
+
+
+class TestTheDockTankLevelSensorGatesOnPresence:
+    """Two docks, one capture each: fwVer 24 / dock.cap.pd 3 reports
+    `tankLvl`, fwVer 20 / pd 2 never sends the key -- not even while a
+    pad wash was failing for want of water.
+
+    Two variables differ at once, so the field cannot say which governs,
+    and the APK cannot either: pd/pw/pwo are not literals, the mapping
+    is a runtime-filled map<string, DockCapability>, and DockCapability
+    is purely categorical with no notion of a level 2 or 3.
+
+    Hence presence, not capability. The dock that stays silent produces
+    no entity rather than one reading "unknown" forever -- the lesson
+    from @jouwdan's vacuum-only Max 705, which got a pad-wash sensor it
+    could never populate.
+    """
+
+    async def _sensors(self, dock):
+        import importlib
+        from unittest.mock import MagicMock
+
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        shadows = dict(prime_fixtures.SHADOWS)
+        shadows["ro-currentstate"] = dict(prime_fixtures.CURRENT_STATE) | {"dock": dock}
+        entry.runtime_data.prime_status_coordinator.data = shadows
+        entry.runtime_data.prime_coordinator.data = shadows
+
+        module = importlib.import_module("custom_components.roomba_plus.sensor")
+        created: list = []
+        await module.async_setup_entry(MagicMock(), entry, created.extend)
+        return [type(e).__name__ for e in created]
+
+    @pytest.mark.asyncio
+    async def test_a_dock_that_reports_the_level_gets_a_sensor(self):
+        names = await self._sensors(
+            {"known": True, "tankLvl": 100, "cap": {"pd": 3, "pw": 1}}
+        )
+
+        assert "PrimeDockTankLevelSensor" in names
+
+    @pytest.mark.asyncio
+    async def test_a_dock_that_never_reports_it_gets_none(self):
+        """The silent dock still has pad wash and pad dry -- so this is
+        not "no dock", it is a dock that does not publish the level."""
+        names = await self._sensors(
+            {"known": True, "cap": {"pd": 2, "pw": 1}, "pwState": 671}
+        )
+
+        assert "PrimeDockTankLevelSensor" not in names
+        assert "PrimePadWashStatusSensor" in names
+
+    @pytest.mark.asyncio
+    async def test_an_empty_tank_still_gets_a_sensor(self):
+        """0 is a reading. Gating on truthiness would hide the sensor
+        exactly when it matters most."""
+        names = await self._sensors(
+            {"known": True, "tankLvl": 0, "cap": {"pd": 3, "pw": 1}}
+        )
+
+        assert "PrimeDockTankLevelSensor" in names
+
+
+class TestNoDockEntitiesWithoutADock:
+    """@utkjmitch's Y351020 sits on a plain charge dock and reports
+    `dock: {"known": false, "error": 0, "fwVer": ""}` -- no `cap` object
+    at all.
+
+    A missing cap was read as "the shadow has not arrived, fail open",
+    which is right when the shadow really is incomplete and wrong here:
+    `known: false` is the robot stating there is no such dock. It
+    produced pad wash and pad dry sensors on a robot that can do
+    neither.
+
+    Same family as the a17 Max 705 fix, different trigger -- there the
+    cap object was present and the key absent, here the object never
+    comes.
+    """
+
+    async def _sensors(self, dock):
+        import importlib
+        from unittest.mock import MagicMock
+
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        shadows = dict(prime_fixtures.SHADOWS)
+        shadows["ro-currentstate"] = dict(prime_fixtures.CURRENT_STATE) | {"dock": dock}
+        entry.runtime_data.prime_status_coordinator.data = shadows
+        entry.runtime_data.prime_coordinator.data = shadows
+
+        module = importlib.import_module("custom_components.roomba_plus.sensor")
+        created: list = []
+        await module.async_setup_entry(MagicMock(), entry, created.extend)
+        return [type(e).__name__ for e in created]
+
+    @pytest.mark.asyncio
+    async def test_a_plain_charge_dock_gets_no_wash_or_dry_sensors(self):
+        names = await self._sensors({"known": False, "error": 0, "fwVer": ""})
+
+        assert "PrimePadWashStatusSensor" not in names
+        assert "PrimePadDryStatusSensor" not in names
+
+    @pytest.mark.asyncio
+    async def test_a_wash_dock_still_gets_them(self):
+        names = await self._sensors(
+            {"known": True, "cap": {"pw": 1, "pd": 3}, "tankLvl": 90}
+        )
+
+        assert "PrimePadWashStatusSensor" in names
+        assert "PrimePadDryStatusSensor" in names
+
+    @pytest.mark.asyncio
+    async def test_an_absent_dock_key_still_fails_open(self):
+        """No `known` field at all is a genuine gap -- the shadow may
+        simply not have arrived yet. Only an explicit false suppresses."""
+        names = await self._sensors({"cap": {"pw": 1, "pd": 3}})
+
+        assert "PrimePadWashStatusSensor" in names

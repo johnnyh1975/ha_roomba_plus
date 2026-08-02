@@ -464,10 +464,30 @@ class TestPrimeSettingSwitches:
 
         return PRIME_SETTING_SWITCHES
 
-    def test_the_four_confirmed_settings_are_present(self):
+    def test_only_settings_with_their_own_write_command_are_present(self):
+        """An exact set, not a minimum, so that adding one is a
+        deliberate act with a reason attached.
+
+        padDryAllowed joined the four in a20. It is the only one of the
+        seven AutoWash-related rw-settings fields with its own
+        SetPadDryAllowCommand in the app; the rest travel through
+        SetAllRoombaPreferences as a bundle, and writing one field of a
+        bundle alone is how schedHold behaves -- accepted, ignored."""
         assert {d.wire_key for d in self._descriptions()} == {
             "childLock", "ecoCharge", "noAutoPasses", "vacHigh",
+            "padDryAllowed",
         }
+
+    def test_the_bundled_autowash_settings_stay_out(self):
+        """Six siblings sit next to padDryAllowed in the same shadow and
+        are deliberately not offered: the app writes them together
+        through a ten-boolean command value, and which of them move
+        together is not statically readable."""
+        offered = {d.wire_key for d in self._descriptions()}
+
+        for bundled in ("padDryDur", "padWashAllowed", "pwAreaInterval",
+                        "pwTimeInterval", "pwReturn", "autoevacFreq"):
+            assert bundled not in offered
 
     def test_sched_hold_is_absent(self):
         """THE exclusion that matters. schedHold writes and reads back

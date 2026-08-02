@@ -390,12 +390,10 @@ class TestTheSchedulesAreParsedNotReadOffDicts:
         from custom_components.roomba_plus import switch as switch_module
         from custom_components.roomba_plus.models import ConnectionType
 
-        entry = _entry([("c1", [
-            _schedule_json("s1", name="Weekdays"),
-            _schedule_json("s2", name="Saturday", enabled=False),
-        ])])
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
-        entry.runtime_data.prime_status_coordinator.data = {}
 
         created: list = []
         await switch_module.async_setup_entry(MagicMock(), entry, created.extend)
@@ -610,3 +608,114 @@ class TestConcurrentTogglesDoNotOverwriteEachOther:
         # The second write must have been built on the first one's result,
         # not on the state both read at the start.
         assert writes[-1] == {"s1": False, "s2": False}
+
+
+class TestTheEntityListFollowsTheScheduleList:
+    """@DaRealGuGu's four-row test matrix, a19.
+
+    a19 added a coordinator so a schedule toggled in the iRobot app
+    reaches Home Assistant without a reload. It refreshes the STATE of
+    switches that already exist -- and entities were still built exactly
+    once, at setup. So:
+
+        create a schedule in the app  -> no switch until a reload
+        delete a schedule in the app -> switch goes unavailable, then
+                                        stays there forever
+
+    His diagnostics proved the read side was never the problem: the file
+    he took at the moment HA showed the old value already contained the
+    new one. The staleness was entirely in the entity list.
+    """
+
+    def _entry_and_add(self, containers):
+        from unittest.mock import MagicMock
+
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        coordinator = entry.runtime_data.prime_schedule_coordinator
+        coordinator.data = containers
+        listeners: list = []
+        coordinator.async_add_listener = MagicMock(
+            side_effect=lambda cb: listeners.append(cb) or (lambda: None)
+        )
+        created: list = []
+        return entry, coordinator, listeners, created
+
+    async def _setup(self, entry, created):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus import switch as switch_module
+
+        await switch_module.async_setup_entry(MagicMock(), entry, created.extend)
+
+    @staticmethod
+    def _schedules(created):
+        """The switch platform also builds carpet boost and settings
+        switches; only the schedule ones are under test here."""
+        return [e for e in created if type(e).__name__ == "PrimeScheduleSwitch"]
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_added_in_the_app_gets_a_switch(self):
+        entry, coordinator, listeners, created = self._entry_and_add(
+            [("c1", [_parsed("s1")])]
+        )
+        await self._setup(entry, created)
+        assert len(self._schedules(created)) == 1
+
+        # The app gains a schedule; the coordinator picks it up on its
+        # next cycle and notifies.
+        coordinator.data = [("c1", [_parsed("s1"), _parsed("s2")])]
+        for callback in listeners:
+            callback()
+
+        assert [e._schedule_id for e in self._schedules(created)] == ["s1", "s2"]
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_refresh_adds_nothing(self):
+        """Matched by schedule_id, never by content. The order of
+        start.day is not stable between two reads of the same unchanged
+        schedule -- comparing content would add duplicates on every
+        refresh."""
+        entry, coordinator, listeners, created = self._entry_and_add(
+            [("c1", [_parsed("s1", days=[4, 3, 1, 2])])]
+        )
+        await self._setup(entry, created)
+
+        coordinator.data = [("c1", [_parsed("s1", days=[1, 2, 4, 3])])]
+        for callback in listeners:
+            callback()
+
+        assert len(self._schedules(created)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_first_refresh_still_wires_the_listener(self):
+        """A cloud hiccup at startup must not cost the user their
+        switches until the next restart -- the next successful refresh
+        has to be able to add them."""
+        from unittest.mock import AsyncMock
+
+        entry, coordinator, listeners, created = self._entry_and_add([])
+        coordinator.async_config_entry_first_refresh = AsyncMock(
+            side_effect=RuntimeError("cloud down")
+        )
+        await self._setup(entry, created)
+        assert self._schedules(created) == []
+
+        coordinator.data = [("c1", [_parsed("s1")])]
+        for callback in listeners:
+            callback()
+
+        assert len(self._schedules(created)) == 1
+
+
+def _parsed(schedule_id, days=None, enabled=True):
+    from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+    return HouseholdSchedule.from_json(_schedule_json(
+        schedule_id, enabled=enabled,
+    ) | {"options": {
+        "name": schedule_id, "enabled": enabled, "deleted": False,
+        "frequency": "WEEKLY",
+        "start": {"day": days or [1], "hour": 9, "min": 0},
+    }})
