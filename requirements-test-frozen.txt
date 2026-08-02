@@ -6,7 +6,7 @@ aiohappyeyeballs==2.7.1
 aiohasupervisor==0.2.2b5
 aiohttp==3.11.11
 aiohttp-cors==0.7.0
-aiohttp-fast-zlib==0.2.0
+aiohttp-fast-zlib==0.3.0
 aiooui==0.1.9
 aiosignal==1.4.0
 aiozoneinfo==0.2.1
