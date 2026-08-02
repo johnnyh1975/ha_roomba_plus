@@ -30,7 +30,7 @@ from homeassistant.const import EntityCategory
 
 from .const import CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
 from .entity import IRobotEntity
-from .prime_coordinator import get_prime_capability_flags
+from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -241,13 +241,23 @@ async def async_build_prime_buttons(
     # The wire strings were then confirmed from CommandType's
     # @SerialName annotations rather than guessed.
     _cap, dock_cap = get_prime_capability_flags(config_entry)
-    for command in PRIME_DOCK_COMMANDS:
-        # None means unknown, only an explicit 0 means absent -- so a
-        # robot that has not reported its dock yet still gets the
-        # buttons rather than silently losing them.
-        if dock_cap is not None and getattr(dock_cap, command.dock_cap_attr, None) == 0:
-            continue
-        entities.append(PrimeDockButton(data.blid, config_entry, command))
+    # A ROBOT THAT SAYS IT HAS NO DOCK GETS NO DOCK BUTTONS.
+    #
+    # @utkjmitch's Y351020 on a plain charge dock reports
+    # `dock: {"known": false}` with no `cap` object, and the rule below
+    # reads a missing cap as "unknown, offer anyway". That gave him wash
+    # and dry buttons for a dock that has neither. `known: false` is a
+    # statement, not a gap. Same helper and same reasoning as the dock
+    # sensors in sensor.py.
+    if _dock_reports_itself(config_entry):
+        for command in PRIME_DOCK_COMMANDS:
+            # None means unknown, only an explicit 0 means absent -- so a
+            # robot that has not reported its dock yet still gets the
+            # buttons rather than silently losing them.
+            if (dock_cap is not None
+                    and getattr(dock_cap, command.dock_cap_attr, None) == 0):
+                continue
+            entities.append(PrimeDockButton(data.blid, config_entry, command))
 
     # Locate is always offered; favourite buttons are optional.
     #

@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Carga ecológica"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Secado de la mopa"
+      },
       "prime_two_pass": {
         "name": "Limpieza en dos pasadas"
       },

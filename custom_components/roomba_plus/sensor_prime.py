@@ -476,6 +476,19 @@ _PAD_STATE_SLUGS: dict[str, str] = {
 #: EMPTY rather than missing, hence the deliberately broad wording --
 #: naming it "empty" would send someone to refill a tank that is not
 #: fitted.
+#:
+#: CONFIRMED ABSENT FROM THE APK (2 August 2026). 671 appears nowhere in
+#: DockState, whose pad-wash family stops at 669
+#: (PAD_WASH_PAD_ACTUATOR_STALL_ERROR), and there is no second, newer
+#: dock-state table. The app carries a fallback for exactly this case --
+#: `DockStateImpl` holds the string "Unknown dock state %d" -- so the
+#: official app would log it as unknown too.
+#:
+#: The code is therefore server-side and newer than app version 2.2.4,
+#: the same situation as `is_smart_clean_fav` in the schedule payload.
+#: This table is not a stopgap until the real name turns up: two
+#: controlled field observations are the best source that exists, and
+#: the label below says more than the app itself would.
 _FIELD_OBSERVED_DOCK_STATES: Final[dict[int, str]] = {
     671: "Pad wash not possible (check tanks)",
 }
@@ -549,6 +562,49 @@ class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
         if state is None or state.dock is None:
             return None
         return _dock_state_label(state.dock.pw_state)
+
+
+class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
+    """Clean water tank level in the dock, for docks that report one.
+
+    GATED ON THE FIELD BEING PRESENT, not on a capability flag, and that
+    is a deliberate choice rather than laziness.
+
+    Two docks, one capture each: fwVer 24 with dock.cap.pd 3 sends
+    tankLvl 100; fwVer 20 with pd 2 never sends the key at all -- not
+    even while a pad wash was failing for lack of water. Two variables
+    differ at once, so the field cannot say which governs, and the APK
+    cannot either: pd/pw/pwo are not literals, the mapping lives in a
+    runtime-filled map<string, DockCapability>, and DockCapability is
+    purely categorical with no notion of a level 2 or 3.
+
+    Gating on presence means the tester whose dock stays silent gets no
+    entity rather than one reading "unknown" forever. Same reasoning as
+    the pad-wash and pad-dry sensors after the Max 705 report.
+
+    `gwTankLvl` (grey water) gets no sensor: the literal exists in the
+    app's native library but its role could not be established, and it
+    appears in no capture from either dock.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="prime_dock_tank_level",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_name = "Dock clean water tank"
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_dock_tank_level"
+
+    @property
+    def native_value(self) -> int | None:
+        state = self._current_state
+        if state is None or state.dock is None:
+            return None
+        return state.dock.tank_lvl
 
 
 class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
@@ -1019,11 +1075,33 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
     CurrentStateShadow.clean_mission_status.error (CONFIRMED LIVE for
     Prime, chairstacker's own ro-currentstate payload).
 
-    Reuses Classic's OWN translation_key ("error") and its
-    ERROR_CODE_LABELS catalogue rather than introducing a parallel
-    Prime-specific one -- the codes are the same product-wide
-    catalogue, only the transport differs (cloud shadow vs local MQTT),
-    exactly as with the mission-count sensors.
+    REPORTS THE CODE, NOT A LABEL, and that is a correction rather
+    than an omission.
+
+    This class used to state that "the codes are the same product-wide
+    catalogue, only the transport differs". That was an assumption
+    written as a fact, and it does not hold up:
+
+      - APK analysis found NO error-code table in the app at all --
+        not for Prime, not for Classic. RobotErrorDescriptor carries a
+        bare `short getCode()` and a severity flag. The app almost
+        certainly fetches error text from the server, exactly as it
+        does for the consumable-parts catalogue.
+      - A field capture contradicts the label outright (@utkjmitch,
+        Y351020): `error: 46` with `phase: "stuck"` on a robot
+        physically confirmed stuck, at 55% battery. ERROR_CODE_LABELS
+        renders 46 as "Low battery".
+
+    So ERROR_CODE_LABELS is community knowledge validated by Classic
+    users over years -- real evidence, but for Classic. Nothing carries
+    it across to a different firmware generation, and one counter-
+    example says it does not.
+
+    The reasoning is the same one already applied to consumable parts
+    202 and 212 a few screens below: a wrong label gets believed, a
+    number invites a question. The Classic reading stays reachable as
+    an attribute rather than being thrown away -- it is probably right
+    more often than not, it just must not be asserted.
 
     INHERITS CLASSIC'S HARD-WON STALE-ERROR SUPPRESSION, deliberately
     rather than reading the field raw: cleanMissionStatus.error
@@ -1066,18 +1144,31 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
         # Same rule Classic uses -- see this class's own docstring.
         if (status.cycle or "none") == "none" and (status.phase or "") in ("charge", "stop", "idle", ""):
             return "None"
-        return ERROR_CODE_LABELS.get(status.error or 0, "None")
+        code = status.error or 0
+        if code == 0:
+            return "None"
+        return f"Error {code}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         status = self._mission_status
         if status is None:
             return {}
-        return {
+        attrs: dict[str, Any] = {
             "error_code": status.error,
             "not_ready": status.not_ready,
             "cond_not_ready": status.cond_not_ready,
         }
+        # The Classic reading, offered and labelled as unconfirmed. It
+        # is probably right more often than not; it is simply not
+        # established for this firmware generation, and one field
+        # capture contradicts it. Naming the attribute for its own
+        # uncertainty means nobody builds an automation on it by
+        # accident.
+        guess = ERROR_CODE_LABELS.get(status.error or 0)
+        if guess:
+            attrs["classic_label_unconfirmed"] = guess
+        return attrs
 
 
 #: Part id -> (display name, unit, whether the raw value is minutes).

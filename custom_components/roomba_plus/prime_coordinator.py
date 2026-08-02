@@ -618,6 +618,29 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
 
 
+def _dock_reports_itself(config_entry: Any) -> bool:
+    """Whether the robot claims to have a dock at all.
+
+    `dock.known` is a statement, not a gap: a robot on a plain charge
+    dock reports `{"known": false, "error": 0, "fwVer": ""}` with no
+    `cap` object. Read as "capability unknown", that produced pad wash
+    and pad dry entities on a robot that can do neither (@utkjmitch,
+    a19).
+
+    Absent entirely -- no dock key, or the shadow has not arrived --
+    stays True: that IS a gap, and failing open is right for it. Only an
+    explicit `known: false` suppresses.
+    """
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_status_coordinator", None
+    )
+    state = (getattr(coordinator, "data", None) or {}).get("ro-currentstate") or {}
+    dock = state.get("dock")
+    if not isinstance(dock, dict) or "known" not in dock:
+        return True
+    return bool(dock["known"])
+
+
 def get_prime_capability_flags(config_entry: Any) -> tuple[Any | None, Any | None]:
     """Returns (CapabilityFlags, DockCapabilities) for a CLOUD_ONLY
     config entry -- (None, None) if genuinely unavailable (coordinator

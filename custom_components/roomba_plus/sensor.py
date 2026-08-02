@@ -75,6 +75,7 @@ from .sensor_prime import (
     PrimeConsumablePartSensor,
     PrimeMissionEventSensor,
     PrimeNavigationResetsSensor,
+    PrimeDockTankLevelSensor,
     PrimePadDryStatusSensor,
     PrimePadWashStatusSensor,
     PrimeRuntimeHoursSensor,
@@ -198,7 +199,7 @@ async def async_setup_entry(
     # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
     # a different coordinator entirely) applies to a CLOUD_ONLY entry.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
-        from .prime_coordinator import get_prime_capability_flags
+        from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
 
         cap, dock_cap = get_prime_capability_flags(config_entry)
 
@@ -253,11 +254,35 @@ async def async_setup_entry(
         # a pad-dry sensor, both permanently meaningless. His own
         # diagnostics said so: "created (capability unknown -- failing
         # open)".
+        # A DOCK THE ROBOT SAYS IT DOES NOT KNOW IS NOT AN UNKNOWN DOCK.
+        #
+        # @utkjmitch's Y351020 sits on a plain charge dock and reports
+        # `dock: {"known": false, "error": 0, "fwVer": ""}` -- no `cap`
+        # object at all. The rule below reads a missing cap as "shadow
+        # has not arrived, fail open", which is right when the shadow
+        # really is incomplete and wrong here: `known: false` is the
+        # robot stating there is no such dock.
+        #
+        # It produced pad wash and pad dry sensors, plus the wash and dry
+        # buttons, on a robot that can do neither. Same family as the
+        # a17 Max 705 fix and a different trigger -- there the cap object
+        # was present and the key absent, here the object never comes.
+        dock_known = _dock_reports_itself(config_entry)
         dock_cap_known = dock_cap is not None
-        if not dock_cap_known or dock_cap.pad_wash not in (0, None):
+        if dock_known and (not dock_cap_known or dock_cap.pad_wash not in (0, None)):
             entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
-        if not dock_cap_known or dock_cap.pad_dry not in (0, None):
+        if dock_known and (not dock_cap_known or dock_cap.pad_dry not in (0, None)):
             entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
+        # PRESENCE, not capability. See PrimeDockTankLevelSensor's
+        # docstring: which docks report tankLvl is not decidable from
+        # dock.cap, and a sensor reading "unknown" forever is worse than
+        # no sensor.
+        coordinator = getattr(config_entry.runtime_data,
+                              "prime_status_coordinator", None)
+        raw_dock = ((getattr(coordinator, "data", None) or {})
+                    .get("ro-currentstate") or {}).get("dock") or {}
+        if isinstance(raw_dock, dict) and raw_dock.get("tankLvl") is not None:
+            entities.append(PrimeDockTankLevelSensor(data.blid, config_entry))
 
         async_add_entities(entities)
 

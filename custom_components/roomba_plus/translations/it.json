@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Ricarica eco"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Asciugatura del panno"
+      },
       "prime_two_pass": {
         "name": "Pulizia a due passaggi"
       },

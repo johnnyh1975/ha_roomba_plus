@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Charge éco"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Séchage de la serpillière"
+      },
       "prime_two_pass": {
         "name": "Nettoyage en deux passages"
       },

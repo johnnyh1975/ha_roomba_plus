@@ -424,6 +424,20 @@ async def async_build_prime_floor_plan(
         )
         return empty
 
+    # EVERY FILE IS OPTIONAL, and that is confirmed rather than
+    # defensive. APK analysis: P2MapBundleContentHolder carries
+    # `Map<String, byte[]> featureData` whose keys come from manifest.json
+    # at runtime, and FeatureType is a Java generic parameter rather than
+    # an enumeration -- there is no fixed set of files a bundle can hold.
+    # The server decides per map which features it generates.
+    #
+    # Confirmed in the field too: one account's bundle has five files
+    # (borders, dockPose, manifest, metadata, rooms) and another's has
+    # eight, and the five-file set INCLUDES two that were previously
+    # taken for extras of the eight-file set. It is not a per-SKU split.
+    #
+    # So: .get() throughout, absent means empty, and nobody should ever
+    # add a required-file list here.
     plan = PrimeFloorPlan(
         room_names=_room_names_from_bundle(parsed.get("rooms")),
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),

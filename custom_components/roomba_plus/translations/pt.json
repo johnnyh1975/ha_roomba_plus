@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Carregamento eco"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Secagem da mopa"
+      },
       "prime_two_pass": {
         "name": "Limpeza em duas passagens"
       },

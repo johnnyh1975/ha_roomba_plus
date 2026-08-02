@@ -16,7 +16,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
@@ -42,63 +42,61 @@ async def _async_add_prime_schedule_switches(
     them would cost the user carpet boost and child lock too.
     """
     from .prime_schedule_switch import (  # noqa: PLC0415
-        PrimeScheduleSwitch,
-        async_read_schedule_containers,
+        build_prime_schedule_switches,
     )
 
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    if coordinator is None:
+        return
+
     try:
-        containers = await async_read_schedule_containers(config_entry)
+        await coordinator.async_config_entry_first_refresh()
     except Exception:  # noqa: BLE001
+        # Best-effort: a failure adds no switches now and the coordinator
+        # will try again on its own cycle, at which point the listener
+        # below adds them.
         _LOGGER.debug("roomba_plus: could not read schedules", exc_info=True)
-        return
-    if containers is None:
-        # The read failed rather than finding nothing. Creating no
-        # switches is the same outcome either way here, but saying which
-        # happened is the difference between "this account has no
-        # schedules" and "the cloud call did not come back" -- a
-        # distinction this feature has been bitten by repeatedly.
-        _LOGGER.debug("roomba_plus: schedules unreadable, no switches added")
-        return
 
-    entities: list[SwitchEntity] = []
-    for container_id, schedules in containers:
-        for schedule in schedules:
-            schedule_id = getattr(schedule, "schedule_id", None)
-            if not schedule_id:
-                continue
-            options = schedule.options
-            # A deleted schedule stays in the payload with deleted=True.
-            # Creating a switch for it would offer control over something
-            # the app no longer shows.
-            if options.deleted:
-                continue
-            # NO SWITCH FOR A SCHEDULE WHOSE STATE THE SERVER DID NOT SEND.
-            #
-            # This replaces an `options is None` check that became
-            # unreachable when the schedules started being parsed:
-            # HouseholdSchedule.from_json() always builds a ScheduleOptions,
-            # so a payload entry carrying no options at all now arrives as
-            # an object full of Nones rather than as None.
-            #
-            # The old check's reasoning still holds and is why this is
-            # here rather than defaulting to off: toggling writes the
-            # WHOLE container back, so offering a switch for a schedule we
-            # know nothing about means re-serialising it from defaults --
-            # writing over settings the user has and we never saw.
-            #
-            # `enabled is None` is the honest form of that question. False
-            # is a real answer and gets a switch; None means unanswered.
-            if options.enabled is None:
-                continue
-            entities.append(PrimeScheduleSwitch(
-                config_entry,
-                container_id,
-                str(schedule_id),
-                getattr(options, "name", "") or "",
-            ))
+    known: set[str] = set()
 
-    if entities:
-        async_add_entities(entities)
+    @callback
+    def _sync_entities() -> None:
+        """Adds switches for schedules that appeared since the last run.
+
+        WHY THIS IS NOT A ONE-OFF (@DaRealGuGu, a19 field test). a19
+        added a coordinator so that a schedule toggled in the iRobot app
+        reaches Home Assistant without a reload. It refreshes the STATE
+        of switches that already exist, and entities were still built
+        exactly once, here, at setup.
+
+        His four-row test matrix showed what that leaves:
+
+            create a schedule in the app  -> no switch until reload
+            delete a schedule in the app -> switch goes unavailable and
+                                            then stays forever
+
+        MATCHED BY schedule_id, NEVER BY CONTENT. The order of
+        `start.day` is not stable between two reads of the same
+        unchanged schedule -- [4,3,1,2], then [1,2,4,3], then [3,1,2,4]
+        across his captures. Comparing content would report a change on
+        every refresh.
+        """
+        new_entities = [
+            switch
+            for switch in build_prime_schedule_switches(
+                config_entry, coordinator.data or []
+            )
+            if switch.unique_id not in known
+        ]
+        if not new_entities:
+            return
+        known.update(str(switch.unique_id) for switch in new_entities)
+        async_add_entities(new_entities)
+
+    _sync_entities()
+    config_entry.async_on_unload(coordinator.async_add_listener(_sync_entities))
 
 
 async def async_setup_entry(
@@ -558,6 +556,37 @@ PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
         translation_key="prime_eco_charge",
         wire_key="ecoCharge",
         model_attr="eco_charge",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    # THE ONLY AutoWash SETTING THAT IS SAFE TO OFFER, and the reason is
+    # worth writing down because six sibling settings sit right next to
+    # it in the same shadow and are NOT here.
+    #
+    # A tester asked for controls over the app's "Mop AutoWash Settings"
+    # -- pad wash frequency and mop dry duration. The data is all in
+    # rw-settings: padDryAllowed, padDryDur, padWashAllowed,
+    # pwAreaInterval, pwTimeInterval, pwReturn, autoevacFreq.
+    #
+    # An APK pass found the obstacle. Of 37 Set*Command classes exactly
+    # one covers this area: SetPadDryAllowCommand. Everything else goes
+    # through SetAllRoombaPreferences with a RoombaPreferencesCommandValue
+    # whose constructor takes TEN booleans -- the app writes these
+    # settings as a BUNDLE. Which fields travel together is decided in
+    # getPreferenceJsonString(), whose field names live in BSS constants
+    # and are not statically readable.
+    #
+    # So a control that writes one of the bundled fields alone might be
+    # accepted and do nothing. That is not hypothetical here: schedHold
+    # is taken by the server and ignored.
+    #
+    # padDryAllowed has its own command, so it is written the way the
+    # app writes it. The other six stay out until a field capture shows
+    # whether one slider moves one field or several.
+    PrimeSettingSwitchDescription(
+        key="prime_pad_dry_allowed",
+        translation_key="prime_pad_dry_allowed",
+        wire_key="padDryAllowed",
+        model_attr="pad_dry_allowed",
         entity_category=EntityCategory.CONFIG,
     ),
     PrimeSettingSwitchDescription(

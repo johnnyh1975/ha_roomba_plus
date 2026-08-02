@@ -141,6 +141,50 @@ async def async_read_schedule_containers(
     return containers
 
 
+def build_prime_schedule_switches(
+    config_entry: RoombaConfigEntry,
+    containers: list[tuple[str, list[Any]]],
+) -> list[PrimeScheduleSwitch]:
+    """One switch per schedule that can meaningfully carry one.
+
+    Lives here rather than in switch.py because the platform now calls
+    it on every coordinator refresh, not only at setup -- schedules
+    appear and disappear in the iRobot app, and the entity list has to
+    follow. See switch.py's _sync_entities for what that costs.
+    """
+    switches: list[PrimeScheduleSwitch] = []
+    for container_id, schedules in containers:
+        for schedule in schedules:
+            if not schedule.schedule_id:
+                continue
+            options = schedule.options
+            # A deleted schedule stays in the payload with deleted=True.
+            # Creating a switch for it would offer control over
+            # something the app no longer shows.
+            #
+            # Field note: a schedule deleted in the app simply VANISHES
+            # from the response rather than arriving with deleted=True,
+            # so this guard is correct but has never fired in practice.
+            # Real deletions are handled by the entity going unavailable
+            # when _apply cannot find its schedule any more.
+            if options.deleted:
+                continue
+            # NO SWITCH FOR A SCHEDULE WHOSE STATE THE SERVER DID NOT
+            # SEND. Toggling writes the WHOLE container back, so
+            # offering a switch for a schedule we know nothing about
+            # means re-serialising it from defaults -- writing over
+            # settings the user has and we never saw. `enabled is None`
+            # is the honest form of that question: False is a real
+            # answer and gets a switch, None means unanswered.
+            if options.enabled is None:
+                continue
+            switches.append(PrimeScheduleSwitch(
+                config_entry, container_id, str(schedule.schedule_id),
+                options.name or "",
+            ))
+    return switches
+
+
 class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
     """One robot schedule, on or off.
 

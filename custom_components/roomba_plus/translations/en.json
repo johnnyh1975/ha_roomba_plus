@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Eco charging"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Pad drying"
+      },
       "prime_two_pass": {
         "name": "Two-pass cleaning"
       },

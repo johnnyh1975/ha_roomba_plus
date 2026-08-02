@@ -971,6 +971,9 @@
       "prime_eco_charge": {
         "name": "Eco-Laden"
       },
+      "prime_pad_dry_allowed": {
+        "name": "Wischtuch-Trocknung"
+      },
       "prime_two_pass": {
         "name": "Zwei Durchgänge"
       },
