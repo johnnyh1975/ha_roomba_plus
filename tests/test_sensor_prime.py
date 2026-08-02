@@ -890,3 +890,46 @@ class TestPrimeCleaningModeSensor:
         )
 
         assert "if " not in line
+
+
+class TestFieldObservedDockStates:
+    """@chairstacker's pad wash status read "Unknown (671)" for a
+    condition this project can name.
+
+    671 is not in DockState -- the enum's 84 members come from APK
+    analysis and the pad-wash family stops at 669. But the meaning is
+    established by a controlled before/after: tank removed -> pwState
+    671; tank refitted -> 601 (PAD_WASH_OKAY), with dock.state,
+    dock.error and pdState unchanged throughout. One field carried the
+    whole signal.
+    """
+
+    def _label(self, value):
+        from custom_components.roomba_plus.sensor_prime import _dock_state_label
+
+        return _dock_state_label(value)
+
+    def test_671_is_named(self):
+        assert self._label(671) == "Pad wash not possible (check tanks)"
+
+    def test_it_does_not_say_empty(self):
+        """The tank was REMOVED, not empty. "Empty" sends someone to
+        refill a tank that is not in the dock -- and 671 was seen in
+        both states, so neither word is right on its own."""
+        assert "empty" not in self._label(671).lower()
+
+    def test_enum_values_still_win(self):
+        """The overlay must not shadow the decompiled enum."""
+        assert self._label(601) == "Pad wash okay"
+        assert self._label(301) == "Dock ready"
+
+    def test_an_unknown_code_still_falls_back(self):
+        assert self._label(9999) == "Unknown (9999)"
+
+    def test_the_enum_is_not_polluted(self):
+        """DockState stays purely APK-derived, so the next reader can
+        tell decompiled values from field-inferred ones."""
+        from roombapy_prime.models.robot_info import DockState
+
+        with pytest.raises(ValueError):
+            DockState(671)

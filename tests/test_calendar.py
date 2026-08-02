@@ -299,9 +299,17 @@ class TestZoneLabelsInSummary:
         assert events[0].summary == "Cleaning: Kitchen, Living Room"
 
 
-def _make_prime_calendar(prime_household_id="hh1", prime_robot=None):
+def _make_prime_calendar(prime_household_id="hh1", prime_robot=None,
+                         schedule_containers=None):
     """Minimal PrimeScheduleCalendar — bypasses IRobotEntity.__init__,
-    same pattern as _make_calendar() above."""
+    same pattern as _make_calendar() above.
+
+    `schedule_containers` feeds PrimeScheduleCoordinator.data, which is
+    where this calendar now reads its schedules from. It used to call
+    get_schedules() itself; the switches needed a refresh source anyway,
+    and two timers against one endpoint for one account was one too
+    many. Coordinator data is parsed HouseholdSchedule objects, not the
+    raw dicts the library returns."""
     from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
 
     cal = PrimeScheduleCalendar.__new__(PrimeScheduleCalendar)
@@ -309,6 +317,9 @@ def _make_prime_calendar(prime_household_id="hh1", prime_robot=None):
     config_entry = MagicMock()
     config_entry.runtime_data.prime_household_id = prime_household_id
     config_entry.runtime_data.prime_robot = prime_robot or MagicMock()
+    coordinator = MagicMock()
+    coordinator.data = schedule_containers
+    config_entry.runtime_data.prime_schedule_coordinator = coordinator
     cal._config_entry = config_entry
     cal._cached_occurrences = []
     cal._cached_room_names = {}
@@ -361,20 +372,23 @@ class TestPrimeScheduleCalendarFetchOccurrences:
                 "commands": [{"regions": [{"region_id": "23", "type": "rid"}]}],
             },
         }
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
         prime_robot = MagicMock()
-        response = MagicMock()
-        schedules_list = MagicMock()
-        schedules_list.schedules = [schedule_raw]
-        response.household_schedules = [schedules_list]
-        prime_robot.get_schedules = AsyncMock(return_value=response)
-        cal = _make_prime_calendar(prime_robot=prime_robot)
+        cal = _make_prime_calendar(
+            prime_robot=prime_robot,
+            schedule_containers=[("hs1", [HouseholdSchedule.from_json(schedule_raw)])],
+        )
 
         result = await cal._fetch_occurrences(
             datetime.datetime(2026, 7, 20), datetime.datetime(2026, 7, 27)
         )
 
         assert len(result) == 1
-        prime_robot.get_schedules.assert_awaited_once_with("hh1")
+        # The calendar must not make its own cloud call any more: one
+        # fetch for the account, read by the calendar and every schedule
+        # switch alike.
+        prime_robot.get_schedules.assert_not_called()
 
 
 class TestPrimeScheduleCalendarRoomNames:

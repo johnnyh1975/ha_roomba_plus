@@ -49,6 +49,15 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "prime_coordinator -> prime_schedule_switch": (
+        "the schedule parsing lives with the switches, and this module is "
+        "imported by __init__ during setup -- a top-level import would drag "
+        "the Home Assistant switch component into the graph before the "
+        "platform is even set up. Reversing it is the wrong fix: the parsing "
+        "must stay in ONE place, because reading schedules as attributes off "
+        "the raw dicts the library returns is a mistake this project has now "
+        "made in four separate modules"
+    ),
     "select -> select_prime": "Prime-only entities",
     "select -> prime_coordinator": "capability flags, read only on the Prime branch",
     "diagnostics -> prime_coordinator": "Prime-only diagnostics section",
