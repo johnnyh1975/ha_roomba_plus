@@ -47,7 +47,7 @@ greenlet==3.5.3
 h11==0.16.0
 habluetooth==6.1.0
 hass-nabucasa==0.87.0
-home-assistant-bluetooth==1.13.0
+home-assistant-bluetooth==2.0.0
 homeassistant==2025.1.4
 httpcore==1.0.9
 httpx==0.27.2
