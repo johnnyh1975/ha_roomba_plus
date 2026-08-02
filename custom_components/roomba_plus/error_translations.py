@@ -767,16 +767,18 @@ _TRANSLATION_GROUPS: Final[list[tuple[list[int], dict[str, dict[str, str]]]]] = 
         "pt": {"label": "Desobstruir caminho", "description": "O caminho do robô está obstruído.", "action": "Remova os obstáculos do caminho do robô e reinicie."},
         "nl": {"label": "Pad vrijmaken", "description": "Het pad van de robot is geblokkeerd.", "action": "Verwijder obstakels uit het pad van de robot en start opnieuw."},
     }),
-    # FIELD-REPORTED (chairstacker, Combo 405 / V4 Prime) -- see this
-    # code's own entry in const.py's ERROR_CATALOGUE for the confidence
-    # note on how the meaning was established.
+    # FIELD-REPORTED (chairstacker, Combo 405 / V4 Prime). The wording
+    # WIDENED in a19: a second, controlled observation showed 671 with
+    # the tank REMOVED, not empty, so "tank empty" was sending people to
+    # refill a tank that was not in the dock. See const.py's entry for
+    # the full note, including why it stays in this table at all.
     ([671], {
-        "de": {"label": "Frischwassertank leer", "description": "Der Frischwassertank ist leer. Das Wischen kann nicht fortgesetzt werden.", "action": "Frischwassertank auffüllen und die Reinigung neu starten."},
-        "fr": {"label": "Réservoir d'eau propre vide", "description": "Le réservoir d'eau propre est vide. Le lavage ne peut pas continuer.", "action": "Remplissez le réservoir d'eau propre et relancez la mission."},
-        "it": {"label": "Serbatoio acqua pulita vuoto", "description": "Il serbatoio dell'acqua pulita è vuoto. Il lavaggio non può continuare.", "action": "Riempire il serbatoio dell'acqua pulita e riavviare la pulizia."},
-        "es": {"label": "Depósito de agua limpia vacío", "description": "El depósito de agua limpia está vacío. El fregado no puede continuar.", "action": "Rellene el depósito de agua limpia y reinicie la limpieza."},
-        "pt": {"label": "Depósito de água limpa vazio", "description": "O depósito de água limpa está vazio. A lavagem não pode continuar.", "action": "Encha o depósito de água limpa e reinicie a limpeza."},
-        "nl": {"label": "Schoonwatertank leeg", "description": "De schoonwatertank is leeg. Dweilen kan niet doorgaan.", "action": "Vul de schoonwatertank bij en start de missie opnieuw."},
+        "de": {"label": "Wischtuchwäsche nicht möglich", "description": "Die Station kann das Wischtuch nicht waschen. Beobachtet sowohl bei leerem als auch bei fehlendem Frischwassertank.", "action": "Prüfen, ob beide Tanks eingesetzt sind und der Frischwassertank gefüllt ist."},
+        "fr": {"label": "Lavage de la serpillière impossible", "description": "La station ne peut pas laver la serpillière. Observé avec le réservoir d'eau propre vide comme retiré.", "action": "Vérifiez que les deux réservoirs sont en place et que le réservoir d'eau propre est rempli."},
+        "it": {"label": "Lavaggio del panno non possibile", "description": "La base non può lavare il panno. Osservato sia con il serbatoio dell'acqua pulita vuoto sia rimosso.", "action": "Verificare che entrambi i serbatoi siano inseriti e che quello dell'acqua pulita sia pieno."},
+        "es": {"label": "No se puede lavar la mopa", "description": "La base no puede lavar la mopa. Observado con el depósito de agua limpia vacío y también retirado.", "action": "Compruebe que ambos depósitos estén colocados y que el de agua limpia esté lleno."},
+        "pt": {"label": "Não é possível lavar a mopa", "description": "A base não consegue lavar a mopa. Observado com o depósito de água limpa vazio e também removido.", "action": "Verifique se ambos os depósitos estão colocados e se o de água limpa está cheio."},
+        "nl": {"label": "Dweil wassen niet mogelijk", "description": "Het station kan de dweil niet wassen. Waargenomen met de schoonwatertank zowel leeg als verwijderd.", "action": "Controleer of beide tanks geplaatst zijn en de schoonwatertank gevuld is."},
     }),
 ]
 

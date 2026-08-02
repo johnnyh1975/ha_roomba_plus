@@ -753,3 +753,88 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
         return parts
+
+
+class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]]):
+    """V4/Prime cleaning schedules, shared by the calendar and the switches.
+
+    WHY THIS EXISTS (chairstacker, v4.0.0a18 field test). The schedule
+    switches read their state exactly twice: when the entity is created,
+    and after this integration writes it. Nothing else. Schedules come
+    from a REST call rather than the robot's live stream, so a schedule
+    toggled in the iRobot app did not reach Home Assistant until the
+    integration was reloaded -- not on a mission start, not ever.
+
+    The trade written into the switch said "a setting nobody watches
+    change". He gave the case that breaks it, and it is worse than a
+    stale display:
+
+        Switch off the automations in the app before going on holiday.
+        A Home Assistant automation using that switch as a CONDITION now
+        acts on a value that has been false since the last restart, and
+        nothing anywhere reports a problem.
+
+    A switch entity is machine-readable state, not decoration. Stale
+    here is not a cosmetic issue, it is a correctness one -- and quiet,
+    which is the shape of most of what this project has had to dig out.
+
+    WHY A COORDINATOR RATHER THAN POLLING THE SWITCHES. Six schedules
+    means six entities. Polling each would be six cloud calls per cycle
+    for one account-wide answer, and scripts/check_request_budget.py
+    forbids exactly that -- correctly. One fetch, many readers.
+
+    The calendar already fetches this data on its own fifteen-minute
+    cycle. It moves onto this coordinator rather than keeping a second
+    timer against the same endpoint for the same account.
+    """
+
+    #: Matches the calendar's existing SCAN_INTERVAL, deliberately.
+    #: Schedules are edited by hand a few times a year; the interval is
+    #: set by how long a wrong answer may persist, not by how fast the
+    #: data moves. Fifteen minutes bounds the window in which an
+    #: automation can act on a stale flag.
+    UPDATE_INTERVAL = timedelta(minutes=15)
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        prime_robot: Any,
+        blid: str,
+        config_entry: ConfigEntry,
+    ) -> None:
+        self.prime_robot = prime_robot
+        self.blid = blid
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"roomba_plus_prime_schedules_{blid}",
+            update_interval=self.UPDATE_INTERVAL,
+            config_entry=config_entry,
+        )
+
+    async def _async_update_data(self) -> list[tuple[str, list[Any]]]:
+        """Containers as (household_schedule_id, [HouseholdSchedule]).
+
+        The outer structure is kept because the write endpoint addresses
+        the container, and because a switch has to send the whole list
+        back to change one flag.
+
+        Reuses async_read_schedule_containers() rather than calling the
+        robot directly: that function is where the schedules get PARSED,
+        and reading them as attributes off the raw dicts the library
+        returns is the bug that left this feature with zero entities for
+        its entire life. One parser, one place.
+        """
+        from .prime_schedule_switch import (  # noqa: PLC0415
+            async_read_schedule_containers,
+        )
+
+        containers = await async_read_schedule_containers(self.config_entry)
+        if containers is None:
+            # None means the read FAILED, [] means it succeeded and found
+            # nothing -- a distinction async_read_schedule_containers()
+            # exists to preserve. Raising keeps the last good data and
+            # marks the coordinator unavailable, instead of telling every
+            # switch its schedule vanished.
+            raise UpdateFailed("could not read schedules")
+        return containers

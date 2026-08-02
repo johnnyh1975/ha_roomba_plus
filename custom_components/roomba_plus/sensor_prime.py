@@ -30,7 +30,7 @@ matching where their Classic equivalents already live.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -460,6 +460,27 @@ _PAD_STATE_SLUGS: dict[str, str] = {
 }
 
 
+#: Dock state codes seen in the field that DockState does not contain.
+#:
+#: Kept separate from the enum on purpose. DockState's 84 members come
+#: from APK analysis and are verified as a set; mixing a field-observed
+#: value into it would blur a clean provenance boundary and make the
+#: next person unable to tell which values were decompiled and which
+#: were inferred from a robot's behaviour.
+#:
+#: 671 -- @chairstacker, Combo 405, dock fwVer 20. Controlled before and
+#: after: with the clean water tank removed, dock.pwState read 671; the
+#: moment it went back in, 601 (PAD_WASH_OKAY). dock.state (301),
+#: dock.error (0) and pdState (701) did not move either way, so this one
+#: field carries the whole signal. Also seen earlier with the tank
+#: EMPTY rather than missing, hence the deliberately broad wording --
+#: naming it "empty" would send someone to refill a tank that is not
+#: fitted.
+_FIELD_OBSERVED_DOCK_STATES: Final[dict[int, str]] = {
+    671: "Pad wash not possible (check tanks)",
+}
+
+
 def _dock_state_label(raw_value: Any) -> str | None:
     """Formats a DockState enum member (or its raw int, if the value
     isn't one of the 86 confirmed members) into a readable label --
@@ -476,7 +497,11 @@ def _dock_state_label(raw_value: Any) -> str | None:
     try:
         member = DockState(raw_value)
     except ValueError:
-        return f"Unknown ({raw_value})"
+        # Field-observed codes before the bare fallback: "Unknown (671)"
+        # is what a tester actually saw for a condition this project can
+        # name.
+        known = _FIELD_OBSERVED_DOCK_STATES.get(raw_value)
+        return known if known else f"Unknown ({raw_value})"
     return member.name.replace("_", " ").capitalize()
 
 

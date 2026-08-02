@@ -93,7 +93,12 @@ from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA'
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
-from .prime_coordinator import PrimeCoordinator, PrimePartsCoordinator, PrimeStatusCoordinator
+from .prime_coordinator import (
+    PrimeCoordinator,
+    PrimePartsCoordinator,
+    PrimeScheduleCoordinator,
+    PrimeStatusCoordinator,
+)
 from ._prime_login_bridge import pop_pending_login
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -1191,6 +1196,10 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # a robot whose parts endpoint is unreachable should still finish
     # setting up with everything else working. Same reasoning as the
     # household lookup below.
+    schedule_coordinator = PrimeScheduleCoordinator(
+        hass, prime_robot, blid, config_entry
+    )
+
     parts_coordinator = PrimePartsCoordinator(hass, prime_robot, blid, config_entry)
     try:
         await parts_coordinator.async_config_entry_first_refresh()
@@ -1384,6 +1393,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_favorites=prime_favorites,
         prime_status_coordinator=status_coordinator,
         prime_parts_coordinator=parts_coordinator,
+        prime_schedule_coordinator=schedule_coordinator,
         prime_household_id=household_id,
         prime_serial_info=serial_info,
         blocking_manager=blocking_manager,

@@ -234,26 +234,30 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         HouseholdSchedule.from_json() regardless -- this would have
         silently returned zero occurrences for every real account,
         never raising, so nothing would have surfaced this without a
-        real test."""
-        household_id = self._config_entry.runtime_data.prime_household_id
-        if household_id is None:
-            return []
-        prime_robot = self._config_entry.runtime_data.prime_robot
-        try:
-            response = await prime_robot.get_schedules(household_id)
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning(
-                "roomba_plus: get_schedules() failed for %s -- schedule calendar "
-                "will show no data until this succeeds", self._blid, exc_info=True,
-            )
-            return []
+        real test.
 
-        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+        NOW READS THE SHARED COORDINATOR rather than calling
+        get_schedules() itself. This calendar and the schedule switches
+        want the same account-wide answer on the same fifteen-minute
+        rhythm; two timers against one endpoint is one timer too many,
+        and the switches needed a refresh source anyway (see
+        PrimeScheduleCoordinator's docstring for the field report that
+        forced that).
 
+        The parsing note above still holds and is why the coordinator
+        returns parsed HouseholdSchedule objects: SchedulesList.schedules
+        is list[dict], and reading attributes off those raw dicts is a
+        mistake this project has now made in four separate places.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is None or not coordinator.data:
+            return []
         schedules = [
-            HouseholdSchedule.from_json(raw)
-            for schedules_list in (getattr(response, "household_schedules", None) or [])
-            for raw in (getattr(schedules_list, "schedules", None) or [])
+            schedule
+            for _container_id, container in coordinator.data
+            for schedule in container
         ]
         return parse_prime_schedule_occurrences(schedules, start, end)
 

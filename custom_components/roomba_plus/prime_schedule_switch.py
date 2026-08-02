@@ -37,6 +37,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.core import callback
 from homeassistant.components.switch import SwitchEntity
 
 from .entity import IRobotEntity
@@ -167,10 +168,23 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
     #: somebody edits a schedule in the iRobot app, which is to say
     #: almost never.
     #:
-    #: The state is read once when the entity is added, and again after
-    #: this integration writes it. A schedule toggled in the app shows
-    #: up on the next reload rather than within 30 seconds, which is the
-    #: right trade for a setting nobody watches change.
+    #: STILL FALSE, BUT FOR A DIFFERENT REASON NOW. This used to mean
+    #: "read once at creation, once after our own write, and otherwise
+    #: never" -- and the comment here justified that as "the right trade
+    #: for a setting nobody watches change".
+    #:
+    #: That was wrong, and a field test showed how (chairstacker):
+    #: switch the automations off in the iRobot app before a holiday,
+    #: and a Home Assistant automation using this switch as a CONDITION
+    #: goes on acting on a value that has been false since the last
+    #: restart. A switch entity is machine-readable state, not
+    #: decoration, so stale is a correctness problem rather than a
+    #: cosmetic one -- and a silent one.
+    #:
+    #: Polling is still off because the refresh belongs to
+    #: PrimeScheduleCoordinator, not to each entity: six schedules would
+    #: otherwise mean six cloud calls per cycle for one account-wide
+    #: answer, which scripts/check_request_budget.py forbids and should.
     _attr_should_poll = False
 
     def __init__(
@@ -240,7 +254,48 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
         # roomba=None (Prime), so it is safe and must not be skipped --
         # skipping it is what would leave the device name generic.
         await super().async_added_to_hass()
+
+        # SUBSCRIBE TO THE COORDINATOR THAT CARRIES THIS ENTITY'S DATA.
+        # Missing exactly this subscription is what left the vacuum
+        # entity showing "Returning to dock" after a mission had ended,
+        # and it is what left these switches frozen at whatever they read
+        # when they were created.
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self._handle_coordinator_update)
+            )
+            if coordinator.data is not None:
+                self._apply(coordinator.data)
+                return
         await self.async_update()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        coordinator = self._config_entry.runtime_data.prime_schedule_coordinator
+        if coordinator.data is not None:
+            self._apply(coordinator.data)
+            self.async_write_ha_state()
+
+    def _apply(self, containers: list[tuple[str, list[Any]]]) -> None:
+        """Sets is_on from a container list somebody else fetched.
+
+        None stays None -- `available` reads exactly this to decide
+        whether the flag has ever been read, and bool(None) would render
+        an unknown schedule as off.
+        """
+        for container_id, schedules in containers:
+            if container_id != self._container_id:
+                continue
+            for schedule in schedules:
+                if schedule.schedule_id == self._schedule_id:
+                    self._attr_is_on = schedule.options.enabled
+                    return
+        # The read succeeded and this schedule was not in it: deleted in
+        # the app. Unknown, not off.
+        self._attr_is_on = None
 
     async def async_update(self) -> None:
         """Re-reads the enabled flag for this one schedule.
@@ -258,20 +313,10 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
         """
         containers = await async_read_schedule_containers(self._config_entry)
         if containers is None:
+            # A failed read keeps the last known state rather than making
+            # the entity flicker out on every cloud hiccup.
             return
-        for container_id, schedules in containers:
-            if container_id != self._container_id:
-                continue
-            for schedule in schedules:
-                if schedule.schedule_id != self._schedule_id:
-                    continue
-                # None stays None -- `available` reads exactly this to
-                # decide whether the state has ever been read. bool(None)
-                # would render an unknown schedule as off.
-                self._attr_is_on = schedule.options.enabled
-                return
-        # Read succeeded and this schedule was not in it.
-        self._attr_is_on = None
+        self._apply(containers)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_set_enabled(True)

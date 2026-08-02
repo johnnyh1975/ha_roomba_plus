@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from .prime_coordinator import (  # V4/Prime
         PrimeCoordinator,
         PrimePartsCoordinator,
+        PrimeScheduleCoordinator,
         PrimeStatusCoordinator,
     )
 
@@ -135,6 +136,14 @@ class RoombaData:
     #: POLLING coordinator here -- parts come from REST, nothing pushes
     #: them. See its own docstring for why it polls rarely.
     prime_parts_coordinator: "PrimePartsCoordinator | None" = None
+
+    # Cleaning schedules, shared by the calendar and the schedule
+    # switches. Before this existed the switches read their state twice
+    # ever -- at creation and after their own write -- so a schedule
+    # toggled in the iRobot app stayed wrong in Home Assistant until a
+    # reload, and an automation using that switch as a condition acted
+    # on it. See PrimeScheduleCoordinator's docstring.
+    prime_schedule_coordinator: "PrimeScheduleCoordinator | None" = None
     # NEW: household_id for THIS robot, resolved once via
     # PrimeRobot.get_household_id() during _async_setup_entry_prime() --
     # needed for get_schedules()/PrimeScheduleCalendar (calendar.py).
