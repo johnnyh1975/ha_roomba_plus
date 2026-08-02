@@ -126,7 +126,7 @@ urllib3==1.26.20
 usb-devices==0.5.1
 uv==0.5.8
 voluptuous==0.15.2
-voluptuous-openapi==0.0.5
+voluptuous-openapi==0.4.1
 voluptuous-serialize==2.6.0
 webrtc-models==0.3.0
 yarl==1.18.3
