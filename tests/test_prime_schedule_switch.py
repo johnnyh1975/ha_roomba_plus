@@ -719,3 +719,334 @@ def _parsed(schedule_id, days=None, enabled=True):
         "frequency": "WEEKLY",
         "start": {"day": days or [1], "hour": 9, "min": 0},
     }})
+
+
+class TestVanishedSchedulesLoseTheirSwitch:
+    """a20 claimed this and only shipped half of it.
+
+    Its release notes said a deleted schedule's switch "will disappear".
+    Only the additive half had been written: `_sync_entities` compared
+    against a set of known ids and added what was missing, and never
+    looked the other way. @DaRealGuGu tested it and reported three
+    switches still sitting there greyed out well past the refresh
+    interval -- which was exactly right.
+
+    The additive half did work: a schedule created in the app got its
+    switch on the next cycle. So the feature looked like it worked from
+    one direction.
+    """
+
+    def _setup(self, containers, ok=True):
+        from unittest.mock import MagicMock
+
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        coordinator = entry.runtime_data.prime_schedule_coordinator
+        coordinator.data = containers
+        coordinator.last_update_success = ok
+        listeners: list = []
+        coordinator.async_add_listener = MagicMock(
+            side_effect=lambda cb: listeners.append(cb) or (lambda: None)
+        )
+        return entry, coordinator, listeners
+
+    async def _run(self, entry, registry):
+        """Returns the created list AND a live patch context.
+
+        The entity registry lookup happens when a listener fires, not
+        during setup, so the patch has to outlive async_setup_entry --
+        an earlier version of this test let it expire and saw no
+        removals for that reason rather than a real one.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import switch as switch_module
+
+        created: list = []
+        patcher = patch.object(switch_module.er, "async_get", return_value=registry)
+        patcher.start()
+        await switch_module.async_setup_entry(MagicMock(), entry, created.extend)
+        return created, patcher
+
+    def addfinalizer(self, patcher):
+        self._patchers.append(patcher)
+
+    _patchers: list = []
+
+    def teardown_method(self):
+        while self._patchers:
+            self._patchers.pop().stop()
+
+    def _registry(self):
+        from unittest.mock import MagicMock
+
+        registry = MagicMock()
+        registry.async_get_entity_id = MagicMock(side_effect=lambda p, d, uid: uid)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_deleted_in_the_app_loses_its_switch(self):
+        entry, coordinator, listeners = self._setup(
+            [("c1", [_parsed("s1"), _parsed("s2")])]
+        )
+        registry = self._registry()
+        _, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+
+        coordinator.data = [("c1", [_parsed("s1")])]
+        for callback in listeners:
+            callback()
+
+        removed = [call.args[0] for call in registry.async_remove.call_args_list]
+        assert len(removed) == 1
+        assert "s2" in removed[0]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_removed_after_a_failed_refresh(self):
+        """The worst thing this file could do. A failed refresh leaves
+        the coordinator's data at its last good value, so in practice
+        nothing would vanish -- but tying deletion to a flag that says
+        "this data is current" is the difference between a rule and a
+        coincidence."""
+        entry, coordinator, listeners = self._setup(
+            [("c1", [_parsed("s1"), _parsed("s2")])]
+        )
+        registry = self._registry()
+        _, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+
+        coordinator.data = []
+        coordinator.last_update_success = False
+        for callback in listeners:
+            callback()
+
+        registry.async_remove.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_refresh_removes_nothing(self):
+        """The day order is not stable between reads, so a content
+        comparison would churn the entity list on every cycle."""
+        entry, coordinator, listeners = self._setup(
+            [("c1", [_parsed("s1", days=[4, 3, 1, 2])])]
+        )
+        registry = self._registry()
+        created, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+        before = len(created)
+
+        coordinator.data = [("c1", [_parsed("s1", days=[1, 2, 4, 3])])]
+        for callback in listeners:
+            callback()
+
+        registry.async_remove.assert_not_called()
+        assert len(created) == before
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_can_come_back(self):
+        """Removed and then re-added must produce a switch again --
+        otherwise the known-id set would remember a schedule the user
+        recreated and silently skip it."""
+        entry, coordinator, listeners = self._setup([("c1", [_parsed("s1")])])
+        registry = self._registry()
+        created, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+
+        coordinator.data = []
+        for callback in listeners:
+            callback()
+        coordinator.data = [("c1", [_parsed("s1")])]
+        for callback in listeners:
+            callback()
+
+        schedules = [e for e in created if type(e).__name__ == "PrimeScheduleSwitch"]
+        assert len(schedules) == 2
+
+
+class TestSwitchLabelsTellSchedulesApart:
+    """@chairstacker's a20 screenshot: six switches, all reading
+    "Schedule - Regular Schedule".
+
+    The `name` field cannot distinguish them, and APK analysis
+    established why: it is a hard-coded default with no user relation.
+    The app shows no name anywhere and offers no field to set one. Nine
+    schedules across two accounts all read "Regular Schedule"; the only
+    different value came from our own CLI call.
+
+    So the label is built the way the app's own list is -- from the
+    rooms a schedule cleans -- plus the start time.
+    """
+
+    _NAMES = {"13": "Kitchen", "10": "Bathroom", "12": "Hallway",
+              "11": "Living room", "14": "Study"}
+
+    def _label(self, regions=(), room_names=None, **kwargs):
+        """Built THROUGH the parser, not by hand.
+
+        An earlier version constructed ScheduleOptions directly with the
+        wire shape `{"command": {"regions": [...]}}`. ScheduleOptions
+        .from_json() unwraps that, so a parsed schedule holds the inner
+        dict -- and the code under test only understood the wrapper. The
+        hand-built fixture agreed with the bug and every test passed
+        while no real schedule resolved a single room name.
+
+        Exactly what tests/prime_fixtures.py exists to prevent, made
+        inside a test instead of in the code.
+        """
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            _schedule_label,
+        )
+
+        options: dict = {"name": kwargs.get("name")}
+        start = kwargs.get("start")
+        if start is not None:
+            options["start"] = start
+        if regions:
+            options["commands"] = [{"command": {"regions": [
+                {"region_id": r, "type": "rid"} for r in regions
+            ]}}]
+        if kwargs.get("commands") is not None:
+            options["commands"] = kwargs["commands"]
+        parsed = HouseholdSchedule.from_json({"schedule_id": "x", "options": options})
+        return _schedule_label(
+            parsed.options, self._NAMES if room_names is None else room_names
+        )
+
+    def test_the_rooms_are_the_label(self):
+        assert self._label(
+            regions=["13", "10"], name="Regular Schedule",
+            start={"day": [1], "hour": 9, "min": 0},
+        ) == "Kitchen, Bathroom 09:00"
+
+    def test_two_schedules_covering_different_rooms_read_differently(self):
+        """The whole point. Under the old label both of these were
+        "Regular Schedule 09:00"."""
+        first = self._label(regions=["13", "10"],
+                            start={"day": [1], "hour": 9, "min": 0})
+        second = self._label(regions=["12", "11"],
+                             start={"day": [5], "hour": 9, "min": 0})
+
+        assert first != second
+
+    def test_a_long_room_list_is_cut_short(self):
+        """Seven rooms would produce a label nobody can scan in a
+        list."""
+        assert self._label(
+            regions=["13", "10", "12", "11", "14"],
+            start={"day": [1], "hour": 15, "min": 45},
+        ) == "Kitchen, Bathroom +3 15:45"
+
+    def test_an_unresolvable_region_falls_back_to_the_time(self):
+        """A bare "Zone 99" looks like information and is not. The time
+        separates schedules better than a region number does."""
+        assert self._label(
+            regions=["99"], start={"day": [1], "hour": 6, "min": 5}
+        ) == "06:05"
+
+    def test_no_rooms_at_all_falls_back_to_the_time(self):
+        assert self._label(
+            name="Regular Schedule", start={"day": [1], "hour": 7, "min": 30}
+        ) == "07:30"
+
+    def test_no_start_time_falls_back_to_the_name(self):
+        assert self._label(name="Regular Schedule") == "Regular Schedule"
+
+    def test_a_malformed_command_block_does_not_raise(self):
+        """These are raw dicts off the wire, read inside a coordinator
+        listener -- an exception here would take the whole switch
+        platform down."""
+        for commands in ([{"command": "not-a-dict"}],
+                         [{"command": {"regions": ["x", 3]}}], [None]):
+            assert self._label(
+                commands=commands, start={"day": [1], "hour": 9, "min": 0}
+            ) == "09:00"
+
+    def test_the_object_id_still_comes_from_the_schedule_id(self):
+        """Renaming a routine in the app must not rename the entity out
+        from under an automation -- so the label may change freely while
+        the slug does not."""
+        from tests import prime_fixtures
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        switch = PrimeScheduleSwitch(entry, "c1", "S-1", "Regular Schedule 15:45")
+
+        assert switch.suggested_object_id == "schedule_S-1"
+
+
+class TestWeekdaysInTheLabel:
+    """Rooms plus time was not enough, and a real account proved it.
+
+    Two of @DaRealGuGu's three schedules clean the SAME four rooms at
+    the SAME time and differ only in which days they run -- so the
+    room-based label produced two identical entries, reintroducing the
+    problem it was built to solve.
+    """
+
+    _ROOMS = {"13": "Kitchen", "10": "Bathroom", "12": "Hallway",
+              "11": "Living room"}
+    _DAYS = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu",
+             5: "Fri", 6: "Sat"}
+
+    _DEFAULT = object()
+
+    def _label(self, days, hour, minute, regions, weekday_names=_DEFAULT):
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            _schedule_label,
+        )
+
+        parsed = HouseholdSchedule.from_json({"schedule_id": "x", "options": {
+            "name": "Regular Schedule",
+            "start": {"day": days, "hour": hour, "min": minute},
+            "commands": [{"command": {"regions": [
+                {"region_id": r, "type": "rid"} for r in regions
+            ]}}],
+        }})
+        # A sentinel rather than None: None is itself one of the broken
+        # inputs under test, and defaulting on it made that case quietly
+        # exercise the real table instead.
+        return _schedule_label(
+            parsed.options, self._ROOMS,
+            self._DAYS if weekday_names is self._DEFAULT else weekday_names,
+        )
+
+    def test_his_two_colliding_schedules_now_differ(self):
+        friday = self._label([5], 9, 0, ["13", "10", "12", "11"])
+        weekdays = self._label([3, 1, 2, 4], 9, 0, ["13", "10", "12", "11"])
+
+        assert friday != weekdays
+        assert friday == "Kitchen, Bathroom +2 Fri 09:00"
+        assert weekdays == "Kitchen, Bathroom +2 Mon-Thu 09:00"
+
+    def test_consecutive_days_collapse_into_a_range(self):
+        """Sorted first: the day order is not stable between reads --
+        the same untouched schedule came back as [4,3,1,2], then
+        [1,2,4,3], then [3,1,2,4]."""
+        assert self._label([4, 3, 1, 2], 9, 0, ["13"]) == "Kitchen Mon-Thu 09:00"
+
+    def test_non_consecutive_days_are_listed(self):
+        assert self._label([1, 3, 5], 9, 0, ["13"]) == "Kitchen Mon, Wed, Fri 09:00"
+
+    def test_two_days_are_listed_rather_than_ranged(self):
+        """"Mon-Tue" is longer than "Mon, Tue" and reads as a span the
+        user did not set."""
+        assert self._label([1, 2], 9, 0, ["13"]) == "Kitchen Mon, Tue 09:00"
+
+    def test_missing_translations_degrade_to_rooms_and_time(self):
+        """A failed translation lookup must cost the days, not the
+        entity."""
+        assert self._label([5], 9, 0, ["13"], weekday_names={}) == "Kitchen 09:00"
+
+    def test_a_lookup_that_is_not_a_mapping_does_not_raise(self):
+        """This runs inside a coordinator listener -- raising here takes
+        the whole switch platform down."""
+        for broken in (None, "nonsense", {1: 7}, {1: ""}):
+            assert self._label([1], 9, 0, ["13"], weekday_names=broken) \
+                == "Kitchen 09:00"

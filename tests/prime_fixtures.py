@@ -194,6 +194,17 @@ def cloud_only_config_entry() -> MagicMock:
     # entity list follows the schedule list, are also BUILT from it.
     data.prime_schedule_coordinator = MagicMock()
     data.prime_schedule_coordinator.data = schedule_containers()
+    # Room names live on the coordinator because the switch platform
+    # builds its entities inside a listener and cannot await a cloud
+    # call. The calendar reads the same set instead of fetching its own.
+    data.prime_schedule_coordinator.room_names = {
+        "13": "Kitchen", "10": "Bathroom", "12": "Hallway",
+    }
+    # iRobot's numbering: 0 = Sunday. Resolved from strings.json at
+    # runtime so schedule labels are not hard-coded English.
+    data.prime_schedule_coordinator.weekday_names = {
+        0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat",
+    }
     data.prime_schedule_coordinator.async_config_entry_first_refresh = AsyncMock()
     data.prime_schedule_coordinator.async_add_listener = MagicMock(
         return_value=lambda: None

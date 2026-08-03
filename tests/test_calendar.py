@@ -75,20 +75,52 @@ class TestEventProperty:
         assert event.summary == "Cleaning"
         assert "Estimated" in event.description
 
-    def test_currently_running_slot_not_returned_as_next(self):
-        """Matches sensor.*_next_clean's existing 'strictly future' semantics
-        — an occurrence exactly at (or before) now is not 'the next one'."""
+    def test_a_running_occurrence_is_the_event(self):
+        """THE BUG FROM ISSUE #23, and this test used to assert it.
+
+        It read: "an occurrence exactly at (or before) now is not 'the
+        next one'", borrowing sensor.*_next_clean's strictly-future
+        semantics. That is right for a "next clean" sensor and wrong
+        for a calendar: Home Assistant derives a calendar entity's
+        on/off state from whether `event` covers `now`, so the strict
+        rule made the entity report "Off" for the whole duration of a
+        running, schedule-triggered mission.
+
+        Reported on a Prime robot, fixed there, and left here for a
+        release -- so every Classic user kept the symptom while the
+        reporter's went away.
+        """
         state = {
             "cleanSchedule2": [
                 {"enabled": True, "start": {"hour": 8, "min": 0, "day": [2]}},  # Tue 08:00
             ],
         }
         cal = _make_calendar(state)
-        with freeze_time("2026-07-07 08:00:00"):  # exactly Tuesday 08:00
+
+        with freeze_time("2026-07-07 08:30:00"):  # half an hour in
             event = cal.event
-        # Next occurrence must be a week later, not "now" itself.
+
         assert event is not None
-        assert event.start > datetime.datetime(2026, 7, 7, 8, 0, tzinfo=datetime.timezone.utc)
+        assert event.start == datetime.datetime(
+            2026, 7, 7, 8, 0, tzinfo=datetime.timezone.utc
+        )
+
+    def test_the_next_one_is_returned_when_nothing_is_running(self):
+        """The other half: outside any occurrence, the upcoming one."""
+        state = {
+            "cleanSchedule2": [
+                {"enabled": True, "start": {"hour": 8, "min": 0, "day": [2]}},
+            ],
+        }
+        cal = _make_calendar(state)
+
+        with freeze_time("2026-07-07 10:00:00"):  # an hour after it ended
+            event = cal.event
+
+        assert event is not None
+        assert event.start > datetime.datetime(
+            2026, 7, 7, 8, 0, tzinfo=datetime.timezone.utc
+        )
 
     def test_disabled_schedule_entries_produce_no_event(self):
         state = {
@@ -531,3 +563,156 @@ class TestAsyncSetupEntryRoutesByConnectionType:
         from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
         assert len(added) == 1
         assert isinstance(added[0], PrimeScheduleCalendar)
+
+
+class TestThePrimeCalendarIsDrivenByTheCoordinator:
+    """The reason the entity said "off" for its entire existence.
+
+    IRobotEntity sets `_attr_should_poll = False` -- right for Classic,
+    whose entities are driven by roombapy's MQTT push -- and this class
+    inherits it. `async_update()` is the only thing that fills
+    `_cached_occurrences`, and Home Assistant never called it. The list
+    stayed empty, `event` returned None, and the state was permanently
+    off.
+
+    THE CALENDAR VIEW WAS NEVER BROKEN, which is why it survived:
+    `async_get_events()` fetches directly with no cache, so the
+    schedules were visible on screen the whole time. Reported exactly
+    that way (issue #23) -- "the same schedule was plainly visible in
+    the calendar view".
+
+    The fix made then -- check for an ongoing occurrence, widen the
+    fetch window -- was correct and could not take effect, because it
+    reads a cache nobody fills. Two releases of a fix that ran on empty
+    input.
+    """
+
+    def _calendar(self, containers, occurrences=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "BLID"
+        entry.runtime_data.prime_household_id = "HH"
+        coordinator = MagicMock()
+        coordinator.data = containers
+        listeners: list = []
+        coordinator.async_add_listener = MagicMock(
+            side_effect=lambda cb: listeners.append(cb) or (lambda: None)
+        )
+        entry.runtime_data.prime_schedule_coordinator = coordinator
+
+        cal = PrimeScheduleCalendar.__new__(PrimeScheduleCalendar)
+        cal._blid = "BLID"
+        cal._config_entry = entry
+        cal._cached_occurrences = []
+        cal._cached_room_names = {}
+        cal._fetch_room_names = AsyncMock(return_value={})
+        return cal, coordinator, listeners
+
+    @pytest.mark.asyncio
+    async def test_the_occurrence_cache_is_filled_from_the_coordinator(self):
+        """The whole bug in one assertion: this list used to stay empty
+        forever."""
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        schedule = HouseholdSchedule.from_json({
+            "schedule_id": "s1",
+            "options": {
+                "enabled": True, "name": "W", "frequency": "WEEKLY",
+                "start": {"day": [1], "hour": 9, "min": 0},
+            },
+        })
+        cal, _coordinator, _listeners = self._calendar([("c1", [schedule])])
+
+        await cal.async_update()
+
+        assert cal._cached_occurrences
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_poll(self):
+        """Not a regression to guard against -- a fact to pin down. If
+        someone ever sets this to True, `async_update` starts making
+        cloud calls from a polling entity, which
+        scripts/check_request_budget.py forbids and should."""
+        cal, _c, _l = self._calendar([])
+
+        assert cal.should_poll is False
+
+    @pytest.mark.asyncio
+    async def test_a_refresh_recomputes_and_writes_state(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        cal, _coordinator, listeners = self._calendar([])
+        cal.hass = MagicMock()
+        cal.async_write_ha_state = MagicMock()
+        cal._async_recompute = AsyncMock()
+
+        cal._handle_coordinator_update()
+
+        cal.hass.async_create_task.assert_called_once()
+        # The task is created, not awaited here -- close the coroutine
+        # so the test does not leave one unawaited.
+        cal.hass.async_create_task.call_args.args[0].close()
+
+
+class TestAFailedReadDoesNotCostTheCalendarEntity:
+    """Found in the a21 bug hunt.
+
+    An exception in `async_update()` propagated out of
+    `async_added_to_hass`, so Home Assistant would not add the entity at
+    all -- a single malformed schedule would leave the user with no
+    calendar rather than an empty one.
+
+    Not hypothetical: a null inside `commands` crashed the schedule
+    parser earlier in this same release.
+    """
+
+    def _calendar(self, update_effect=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "B"
+        coordinator = MagicMock()
+        coordinator.data = []
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+        entry.runtime_data.prime_schedule_coordinator = coordinator
+
+        cal = PrimeScheduleCalendar.__new__(PrimeScheduleCalendar)
+        cal._blid = "B"
+        cal._config_entry = entry
+        cal._cached_occurrences = []
+        cal._cached_room_names = {}
+        cal.async_on_remove = MagicMock()
+        cal.async_write_ha_state = MagicMock()
+        cal.async_update = AsyncMock(side_effect=update_effect)
+        return cal
+
+    @pytest.mark.asyncio
+    async def test_the_entity_is_still_added_when_the_first_read_fails(self):
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = self._calendar(update_effect=RuntimeError("cloud down"))
+
+        with patch.object(PrimeScheduleCalendar.__mro__[1],
+                          "async_added_to_hass", new=AsyncMock()):
+            await cal.async_added_to_hass()  # must not raise
+
+        assert cal._cached_occurrences == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_recompute_keeps_the_previous_occurrences(self):
+        """It runs in a background task, where an exception would only
+        surface as a stray traceback."""
+        cal = self._calendar(update_effect=RuntimeError("boom"))
+        cal._cached_occurrences = ["previous"]
+
+        await cal._async_recompute()
+
+        assert cal._cached_occurrences == ["previous"]
+        cal.async_write_ha_state.assert_not_called()

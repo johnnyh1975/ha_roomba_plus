@@ -1364,3 +1364,129 @@ class TestTheFitChangeDoesNotTouchClassic:
         ).read_text(encoding="utf-8")
 
         assert source.count("MapRenderer(RendererConfig()") == 1
+
+
+class TestTheRobotMarkerIsActuallyVisible:
+    """Two testers independently reported the marker "not working" on
+    a20. It was drawn the whole time.
+
+    The measurement, not the impression: the marker was (60, 170, 255)
+    and the trail it sits at the end of is (120, 200, 255) -- a
+    difference of 90 across three channels out of 765. The dock, at
+    (200, 200, 90), differs from the same trail by 245, and both testers
+    could see that one immediately.
+
+    "I cannot see it" and "it is not there" look identical in a
+    screenshot, which is why this is asserted on pixels rather than on
+    the drawing call existing.
+    """
+
+    def _render(self, dock_at_end=False):
+        import io
+        from types import SimpleNamespace
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._renderer = None
+        entity._polygons = {"r": [(0.0, 0.0), (4000.0, 0.0),
+                                  (4000.0, 3000.0), (0.0, 3000.0)]}
+        entity._names = {}
+        entity._live_bundle = None
+        positions = [(500.0 + i * 30, 1500.0, 0.0) for i in range(100)]
+        entity._floor_plan = SimpleNamespace(
+            carpet=[], borders=[],
+            dock=(*positions[-1][:2], 0.0) if dock_at_end else None,
+            room_names={}, room_polygons={},
+        )
+        entity._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(prime_positions=positions), options={}
+        )
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+        return image, entity, positions
+
+    @staticmethod
+    def _distance(a, b):
+        return sum(abs(x - y) for x, y in zip(a, b))
+
+    def test_the_marker_is_big_enough_to_survive_scaling(self):
+        """Contrast is useless if nothing is left to carry it.
+
+        At radius 7 the marker was fourteen pixels on a 600-pixel
+        render -- about four and a half on the card @chairstacker
+        screenshotted, where a two-pixel ring is half a pixel. He still
+        could not make out the robot after the colour was fixed, which
+        is a size problem wearing a contrast problem's clothes.
+        """
+        image, entity, positions = self._render()
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        width = image.size[0]
+        # Sample outwards until the marker ends.
+        radius = next(
+            offset for offset in range(1, 40)
+            if image.getpixel((round(px), round(py) + offset))
+            == image.getpixel((round(px), round(py) + 39))
+        )
+        assert radius >= 10, "marker radius shrank"
+        # Roughly nine pixels on a 250-pixel dashboard card.
+        assert (radius * 2) / width * 250 >= 8
+
+    def test_the_dock_is_a_square_not_a_second_circle(self):
+        """Both used to be circles within two pixels of each other, so a
+        viewer who spotted one dot still could not tell which marker it
+        was. Shape says it now, independently of size and colour."""
+        image, entity, positions = self._render(dock_at_end=True)
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        # A square's diagonal corner is filled; a circle's is background.
+        corner = image.getpixel((round(px) + 6, round(py) + 6))
+        assert corner != image.getpixel((round(px) + 30, round(py) + 30))
+
+    def test_the_marker_stands_out_from_the_trail(self):
+        image, entity, positions = self._render()
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        tx, ty = entity._renderer._mm_to_px_fit(*positions[50][:2])
+        trail = image.getpixel((round(tx), round(ty)))
+        body = image.getpixel((round(px), round(py) + 4))
+
+        # The old marker scored 90 here and was invisible to two people.
+        assert self._distance(body, trail) > 180
+
+    def test_a_white_ring_separates_it_from_whatever_is_underneath(self):
+        """The ring is what makes this robust. A hue chosen to contrast
+        with the trail would still vanish on a coverage fill or a room
+        of the wrong colour; a white outline does not."""
+        image, entity, positions = self._render()
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        # At the marker's edge -- radius 11 since the size fix, so -7
+        # now lands in the fill rather than on the ring.
+        assert image.getpixel((round(px), round(py) - 11)) == (255, 255, 255)
+
+    def test_the_dock_also_carries_a_ring(self):
+        """The dock reads clearly against the trail (245) and much less
+        so against a cleaned area (145): yellow on the coverage green.
+        Not the 90 that made the robot invisible, but a marker whose
+        legibility depends on whether its own room has been cleaned yet
+        is worth making unconditional."""
+        image, entity, positions = self._render(dock_at_end=True)
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        # The robot sits on the dock here and is drawn last, so probe
+        # the dock's ring where the robot's own circle does not reach.
+        assert (255, 255, 255) in [
+            image.getpixel((round(px) + dx, round(py)))
+            for dx in (-8, 8)
+        ]
+
+    def test_a_docked_robot_is_not_hidden_by_the_dock(self):
+        """The dock used to be drawn after the robot, so a robot sitting
+        on it disappeared underneath."""
+        image, entity, positions = self._render(dock_at_end=True)
+
+        px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
+        assert image.getpixel((round(px), round(py) + 4)) == (20, 110, 220)
