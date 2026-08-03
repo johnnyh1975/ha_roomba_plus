@@ -390,10 +390,37 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         # was arriving and failing to decode 106 times an hour -- the
         # counters make that visible in one glance instead of requiring
         # someone to scrape their log.
+        # TWO INDEPENDENT STREAMS, and the names invite reading them as
+        # one. A field report compared them directly and asked whether
+        # two thirds of the messages were being coalesced away
+        # (@utkjmitch: 139 messages against 46 updates, ~2.5s against
+        # ~8s). They are not comparable at all:
+        #
+        #   position_messages  pose packets off the MQTT stream --
+        #                      these drive the robot marker and trail
+        #   position_points    poses inside them; one message can
+        #                      carry several
+        #   updates_received   HTTP downloads of the live-map BUNDLE --
+        #                      coverage, trajectories, hazards
+        #
+        # So a gap between the two is a difference in cadence between
+        # two channels, not loss. decode_ok tracks updates_received,
+        # not position_messages: only the bundle is decoded.
+        #
+        # RESET ON EVERY RELOAD, because they live on runtime_data.
+        # Worth knowing before asking anyone for a capture: three
+        # testers reported all-zero counters and every one of those
+        # files had been pulled after a reload.
         config_entry.runtime_data.live_map_stats = {
             "updates_received": 0,
             "position_messages": 0,
             "position_points": 0,
+            #: What SURVIVED into prime_positions, against the two ways
+            #: a sample can be dropped on the way. position_points minus
+            #: trail_points_added is exactly the two skip counters.
+            "trail_points_added": 0,
+            "trail_skipped_no_point": 0,
+            "trail_skipped_no_xy": 0,
             "decode_ok": 0,
             "decode_failed": 0,
             "last_error": None,
@@ -445,16 +472,40 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         # on the rooms map, which does. A first version called
         # self._renderer here -- which is None on this class, so every
         # point was silently discarded.
+        # COUNTED WHERE IT IS DECIDED, not where the message arrives.
+        #
+        # `position_points` above counts len(message.updates) -- what the
+        # robot sent. Everything below can still drop every one of them:
+        # a sample without a `point`, or a point without x/y, is skipped
+        # silently. So 5553 points counted proves nothing about whether
+        # a single one reached the list the trail and the robot marker
+        # are drawn from.
+        #
+        # @DaRealGuGu hit exactly that gap: 2267 messages, 5553 points,
+        # and no marker on the map -- and no number in the capture could
+        # say whether they arrived and were dropped here, or arrived and
+        # were drawn somewhere he could not see.
+        #
+        # Same shape as every other counter mistake in this project:
+        # counting arrival instead of survival.
         data = self._config_entry.runtime_data
+        stats = data.live_map_stats
         try:
             for sample in getattr(message, "updates", None) or []:
                 point = getattr(sample, "point", None)
                 if point is None:
+                    stats["trail_skipped_no_point"] = (
+                        stats.get("trail_skipped_no_point", 0) + 1
+                    )
                     continue
                 x_m, y_m = getattr(point, "x", None), getattr(point, "y", None)
                 if x_m is None or y_m is None:
+                    stats["trail_skipped_no_xy"] = (
+                        stats.get("trail_skipped_no_xy", 0) + 1
+                    )
                     continue
                 orientation_rad = getattr(sample, "orientation", None) or 0.0
+                stats["trail_points_added"] = stats.get("trail_points_added", 0) + 1
                 data.prime_positions.append((
                     float(x_m) * METRES_TO_MM,
                     float(y_m) * METRES_TO_MM,

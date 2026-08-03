@@ -41,6 +41,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from .const import MAP_UPDATING_NOT_READY
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -551,12 +552,17 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             return
 
         # Guard: reject if the robot is currently updating its Smart Map.
-        # notReady bit 6 (64) = map save/upload in progress — same guard as
-        # the clean_room service action.
+        #
+        # EQUALITY, not a bit test -- notReady is a scalar index into a
+        # readiness enum, and 67 is the value that means DownloadingMap.
+        # This carried a bare 64, which is why the first sweep for the
+        # named constant missed it: eight unrelated states share that
+        # bit, so an expired subscription blocked a zone clean with a
+        # message about a map update. See const.MAP_UPDATING_NOT_READY.
         not_ready: int = self.vacuum_state.get(
             "cleanMissionStatus", {}
         ).get("notReady", 0)
-        if not_ready & 64:
+        if not_ready == MAP_UPDATING_NOT_READY:
             _LOGGER.warning(
                 "SmartZoneButton: robot is updating Smart Map (notReady=%d) — "
                 "wait for map update to complete before starting a zone clean",

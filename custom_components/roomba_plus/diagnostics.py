@@ -728,6 +728,23 @@ async def _build_diagnostics(
             "stores": _prime_store_summary(data),
             "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
+            # THE LIST THE ROBOT MARKER IS DRAWN FROM, and the one thing
+            # the counters above cannot tell you.
+            #
+            # live_map counts what ARRIVED. This counts what SURVIVED
+            # into the list the renderer reads -- and the marker is only
+            # drawn when it is non-empty. @DaRealGuGu reported 2267
+            # position messages and no marker on the map, which the
+            # counters alone cannot explain: either the list is empty
+            # when the render runs, or the marker is drawn and not seen.
+            #
+            # Two numbers separate those cases. The last point is
+            # included because a marker drawn far outside the map's own
+            # bounds would be invisible for a third reason again.
+            "trail_points": len(data.prime_positions),
+            "trail_last_point": (
+                data.prime_positions[-1] if data.prime_positions else None
+            ),
             "capabilities": _prime_capability_report(config_entry),
             "mission_status": _prime_mission_status(config_entry),
             # SCHEDULES AS THE ROBOT REPORTS THEM, from the REST call

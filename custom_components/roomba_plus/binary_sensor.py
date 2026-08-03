@@ -29,6 +29,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from . import roomba_reported_state
 from .const import (
+    MAP_UPDATING_NOT_READY,
     CONF_BLOCKING_SENSORS,
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
@@ -46,7 +47,11 @@ from .models import ConnectionType, RoombaConfigEntry
 
 PARALLEL_UPDATES = 0
 
-_NOT_READY_MAP_SAVING: int = 64  # notReady bitmask bit 6
+#: CORRECTED (a22). notReady is not a bitmask -- it is a scalar index,
+#: and 67 means DownloadingMap. A local copy of the same magic number is
+#: why the first sweep for the shared constant did not reach this file:
+#: grepping for the name finds call sites, not duplicated values.
+_NOT_READY_MAP_SAVING: int = MAP_UPDATING_NOT_READY
 
 
 def _prime_reports_tank(config_entry: RoombaConfigEntry) -> bool:
@@ -476,7 +481,7 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
             .get("cleanMissionStatus", {})
             .get("notReady") or 0
         )
-        return bool(not_ready & _NOT_READY_MAP_SAVING)
+        return not_ready == _NOT_READY_MAP_SAVING
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

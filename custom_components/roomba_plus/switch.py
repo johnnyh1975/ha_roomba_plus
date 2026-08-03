@@ -21,7 +21,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
-from .const import DOMAIN
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -119,18 +118,33 @@ async def _async_add_prime_schedule_switches(
         if not getattr(coordinator, "last_update_success", True):
             return
 
-        vanished = known - set(wanted)
-        if not vanished:
-            return
-        known.difference_update(vanished)
-
+        # THE REGISTRY IS THE SOURCE, NOT THE `known` SET.
+        #
+        # a21 removed `known - wanted`, and `known` only ever holds what
+        # THIS SESSION added. After a restart it starts empty, gets
+        # filled with whatever exists now, and the difference is empty by
+        # construction -- so an entity whose schedule disappeared while
+        # Home Assistant was down, or before the upgrade that added this
+        # code, could never be reached.
+        #
+        # @DaRealGuGu had four of them still sitting there on a21, and
+        # the release notes said they would go. Removal that only works
+        # for deletions observed live is removal that does not work.
         registry = er.async_get(hass)
-        for unique_id in vanished:
-            entity_id = registry.async_get_entity_id(
-                Platform.SWITCH, DOMAIN, unique_id
-            )
-            if entity_id:
-                registry.async_remove(entity_id)
+        prefix = f"{config_entry.runtime_data.blid}_schedule_"
+        for entry in er.async_entries_for_config_entry(
+            registry, config_entry.entry_id
+        ):
+            if entry.domain != Platform.SWITCH:
+                continue
+            # Only this platform's schedule switches. The prefix carries
+            # the blid, so a second robot in the same entry keeps its own.
+            if not entry.unique_id.startswith(prefix):
+                continue
+            if entry.unique_id in wanted:
+                continue
+            known.discard(entry.unique_id)
+            registry.async_remove(entry.entity_id)
 
     _sync_entities()
     config_entry.async_on_unload(coordinator.async_add_listener(_sync_entities))

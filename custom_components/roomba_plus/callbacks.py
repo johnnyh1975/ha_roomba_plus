@@ -1700,7 +1700,7 @@ def make_map_updating_callback(
 ) -> Any:
     """Return an MQTT callback for MAP-RETRAIN-WF (v2.9.0).
 
-    Tracks cleanMissionStatus.notReady & 64 ("Smart Map updating") on every
+    Tracks cleanMissionStatus.notReady == 67 ("Smart Map updating") on every
     message and forwards the live boolean to repairs.async_check_map_
     retrain_workflow(), which owns the duration tracking and Repair Issue
     escalation. No separate timer needed — the robot keeps sending regular
@@ -1710,7 +1710,7 @@ def make_map_updating_callback(
     SMART-tier only (registered conditionally in __init__.py) — notReady's
     bit-64 meaning is specific to Smart Map robots.
     """
-    from .const import MAP_UPDATING_NOT_READY_BIT
+    from .const import MAP_UPDATING_NOT_READY
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
@@ -1718,7 +1718,8 @@ def make_map_updating_callback(
         if mission is None:
             return
         not_ready = mission.get("notReady", 0) or 0
-        map_updating = bool(not_ready & MAP_UPDATING_NOT_READY_BIT)
+        # Equality: notReady is a scalar index, not a mask.
+        map_updating = not_ready == MAP_UPDATING_NOT_READY
 
         # v2.9.0 — this callback runs on roombapy's MQTT thread, not the
         # event loop thread (same reason make_map_retrain_callback bridges

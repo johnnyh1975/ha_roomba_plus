@@ -1405,7 +1405,7 @@ async def async_check_cloud_stale(
         _disarm(entry_id, "cloud_stale")
 
 
-# v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady&64 ("Smart
+# v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady reached 67 ("Smart
 # Map updating") was FIRST observed continuously set for this entry. Not
 # persisted — matches _health_low_since's in-memory pattern; a fresh HA
 # restart simply restarts the duration timer.
@@ -1418,7 +1418,7 @@ def async_check_map_retrain_workflow(
     map_updating: bool,
 ) -> None:
     """MAP-RETRAIN-WF (v2.9.0) — escalating map-retrain-in-progress signal
-    while the robot's Smart Map is updating (cleanMissionStatus.notReady & 64).
+    while the robot's Smart Map is updating (cleanMissionStatus.notReady == 67).
 
     Three stages:
       1. map_updating just turned True — no signal yet. Brief map updates

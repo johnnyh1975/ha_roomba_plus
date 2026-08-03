@@ -488,10 +488,40 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
             for schedule in schedules:
                 if schedule.schedule_id == self._schedule_id:
                     self._attr_is_on = schedule.options.enabled
+                    self._refresh_label(schedule.options)
                     return
         # The read succeeded and this schedule was not in it: deleted in
         # the app. Unknown, not off.
         self._attr_is_on = None
+
+    def _refresh_label(self, options: Any) -> None:
+        """Keeps the displayed name in step with the schedule.
+
+        The label used to be computed once, in __init__, and never
+        again -- so a schedule renamed, re-timed or re-roomed kept its
+        old label until the entity was rebuilt. Nobody noticed while the
+        only way to change a schedule was the iRobot app, which does not
+        offer a rename field at all.
+
+        It became visible the moment someone built a service that CAN
+        rename one (@utkjmitch, #49): the data updated and the cosmetics
+        lagged.
+
+        The unique id is untouched by this, and so is the entity id --
+        both come from the schedule id. Only what the user reads changes,
+        which is the point: a label that describes rooms and times has to
+        follow when the rooms and times do.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        label = _schedule_label(
+            options,
+            getattr(coordinator, "room_names", None),
+            getattr(coordinator, "weekday_names", None),
+        )
+        if label and label != self._attr_translation_placeholders.get("schedule"):
+            self._attr_translation_placeholders = {"schedule": label}
 
     async def async_update(self) -> None:
         """Re-reads the enabled flag for this one schedule.

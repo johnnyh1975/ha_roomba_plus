@@ -44,6 +44,7 @@ from .const import (
     has_carpet_boost,
     has_clean_base,
     has_pose,
+    is_braava,
     is_mop,
 )
 from .entity import IRobotEntity
@@ -807,6 +808,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Brushes last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # STILL is_mop, NOT is_braava -- and that is a store limitation,
+        # not an oversight. MaintenanceStore has ONE slot for this
+        # (`brush_*`), used for a brush or a pad depending on the robot.
+        # A Combo has both, so switching this gate would give it two
+        # sensors reading the same number, which is worse than one
+        # sensor that is at least unambiguous.
+        #
+        # The filter gates below DID move: the filter has its own store
+        # slot, and a Combo definitely has a filter.
         filter_fn=lambda s: not is_mop(s),  # Braava uses pad_last_replaced
         value_fn=lambda e: (
             dt_util.parse_datetime(
@@ -1133,7 +1143,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: not is_mop(s),
+        filter_fn=lambda s: not is_braava(s),
         value_fn=_filter_wear_rate,
     ),
     RoombaSensorDescription(
@@ -1165,7 +1175,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        filter_fn=lambda s: not is_mop(s),
+        filter_fn=lambda s: not is_braava(s),
         value_fn=_filter_days_until_due,
     ),
     RoombaSensorDescription(

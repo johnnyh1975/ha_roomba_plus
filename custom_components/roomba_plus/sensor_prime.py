@@ -372,7 +372,24 @@ class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     chairstacker: a plain string, e.g. "padPlate") -- the raw reported
     value, not translated into a friendlier label, since the full set
     of possible values isn't confirmed yet (see that field's own
-    docstring)."""
+    docstring).
+
+    IT SENSES THE CARRIER PLATE, NOT THE CLOTH. Established by the one
+    experiment that could establish it -- the same robot, same SKU,
+    reading `noPad` in one capture and `padPlate` in the next, with
+    nothing about a mop pad changed in between. What changed was that
+    the plastic mop PLATE had been clicked back in, with no cloth on it
+    (@utkjmitch, Y351020, a20).
+
+    So `padPlate` means "plate fitted" and reads that way with a bare
+    plate. ANYTHING GATING MOP BEHAVIOUR ON THIS FIELD IS GATING ON THE
+    WRONG THING: it cannot say whether there is a cloth that could be
+    washed, dried or worn out.
+
+    Two before-and-after captures on one unit beat any number of
+    single-state captures from different robots, which is why this was
+    settled by an accident during a rescue rather than by the pad-fitted
+    capture that had been asked for."""
 
     entity_description = SensorEntityDescription(
         key="prime_detected_pad",
@@ -477,18 +494,29 @@ _PAD_STATE_SLUGS: dict[str, str] = {
 #: naming it "empty" would send someone to refill a tank that is not
 #: fitted.
 #:
-#: CONFIRMED ABSENT FROM THE APK (2 August 2026). 671 appears nowhere in
-#: DockState, whose pad-wash family stops at 669
-#: (PAD_WASH_PAD_ACTUATOR_STALL_ERROR), and there is no second, newer
-#: dock-state table. The app carries a fallback for exactly this case --
-#: `DockStateImpl` holds the string "Unknown dock state %d" -- so the
-#: official app would log it as unknown too.
+#: NOT IN THE DockState ENUM, whose pad-wash family stops at 669
+#: (PAD_WASH_PAD_ACTUATOR_STALL_ERROR). DockStateImpl carries a
+#: "Unknown dock state %d" fallback, which is why the sensor had
+#: nothing to show.
 #:
-#: The code is therefore server-side and newer than app version 2.2.4,
-#: the same situation as `is_smart_clean_fav` in the schedule payload.
-#: This table is not a stopgap until the real name turns up: two
-#: controlled field observations are the best source that exists, and
-#: the label below says more than the app itself would.
+#: THREE DIFFERENT 671s EXIST. This comment said two, and that was
+#: already a correction of an earlier "671 does not exist in the APK".
+#: The full picture:
+#:
+#:   dock.pwState 671   this state -- pad wash blocked, field-observed
+#:   C671               a CONNECTION error in res/raw; 59 of 67 guides
+#:                      in that catalogue share one generic WiFi text
+#:   Error 671          a genuine Prime mission error code, article
+#:                      70671 in iRobot's own help catalogue
+#:
+#: Three numbering spaces, one number. Every round of this project that
+#: got 671 wrong got it wrong by asking "same number?" instead of "same
+#: field?" -- and each answer looked complete until the next source
+#: turned up.
+#:
+#: The label below stands on its own evidence: two controlled
+#: before-and-after observations on a real dock, which remain the only
+#: source describing THIS state.
 _FIELD_OBSERVED_DOCK_STATES: Final[dict[int, str]] = {
     671: "Pad wash not possible (check tanks)",
 }
@@ -1082,20 +1110,36 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
     catalogue, only the transport differs". That was an assumption
     written as a fact, and it does not hold up:
 
-      - APK analysis found NO error-code table in the app at all --
-        not for Prime, not for Classic. RobotErrorDescriptor carries a
-        bare `short getCode()` and a severity flag. The app almost
-        certainly fetches error text from the server, exactly as it
-        does for the consumable-parts catalogue.
       - A field capture contradicts the label outright (@utkjmitch,
         Y351020): `error: 46` with `phase: "stuck"` on a robot
         physically confirmed stuck, at 55% battery. ERROR_CODE_LABELS
         renders 46 as "Low battery".
+      - iRobot's own help catalogue gives Prime and Classic DIFFERENT
+        articles for the same code. Of 16 codes present in both the i7
+        and the Combo 405 catalogue, all 16 point elsewhere:
 
-    So ERROR_CODE_LABELS is community knowledge validated by Classic
-    users over years -- real evidence, but for Classic. Nothing carries
-    it across to a different firmware generation, and one counter-
-    example says it does not.
+              code 2   i7 8957   Prime 10531
+              code 46  i7 8974   Prime 10546
+              code 671 --        Prime 70671
+
+        Between two CLASSIC models, 4 of 21 shared codes are
+        article-identical. Between Classic and Prime: none.
+
+    A CORRECTION TO THIS CLASS'S OWN EARLIER REASONING. It said "APK
+    analysis found no error-code table in the app at all, not for Prime,
+    not for Classic". True of the APK, and wrong as a conclusion: the
+    table exists, it just lives in the service rather than the app.
+    `GET /v2/help/{lang}/{country}/{sku}` returns a full Prime-specific
+    catalogue for G185020 -- 43 Error, 21 Charging Error, 15
+    Start-Refuse entries, no authentication.
+
+    So the decision was right and the argument was not. The article
+    split above is the better evidence and it is a vendor's own, rather
+    than one field capture: iRobot itself treats these as separate
+    namespaces.
+
+    ERROR_CODE_LABELS remains community knowledge from rest980,
+    validated by Classic users over years -- real evidence, for Classic.
 
     The reasoning is the same one already applied to consumable parts
     202 and 212 a few screens below: a wrong label gets believed, a

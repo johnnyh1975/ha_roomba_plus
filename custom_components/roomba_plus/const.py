@@ -729,13 +729,63 @@ INTEGRATION_HEALTH_GOOD_THRESHOLD: Final[int] = 80
 # returns. Higher = healthier.
 HEALTH_BAND_RANK: Final[dict[str, int]] = {"critical": 0, "degraded": 1, "healthy": 2}
 
-# v2.9.0 MAP-RETRAIN-WF — cleanMissionStatus.notReady is a bitmask; bit 64
-# means "Smart Map updating" (services.py's clean_room guard already checks
-# this exact bit — named here so both call sites share one source instead
-# of two independent magic-number "64"s silently drifting apart).
-MAP_UPDATING_NOT_READY_BIT: Final[int] = 64
+# CORRECTED (APK analysis of iRobot Home 7.18.0, 3 August 2026).
+#
+# This said "cleanMissionStatus.notReady is a bitmask; bit 64 means Smart
+# Map updating". It is not a bitmask. The app decodes it as a scalar
+# index into a 73-entry readiness enum, with an offset:
+#
+#     mReadyState = jsonInt <= 10 ? values()[jsonInt] : values()[jsonInt - 3]
+#
+# Indexing an enum by the value would be meaningless if it were a mask.
+#
+# WHERE THE 64 CAME FROM: wire value 67 decodes to `DownloadingMap` --
+# literally "the map is being updated". The intent was right and the
+# mechanism was inferred. But `67 & 64` is true, and so is `64 & 64`,
+# `65 & 64` and every value from 64 to 71:
+#
+#     64 FleetDisabled          68 OffDock
+#     65 SubscriptionExpired    69 TankLeaking
+#     66 DeadNavigationBoard    70/71 fluid level sensor broken
+#
+# So a user with an expired subscription was told to wait for a map
+# update -- a wrong reason they cannot act on, which is exactly what the
+# guard's own error message set out to avoid.
+#
+#: The wire value that means "Smart Map updating". A scalar, not a mask.
+MAP_UPDATING_NOT_READY: Final[int] = 67
+
+#: Kept as an alias so nothing outside this module breaks silently on the
+#: rename. Do not use: it invites `&`, which is the bug.
+MAP_UPDATING_NOT_READY_BIT: Final[int] = MAP_UPDATING_NOT_READY
+
+
+def decode_not_ready(raw: object) -> int | None:
+    """`cleanMissionStatus.notReady` as the app reads it.
+
+    Returns the READINESS INDEX, not the wire value: the app maps wire
+    values above 10 down by three, so wire 25 and index 22 are the same
+    state (`MapVersionMisMatch`). Anything comparing readiness states has
+    to agree on which of the two it is holding.
+
+    WIRE 11, 12 AND 13 COLLIDE with 8, 9 and 10 under that offset, and
+    the app has no way to tell them apart either. They are returned as
+    the colliding index rather than as an error, because that is what the
+    robot's own app would show -- but nobody has observed one, and if a
+    diagnostics capture ever carries one it is worth knowing.
+
+    Non-integers return None: a robot reporting a string, or a test
+    fixture handing back a mock, must not make a caller raise. A wrong
+    refusal is worse than no refusal.
+    """
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    if raw < 0:
+        return None
+    return raw if raw <= 10 else raw - 3
 # Escalation thresholds for the map_retrain_workflow Repair Issue: WARNING
-# once notReady&64 has been continuously set for this long (a normal retrain
+# once notReady has read 67 (DownloadingMap) continuously for this long (a
+# normal retrain
 # is usually done within a few minutes; this is a conservative first-pass
 # value, not derived from field data), ERROR if it's still set after the
 # longer threshold (genuinely stuck, not just slow).
@@ -757,7 +807,14 @@ MAINTENANCE_DUE_GRACE_DAYS: Final[int] = 3
 ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     0:   {"label": "None",                     "description": "No error.",                                                  "action": ""},
     1:   {"label": "Left wheel off floor",      "description": "The left wheel has lifted off the floor.",                  "action": "Check for objects under the robot and place it on a flat surface."},
-    2:   {"label": "Main brushes stuck",        "description": "The main brush roll is jammed.",                            "action": "Remove the brush roll and clear hair or debris, then reinsert."},
+    # CORRECTED to the DEFAULT variant. "Main brushes stuck" is real, but
+    # it is the SKU override the app applies only for the MARCONI prefix;
+    # the default text is "Debris extractors stuck". We were showing the
+    # special case to every robot.
+    #
+    # The per-SKU override is not implemented: it needs the robot's SKU
+    # at label time and affects six codes. Worth doing, not guessed at.
+    2:   {"label": "Debris extractors stuck",  "description": "The debris extractors are jammed.",                         "action": "Remove the extractors and clear hair or debris, then reinsert."},
     3:   {"label": "Right wheel off floor",     "description": "The right wheel has lifted off the floor.",                 "action": "Check for objects under the robot and place it on a flat surface."},
     4:   {"label": "Left wheel stuck",          "description": "The left wheel is stuck or jammed.",                        "action": "Remove any debris from around the left wheel and restart."},
     5:   {"label": "Right wheel stuck",         "description": "The right wheel is stuck or jammed.",                       "action": "Remove any debris from around the right wheel and restart."},
@@ -807,7 +864,12 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     53:  {"label": "Software update required",  "description": "A critical software update is required.",                  "action": "Connect the robot to Wi-Fi and allow the update to complete."},
     65:  {"label": "Hardware problem detected", "description": "A hardware component has reported a fault.",               "action": "Reboot the robot. Contact iRobot support if the error persists."},
     66:  {"label": "Low memory",                "description": "The robot's software encountered a memory issue.",         "action": "Reboot the robot. Contact iRobot support if the error persists."},
-    68:  {"label": "Updating map",              "description": "A Smart Map update is in progress.",                       "action": "Wait for the map update to complete before sending new commands."},
+    # CORRECTED against the vendor table (iRobot Home 7.18.0). This read
+    # "Updating map" -- neither the enum name (CAMERA_HARDWARE_FAILURE)
+    # nor the app's own text ("Camera issue") supports that, and the two
+    # agree with each other. A user was told to wait while the robot
+    # reported a hardware fault it cannot recover from on its own.
+    68:  {"label": "Camera issue",              "description": "The robot reports a camera hardware failure.",             "action": "Wipe the camera lens. If it persists, the robot needs service — navigation depends on it."},
     73:  {"label": "Pad type changed",          "description": "A different pad type has been detected.",                  "action": "Confirm the correct pad is attached in the iRobot app."},
     74:  {"label": "Max area reached",          "description": "The robot has reached the maximum cleanable area.",        "action": "This is informational. Dock and recharge, then continue if needed."},
     75:  {"label": "Navigation problem",        "description": "The robot could not complete navigation in time.",         "action": "Clear the area of obstacles and try again."},
@@ -861,7 +923,10 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     161: {"label": "Dock not found",            "description": "The robot could not find the dock after cleaning.",       "action": "Ensure the dock is plugged in and unobstructed."},
     162: {"label": "Low battery — abort",       "description": "Battery too low to complete the mission.",               "action": "Allow the robot to charge fully before the next mission."},
     163: {"label": "Mission failed",            "description": "The mission could not be completed.",                     "action": "Check for obstacles and retry."},
-    216: {"label": "Charging base bag full",    "description": "The Clean Base bag is full and needs replacing.",         "action": "Replace the Clean Base bag."},
+    # CORRECTED: the wrong part. Enum STARTING_ERROR_BIN_FULL, app text
+    # "Bin full" -- the robot's own bin, not the Clean Base bag. Sending
+    # someone to replace a bag when the bin needs emptying.
+    216: {"label": "Bin full",                 "description": "The robot refused to start because its bin is full.",      "action": "Empty the robot's bin, then start the job again."},
     224: {"label": "Smart Map localization failed", "description": "The robot could not localise on its Smart Map.",      "action": "Place the robot in an open area on the map and try again. Retrain the map if needed."},
     # v3.4.1 — Combo wet-mopping tank/dock error category (450-463, 501-509),
     # confirmed from direct iRobot Home app APK analysis (dock_history_error_*
@@ -993,17 +1058,97 @@ CYCLE_LABELS: Final[dict[str, str]] = {
     "none": "Ready",
 }
 
-NOT_READY_LABELS: Final[dict[int, str]] = {
-    -1: "Unknown",
-    0: "Ready",
-    2: "Uneven ground",
-    15: "Low battery",
-    16: "Bumped unexpectedly",
-    31: "Fill tank",
-    34: "Not ready",
-    39: "Pending",
-    48: "Path blocked",
-    68: "Updating map",
+#: The readiness states, by INDEX (see decode_not_ready). Names come
+#: from RobotReadinessState in the iRobot Home app, 73 entries.
+#:
+#: REPLACES a nine-entry table of which six were wrong. It read
+#: notReady as a bitmask and carried labels nobody could source:
+#: 2 as "Uneven ground" where the app says WheelDropBoth, 16 as
+#: "Bumped unexpectedly" where it says BinFull, 48 as "Path
+#: blocked" where it says SafetyFaultHardware.
+#:
+#: And 68 as "Updating map" -- the seed of the whole bitmask
+#: story, since 68 & 64 is true. The state that actually means
+#: the map is updating is wire 67, index 64, DownloadingMap.
+#: Wire 68 is OffDock.
+#:
+#: Names are transliterated, not translated: "Wheel drop both"
+#: rather than an invented phrase. Less fluent than the old
+#: labels and traceable to a source, which the old ones were not.
+READINESS_STATE_LABELS: Final[dict[int, str]] = {
+    0: 'None',
+    1: 'Cliff',
+    2: 'Wheel drop both',
+    3: 'Wheel drop left',
+    4: 'Wheel drop right',
+    5: 'Final docking',
+    6: 'Brush stall',
+    7: 'No bin',
+    8: 'Nav crash',
+    9: 'Misconfigured',
+    10: 'In rcon',
+    11: 'Invalid command',
+    12: 'Insufficient charge',
+    13: 'Bin full',
+    14: 'Nav comms down',
+    15: 'In cloud upgrade',
+    16: 'Charging sleep',
+    17: 'Invalid pad',
+    18: 'Safety offline',
+    19: 'Gyro',
+    20: 'Lid open',
+    21: 'Bumped',
+    22: 'Map version mismatch',
+    23: 'Tank low',
+    24: 'No pad',
+    25: 'Bumper offline',
+    26: 'Power offline',
+    27: 'New cleaning head',
+    28: 'Schedule no clock',
+    29: 'Battery auth error',
+    30: 'Mobility offline',
+    31: 'Invalid cal',
+    32: 'In dock halo',
+    33: 'Pad detection timeout',
+    34: 'Auto evacuation clogged',
+    35: 'SM bus permanent failure',
+    36: 'Charge timeout',
+    37: 'Saving map',
+    38: 'Dead camera',
+    39: 'Backup refused',
+    40: 'Safety fault confinement',
+    41: 'Safety fault tilt',
+    42: 'Safety fault rollover',
+    43: 'Safety fault lift',
+    44: 'Safety fault emergency stop',
+    45: 'Safety fault hardware',
+    46: 'Safety fault unknown',
+    47: 'Safety fault handle lift',
+    48: 'Localization failed',
+    49: 'Low beacon count',
+    50: 'Precheck refused',
+    51: 'Safety fault drive stall left',
+    52: 'Safety fault drive stall right',
+    53: 'Not docked',
+    54: 'Bridge not confined',
+    55: 'Bridge does not reach dock',
+    56: 'Bridge does not reach yard',
+    57: 'Wheel motor overtemp',
+    58: 'Wheel motor undertemp',
+    59: 'Blade motor overtemp',
+    60: 'Blade motor undertemp',
+    61: 'Fleet disabled',
+    62: 'Subscription expired',
+    63: 'Dead navigation board',
+    64: 'Downloading map',
+    65: 'Off dock',
+    66: 'Tank leaking',
+    67: 'Robot fluid level sensor broken',
+    68: 'Tank fluid level sensor broken',
+    69: 'Cleaning head hw mismatch',
+    70: 'Dead floor type sensor',
+    71: 'Unknown',
+    72: 'Ota update',
 }
 
 BIN_LABELS: Final[dict[bool, str]] = {True: "Full", False: "Not full"}
@@ -1145,8 +1290,54 @@ def has_smart_map(state: dict) -> bool:
 
 
 def is_mop(state: dict) -> bool:
-    """Return True if this device is a Braava mop (detectedPad present)."""
+    """True if this robot can mop -- it reports a pad field.
+
+    ANSWERS "CAN IT MOP", AND WAS BEING USED TO ASK "HAS IT NO BRUSHES".
+    On a Braava those coincide, which is why thirteen brush and bin gates
+    were written as `not is_mop(state)` and nobody noticed. On a Combo
+    they do not: it has a pad AND brushes, so it would have lost its
+    brush maintenance sensors and gained pad ones.
+
+    Use is_braava() for anything about vacuum hardware. This stays for
+    what its name says: pad-related entities.
+    """
     return "detectedPad" in state
+
+
+def is_braava(state: dict) -> bool:
+    """True for a Braava -- a mop with no vacuum hardware at all.
+
+    DECIDED BY SKU PREFIX, not by a capability flag. Two candidates were
+    weighed:
+
+      cap.binFullDetect  absent on san_marino (Braava m6) and present on
+                         every other platform in iRobot's own sample
+                         responses -- but it can also be absent simply
+                         because a robot's firmware does not report the
+                         flag, and that would strip the brush sensors
+                         off a working i7.
+      SKU prefix "m"     cannot go missing on a robot that has a SKU, and
+                         this project already routes profiles through
+                         get_robot_profile() the same way. iRobot's own
+                         app resolves per-SKU overrides on a three-letter
+                         prefix.
+
+    The failure modes decided it: a wrong capability read costs a working
+    robot its sensors, a missing SKU falls back to the old behaviour and
+    costs nothing.
+
+    WHY NO TESTER FOUND THIS. Every field robot sits cleanly on one side
+    -- Braava m6, i-series, s9, 900-series. The confusion needs a Classic
+    Combo (SKU prefixes c3/c7, confirmed present in the app's own SKU
+    list), and nobody in the group owns one.
+    """
+    sku = state.get("sku")
+    if not isinstance(sku, str) or not sku:
+        # No SKU: fall back to the old reading rather than guess. On a
+        # Braava that is still correct, and on anything else it is no
+        # worse than before this function existed.
+        return is_mop(state)
+    return sku[0].lower() == "m"
 
 
 def has_clean_base(state: dict) -> bool:

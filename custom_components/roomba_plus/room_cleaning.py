@@ -47,7 +47,7 @@ from .const import (
     CONF_FLOOR,
     CONF_SMART_ZONE_DATA,
     DOMAIN,
-    MAP_UPDATING_NOT_READY_BIT,
+    MAP_UPDATING_NOT_READY,
 )
 from .models import ConnectionType, MapCapability
 
@@ -327,7 +327,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             return
         current = coordinator.data.get("ro-currentstate") or {}
         not_ready = (current.get("cleanMissionStatus") or {}).get("notReady", 0)
-        if not_ready & MAP_UPDATING_NOT_READY_BIT:
+        # EQUALITY, not a bit test. notReady is a scalar index, and `&`
+        # fired for eight unrelated states -- see const.py.
+        if not_ready == MAP_UPDATING_NOT_READY:
             raise ServiceValidationError(
                 "The robot is currently updating its map. Wait for the update to "
                 "complete, then try again.",
@@ -684,7 +686,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # for a reason the user cannot act on.
         if not isinstance(not_ready, int):
             return
-        if not_ready & MAP_UPDATING_NOT_READY_BIT:
+        if not_ready == MAP_UPDATING_NOT_READY:
             raise ServiceValidationError(
                 "The robot is currently updating its Smart Map. Wait for the update "
                 "to complete (readiness sensor shows 'Ready'), then try again.",

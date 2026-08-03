@@ -31,7 +31,8 @@ from .const import (
     INTEGRATION_HEALTH_GOOD_THRESHOLD,
     INTEGRATION_HEALTH_LOW_THRESHOLD,
     INTEGRATION_HEALTH_MQTT_STALE_HOURS,
-    NOT_READY_LABELS,
+    READINESS_STATE_LABELS,
+    decode_not_ready,
     PHASE_LABELS,
     SQFT_TO_M2,
     active_charge_cycles,
@@ -67,33 +68,36 @@ _ACTIVE_PHASES = {"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "new", "resume"}
 
 
 # notReady bitmask — individual bit meanings for i7/s9/j-series
-_NOT_READY_BITS: dict[int, str] = {
-    1:   "Low battery",
-    2:   "Bin full",
-    4:   "Map not ready",
-    8:   "Not on dock",
-    16:  "Lid open",
-    32:  "Tank empty",
-    64:  "Updating map",
-    128: "Pending task",
-}
 
 
 def _not_ready_value(entity: "IRobotEntity") -> str:
-    """Decode notReady bitmask into a human-readable label.
+    """The readiness state the robot is reporting.
 
-    NOT_READY_LABELS covers exact combined values seen in the wild.
-    For unlisted combinations, decode bit by bit so any value is readable
-    rather than falling back to a raw integer.
+    REWRITTEN against the iRobot Home app's own decode. This used to
+    treat notReady as a bitmask -- a nine-entry table of exact values
+    plus a bit-by-bit fallback that assembled labels like "Updating map,
+    Pending task" out of a premise that does not hold.
+
+    The app reads it as a scalar index into a 73-state enum:
+
+        mReadyState = jsonInt <= 10 ? values()[jsonInt] : values()[jsonInt - 3]
+
+    Six of the nine table entries were wrong against that -- 2 was
+    "Uneven ground" where the app says WheelDropBoth, 48 was "Path
+    blocked" where it says SafetyFaultHardware. Only 0 and 15 held up.
+
+    A value with no name keeps its number rather than being decomposed
+    into invented parts: an unlisted state is one this project does not
+    know, and saying so is more use than a plausible sentence.
     """
-    nr: int = entity.clean_mission_status.get("notReady", 0)
-    if nr in NOT_READY_LABELS:
-        return NOT_READY_LABELS[nr]
-    if nr == 0:
+    raw = entity.clean_mission_status.get("notReady", 0)
+    index = decode_not_ready(raw)
+    if index is None:
+        return "Ready" if not raw else f"Not ready ({raw})"
+    if index == 0:
         return "Ready"
-    # Decode individual bits for unknown combinations.
-    parts = [label for bit, label in sorted(_NOT_READY_BITS.items()) if nr & bit]
-    return ", ".join(parts) if parts else f"Not ready ({nr})"
+    label = READINESS_STATE_LABELS.get(index)
+    return label if label else f"Not ready ({raw})"
 
 
 def _error_value(entity: "IRobotEntity") -> str:
