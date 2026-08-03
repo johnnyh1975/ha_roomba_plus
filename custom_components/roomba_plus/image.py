@@ -3233,20 +3233,75 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             if len(trail) >= 2:
                 draw.line(trail, fill=(120, 200, 255), width=2)
 
+        if self._floor_plan.dock is not None:
+            # THE SAME WHITE RING AS THE ROBOT, for the same reason.
+            #
+            # The dock reads clearly against the trail (a difference of
+            # 245 across three channels) and much less so against a
+            # cleaned area: yellow on the coverage green scores 145, and
+            # the dock's own room is exactly the area that gets covered.
+            #
+            # 145 is not the 90 that made the robot invisible, so this
+            # is not a repeat of that bug -- but a marker whose
+            # legibility depends on whether the room has been cleaned
+            # yet is one worth making unconditional. The ring costs
+            # nothing and works over any hue underneath.
+            # A SQUARE, so shape alone says which marker this is.
+            #
+            # Dock and robot used to be circles of 12 and 14 pixels on a
+            # 600-pixel render -- about five and six pixels on a typical
+            # dashboard card. Indistinguishable by size, and a viewer
+            # who spots one dot still cannot tell which it is.
+            dx, dy, _orientation = self._floor_plan.dock
+            px, py = to_px(dx, dy)
+            draw.rectangle(
+                (px - 8, py - 8, px + 8, py + 8),
+                fill=(200, 200, 90), outline=(255, 255, 255), width=2,
+            )
+
+        # THE ROBOT LAST, and with a ring around it.
+        #
+        # Two testers independently reported the marker "not working" on
+        # a20. It was being drawn the whole time -- in (60, 170, 255),
+        # against a trail in (120, 200, 255), which is a difference of 90
+        # across all three channels out of a possible 765. The dock, at
+        # (200, 200, 90), differs from the trail by 245 and both of them
+        # could see that immediately.
+        #
+        # So this was never a rendering bug: a small circle in nearly the
+        # trail's own colour, sitting at the end of that trail, is
+        # invisible. Measured rather than guessed at, because "I cannot
+        # see it" and "it is not there" look identical in a screenshot.
+        #
+        # The white ring is what does the work. It separates the marker
+        # from anything it happens to sit on, whatever hue that is --
+        # trail, coverage fill, a room, or the dock. Drawing the robot
+        # after the dock matters for the same reason: a docked robot used
+        # to disappear underneath it.
         if positions:
             x_mm, y_mm, heading = positions[-1]
             px, py = to_px(x_mm, y_mm)
-            draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(60, 170, 255))
+            # BIG ENOUGH TO SURVIVE BEING SCALED DOWN.
+            #
+            # At radius 7 this was fourteen pixels on a 600-pixel
+            # render: under six on a 250-pixel dashboard card, and about
+            # four and a half on the card @chairstacker screenshotted.
+            # At that size a two-pixel ring is half a pixel, so contrast
+            # had nothing left to work with -- which is why he still
+            # could not make out the robot after the colour was fixed.
+            #
+            # Radius 11 gives twenty-two pixels, roughly nine on a
+            # 250-pixel card. Large enough to read, small enough not to
+            # swallow a room on a compact map.
+            draw.ellipse(
+                (px - 11, py - 11, px + 11, py + 11),
+                fill=(20, 110, 220), outline=(255, 255, 255), width=3,
+            )
             radians = math.radians(heading)
             draw.line(
-                (px, py, px + math.cos(radians) * 12, py - math.sin(radians) * 12),
-                fill=(255, 255, 255), width=2,
+                (px, py, px + math.cos(radians) * 20, py - math.sin(radians) * 20),
+                fill=(255, 255, 255), width=4,
             )
-
-        if self._floor_plan.dock is not None:
-            dx, dy, _orientation = self._floor_plan.dock
-            px, py = to_px(dx, dy)
-            draw.ellipse((px - 5, py - 5, px + 5, py + 5), fill=(200, 200, 90))
 
         # ROOM LABELS ARE OFF BY DEFAULT, which reads backwards until you
         # know what Classic does: it removed its own in v2.7.3 because

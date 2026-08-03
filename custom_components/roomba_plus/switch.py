@@ -15,11 +15,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from .const import DOMAIN
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -28,6 +30,7 @@ PARALLEL_UPDATES = 0
 
 
 async def _async_add_prime_schedule_switches(
+    hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
@@ -63,7 +66,7 @@ async def _async_add_prime_schedule_switches(
 
     @callback
     def _sync_entities() -> None:
-        """Adds switches for schedules that appeared since the last run.
+        """Adds switches for new schedules and removes vanished ones.
 
         WHY THIS IS NOT A ONE-OFF (@DaRealGuGu, a19 field test). a19
         added a coordinator so that a schedule toggled in the iRobot app
@@ -77,23 +80,57 @@ async def _async_add_prime_schedule_switches(
             delete a schedule in the app -> switch goes unavailable and
                                             then stays forever
 
+        REMOVAL WAS MISSING IN a20 AND CLAIMED AS DONE. The a20 release
+        notes said a deleted schedule's switch "will disappear"; only
+        the additive half had been written. He tested it and reported
+        three switches still sitting there greyed out after well over
+        the refresh interval, which is exactly right.
+
         MATCHED BY schedule_id, NEVER BY CONTENT. The order of
         `start.day` is not stable between two reads of the same
         unchanged schedule -- [4,3,1,2], then [1,2,4,3], then [3,1,2,4]
         across his captures. Comparing content would report a change on
-        every refresh.
+        every refresh and churn the entity list endlessly.
         """
-        new_entities = [
-            switch
+        wanted = {
+            str(switch.unique_id): switch
             for switch in build_prime_schedule_switches(
-                config_entry, coordinator.data or []
+                config_entry, coordinator.data or [],
+                getattr(coordinator, "room_names", None),
+                getattr(coordinator, "weekday_names", None),
             )
-            if switch.unique_id not in known
+        }
+
+        new_entities = [
+            switch for uid, switch in wanted.items() if uid not in known
         ]
-        if not new_entities:
+        if new_entities:
+            known.update(str(switch.unique_id) for switch in new_entities)
+            async_add_entities(new_entities)
+
+        # REMOVAL ONLY AFTER A READ THAT SUCCEEDED.
+        #
+        # A refresh that failed leaves coordinator.data at its last good
+        # value, so in practice nothing would vanish -- but tying
+        # deletion to a flag that says "this data is current" is the
+        # difference between a rule and a coincidence. Deleting a user's
+        # switches because the cloud hiccuped would be the worst thing
+        # in this file.
+        if not getattr(coordinator, "last_update_success", True):
             return
-        known.update(str(switch.unique_id) for switch in new_entities)
-        async_add_entities(new_entities)
+
+        vanished = known - set(wanted)
+        if not vanished:
+            return
+        known.difference_update(vanished)
+
+        registry = er.async_get(hass)
+        for unique_id in vanished:
+            entity_id = registry.async_get_entity_id(
+                Platform.SWITCH, DOMAIN, unique_id
+            )
+            if entity_id:
+                registry.async_remove(entity_id)
 
     _sync_entities()
     config_entry.async_on_unload(coordinator.async_add_listener(_sync_entities))
@@ -147,7 +184,7 @@ async def async_setup_entry(
         # what they are called, is the user's business. A fixed set would
         # be wrong for everyone.
         await _async_add_prime_schedule_switches(
-            config_entry, async_add_entities
+            hass, config_entry, async_add_entities
         )
         return
 

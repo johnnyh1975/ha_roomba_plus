@@ -53,6 +53,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .const import DOMAIN
+
 from roombapy_prime import (
     PrimeRobot,
     ShadowConnectionError,
@@ -827,6 +829,38 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
     ) -> None:
         self.prime_robot = prime_robot
         self.blid = blid
+
+        #: {region_id: room name}, refreshed alongside the schedules.
+        #:
+        #: LIVES HERE BECAUSE ITS CONSUMERS ARE SYNCHRONOUS. The switch
+        #: platform builds its entities inside a coordinator listener,
+        #: which cannot await a cloud call -- so a schedule's region ids
+        #: could only ever have been shown as bare numbers.
+        #:
+        #: The calendar used to fetch this itself on every update. It
+        #: reads this instead now, so the account makes one call where
+        #: it previously made two.
+        #:
+        #: Best-effort, deliberately: a failed name lookup leaves the
+        #: previous names in place and does not fail the refresh.
+        #: Schedules are the payload; names are decoration, and losing
+        #: the switches because a map lookup timed out would be a bad
+        #: trade.
+        self.room_names: dict[str, str] = {}
+
+        #: {0..6: abbreviation}, in iRobot's numbering (0 = Sunday).
+        #:
+        #: Resolved from our own strings.json rather than formatted in
+        #: code: hard-coded English abbreviations would be wrong in
+        #: seven of the eight languages this integration ships, and
+        #: calendar.day_abbr follows the process locale, not the one
+        #: configured in Home Assistant.
+        #:
+        #: Filled once, on first refresh -- the user's language does not
+        #: change between refreshes, and async_get_translations is a
+        #: cached lookup but not free.
+        self.weekday_names: dict[int, str] = {}
+
         super().__init__(
             hass,
             _LOGGER,
@@ -834,6 +868,53 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             update_interval=self.UPDATE_INTERVAL,
             config_entry=config_entry,
         )
+
+    async def _async_load_weekday_names(self) -> None:
+        """Once per coordinator; see weekday_names' own comment."""
+        if self.weekday_names:
+            return
+        from homeassistant.helpers.translation import (  # noqa: PLC0415
+            async_get_translations,
+        )
+
+        try:
+            table = await async_get_translations(
+                self.hass, self.hass.config.language, "common", {DOMAIN}
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not load weekday names -- schedule labels "
+                "will fall back to rooms and time", exc_info=True,
+            )
+            return
+        resolved = {
+            index: table[key]
+            for index in range(7)
+            if (key := f"component.{DOMAIN}.common.weekday_{index}") in table
+        }
+        if len(resolved) == 7:
+            self.weekday_names = resolved
+
+    async def _async_refresh_room_names(self) -> None:
+        """Best-effort; see room_names' own comment for why."""
+        try:
+            from roombapy_prime.models import (  # noqa: PLC0415
+                build_room_name_map,
+                parse_active_map_versions,
+            )
+
+            raw = await self.prime_robot.get_active_map_versions()
+            names = build_room_name_map(
+                parse_active_map_versions(raw), blid=self.blid
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not refresh room names for %s -- keeping the "
+                "previous set", self.blid, exc_info=True,
+            )
+            return
+        if names:
+            self.room_names = names
 
     async def _async_update_data(self) -> list[tuple[str, list[Any]]]:
         """Containers as (household_schedule_id, [HouseholdSchedule]).
@@ -851,6 +932,9 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         from .prime_schedule_switch import (  # noqa: PLC0415
             async_read_schedule_containers,
         )
+
+        await self._async_load_weekday_names()
+        await self._async_refresh_room_names()
 
         containers = await async_read_schedule_containers(self.config_entry)
         if containers is None:

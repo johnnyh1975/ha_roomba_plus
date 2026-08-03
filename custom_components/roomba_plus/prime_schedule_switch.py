@@ -141,9 +141,161 @@ async def async_read_schedule_containers(
     return containers
 
 
+#: How many room names a label carries before it gets a "+n" tail.
+#: Two is enough to tell schedules apart and short enough to read in a
+#: list; a seven-room schedule would otherwise produce a label nobody
+#: can scan.
+_MAX_ROOMS_IN_LABEL = 2
+
+
+def _schedule_region_ids(options: Any) -> list[str]:
+    """The region ids a schedule cleans, in the order it cleans them.
+
+    BOTH SHAPES ARE ACCEPTED, and that is not defensiveness -- it is a
+    bug this function had. On the wire each entry is
+    `{"command": {... "regions": [...]}}`, but ScheduleOptions.from_json
+    UNWRAPS it (`commands=[c.get("command", c) for c in ...]`), so a
+    parsed schedule holds the inner dict directly. The first version
+    looked only for the wrapper, found nothing on every real schedule,
+    and silently fell back to the bare start time.
+
+    It was caught by running a real tester's three schedules through it
+    -- the hand-built test fixtures used the wire shape, which is
+    exactly the mistake tests/prime_fixtures.py exists to prevent, made
+    inside a test rather than in the code under test.
+
+    Regions carry `region_id` plus a `type` of "rid" (room), "zid"
+    (zone) or "furniture". Everything is read defensively beyond that:
+    these are raw dicts, and this runs inside a coordinator listener
+    where an exception would take the whole switch platform with it.
+    """
+    ids: list[str] = []
+    for entry in getattr(options, "commands", None) or []:
+        if not isinstance(entry, dict):
+            continue
+        command = entry.get("command") if isinstance(entry.get("command"), dict) else entry
+        if not isinstance(command, dict):
+            continue
+        for region in command.get("regions") or []:
+            if not isinstance(region, dict):
+                continue
+            region_id = region.get("region_id")
+            if region_id is not None and str(region_id) not in ids:
+                ids.append(str(region_id))
+    return ids
+
+
+def _schedule_days(options: Any, weekday_names: dict[int, str] | None = None) -> str:
+    """The weekday part of a label, e.g. "Mon-Thu" or "Fri".
+
+    TRANSLATED, and that is the whole reason this takes a lookup rather
+    than formatting the days itself. Hard-coding English abbreviations
+    would be wrong for seven of the eight languages this integration
+    ships, and `calendar.day_abbr` follows the process locale rather
+    than the one configured in Home Assistant.
+
+    So the names come from our own strings.json (`common.weekday_0` ..
+    `weekday_6`, iRobot's numbering: 0 = Sunday), resolved once per
+    entity in async_added_to_hass.
+
+    Ranges are collapsed only when the days are genuinely consecutive
+    in iRobot's own order -- [1,2,3,4] becomes "Mon-Thu", while
+    [1,3,5] stays "Mon, Wed, Fri". Sorted first because the order is
+    not stable between reads: the same untouched schedule came back as
+    [4,3,1,2], then [1,2,4,3], then [3,1,2,4].
+    """
+    start = getattr(options, "start", None)
+    raw = getattr(start, "day", None) if start else None
+    # isinstance rather than truthiness: this runs inside a coordinator
+    # listener, and anything that is not a real mapping of real strings
+    # has to degrade to "no days" instead of raising and taking the
+    # switch platform with it.
+    if not raw or not isinstance(weekday_names, dict):
+        return ""
+    try:
+        days = sorted({int(d) for d in raw})
+    except (TypeError, ValueError):
+        return ""
+    labels = [weekday_names.get(d) for d in days]
+    if not all(isinstance(label, str) and label for label in labels):
+        return ""
+    if len(days) > 2 and days == list(range(days[0], days[-1] + 1)):
+        return f"{labels[0]}-{labels[-1]}"
+    return ", ".join(labels)
+
+
+def _schedule_label(
+    options: Any,
+    room_names: dict[str, str] | None = None,
+    weekday_names: dict[int, str] | None = None,
+) -> str:
+    """A label that tells one schedule from another.
+
+    THE NAME FIELD CANNOT. The iRobot app calls every schedule it
+    creates "Regular Schedule" -- nine of them across two accounts, all
+    identical -- so a household with six gets six identically named
+    switches (@chairstacker, a20). APK analysis then established that
+    `name` is a hard-coded default with no user relation: the app shows
+    no name anywhere, and offers no field to set one.
+
+    So the label is built the way the app's own list is: from the ROOMS
+    a schedule cleans, plus its start time.
+
+        "Kitchen, Bathroom 09:00"
+        "Kitchen, Bathroom +3 09:00"      (five rooms)
+        "09:00"                            (no rooms resolved)
+
+    Room names rather than the app's "2 Rooms, Whole House": that
+    phrasing would leave two schedules covering two rooms each equally
+    indistinguishable, which is the problem this exists to solve. It
+    also needs no plural forms in eight languages, and no answer to
+    where "Whole House" comes from -- a string the APK analysis could
+    not find as a resource at all.
+
+    Falls back to the start time alone when no name resolves, and to the
+    raw `name` when there is no start time either. A bare region id
+    ("Zone 13") is deliberately NOT used as a filler: it looks like
+    information and is not, and the time already separates schedules
+    better than a number would.
+
+    The schedule id stays the basis for `suggested_object_id`, so a
+    label that changes when rooms get renamed still cannot rename the
+    entity out from under an automation.
+    """
+    start = getattr(options, "start", None)
+    hour = getattr(start, "hour", None) if start else None
+    stamp = (
+        f"{int(hour):02d}:{int(getattr(start, 'min', 0) or 0):02d}"
+        if hour is not None else ""
+    )
+
+    # THE DAYS ARE NOT OPTIONAL DECORATION. Two of one tester's three
+    # schedules clean the SAME rooms at the SAME time and differ only
+    # in which days they run -- rooms plus time left them identical, so
+    # the label that was supposed to solve six-identical-switches
+    # produced two of its own.
+    days = _schedule_days(options, weekday_names)
+
+    named = [
+        name for region_id in _schedule_region_ids(options)
+        if (name := (room_names or {}).get(region_id))
+    ]
+    if named:
+        shown = ", ".join(named[:_MAX_ROOMS_IN_LABEL])
+        if len(named) > _MAX_ROOMS_IN_LABEL:
+            shown = f"{shown} +{len(named) - _MAX_ROOMS_IN_LABEL}"
+        return " ".join(part for part in (shown, days, stamp) if part)
+
+    if days or stamp:
+        return " ".join(part for part in (days, stamp) if part)
+    return (getattr(options, "name", None) or "").strip()
+
+
 def build_prime_schedule_switches(
     config_entry: RoombaConfigEntry,
     containers: list[tuple[str, list[Any]]],
+    room_names: dict[str, str] | None = None,
+    weekday_names: dict[int, str] | None = None,
 ) -> list[PrimeScheduleSwitch]:
     """One switch per schedule that can meaningfully carry one.
 
@@ -180,7 +332,7 @@ def build_prime_schedule_switches(
                 continue
             switches.append(PrimeScheduleSwitch(
                 config_entry, container_id, str(schedule.schedule_id),
-                options.name or "",
+                _schedule_label(options, room_names, weekday_names),
             ))
     return switches
 

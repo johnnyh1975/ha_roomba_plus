@@ -1,4 +1,13 @@
 {
+  "common": {
+    "weekday_0": "Sun",
+    "weekday_1": "Mon",
+    "weekday_2": "Tue",
+    "weekday_3": "Wed",
+    "weekday_4": "Thu",
+    "weekday_5": "Fri",
+    "weekday_6": "Sat"
+  },
   "config": {
     "step": {
       "user": {

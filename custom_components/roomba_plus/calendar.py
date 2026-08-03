@@ -37,7 +37,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
@@ -66,6 +66,10 @@ _LOGGER = logging.getLogger(__name__)
 #:
 #: Found by the request-budget check, not by anything failing -- the
 #: entity worked correctly the whole time.
+#: Applies to the CLASSIC calendar only. Prime's is driven by
+#: PrimeScheduleCoordinator, which runs on its own fifteen-minute cycle;
+#: a module-level SCAN_INTERVAL has no effect on a non-polling entity,
+#: and this one looked for two releases as though it did.
 SCAN_INTERVAL = dt_stdlib.timedelta(minutes=15)
 PARALLEL_UPDATES = 0
 
@@ -137,11 +141,37 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
 
     @property
     def event(self) -> CalendarEvent | None:
-        """Return the next upcoming scheduled cleaning, if any."""
+        """The occurrence happening right now, or else the next one.
+
+        THE SAME BUG THE PRIME CALENDAR HAD, fixed here a release later
+        (issue #23, @chairstacker). Home Assistant derives a calendar
+        entity's on/off state from whether `event` returns something
+        covering `now`, so a version that only ever looked at
+        `start > now` reported "Off" for the ENTIRE duration of an
+        active, schedule-triggered mission -- while the same schedule
+        was plainly visible in the calendar view.
+
+        It was fixed on PrimeScheduleCalendar and not here. The reporter
+        has a Prime robot, so his symptom went away; every Classic user
+        kept it. Third time in this project that a repair reached one
+        of two sibling classes -- see the config_entry fix and the
+        dict-versus-attribute reads.
+
+        TWO CHANGES, not one. Checking for an ongoing occurrence is
+        useless while the search window still starts at `now`: an
+        occurrence that began ten minutes ago is simply not in the
+        list. The window now reaches back by DEFAULT_EVENT_DURATION,
+        exactly as the Prime version does.
+        """
         now = dt_util.now()
         occurrences = parse_schedule_occurrences_with_regions(
-            self.vacuum_state, now, now + _NEXT_EVENT_LOOKAHEAD
+            self.vacuum_state, now - DEFAULT_EVENT_DURATION,
+            now + _NEXT_EVENT_LOOKAHEAD,
         )
+        ongoing = [(s, e, r) for s, e, r in occurrences if s <= now < e]
+        if ongoing:
+            start, end, region_ids = min(ongoing, key=lambda o: o[0])
+            return _to_calendar_event(start, end, self._zone_labels(region_ids))
         future = [(s, e, r) for s, e, r in occurrences if s > now]
         if not future:
             return None
@@ -186,11 +216,33 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
     Simpler to fetch on demand here than to add string-blob parsing
     for a shadow that isn't otherwise needed for this feature.
 
-    No push channel exists for schedule changes (unlike the shadow-
-    based sensors) -- HA's own periodic polling (async_update(),
-    default interval) is what keeps this current instead. Schedules
-    change rarely, so this is a reasonable fit for polling rather than
-    push.
+    DRIVEN BY PrimeScheduleCoordinator, and that is a correction of a
+    bug that made this entity permanently useless.
+
+    It used to rely on "HA's own periodic polling (async_update(),
+    default interval)". HA never called it. IRobotEntity sets
+    `_attr_should_poll = False` -- correct for Classic, whose entities
+    are driven by roombapy's MQTT push -- and this class inherits it.
+    async_update() is the ONLY thing that fills _cached_occurrences, so
+    the list stayed empty for the entity's whole life, `event` always
+    returned None, and Home Assistant reported `off` forever.
+
+    WHY IT SURVIVED SO LONG: the calendar VIEW was never broken.
+    async_get_events() fetches directly with no cache, so the schedules
+    were plainly visible while the entity state said off. That is
+    exactly how it was reported (issue #23, @chairstacker), and the fix
+    made at the time -- checking for an ongoing occurrence, widening the
+    fetch window -- was correct and could not possibly take effect,
+    because it reads a cache nobody fills.
+
+    The module-level SCAN_INTERVAL is dead for the same reason: it
+    applies to polling entities only. It looks like it does something.
+
+    So this now subscribes to the coordinator that already fetches
+    schedules every fifteen minutes for the schedule switches. One
+    fetch for the account, and the lesson from the "Returning to dock"
+    bug applied again: an entity has to subscribe to every coordinator
+    that supplies its data.
     """
 
     _attr_translation_key = "schedule"
@@ -202,23 +254,84 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         self._cached_occurrences: list[tuple[Any, Any, list[str], str | None]] = []
         self._cached_room_names: dict[str, str] = {}
 
-    async def _fetch_room_names(self) -> dict[str, str]:
-        """Best-effort: an empty result just means region_ids show up
-        unresolved (e.g. "Zone 23") rather than a real name -- not
-        treated as an error, since the schedule data itself (the main
-        point of this entity) doesn't depend on it."""
-        from roombapy_prime.models import build_room_name_map, parse_active_map_versions
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
 
-        prime_robot = self._config_entry.runtime_data.prime_robot
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is None:
+            # No coordinator means no schedules to show. Refreshing once
+            # would put a snapshot on screen that then never moves,
+            # which is worse than an empty calendar.
+            return
+
+        self.async_on_remove(
+            coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+        # A FAILED FIRST READ MUST COST THE CONTENT, NOT THE ENTITY.
+        #
+        # An exception raised here propagates out of async_added_to_hass
+        # and Home Assistant does not add the entity at all -- so a
+        # single malformed schedule would leave the user with no
+        # calendar rather than an empty one, and no obvious way to tell
+        # which happened.
+        #
+        # Not hypothetical: parse_prime_schedule_occurrences reads
+        # values straight off the wire, and a null inside `commands`
+        # crashed the schedule parser earlier in this same release.
+        # The next refresh fills it in.
         try:
-            raw = await prime_robot.get_active_map_versions()
-            return build_room_name_map(parse_active_map_versions(raw), blid=self._blid)
+            await self.async_update()
         except Exception:  # noqa: BLE001
             _LOGGER.debug(
-                "roomba_plus: could not resolve room names for %s's schedule calendar",
-                self._blid, exc_info=True,
+                "roomba_plus: first schedule read failed for %s's calendar -- "
+                "starting empty, the next refresh will fill it", self._blid,
+                exc_info=True,
             )
-            return {}
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """The coordinator refreshed; recompute from what it holds.
+
+        Scheduled rather than awaited: a coordinator listener is
+        synchronous, and the occurrence window has to be recomputed
+        against the CURRENT time, not the time of the last refresh.
+        """
+        self.hass.async_create_task(self._async_recompute())
+
+    async def _async_recompute(self) -> None:
+        """Same reasoning as the first read: a refresh that raises must
+        not take the entity down, and it runs in a background task where
+        an exception would only surface as a stray traceback."""
+        try:
+            await self.async_update()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: schedule recompute failed for %s -- keeping the "
+                "previous occurrences", self._blid, exc_info=True,
+            )
+            return
+        self.async_write_ha_state()
+
+    async def _fetch_room_names(self) -> dict[str, str]:
+        """Room names from the shared coordinator, not a call of our own.
+
+        This used to fetch get_active_map_versions() itself on every
+        update, so the account made two cloud calls where one would do
+        -- the schedule coordinator was already fetching the same map
+        for the schedule switches, which need the names synchronously
+        and cannot await anything.
+
+        Still best-effort: an empty result means region ids show up
+        unresolved rather than named, which is not an error. The
+        schedule data this entity exists for does not depend on it.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        return dict(getattr(coordinator, "room_names", None) or {})
 
     async def _fetch_occurrences(
         self, start: dt_stdlib.datetime, end: dt_stdlib.datetime,

@@ -294,17 +294,21 @@ def parse_prime_schedule_occurrences(
     for a list of roombapy_prime HouseholdSchedule objects (from
     get_schedules()) instead of a local vacuum_state dict.
 
-    ASSUMED, NOT CONFIRMED: ScheduleTime.day's own weekday numbering.
-    roombapy-prime's own confirmation only establishes it's a list of
-    plain ints (e.g. [6], [1, 4]) -- WHICH convention (0=Sunday, same
-    as Classic's own confirmed cleanSchedule2, vs. 0=Monday/ISO, vs.
-    something else) has not been separately confirmed for Prime. This
-    reuses schedule_parser.py's own _weekly_occurrences() -- and
-    therefore Classic's SAME 0=Sunday assumption -- since both are
-    iRobot's own APIs and share a numbering convention on priors, but
-    flag this clearly: if a real Prime schedule ever shows up on the
-    wrong day of the week, this assumption is the first place to
-    check.
+    WEEKDAY NUMBERING NOW CONFIRMED for Prime (@DaRealGuGu, b7): the
+    raw schedules line up with his app screen exactly.
+
+        sam. 15:45              -> day [6]
+        ven. 09:00              -> day [5]
+        lun./mar./mer./jeu.     -> day [3, 1, 2, 4]
+
+    So Monday=1 through Saturday=6, and Sunday=0 -- the same 0=Sunday
+    convention as Classic's cleanSchedule2, which this code had assumed
+    on priors and flagged as unverified.
+
+    The flag said "if a real Prime schedule ever shows up on the wrong
+    day of the week, this assumption is the first place to check". It
+    was checked, against a real account, and it holds. Anyone chasing a
+    schedule that fires on the wrong day should look elsewhere.
 
     ONLY ScheduleFrequency.WEEKLY is computed, deliberately, for now.
     BI_WEEKLY/MONTHLY/ONCE are skipped -- not because a reasonable
