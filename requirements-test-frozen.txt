@@ -43,7 +43,7 @@ fnv-hash-fast==1.0.2
 fnvhash==0.1.0
 freezegun==1.5.1
 frozenlist==1.8.0
-greenlet==3.5.3
+greenlet==3.5.4
 h11==0.16.0
 habluetooth==6.1.0
 hass-nabucasa==0.87.0
