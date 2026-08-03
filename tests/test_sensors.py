@@ -2371,7 +2371,11 @@ class TestErrorCodeLabels:
         assert ERROR_CODE_LABELS[0] == "None"
 
     def test_common_errors_present(self):
-        assert ERROR_CODE_LABELS[2] == "Main brushes stuck"
+        # CORRECTED: "Main brushes stuck" is the SKU override the app
+        # applies for the MARCONI prefix only; the default is "Debris
+        # extractors stuck". We were showing the special case to every
+        # robot, and this test pinned it.
+        assert ERROR_CODE_LABELS[2] == "Debris extractors stuck"
         assert ERROR_CODE_LABELS[6] == "Stuck near a cliff"
         assert ERROR_CODE_LABELS[14] == "Bin missing"
         assert ERROR_CODE_LABELS[36] == "Bin full"
@@ -2380,8 +2384,18 @@ class TestErrorCodeLabels:
         assert ERROR_CODE_LABELS[106] == "Battery too warm"
         assert ERROR_CODE_LABELS[119] == "Charging timeout"
 
-    def test_clean_base_error(self):
-        assert ERROR_CODE_LABELS[216] == "Charging base bag full"
+    def test_216_is_the_robots_own_bin(self):
+        """CORRECTED: the wrong part. Enum STARTING_ERROR_BIN_FULL, app
+        text "Bin full" -- the robot's bin, not the Clean Base bag. This
+        sent people to replace a bag when the bin needed emptying."""
+        assert ERROR_CODE_LABELS[216] == "Bin full"
+
+    def test_68_is_a_camera_fault_not_a_map_update(self):
+        """Neither the enum name (CAMERA_HARDWARE_FAILURE) nor the app's
+        text supports "Updating map", and the two agree with each other.
+        A user was told to wait while the robot reported a hardware
+        fault."""
+        assert ERROR_CODE_LABELS[68] == "Camera issue"
 
     def test_total_coverage(self):
         assert len(ERROR_CODE_LABELS) >= 70
@@ -4998,3 +5012,112 @@ class TestConsumablePartsAppearWhenDiscovered:
         data.prime_parts_coordinator = None
 
         _add_discovered_parts(data, MagicMock(), lambda gen: list(gen))
+
+
+class TestBraavaVersusMoppingRobots:
+    """`is_mop()` answers "can it mop" and was being used to ask "has it
+    no brushes". On a Braava those coincide, which is why thirteen brush
+    and bin gates were written as `not is_mop(state)` and nobody noticed.
+
+    On a Combo they do not: it has a pad AND brushes, so it would lose
+    its filter sensors to a question about mopping.
+
+    Nobody found this in the field because every tester's robot sits
+    cleanly on one side -- Braava m6, i-series, s9, 900-series. It needs
+    a Classic Combo, and nobody in the group owns one.
+    """
+
+    def _state(self, sku=None, pad=False):
+        state = {}
+        if sku:
+            state["sku"] = sku
+        if pad:
+            state["detectedPad"] = "reusableDry"
+        return state
+
+    def test_a_braava_is_both(self):
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        state = self._state("m611020", pad=True)
+        assert is_mop(state) is True
+        assert is_braava(state) is True
+
+    def test_a_combo_mops_but_is_not_a_braava(self):
+        """The case the split exists for. It has brushes and a filter."""
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        state = self._state("c355020", pad=True)
+        assert is_mop(state) is True
+        assert is_braava(state) is False
+
+    def test_vacuums_are_neither(self):
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        for sku in ("i755840", "R980020", "s955020", "j915020"):
+            state = self._state(sku)
+            assert is_mop(state) is False
+            assert is_braava(state) is False, sku
+
+    def test_no_sku_falls_back_to_the_old_reading(self):
+        """A capability flag can go missing on a robot that has the
+        hardware; a SKU cannot go missing on a robot that has one. When
+        it does, falling back costs nothing -- on a Braava the old
+        reading was already right."""
+        from custom_components.roomba_plus.const import is_braava
+
+        assert is_braava(self._state(pad=True)) is True
+        assert is_braava(self._state()) is False
+
+    def test_a_combo_keeps_its_filter_sensors(self):
+        """The gates that moved. A robot that mops still has a filter."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("c355020", pad=True)
+        keys = {
+            d.key for d in SENSORS
+            if d.key in ("filter_wear_rate", "filter_days_until_due")
+            and d.filter_fn(state)
+        }
+        assert keys == {"filter_wear_rate", "filter_days_until_due"}
+
+    def test_a_braava_is_unaffected_by_the_gates_that_moved(self):
+        """The point of choosing SKU prefix over a capability flag: no
+        robot anyone actually owns changes behaviour."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("m611020", pad=True)
+        moved = {"filter_wear_rate", "filter_days_until_due"}
+        assert not [d for d in SENSORS if d.key in moved and d.filter_fn(state)]
+
+    def test_observed_while_doing_this_two_filter_sensors_are_ungated(self):
+        """`filter_remaining_hours` and `filter_last_replaced` carry no
+        gate at all, so a Braava gets them -- and a Braava has no filter.
+
+        Pre-existing, untouched here, and pinned rather than fixed: it is
+        a different question from the brush/pad split and deserves its
+        own decision. Without this test it would look like the split
+        missed something.
+        """
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("m611020", pad=True)
+        shown = {
+            d.key for d in SENSORS
+            if d.key.startswith("filter_") and d.filter_fn(state)
+        }
+        assert shown == {"filter_remaining_hours", "filter_last_replaced"}
+
+    def test_the_brush_slot_is_still_either_or(self):
+        """Not an oversight. MaintenanceStore has one slot for brush OR
+        pad, so a Combo getting both sensors would read one number
+        twice -- worse than one unambiguous sensor. Documented at the
+        gate; fixing it needs a second store slot."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("c355020", pad=True)
+        shown = {
+            d.key for d in SENSORS
+            if d.key in ("brush_last_replaced", "pad_last_replaced")
+            and d.filter_fn(state)
+        }
+        assert shown == {"pad_last_replaced"}

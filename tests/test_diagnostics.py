@@ -843,3 +843,47 @@ class TestThePrimeScheduleProbeSurvivesAnUnexpectedShape:
 
         assert result["response_shape_recognised"] is True
         assert result["count"] == 0
+
+
+class TestTrailPointsInDiagnostics:
+    """`live_map` counts what arrived; this counts what survived into the
+    list the renderer actually reads.
+
+    @DaRealGuGu reported 2267 position messages and no robot marker on
+    the map. The arrival counters cannot separate the possible causes --
+    an empty list at render time, or a marker drawn and not seen -- and
+    the capture had no way to say which.
+    """
+
+    def _diag(self, positions):
+        """Reads the fields straight out of _build_diagnostics' source
+        rather than calling it: the whole function needs a hass, a config
+        entry and a live coordinator, and none of that is what is being
+        tested here."""
+        return {
+            "trail_points": len(positions),
+            "trail_last_point": positions[-1] if positions else None,
+        }
+
+    def test_the_fields_exist_in_the_diagnostics_builder(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        assert '"trail_points": len(data.prime_positions),' in source
+        assert '"trail_last_point"' in source
+
+    def test_an_empty_list_is_reported_as_empty(self):
+        section = self._diag([])
+
+        assert section["trail_points"] == 0
+        assert section["trail_last_point"] is None
+
+    def test_the_last_point_is_included(self):
+        """A marker drawn far outside the map's own bounds would be
+        invisible for a third reason again."""
+        section = self._diag([(1.0, 2.0, 0.0), (3.0, 4.0, 90.0)])
+
+        assert section["trail_points"] == 2
+        assert section["trail_last_point"] == (3.0, 4.0, 90.0)

@@ -658,15 +658,16 @@ class TestMqttStampCallback:
 
 
 class TestNotReadyConstant:
-    def test_value_is_64(self):
-        assert _NOT_READY_MAP_SAVING == 64
+    def test_value_is_the_map_updating_state(self):
+        assert _NOT_READY_MAP_SAVING == 67
 
 
 # ── is_on ─────────────────────────────────────────────────────────────────────
 
 class TestMapSavingIsOn:
-    def test_on_when_bit_6_set(self):
-        sensor = _make_sensor(not_ready=64)
+    def test_on_for_the_map_updating_state(self):
+        """67 is DownloadingMap. This used to feed 64 and test a bit."""
+        sensor = _make_sensor(not_ready=67)
         assert sensor.is_on is True
 
     def test_off_when_not_ready_is_zero(self):
@@ -679,14 +680,16 @@ class TestMapSavingIsOn:
         sensor = RoombaMapSavingStatus(roomba, "blid")
         assert sensor.is_on is False
 
-    def test_on_when_bit_6_combined_with_others(self):
-        """bit 6 set alongside other bits — still ON."""
-        sensor = _make_sensor(not_ready=64 | 1 | 4)
-        assert sensor.is_on is True
+    def test_off_for_states_that_merely_share_bit_64(self):
+        """The correction. notReady is a scalar index, so 64 through 71
+        are eight distinct states and only 67 is the map one -- 64 is
+        FleetDisabled, 65 SubscriptionExpired, 69 TankLeaking. Under the
+        old bit test every one of them turned this sensor on."""
+        for wire in (64, 65, 66, 68, 69, 70, 71):
+            assert _make_sensor(not_ready=wire).is_on is False, wire
 
-    def test_off_when_other_bits_set_but_not_bit_6(self):
-        """bit 1 + bit 2 + bit 5 — no map saving."""
-        sensor = _make_sensor(not_ready=1 | 2 | 32)
+    def test_off_for_unrelated_states(self):
+        sensor = _make_sensor(not_ready=35)
         assert sensor.is_on is False
 
     def test_off_when_not_ready_is_none(self):
@@ -698,17 +701,21 @@ class TestMapSavingIsOn:
         # None treated as 0 via `or 0` guard — sensor must return False
         assert sensor.is_on is False
 
-    def test_bitmask_values(self):
-        """Exhaustive check: only multiples of 64 within reasonable range trigger ON."""
-        sensor = _make_sensor(not_ready=0)
-        for v in range(256):
+    def test_scalar_values(self):
+        """Exhaustive: exactly one value turns this on.
+
+        The old version asserted `bool(v & 64)` across the same range --
+        128 of 256 values. That is the bug written as a test: it agreed
+        with the implementation and neither was checked against the
+        robot's own app.
+        """
+        for value in range(256):
             roomba = MagicMock()
             roomba.master_state = {
-                "state": {"reported": {"cleanMissionStatus": {"notReady": v}}}
+                "state": {"reported": {"cleanMissionStatus": {"notReady": value}}}
             }
-            sensor2 = RoombaMapSavingStatus(roomba, "blid")
-            expected = bool(v & 64)
-            assert sensor2.is_on == expected, f"Failed for notReady={v}"
+            sensor = RoombaMapSavingStatus(roomba, "blid")
+            assert sensor.is_on == (value == 67), f"notReady={value}"
 
 
 # ── extra_state_attributes ────────────────────────────────────────────────────
@@ -732,7 +739,7 @@ class TestMapSavingAttributes:
 class TestMapSavingStateFilter:
     def test_triggers_on_cleanmissionstatus(self):
         sensor = _make_sensor()
-        assert sensor.new_state_filter({"cleanMissionStatus": {"notReady": 64}}) is True
+        assert sensor.new_state_filter({"cleanMissionStatus": {"notReady": 67}}) is True
 
     def test_ignores_other_fields(self):
         sensor = _make_sensor()
@@ -826,17 +833,20 @@ class TestMapSavingAutomationScenario:
     def test_sequence_off_on_off(self):
         """Robot idle → map saving → map save complete."""
         idle   = self._sensor_with_state(0)
-        saving = self._sensor_with_state(64)
+        saving = self._sensor_with_state(67)
         done   = self._sensor_with_state(0)
 
         assert idle.is_on is False
         assert saving.is_on is True
         assert done.is_on is False
 
-    def test_combined_with_other_not_ready_bits(self):
-        """Map saving combined with 'new map' bit (1) — still ON."""
-        sensor = self._sensor_with_state(64 | 1)
-        assert sensor.is_on is True
+    def test_a_neighbouring_state_is_not_the_map_one(self):
+        """65 is SubscriptionExpired. It used to read as map-saving
+        because it shares bit 64 -- and a user whose subscription had
+        lapsed was told to wait for a map update."""
+        sensor = self._sensor_with_state(65)
+
+        assert sensor.is_on is False
         assert sensor.extra_state_attributes["not_ready_bitmask"] == 65
 
 

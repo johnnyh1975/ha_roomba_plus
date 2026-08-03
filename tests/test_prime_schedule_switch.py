@@ -764,7 +764,7 @@ class TestVanishedSchedulesLoseTheirSwitch:
         from custom_components.roomba_plus import switch as switch_module
 
         created: list = []
-        patcher = patch.object(switch_module.er, "async_get", return_value=registry)
+        patcher = self._patch_registry(registry)
         patcher.start()
         await switch_module.async_setup_entry(MagicMock(), entry, created.extend)
         return created, patcher
@@ -778,19 +778,48 @@ class TestVanishedSchedulesLoseTheirSwitch:
         while self._patchers:
             self._patchers.pop().stop()
 
-    def _registry(self):
+    def _registry(self, existing=()):
+        """A registry holding entries, because that is what the removal
+        reads now.
+
+        The first version of this test faked `async_get_entity_id`, which
+        matched an implementation that only knew about entities the
+        current session had added -- and that was exactly the bug: an
+        orphan from a previous run was invisible to it.
+        """
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
+        from homeassistant.const import Platform
+
         registry = MagicMock()
-        registry.async_get_entity_id = MagicMock(side_effect=lambda p, d, uid: uid)
+        registry._entries = [
+            SimpleNamespace(domain=Platform.SWITCH, unique_id=uid, entity_id=f"switch.{uid}")
+            for uid in existing
+        ]
         return registry
+
+    @staticmethod
+    def _patch_registry(registry):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus import switch as switch_module
+
+        return patch.multiple(
+            switch_module.er,
+            async_get=lambda _hass: registry,
+            async_entries_for_config_entry=lambda _reg, _eid: registry._entries,
+        )
 
     @pytest.mark.asyncio
     async def test_a_schedule_deleted_in_the_app_loses_its_switch(self):
         entry, coordinator, listeners = self._setup(
             [("c1", [_parsed("s1"), _parsed("s2")])]
         )
-        registry = self._registry()
+        blid = entry.runtime_data.blid
+        registry = self._registry(
+            [f"{blid}_schedule_s1", f"{blid}_schedule_s2"]
+        )
         _, patcher = await self._run(entry, registry)
         self.addfinalizer(patcher)
 
@@ -801,6 +830,45 @@ class TestVanishedSchedulesLoseTheirSwitch:
         removed = [call.args[0] for call in registry.async_remove.call_args_list]
         assert len(removed) == 1
         assert "s2" in removed[0]
+
+    @pytest.mark.asyncio
+    async def test_an_orphan_from_a_previous_run_is_removed(self):
+        """THE BUG a21 SHIPPED. Removal compared against a set of ids
+        this session had added, so after a restart the difference was
+        empty by construction and an entity whose schedule vanished while
+        Home Assistant was down could never be reached.
+
+        @DaRealGuGu had four of them still sitting there on a21, with
+        release notes saying they would go.
+        """
+        entry, _coordinator, _listeners = self._setup([("c1", [_parsed("s1")])])
+        blid = entry.runtime_data.blid
+        registry = self._registry(
+            [f"{blid}_schedule_s1", f"{blid}_schedule_GONE"]
+        )
+
+        _, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+
+        removed = [call.args[0] for call in registry.async_remove.call_args_list]
+        assert removed == [f"switch.{blid}_schedule_GONE"]
+
+    @pytest.mark.asyncio
+    async def test_other_switches_are_left_alone(self):
+        """The registry holds every switch this entry owns. Only the ones
+        carrying this robot's schedule prefix are ours to remove."""
+        entry, _coordinator, _listeners = self._setup([("c1", [_parsed("s1")])])
+        blid = entry.runtime_data.blid
+        registry = self._registry([
+            f"{blid}_schedule_s1",
+            f"{blid}_child_lock",
+            "OTHERBLID_schedule_s9",
+        ])
+
+        _, patcher = await self._run(entry, registry)
+        self.addfinalizer(patcher)
+
+        registry.async_remove.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_nothing_is_removed_after_a_failed_refresh(self):
@@ -845,10 +913,14 @@ class TestVanishedSchedulesLoseTheirSwitch:
     @pytest.mark.asyncio
     async def test_a_schedule_can_come_back(self):
         """Removed and then re-added must produce a switch again --
-        otherwise the known-id set would remember a schedule the user
-        recreated and silently skip it."""
+        otherwise the id set would remember a schedule the user
+        recreated and silently skip it.
+
+        The registry entry stays in place while the schedule vanishes:
+        that is the real sequence. Removing it from the fake first would
+        skip the very code path that prunes the id set."""
         entry, coordinator, listeners = self._setup([("c1", [_parsed("s1")])])
-        registry = self._registry()
+        registry = self._registry([f"{entry.runtime_data.blid}_schedule_s1"])
         created, patcher = await self._run(entry, registry)
         self.addfinalizer(patcher)
 
@@ -1050,3 +1122,89 @@ class TestWeekdaysInTheLabel:
         for broken in (None, "nonsense", {1: 7}, {1: ""}):
             assert self._label([1], 9, 0, ["13"], weekday_names=broken) \
                 == "Kitchen 09:00"
+
+
+class TestTheLabelFollowsTheSchedule:
+    """The label was computed once, in __init__, and never again.
+
+    Invisible while the only way to change a schedule was the iRobot
+    app, which offers no rename field. It surfaced the moment someone
+    built a service that CAN rename one (@utkjmitch, #49): the data
+    updated and the cosmetics lagged.
+    """
+
+    _ROOMS = {"13": "Kitchen", "10": "Bathroom"}
+    _DAYS = {1: "Mon", 2: "Tue", 5: "Fri"}
+
+    def _switch_and_apply(self, first, second):
+        from unittest.mock import MagicMock
+
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        def parsed(options):
+            return HouseholdSchedule.from_json({"schedule_id": "S1", "options": options})
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "B"
+        coordinator = entry.runtime_data.prime_schedule_coordinator
+        coordinator.room_names = self._ROOMS
+        coordinator.weekday_names = self._DAYS
+
+        switch = PrimeScheduleSwitch(entry, "c1", "S1", "initial")
+        switch._apply([("c1", [parsed(first)])])
+        before = switch._attr_translation_placeholders["schedule"]
+        switch._apply([("c1", [parsed(second)])])
+        return before, switch._attr_translation_placeholders["schedule"]
+
+    def test_a_retimed_schedule_gets_a_new_label(self):
+        before, after = self._switch_and_apply(
+            {"enabled": True, "start": {"day": [5], "hour": 9, "min": 0}},
+            {"enabled": True, "start": {"day": [5], "hour": 15, "min": 30}},
+        )
+
+        assert before == "Fri 09:00"
+        assert after == "Fri 15:30"
+
+    def test_a_renamed_schedule_gets_a_new_label(self):
+        _before, after = self._switch_and_apply(
+            {"enabled": True, "name": "old", "start": {"day": [1], "hour": 6, "min": 0}},
+            {"enabled": True, "name": "new", "start": {"day": [1], "hour": 6, "min": 0}},
+        )
+
+        assert after == "Mon 06:00"
+
+    def test_changed_rooms_change_the_label(self):
+        rooms = [{"region_id": "13", "type": "rid"}]
+        both = [*rooms, {"region_id": "10", "type": "rid"}]
+        before, after = self._switch_and_apply(
+            {"enabled": True, "start": {"day": [1], "hour": 9, "min": 0},
+             "commands": [{"command": {"regions": rooms}}]},
+            {"enabled": True, "start": {"day": [1], "hour": 9, "min": 0},
+             "commands": [{"command": {"regions": both}}]},
+        )
+
+        assert before == "Kitchen Mon 09:00"
+        assert after == "Kitchen, Bathroom Mon 09:00"
+
+    def test_the_unique_id_never_moves(self):
+        """A label that follows the schedule must not drag the entity id
+        with it -- automations point at the entity."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            PrimeScheduleSwitch,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "B"
+        switch = PrimeScheduleSwitch(entry, "c1", "S1", "whatever")
+        before = switch.unique_id
+
+        switch._refresh_label(type("O", (), {"name": "x", "start": None, "commands": []})())
+
+        assert switch.unique_id == before
+        assert switch.suggested_object_id == "schedule_S1"

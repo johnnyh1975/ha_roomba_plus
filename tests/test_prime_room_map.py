@@ -1490,3 +1490,81 @@ class TestTheRobotMarkerIsActuallyVisible:
 
         px, py = entity._renderer._mm_to_px_fit(*positions[-1][:2])
         assert image.getpixel((round(px), round(py) + 4)) == (20, 110, 220)
+
+
+class TestTrailCountersMeasureSurvival:
+    """`position_points` counts what the robot sent. Everything after it
+    can still drop every sample: one without a `point`, or a point
+    without x/y, is skipped silently.
+
+    @DaRealGuGu's capture had 2267 messages and 5553 points and no robot
+    marker on the map -- and no number in it could say whether they
+    arrived and were dropped, or arrived and were drawn out of view.
+
+    Same shape as every other counter mistake here: counting arrival
+    instead of survival.
+    """
+
+    def _feed(self, samples):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        data = SimpleNamespace(
+            prime_positions=[],
+            live_map_stats={"position_points": 0},
+        )
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data = data
+        entity._feed_trail(SimpleNamespace(updates=samples))
+        return data
+
+    @staticmethod
+    def _sample(x=None, y=None, with_point=True):
+        from types import SimpleNamespace
+
+        point = SimpleNamespace(x=x, y=y) if with_point else None
+        return SimpleNamespace(point=point, orientation=0.0)
+
+    def test_good_samples_are_counted_as_added(self):
+        data = self._feed([self._sample(1.0, 2.0), self._sample(1.1, 2.1)])
+
+        assert data.live_map_stats["trail_points_added"] == 2
+        assert len(data.prime_positions) == 2
+
+    def test_a_sample_without_a_point_is_counted_as_skipped(self):
+        data = self._feed([self._sample(with_point=False)])
+
+        assert data.live_map_stats["trail_skipped_no_point"] == 1
+        assert data.live_map_stats.get("trail_points_added", 0) == 0
+        assert data.prime_positions == []
+
+    def test_a_point_without_coordinates_is_counted_separately(self):
+        """Two different failures deserve two different numbers: a
+        missing point means the sample is shaped differently than
+        expected, a missing x/y means the point is."""
+        data = self._feed([self._sample(None, 2.0), self._sample(1.0, None)])
+
+        assert data.live_map_stats["trail_skipped_no_xy"] == 2
+        assert data.prime_positions == []
+
+    def test_the_three_counters_account_for_every_sample(self):
+        """The property that makes them useful: added plus the two skips
+        equals what arrived, so a shortfall has exactly one place to
+        hide."""
+        samples = [
+            self._sample(1.0, 2.0),
+            self._sample(with_point=False),
+            self._sample(None, 5.0),
+            self._sample(1.1, 2.2),
+        ]
+        stats = self._feed(samples).live_map_stats
+
+        total = (
+            stats.get("trail_points_added", 0)
+            + stats.get("trail_skipped_no_point", 0)
+            + stats.get("trail_skipped_no_xy", 0)
+        )
+        assert total == len(samples)
