@@ -321,6 +321,31 @@ def build_prime_schedule_switches(
             # when _apply cannot find its schedule any more.
             if options.deleted:
                 continue
+            # QUIET HOURS ARRIVE IN THIS LIST TOO, and they are not
+            # cleaning schedules.
+            #
+            # @DaRealGuGu set Do Not Disturb in the OLD iRobot app and
+            # two switches appeared in Home Assistant for his PRIME
+            # robot -- matching the quiet-hours times, and shown nowhere
+            # in the Roomba app. Deleting the quiet hours made them go
+            # away again.
+            #
+            # So the household schedule endpoint carries more than
+            # cleaning schedules, and we were rendering all of it. A
+            # switch for a quiet-hours entry is worse than a missing
+            # one: toggling it writes the whole container back, so a
+            # user "turning off a schedule" would have been rewriting
+            # their quiet hours from whatever we managed to parse.
+            #
+            # THE DISCRIMINATOR IS `end`, NOT A TYPE FIELD. A cleaning
+            # schedule says when to start; quiet hours are an interval
+            # and carry both ends. The app's own HouseholdScheduleType
+            # enum exists but lives in native code and has never been
+            # read, so this is the shape rather than the label -- and if
+            # a cleaning schedule with an end time ever turns up, this
+            # is the line that will be wrong.
+            if options.end is not None or options.end_commands:
+                continue
             # NO SWITCH FOR A SCHEDULE WHOSE STATE THE SERVER DID NOT
             # SEND. Toggling writes the WHOLE container back, so
             # offering a switch for a schedule we know nothing about

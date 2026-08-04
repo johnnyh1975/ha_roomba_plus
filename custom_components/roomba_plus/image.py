@@ -29,6 +29,7 @@ Persistence:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import collections
 import datetime
@@ -555,8 +556,28 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             _LOGGER.debug("Prime map: could not add live positions", exc_info=True)
 
     async def async_will_remove_from_hass(self) -> None:
+        # CANCEL AND THEN WAIT. `cancel()` alone only REQUESTS a stop --
+        # it returns before the task has unwound, so its cleanup may
+        # still be pending when the next line runs.
+        #
+        # What is pending here is the livemap unsubscribe, in the
+        # `finally` of `watch_live_map()`. Leave it unfinished and the
+        # broker keeps the old subscription while a reload builds a new
+        # one, and `async_unload_entry` disconnects the robot underneath
+        # both of them.
+        #
+        # Two testers saw a reload leave BOTH irbt-topic streams silent
+        # -- live map and mission timeline together -- while shadow
+        # traffic kept flowing, and a full Home Assistant restart cleared
+        # it. A restart closes the event loop, which finalises async
+        # generators; a reload does not.
+        #
+        # Whether that is the whole story is unproven. Cancelling
+        # without waiting is wrong on its own.
         if self._watch_task is not None:
             self._watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watch_task
 
         # FLUSH THE DELAYED MAP WRITE.
         #
@@ -608,8 +629,18 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         session = async_get_clientsession(self.hass)
         backoff = 5.0
         while True:
+            # HELD AND CLOSED EXPLICITLY, not consumed inline.
+            #
+            # `async for x in gen():` drops the generator on the floor
+            # when the loop exits, and a cancelled task exits without
+            # closing it -- so the `finally` inside watch_live_map(),
+            # which unsubscribes from the livemap topic, does not run.
+            # Python finalises stray async generators when the event
+            # loop shuts down, which is a Home Assistant RESTART. A
+            # reload leaves them hanging.
+            stream = self._prime_robot.watch_live_map()
             try:
-                async for message in self._prime_robot.watch_live_map():
+                async for message in stream:
                     # POSITION MESSAGES ARE COUNTED, NOT USED (this session).
                     #
                     # The stream carries two kinds: a URL to iRobot's own
@@ -769,6 +800,14 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     "this suggests something else went wrong)", self._blid, backoff,
                 )
                 self._record_watch_failure(repr(exc), backoff)
+            finally:
+                # Runs on a normal exit, on an error, AND on
+                # cancellation -- which is the case that matters. This
+                # is what lets watch_live_map()'s own finally
+                # unsubscribe from the topic before the entity goes
+                # away.
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
 

@@ -30,6 +30,7 @@ from homeassistant.const import EntityCategory
 
 from .const import CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
 from .entity import IRobotEntity
+from .prime_commands import _send_confirmed
 from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
 
 if TYPE_CHECKING:
@@ -295,8 +296,13 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         robot = self._config_entry.runtime_data.prime_robot
-        if robot is not None:
-            await robot.send_simple_command(self._command.command)
+        if robot is None:
+            return
+        # THE RESULT WAS THROWN AWAY. send_simple_command() reports
+        # whether the broker acknowledged the publish; ignoring it made a
+        # command that never left look exactly like one the robot chose
+        # to ignore. See vacuum._send_confirmed for the full note.
+        await _send_confirmed(robot, self._command.command)
 
 
 class PrimeLocateButton(IRobotEntity, ButtonEntity):
@@ -326,7 +332,7 @@ class PrimeLocateButton(IRobotEntity, ButtonEntity):
     async def async_press(self) -> None:
         robot = self._config_entry.runtime_data.prime_robot
         if robot is not None:
-            await robot.send_simple_command("find")
+            await _send_confirmed(robot, "find")
 
 
 async def async_build_prime_buttons(

@@ -29,6 +29,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from . import roomba_reported_state
+from .prime_commands import _send_confirmed
 from .const import (
     DOMAIN,
     ATTR_BIN_FULL,
@@ -728,7 +729,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         live-working (roombapy-prime README's confidence table).
         """
         if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command("start")
+            await _send_confirmed(self._prime_robot, "start")
             return
         if self.activity == VacuumActivity.PAUSED:
             await self.hass.async_add_executor_job(
@@ -841,7 +842,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         locate -- each carried their own identical copy of this branch:
 
             if CLOUD_ONLY:
-                await self._prime_robot.send_simple_command(verb)
+                await _send_confirmed(self._prime_robot, verb)
                 return
             await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
 
@@ -880,7 +881,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
 
         if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command(verb)
+            await _send_confirmed(self._prime_robot, verb)
             return
         await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
 
