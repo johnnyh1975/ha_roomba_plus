@@ -1,0 +1,43 @@
+{
+  "_source": "Field round-trip by @utkjmitch, 3 August 2026, Y351020. Create, read back, delete -- three full cycles. Ids and map ids redacted; every other value is exactly what crossed the wire.",
+  "sent": {
+    "robot_id": "BLID",
+    "name": "Roomba+ padWetness round-trip (safe to delete)",
+    "frequency": "WEEKLY",
+    "start": {"day": [6, 2, 4], "hour": 7, "min": 30},
+    "enabled": false,
+    "commands": [
+      {
+        "command": {
+          "command": "start",
+          "robot_id": "BLID",
+          "p2map_id": "BLID-1752720067",
+          "user_p2mapv_id": "251124T123047.672",
+          "select_all": false,
+          "ordered": 1,
+          "params": {"routine_modified": true},
+          "regions": [
+            {"type": "rid", "region_id": "11",
+             "params": {"operatingMode": 2, "suctionLevel": 3, "twoPass": false,
+                        "padWetness": {"padPlate": 1}}},
+            {"type": "rid", "region_id": "13",
+             "params": {"operatingMode": 2, "suctionLevel": 3, "twoPass": false,
+                        "padWetness": {"padPlate": 1}}},
+            {"type": "rid", "region_id": "10",
+             "params": {"operatingMode": 2, "suctionLevel": 3, "twoPass": false,
+                        "padWetness": {"padPlate": 1}}},
+            {"type": "rid", "region_id": "14",
+             "params": {"operatingMode": 2, "suctionLevel": 3, "twoPass": false,
+                        "padWetness": {"padPlate": 1}}},
+            {"type": "rid", "region_id": "12",
+             "params": {"operatingMode": 2, "suctionLevel": 3, "twoPass": false,
+                        "padWetness": {"padPlate": 1}}}
+          ]
+        }
+      }
+    ]
+  },
+  "server_added": ["created_time", "is_smart_clean_fav", "schedule_id"],
+  "schedule_id_returned": "hh_HOUSEHOLD_KdTkDH5TsUOK_s_AE3C",
+  "container_id": "hh_HOUSEHOLD_KdTkDH5TsUOK_s"
+}

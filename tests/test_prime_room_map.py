@@ -263,7 +263,8 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
     robot bumps when geometry changes. Checking it is a shadow read that
     is already happening, so the common case costs nothing."""
 
-    def _entity(self, version=None, rendered_for=None):
+    def _entity(self, version=None, rendered_for=None, *, maps=None,
+                reported_map=None, rendered_map="M1"):
         from unittest.mock import AsyncMock, MagicMock
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
@@ -272,11 +273,18 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
         entity.hass = MagicMock()
         entity._png = b"CACHED"
         entity._rendered_for_map_version = rendered_for
+        entity._rendered_map_id = rendered_map
         entity._blid = "BLID"
         entry = MagicMock()
+        if maps is None:
+            maps = (
+                [{"p2map_id": "M1", "active_p2mapv_id": version}] if version else []
+            )
+        state = {"p2maps": maps}
+        if reported_map is not None:
+            state["cleanMissionStatus"] = {"p2mapId": reported_map}
         entry.runtime_data.prime_status_coordinator = MagicMock(
-            data={"ro-currentstate": {"p2maps": [{"active_p2mapv_id": version}]}}
-            if version else {}
+            data={"ro-currentstate": state} if maps else {}
         )
         entity._config_entry = entry
         entity._async_refresh_rooms = AsyncMock()
@@ -1523,9 +1531,18 @@ class TestTrailCountersMeasureSurvival:
 
     @staticmethod
     def _sample(x=None, y=None, with_point=True):
+        """A TUPLE, because that is what the library produces.
+
+        This fixture built `SimpleNamespace(x=..., y=...)` when it was
+        written, matching the `getattr(point, "x")` the code did -- so
+        the test agreed with the bug and passed while no robot ever got
+        a trail point. Exactly what tests/prime_fixtures.py exists to
+        prevent, made in a test rather than in the code, for the second
+        time in this project.
+        """
         from types import SimpleNamespace
 
-        point = SimpleNamespace(x=x, y=y) if with_point else None
+        point = None if not with_point else (x, y)
         return SimpleNamespace(point=point, orientation=0.0)
 
     def test_good_samples_are_counted_as_added(self):
@@ -1568,3 +1585,316 @@ class TestTrailCountersMeasureSurvival:
             + stats.get("trail_skipped_no_xy", 0)
         )
         assert total == len(samples)
+
+
+class TestWatcherFailuresReachDiagnostics:
+    """The outer retry loop logged and wrote nothing a capture could see.
+
+    Only the DECODE path ever set `last_error`, so a diagnostics
+    download showing every counter at zero and `last_error: null` could
+    not distinguish "nothing arrived" from "this task has been crashing
+    and retrying since setup".
+
+    @chairstacker's capture was exactly that: all zeros, mid-mission, no
+    error anywhere. His aside is what pointed here -- the map timestamp
+    moved at roughly four-minute intervals instead of the two to twelve
+    seconds he was used to, and `backoff` doubles from 5s to 300s.
+    """
+
+    def _entity(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._blid = "BLID"
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data = SimpleNamespace(
+            live_map_stats={"watch_failures": 0}
+        )
+        return entity
+
+    def test_a_failure_is_counted_and_named(self):
+        entity = self._entity()
+
+        entity._record_watch_failure("ConnectionResetError()", 20.0)
+
+        stats = entity._config_entry.runtime_data.live_map_stats
+        assert stats["watch_failures"] == 1
+        assert stats["last_watch_error"] == "ConnectionResetError()"
+        assert stats["watch_retry_backoff_s"] == 20.0
+
+    def test_repeated_failures_accumulate(self):
+        """The count matters as much as the message: one failure at
+        startup is noise, forty is the whole story."""
+        entity = self._entity()
+
+        for _ in range(40):
+            entity._record_watch_failure("boom", 300.0)
+
+        assert entity._config_entry.runtime_data.live_map_stats["watch_failures"] == 40
+
+    def test_the_backoff_is_recorded_so_the_gap_is_explainable(self):
+        """A four-minute gap between map updates is a grown backoff seen
+        from the outside. Recording it turns a tester's impression into
+        a number."""
+        entity = self._entity()
+
+        entity._record_watch_failure("boom", 300.0)
+
+        assert entity._config_entry.runtime_data.live_map_stats[
+            "watch_retry_backoff_s"
+        ] == 300.0
+
+    def test_missing_stats_do_not_raise(self):
+        """This runs inside a background task -- an exception here would
+        kill the very loop that is already failing."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._blid = "B"
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data = SimpleNamespace(live_map_stats=None)
+
+        entity._record_watch_failure("boom", 5.0)
+
+
+class TestTheVersionCheckWatchesTheMapOnScreen:
+    """It watched `p2maps[0]` while rendering a different map.
+
+    `_async_refresh_rooms()` picks the map the robot says it is standing
+    on and only falls back to the first when that is unknown. On a
+    two-map account the two diverge, and then a change to the map being
+    shown goes unnoticed while a change to the other one triggers a
+    pointless refresh.
+
+    @chairstacker has two maps and edited the older one -- exactly the
+    arrangement where this shows.
+    """
+
+    _MAPS = [
+        {"p2map_id": "WHOLE_HOUSE", "active_p2mapv_id": "v1"},
+        {"p2map_id": "BATHROOM", "active_p2mapv_id": "v9"},
+    ]
+
+    async def _refresh(self, *, reported, rendered_map, rendered_version, maps=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._blid = "B"
+        entity._rendered_for_map_version = rendered_version
+        entity._rendered_map_id = rendered_map
+        entity._async_refresh_rooms = AsyncMock()
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator = MagicMock(
+            data={"ro-currentstate": {
+                "p2maps": self._MAPS if maps is None else maps,
+                "cleanMissionStatus": {"p2mapId": reported},
+            }}
+        )
+        entity._config_entry = entry
+
+        await entity._async_refresh_if_map_changed()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_a_change_to_the_second_map_is_noticed(self):
+        """The bug. Rendering the bathroom map, its version moves, and
+        the old check compared Whole House's version instead."""
+        entity = await self._refresh(
+            reported="BATHROOM", rendered_map="BATHROOM", rendered_version="v8"
+        )
+
+        entity._async_refresh_rooms.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_change_to_a_map_not_on_screen_is_ignored(self):
+        """The other half. Editing Whole House while the bathroom map is
+        shown used to force a re-render for nothing."""
+        maps = [
+            {"p2map_id": "WHOLE_HOUSE", "active_p2mapv_id": "SOMETHING_NEW"},
+            {"p2map_id": "BATHROOM", "active_p2mapv_id": "v9"},
+        ]
+        entity = await self._refresh(
+            reported="BATHROOM", rendered_map="BATHROOM",
+            rendered_version="v9", maps=maps,
+        )
+
+        entity._async_refresh_rooms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_moving_between_floors_refreshes_even_at_the_same_version(self):
+        """Neither map's version moves when the robot changes floors --
+        only which one is rendered. Comparing the id is what catches
+        it."""
+        entity = await self._refresh(
+            reported="BATHROOM", rendered_map="WHOLE_HOUSE", rendered_version="v9"
+        )
+
+        entity._async_refresh_rooms.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_reported_map_falls_back_to_the_first(self):
+        """Same fallback the renderer uses -- parked or freshly booted,
+        the robot reports no map at all."""
+        entity = await self._refresh(
+            reported=None, rendered_map="WHOLE_HOUSE", rendered_version="v1"
+        )
+
+        entity._async_refresh_rooms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_single_map_account_is_unaffected(self):
+        maps = [{"p2map_id": "ONLY", "active_p2mapv_id": "v3"}]
+        entity = await self._refresh(
+            reported="ONLY", rendered_map="ONLY", rendered_version="v3", maps=maps
+        )
+
+        entity._async_refresh_rooms.assert_not_awaited()
+
+
+class TestTrailPointsAreActuallyAppended:
+    """THE MISSING ROBOT MARKER, and it was two getattr() calls.
+
+    `_feed_trail` read `getattr(sample.point, "x", None)` and skipped
+    every sample when it came back None -- which it always did, because
+    `PositionSample.point` is a plain `(x, y)` tuple. The trail list
+    stayed empty on every robot, forever, while `position_points`
+    counted the samples arriving.
+
+    That is @DaRealGuGu's capture explained: 2267 messages, 5553 points,
+    no marker. The marker is drawn only when this list is non-empty, and
+    what he saw instead was the trajectories layer from the downloaded
+    bundle -- which looks like a trail and is not one.
+
+    The defensiveness is what hid it. An exception would have been found
+    in a day; a silent `continue` written against an unverified shape
+    survived every release.
+    """
+
+    def _feed(self, cur_path):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from roombapy_prime.models.livemap import PositionUpdateMessage
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        data = SimpleNamespace(prime_positions=[], live_map_stats={})
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data = data
+        entity._trail_mission_id = None
+        entity._feed_trail(PositionUpdateMessage.from_json({"cur_path": cur_path}))
+        return data
+
+    def test_a_real_message_produces_real_points(self):
+        """Parsed by the library's own from_json, not hand-built -- the
+        hand-built fixture is exactly what would have agreed with the
+        bug."""
+        data = self._feed([1, 1.5, 2.5, 0.0, 2.0, 3.5, 4.5, 0.1, 2.0, 1700000000])
+
+        assert len(data.prime_positions) == 2
+        assert data.live_map_stats["trail_points_added"] == 2
+
+    def test_metres_become_millimetres(self):
+        data = self._feed([1, 1.5, 2.5, 0.0, 2.0, 1700000000])
+
+        x_mm, y_mm, _heading = data.prime_positions[0]
+        assert (x_mm, y_mm) == (1500.0, 2500.0)
+
+    def test_nothing_is_skipped_for_a_well_formed_message(self):
+        """The counters have to add up: every arriving sample either
+        lands in the trail or is counted as skipped, and a healthy
+        message skips none."""
+        data = self._feed([1, 1.5, 2.5, 0.0, 2.0, 3.5, 4.5, 0.1, 2.0, 1700000000])
+
+        assert data.live_map_stats.get("trail_skipped_no_point", 0) == 0
+        assert data.live_map_stats.get("trail_skipped_no_xy", 0) == 0
+
+    def test_a_malformed_point_is_counted_rather_than_raising(self):
+        """Still runs inside a coordinator callback -- a shape that
+        cannot be unpacked must be counted, not thrown."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        data = SimpleNamespace(prime_positions=[], live_map_stats={})
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data = data
+        entity._trail_mission_id = None
+
+        entity._feed_trail(SimpleNamespace(updates=[
+            SimpleNamespace(point="nonsense", orientation=0.0),
+            SimpleNamespace(point=(1.0,), orientation=0.0),
+        ]))
+
+        assert data.prime_positions == []
+        assert data.live_map_stats["trail_skipped_no_xy"] == 2
+
+
+class TestTheImageFollowsTheSelection:
+    """The select writes an id; the image has to read it -- in both the
+    render and the version check.
+
+    Those two diverging is the bug that was just fixed: watching one
+    map's version while rendering another. Adding a third source of
+    truth without wiring it into both would put it straight back.
+    """
+
+    def _entity(self, selected):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._blid = "B"
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_selected_map_id=selected)
+        entity._config_entry = entry
+        return entity
+
+    def test_both_places_read_the_same_field(self):
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        render = inspect.getsource(PrimeRoomsImage._async_refresh_rooms)
+        check = inspect.getsource(PrimeRoomsImage._async_refresh_if_map_changed)
+
+        assert "prime_selected_map_id" in render
+        assert "prime_selected_map_id" in check
+
+    @pytest.mark.asyncio
+    async def test_the_version_check_watches_the_selected_map(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        entity = self._entity("M_BATH")
+        entity._rendered_for_map_version = "v1"
+        entity._rendered_map_id = "M_BATH"
+        entity._async_refresh_rooms = AsyncMock()
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {
+            "p2maps": [
+                {"p2map_id": "M_HOUSE", "active_p2mapv_id": "v1"},
+                {"p2map_id": "M_BATH", "active_p2mapv_id": "v2"},
+            ],
+            # The robot says it is on the house map; the user chose the
+            # bathroom one, and the choice wins.
+            "cleanMissionStatus": {"p2mapId": "M_HOUSE"},
+        }}
+        entity._config_entry.runtime_data.prime_status_coordinator = coordinator
+
+        await entity._async_refresh_if_map_changed()
+
+        entity._async_refresh_rooms.assert_awaited_once()
+        assert entity._rendered_map_id == "M_BATH"

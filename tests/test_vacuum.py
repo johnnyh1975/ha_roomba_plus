@@ -2019,3 +2019,170 @@ class TestCleaningModeAttribute:
         the user."""
         assert self._mode({"cycle": "clean", "operatingMode": 512}) is None
         assert self._mode({"cycle": "clean", "operatingMode": 32}) is None
+
+
+class TestCommandsAreRefusedWhileTheDockWorks:
+    """From the iRobot app's own res/raw availability spec.
+
+    While a mission is under way AND the dock is emptying, refilling,
+    washing or drying, the app offers NO robot controls at all -- an
+    empty button list, not a greyed-out one. A command sent then is one
+    the robot will not act on.
+    """
+
+    def _vacuum(self, *, cycle="clean", dock=None, cloud=True):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = (
+            ConnectionType.CLOUD_ONLY if cloud else ConnectionType.LOCAL_PUSH
+        )
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {}}
+        entry.runtime_data.prime_status_coordinator = coordinator
+        entity._config_entry = entry
+        entity._shadow = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(cycle=cycle),
+            dock=SimpleNamespace(**dock) if dock is not None else None,
+        )
+        return entity
+
+    def _busy(self, **kwargs):
+        from unittest.mock import patch
+
+        entity = self._vacuum(**kwargs)
+        with patch(
+            "roombapy_prime.models.CurrentStateShadow.from_json",
+            return_value=entity._shadow,
+        ):
+            return entity._dock_operation_in_progress()
+
+    _IDLE = {"state": 301, "pw_state": 601, "pd_state": 701}
+
+    def test_each_running_dock_operation_is_named(self):
+        """The refusal says WHICH operation is in the way. "Try again
+        later" without a reason is what this project had to correct when
+        eight unrelated readiness states all reported a map update."""
+        assert "bin" in self._busy(dock={**self._IDLE, "state": 302})
+        assert "washing" in self._busy(dock={**self._IDLE, "pw_state": 602})
+        assert "drying" in self._busy(dock={**self._IDLE, "pd_state": 702})
+
+    def test_an_idle_dock_blocks_nothing(self):
+        assert self._busy(dock=self._IDLE) is None
+
+    def test_no_mission_means_no_block(self):
+        """The rule is scoped to clean and spot. A dock washing a pad
+        while the robot is parked must not lock the controls."""
+        for cycle in ("none", "dock", "evac"):
+            assert self._busy(cycle=cycle, dock={**self._IDLE, "pw_state": 602}) is None
+
+    def test_classic_robots_are_untouched(self):
+        """These rules come from the Prime app. The Classic app was not
+        checked, so a Classic robot keeps every control it has rather
+        than inheriting a rule from evidence that does not cover it."""
+        assert self._busy(cloud=False, dock={**self._IDLE, "pw_state": 602}) is None
+
+    def test_a_missing_config_entry_does_not_raise(self):
+        """Some tests build this entity without running __init__, so the
+        attribute is absent rather than None -- and a command path is the
+        wrong place to discover that."""
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = ConnectionType.CLOUD_ONLY
+
+        assert entity._dock_operation_in_progress() is None
+
+    def test_locate_is_deliberately_not_guarded(self):
+        """Refusing to help someone find their robot has no upside, and
+        the app's spec covers mission controls rather than locate."""
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        assert "find" not in IRobotVacuum._DOCK_GUARDED_VERBS
+        assert {"start", "stop", "pause", "dock"} <= IRobotVacuum._DOCK_GUARDED_VERBS
+
+
+class TestReturnToBaseGoesThroughTheDockGuard:
+    """"dock" was listed in _DOCK_GUARDED_VERBS and never reached it.
+
+    The Prime branch of async_return_to_base called send_simple_command()
+    directly, so Return to base was the one control that still fired
+    while the dock was mid-cycle -- exactly the case the guard exists
+    for. The app's own spec shows NO buttons at all during an
+    evacuation, refill, pad wash or pad dry.
+    """
+
+    def _entity(self, *, dock, cycle="clean"):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = ConnectionType.CLOUD_ONLY
+        entity._prime_robot = AsyncMock()
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {}}
+        entry.runtime_data.prime_status_coordinator = coordinator
+        entity._config_entry = entry
+        entity._shadow = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(cycle=cycle),
+            dock=SimpleNamespace(**dock),
+        )
+        return entity
+
+    _IDLE = {"state": 301, "pw_state": 601, "pd_state": 701}
+
+    async def _dock(self, entity):
+        from unittest.mock import patch
+
+        with patch(
+            "roombapy_prime.models.CurrentStateShadow.from_json",
+            return_value=entity._shadow,
+        ):
+            await entity.async_return_to_base()
+
+    @pytest.mark.asyncio
+    async def test_refused_while_the_pad_is_washing(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        entity = self._entity(dock={**self._IDLE, "pw_state": 602})
+
+        with pytest.raises(ServiceValidationError):
+            await self._dock(entity)
+        entity._prime_robot.send_simple_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_refused_during_an_evacuation(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        entity = self._entity(dock={**self._IDLE, "state": 302})
+
+        with pytest.raises(ServiceValidationError):
+            await self._dock(entity)
+
+    @pytest.mark.asyncio
+    async def test_allowed_when_the_dock_is_idle(self):
+        entity = self._entity(dock=self._IDLE)
+
+        await self._dock(entity)
+
+        entity._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+    @pytest.mark.asyncio
+    async def test_allowed_when_no_mission_is_running(self):
+        """The rules only apply during a clean or spot cycle -- a dock
+        that is washing while the robot sits idle blocks nothing."""
+        entity = self._entity(dock={**self._IDLE, "pw_state": 602}, cycle="none")
+
+        await self._dock(entity)
+
+        entity._prime_robot.send_simple_command.assert_awaited_once_with("dock")

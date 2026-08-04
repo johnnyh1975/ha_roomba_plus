@@ -49,6 +49,14 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "services -> prime_schedule_services": (
+        "IT DOES AVOID A CYCLE -- a transitive one this check cannot see. "
+        "prime_schedule_services imports prime_schedule_switch, which imports "
+        "from the package __init__, which imports services. Moving it to the "
+        "top turned the whole suite into 32 collection errors. The check only "
+        "looks for a DIRECT back-import, which is worth knowing before "
+        "trusting its verdict on the next entry"
+    ),
     "prime_coordinator -> prime_schedule_switch": (
         "the schedule parsing lives with the switches, and this module is "
         "imported by __init__ during setup -- a top-level import would drag "

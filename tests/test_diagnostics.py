@@ -887,3 +887,43 @@ class TestTrailPointsInDiagnostics:
 
         assert section["trail_points"] == 2
         assert section["trail_last_point"] == (3.0, 4.0, 90.0)
+
+
+class TestTheTopicPrefixIsVisible:
+    """Two subscriptions die silently without it.
+
+    `watch_live_map()` and `watch_mission_timeline()` both build their
+    topic as `{irbt_topic_prefix}/things/{blid}/...` and both raise
+    immediately when it is None. The outer retry loops catch that, wait,
+    and double the backoff to five minutes -- so the symptom is a map
+    that updates every few minutes instead of every few seconds.
+
+    What makes it hard to spot is that everything else keeps working:
+    the shadow watcher uses shadow topics and needs no prefix, so the
+    shadows seed, push_freshness stays fresh and the robot reports as
+    connected. @chairstacker's capture showed exactly that -- mid-
+    mission, every live-map counter at zero, mission timeline empty, and
+    no error anywhere.
+    """
+
+    def test_the_field_is_in_the_builder(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert '"irbt_topic_prefix_present"' in inspect.getsource(diagnostics)
+
+    def test_a_present_prefix_reads_true(self):
+        from types import SimpleNamespace
+
+        robot = SimpleNamespace(_irbt_topic_prefix="v028-irbthbu")
+        assert bool(getattr(robot, "_irbt_topic_prefix", None)) is True
+
+    def test_a_missing_or_empty_prefix_reads_false(self):
+        """Empty string counts as missing: it would build a topic
+        beginning with a slash, which subscribes to nothing."""
+        from types import SimpleNamespace
+
+        for value in (None, ""):
+            robot = SimpleNamespace(_irbt_topic_prefix=value)
+            assert bool(getattr(robot, "_irbt_topic_prefix", None)) is False

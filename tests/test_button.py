@@ -133,3 +133,98 @@ class TestMaintenanceResetButtonCurrentHrNullRegression:
         btn = object.__new__(FilterResetButton)
         btn.vacuum_state = {"bbrun": None}
         assert btn._current_hr() == 0
+
+
+class TestDockButtonAvailability:
+    """The rules come from the app's own res/raw availability specs.
+
+    Until now this class had no `available` at all: every dock button was
+    pressable whenever the capability existed. @chairstacker pressed Wash
+    Pad with a tank removed, the robot spoke a complaint and the dock
+    reported 671 -- the app would not have offered the button, because
+    pw_state was not 601.
+    """
+
+    def _button(self, key, *, dock=None, cycle=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.button_prime import (
+            PRIME_DOCK_COMMANDS,
+            PrimeDockButton,
+        )
+
+        command = next(c for c in PRIME_DOCK_COMMANDS if c.key == key)
+        button = PrimeDockButton.__new__(PrimeDockButton)
+        button._command = command
+        button._config_entry = MagicMock()
+        state = SimpleNamespace(
+            dock=SimpleNamespace(**dock) if dock is not None else None,
+            mission=SimpleNamespace(cycle=cycle),
+        )
+        with patch.object(
+            PrimeDockButton, "_current_state", new_callable=PropertyMock
+        ) as current, patch.object(
+            type(button).__mro__[1], "available", new_callable=PropertyMock
+        ) as parent:
+            current.return_value = state
+            parent.return_value = True
+            return button.available
+
+    def test_wash_pad_only_when_the_dock_says_601(self):
+        base = {"error": None, "pd_state": None}
+        assert self._button("prime_wash_pad", dock={"pw_state": 601, **base}) is True
+        # 671 is the state @chairstacker's dock reported with a tank out.
+        assert self._button("prime_wash_pad", dock={"pw_state": 671, **base}) is False
+        assert self._button("prime_wash_pad", dock={"pw_state": 602, **base}) is False
+
+    def test_start_and_stop_drying_have_opposite_rules(self):
+        """The one control where the app's rule inverts: stopping is
+        offered while drying RUNS, starting while it does not."""
+        base = {"error": None, "pw_state": None}
+        assert self._button("prime_start_pad_dry", dock={"pd_state": 701, **base}) is True
+        assert self._button("prime_stop_pad_dry", dock={"pd_state": 701, **base}) is False
+        assert self._button("prime_stop_pad_dry", dock={"pd_state": 702, **base}) is True
+        assert self._button("prime_start_pad_dry", dock={"pd_state": 702, **base}) is False
+
+    def test_empty_bin_follows_the_evac_states(self):
+        base = {"error": None, "pw_state": None, "pd_state": None}
+        assert self._button("prime_empty_bin", dock={"state": 301, **base}) is True
+        assert self._button("prime_empty_bin", dock={"state": 355, **base}) is True
+        # 351-354 are the evac faults: bag missing, clog, seal, bag full.
+        assert self._button("prime_empty_bin", dock={"state": 353, **base}) is False
+
+    def test_a_dock_error_blocks_every_control(self):
+        for key in ("prime_wash_pad", "prime_empty_bin", "prime_start_pad_dry"):
+            assert self._button(
+                key, dock={"error": 505, "pw_state": 601, "pd_state": 701, "state": 301}
+            ) is False, key
+
+    def test_a_running_mission_blocks_every_control(self):
+        """The dock will not wash, dry or empty while the robot is out."""
+        dock = {"error": None, "pw_state": 601, "pd_state": 701, "state": 301}
+        for cycle in ("clean", "spot", "dock"):
+            assert self._button("prime_wash_pad", dock=dock, cycle=cycle) is False, cycle
+        assert self._button("prime_wash_pad", dock=dock, cycle="none") is True
+
+    def test_unknown_means_available(self):
+        """Deliberate. Taking function away from a working robot because
+        a field is missing is the worse mistake, and this project has
+        made it before by gating on a capability flag instead of on a
+        field being present."""
+        assert self._button("prime_wash_pad", dock=None) is True
+        assert self._button(
+            "prime_wash_pad", dock={"error": None, "pw_state": None}
+        ) is True
+
+    def test_an_int_enum_compares_like_its_value(self):
+        """DockState is an IntEnum on the model and a plain int on older
+        payloads. Both have to work."""
+        from enum import IntEnum
+
+        class FakeState(IntEnum):
+            PAD_WASH_OKAY = 601
+
+        assert self._button(
+            "prime_wash_pad", dock={"error": None, "pw_state": FakeState.PAD_WASH_OKAY}
+        ) is True

@@ -50,6 +50,26 @@ PACKAGE = ROOT / "custom_components" / "roomba_plus"
 #: An unlisted difference fails the check. That is the whole mechanism:
 #: it forces a decision rather than allowing an omission.
 DELIBERATE: dict[str, dict[str, str]] = {
+    "vacuum.py::_dock_operation_in_progress": {
+        # THE WHOLE METHOD IS PRIME-ONLY and returns early for Classic,
+        # so the checker reads every call in it as Classic-only. Listing
+        # them individually is the mechanism working as intended: it
+        # forces the reason to be written down once rather than assumed.
+        "from_json": "parses the Prime shadow; Classic has no such payload",
+        "getattr": "reads Prime shadow attributes defensively",
+        "get": "reads the Prime status coordinator's raw shadow dict",
+        "isinstance": (
+            "DockState is an IntEnum on the model and a plain int on older "
+            "payloads; both have to compare correctly"
+        ),
+        "_value": (
+            "the whole method is Prime-only and returns early for Classic. "
+            "Its rules come from the Prime app's own res/raw availability "
+            "spec; the Classic app was not checked, so a Classic robot keeps "
+            "every control it has rather than inheriting a rule from evidence "
+            "that does not cover it"
+        ),
+    },
     "__init__.py::async_unload_entry": {
         "async_disconnect_or_timeout": (
             "closes the local MQTT connection. Prime disconnects its own "

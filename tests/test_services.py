@@ -89,6 +89,13 @@ class TestServicesRegistration:
             # v3.5.0 FULL-BACKUP
             (DOMAIN, "create_backup"),
             (DOMAIN, "restore_backup"),
+            # v4.0.0a23 -- Prime schedule writes, contributed in #49.
+            # Registered from prime_schedule_services.py rather than
+            # here: they share the read-modify-write-under-lock
+            # discipline with prime_schedule_switch.py.
+            (DOMAIN, "create_schedule"),
+            (DOMAIN, "update_schedule"),
+            (DOMAIN, "delete_schedule"),
         }
         assert expected == set(registered.keys())
 
@@ -103,7 +110,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 18
+        assert len(registered) == 21
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -114,7 +121,8 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 18
+        # 18 + the three Prime schedule write services (#49).
+        assert len(registered) == 21
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -1889,3 +1897,51 @@ class TestRestoreBackup:
             call.data = {"entity_id": "vacuum.test", "path": str(bad_zip)}
             with pytest.raises(HomeAssistantError):
                 await async_handle_restore_backup(hass, call)
+
+
+class TestTheRemovalListMatchesWhatIsRegistered:
+    """The comment beside async_remove_services says "a test asserts that
+    the two lists agree". None did, in the direction that matters.
+
+    `test_removes_all_registered_services` checks that removal empties
+    the registry -- it says nothing about names in the removal list that
+    were never registered. Three of them sat there unnoticed:
+    create_schedule, update_schedule and delete_schedule, from a feature
+    proposal, with no handler, no schema and no services.yaml entry.
+
+    A name that is only ever removed is either a leftover or a feature
+    someone forgot to finish, and both are worth a failing test.
+    """
+
+    def _names(self, source: str, function: str) -> set[str]:
+        import ast
+
+        tree = ast.parse(source)
+        found: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name != function:
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                    found.add(inner.value)
+        return found
+
+    def test_every_removed_service_is_also_registered(self):
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services)
+        hass, registered = TestServicesRegistration()._make_hass()
+        services.async_register_services(hass)
+        live = {name for _domain, name in registered}
+
+        removed = self._names(source, "async_remove_services")
+        # The removal list holds bare strings and constants alike; only
+        # compare the ones that look like service names.
+        candidates = {n for n in removed if n.replace("_", "").isalnum()}
+
+        orphans = {n for n in candidates if n in live or "_" in n} - live
+        assert not orphans, (
+            f"named in async_remove_services but never registered: {sorted(orphans)}"
+        )

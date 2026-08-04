@@ -1080,3 +1080,66 @@ class TestNoDockEntitiesWithoutADock:
         names = await self._sensors({"cap": {"pw": 1, "pd": 3}})
 
         assert "PrimePadWashStatusSensor" in names
+
+
+class TestErrorSeverityFromTheVendorsOwnConfig:
+    """The Prime error sensor shows a raw number on purpose: iRobot gives
+    Prime and Classic different help articles for the same code, so no
+    label of ours would be sourced.
+
+    A severity bucket is not a label. It is iRobot's own classification,
+    from the app's `error_allowed_modes` config, and it answers the one
+    question a bare number cannot: is this serious.
+    """
+
+    def _severity(self, code):
+        from custom_components.roomba_plus.const import PRIME_ERROR_SEVERITY
+
+        return PRIME_ERROR_SEVERITY.get(code)
+
+    def test_the_table_covers_the_vendor_list(self):
+        from custom_components.roomba_plus.const import PRIME_ERROR_SEVERITY
+
+        assert len(PRIME_ERROR_SEVERITY) == 171
+
+    def test_the_urgent_bucket_holds_the_ones_you_would_expect(self):
+        """68 is the camera fault this project mislabelled as "Updating
+        map" until a22, and 266 is an expired subscription."""
+        for code in (68, 114, 115, 266):
+            assert self._severity(code)[0] == "p2", code
+
+    def test_workaroundable_errors_all_allow_something(self):
+        """Every `standard` code carries a non-zero mask -- that is what
+        makes the bucket coherent rather than a name."""
+        from custom_components.roomba_plus.const import PRIME_ERROR_SEVERITY
+
+        standard = [c for c, (b, _m) in PRIME_ERROR_SEVERITY.items() if b == "standard"]
+        assert standard
+        for code in standard:
+            assert PRIME_ERROR_SEVERITY[code][1] != 0, code
+
+    def test_671_says_the_robot_can_still_work(self):
+        """Pad wash blocked, and the dock's own text is "switched to
+        vacuum only"."""
+        bucket, modes = self._severity(671)
+
+        assert bucket == "standard"
+        assert modes != 0
+
+    def test_the_vendors_spelling_is_kept(self):
+        """`maintanance`, their typo. Normalising it would break a future
+        diff against their own data."""
+        from custom_components.roomba_plus.const import PRIME_ERROR_SEVERITY
+
+        assert any(b == "maintanance" for b, _m in PRIME_ERROR_SEVERITY.values())
+
+    def test_an_unlisted_code_yields_nothing_rather_than_a_default(self):
+        """Absent from the vendor's list is not the same as harmless."""
+        assert self._severity(99999) is None
+
+    def test_the_bitmask_is_not_decoded(self):
+        """Bin-full reads 3 and pad-wash-blocked reads 5, which rules out
+        the obvious vacuum/mop reading. Inventing a bit layout to print a
+        prettier attribute is how this project has been wrong before."""
+        assert self._severity(36)[1] == 3
+        assert self._severity(671)[1] == 5
