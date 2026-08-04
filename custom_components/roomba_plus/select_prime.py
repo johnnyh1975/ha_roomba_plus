@@ -41,6 +41,8 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .entity import IRobotEntity
 
@@ -183,3 +185,140 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
             self.async_on_remove(
                 coordinator.async_add_listener(self.async_write_ha_state)
             )
+
+
+class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
+    """Which of several maps the Rooms Map image shows.
+
+    WHY A SELECT AND NOT ONE IMAGE PER MAP. The other design looks better
+    on paper -- two dashboards could show different floors -- and the
+    person who would live with it asked for this one instead
+    (@chairstacker, issue #45). He has two maps, uses one constantly and
+    the other rarely, and an entity per map gives no way to keep the rare
+    one off a dashboard at all.
+
+    A user with two equally-used floors would answer differently. Nobody
+    is asking for that, and the design can change when somebody does.
+
+    "Follow the robot" IS THE DEFAULT and stays the default. A user who
+    never touches this sees exactly what they saw before it existed: the
+    map the robot reports standing on, falling back to the first.
+
+    ONE ENTITY EVEN WITH ONE MAP. Gating it on map count would make the
+    entity appear and disappear as maps are added and removed in the app,
+    which is worse than a select with a single option -- an automation
+    referencing a vanished entity fails loudly for a reason that has
+    nothing to do with automations.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_translation_key = "prime_map"
+    _attr_icon = "mdi:layers-outline"
+
+    #: Not a map id, so it cannot collide with one.
+    FOLLOW_ROBOT = "follow_robot"
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        # Same call shape as PrimeSettingSelect: roomba=None, because a
+        # Prime robot has no roombapy object behind it.
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_map"
+        self._names: dict[str, str] = {}
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "prime_map"
+
+    @property
+    def options(self) -> list[str]:
+        """Map names, with "follow the robot" first.
+
+        Names rather than ids: `hh_..._1752720067` tells a user nothing.
+        A map with no name falls back to its id, which is ugly and
+        honest -- inventing "Map 2" would put a label on screen that
+        matches nothing in the iRobot app.
+        """
+        return [self.FOLLOW_ROBOT, *self._names.values()]
+
+    @property
+    def current_option(self) -> str | None:
+        selected = getattr(
+            self._config_entry.runtime_data, "prime_selected_map_id", None
+        )
+        if selected is None:
+            return self.FOLLOW_ROBOT
+        # A map deleted in the app leaves a selection pointing at
+        # nothing. Falling back to following the robot is better than
+        # reporting an option that is not in the list, which Home
+        # Assistant logs as an error on every state write.
+        return self._names.get(selected, self.FOLLOW_ROBOT)
+
+    async def async_select_option(self, option: str) -> None:
+        data = self._config_entry.runtime_data
+        if option == self.FOLLOW_ROBOT:
+            data.prime_selected_map_id = None
+        else:
+            match = next(
+                (mid for mid, name in self._names.items() if name == option), None
+            )
+            if match is None:
+                raise ServiceValidationError(
+                    f"{option} is not one of this account's maps"
+                )
+            data.prime_selected_map_id = match
+
+        # The image caches its render against a map id, so it notices the
+        # change on the next request without being told. Writing state
+        # here is what moves the select itself.
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        # RESTORED, NOT PERSISTED IN OPTIONS. Writing the choice into the
+        # config entry would reload the integration on every change,
+        # which is a heavy price for a dropdown.
+        last = await self.async_get_last_state()
+        if last is not None and last.state not in (None, "unknown", "unavailable"):
+            self._restore = last.state
+        await self._async_load_names()
+
+    async def _async_load_names(self) -> None:
+        """Map ids to display names, once per setup.
+
+        Map names change when somebody renames one in the app, which is
+        rare enough that a cloud call per image request would be the
+        wrong trade -- the same reasoning the rooms map itself uses for
+        its version check.
+        """
+        robot = self._config_entry.runtime_data.prime_robot
+        if robot is None:
+            return
+        try:
+            versions = await robot.get_active_map_versions()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not read map names for %s -- the select "
+                "will offer only 'follow the robot'", self._blid, exc_info=True,
+            )
+            return
+
+        names: dict[str, str] = {}
+        for entry in versions or []:
+            if not isinstance(entry, dict):
+                continue
+            map_id = entry.get("p2map_id")
+            if not map_id:
+                continue
+            names[str(map_id)] = str(entry.get("name") or map_id)
+        self._names = names
+
+        restore = getattr(self, "_restore", None)
+        if restore and restore != self.FOLLOW_ROBOT:
+            match = next((m for m, n in names.items() if n == restore), None)
+            if match is not None:
+                self._config_entry.runtime_data.prime_selected_map_id = match
+        self.async_write_ha_state()

@@ -40,7 +40,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
-from .const import ERROR_CODE_LABELS
+from .const import ERROR_CODE_LABELS, PRIME_ERROR_SEVERITY
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
@@ -1212,6 +1212,31 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
         guess = ERROR_CODE_LABELS.get(status.error or 0)
         if guess:
             attrs["classic_label_unconfirmed"] = guess
+
+        # SEVERITY IS VENDOR DATA, unlike the label above.
+        #
+        # This sensor shows a raw number on purpose: iRobot gives Prime
+        # and Classic different help articles for the same code, so no
+        # text of ours would be sourced. A severity bucket is not a
+        # label -- it is iRobot's own classification, from the app's
+        # `error_allowed_modes` config, and it answers the one question
+        # a bare number cannot: is this serious.
+        #
+        # `partially_operable` is the practical half. 144 of 171 codes
+        # allow nothing; the ones that do are the robot's own "I can
+        # still work around this" -- 671 (pad wash blocked) reads 5,
+        # which fits the dock's own "switched to vacuum only".
+        #
+        # The bitmask is passed through undecoded. Bin-full reads 3 and
+        # pad-wash-blocked reads 5, which rules out the obvious
+        # vacuum/mop reading, and inventing a bit layout to print a
+        # prettier attribute is how this project has been wrong before.
+        severity = PRIME_ERROR_SEVERITY.get(status.error or 0)
+        if severity is not None:
+            bucket, allowed_modes = severity
+            attrs["severity"] = bucket
+            attrs["allowed_modes"] = allowed_modes
+            attrs["partially_operable"] = allowed_modes != 0
         return attrs
 
 

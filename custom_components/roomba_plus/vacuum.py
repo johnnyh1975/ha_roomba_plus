@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-from typing import Any
+from typing import Any, Final
 
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
@@ -30,6 +30,7 @@ from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from . import roomba_reported_state
 from .const import (
+    DOMAIN,
     ATTR_BIN_FULL,
     has_carpet_boost,
     is_mop,
@@ -758,6 +759,80 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             return False
         return (mission_status.get("cycle") or "none") == "none"
 
+    #: Dock sub-states that mean "an operation is running right now",
+    #: from the iRobot app's own res/raw availability spec
+    #: (spec_buttons_cleaning_status_dock_operations). While a mission is
+    #: under way AND one of these is set, the app offers NO robot
+    #: controls at all -- an empty button list, not a greyed-out one.
+    #:
+    #: 302 evacuating · 403 refilling · 602 pad washing · 702 pad drying
+    #:
+    #: evac and fluid replenishment share `dock.state` in this project's
+    #: model; pad wash and pad dry have fields of their own.
+    _DOCK_BUSY_STATES: Final[frozenset[int]] = frozenset({302, 403})
+    _DOCK_BUSY_PAD_WASH: Final[int] = 602
+    _DOCK_BUSY_PAD_DRY: Final[int] = 702
+
+    #: Verbs the dock guard applies to. `find` is deliberately absent:
+    #: the app's spec covers mission controls, and refusing to help
+    #: someone locate their robot has no upside.
+    _DOCK_GUARDED_VERBS: Final[frozenset[str]] = frozenset(
+        {"start", "stop", "pause", "resume", "dock"}
+    )
+
+    def _dock_operation_in_progress(self) -> str | None:
+        """The dock operation currently running, or None.
+
+        PRIME ONLY. These rules come from the Prime app's own spec, and
+        the Classic app was not checked -- a Classic robot keeps every
+        control it has today rather than inheriting a rule from evidence
+        that does not cover it.
+
+        Returns the name so the refusal can say WHICH operation is in
+        the way. "Try again later" without a reason is the kind of
+        message this project has already had to correct once, when eight
+        unrelated readiness states were all reported as a map update.
+        """
+        if self._connection_type is not ConnectionType.CLOUD_ONLY:
+            return None
+        # getattr, not attribute access. `_config_entry` is optional on
+        # this class -- the constructor says so -- and some tests build
+        # the entity without running __init__ at all, so the attribute is
+        # ABSENT rather than None. Reaching through it unguarded turns a
+        # missing fixture into an AttributeError inside a command path,
+        # which is the wrong place to discover it.
+        entry = getattr(self, "_config_entry", None)
+        if entry is None:
+            return None
+        coordinator = entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-currentstate")
+        if raw is None:
+            return None
+        from roombapy_prime.models import CurrentStateShadow  # noqa: PLC0415
+
+        state = CurrentStateShadow.from_json(raw)
+        mission = getattr(state, "clean_mission_status", None)
+        if getattr(mission, "cycle", None) not in ("clean", "spot"):
+            return None
+        dock = getattr(state, "dock", None)
+        if dock is None:
+            return None
+
+        def _value(attr: str) -> int | None:
+            raw_value = getattr(dock, attr, None)
+            raw_value = getattr(raw_value, "value", raw_value)
+            return raw_value if isinstance(raw_value, int) else None
+
+        if _value("state") in self._DOCK_BUSY_STATES:
+            return "emptying the bin or refilling the tank"
+        if _value("pw_state") == self._DOCK_BUSY_PAD_WASH:
+            return "washing the mop pad"
+        if _value("pd_state") == self._DOCK_BUSY_PAD_DRY:
+            return "drying the mop pad"
+        return None
+
     async def _async_send_verb(self, verb: str) -> None:
         """Sends one simple command verb over whichever transport this
         robot uses.
@@ -774,6 +849,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         them. That is not hypothetical here: a fix belonging in one of
         these branches has already been put in the wrong one once.
 
+        THE DOCK GUARD LIVES HERE for the same reason. While the dock is
+        emptying, refilling, washing or drying mid-mission, the iRobot
+        app offers no robot controls at all -- and a command sent then is
+        one the robot will not act on.
+
         NOTE ON WHY THIS IS NOT A SUBCLASS. An earlier architecture note
         proposed an IRobotVacuumPrime subclass for exactly this problem.
         That was wrong, and the reason is worth recording so nobody
@@ -787,6 +867,18 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         Only the four uniform verbs go through here. return_to_base and
         send_command keep their own branches because their two paths
         genuinely differ in behaviour, not just in transport."""
+        busy = (
+            self._dock_operation_in_progress()
+            if verb in self._DOCK_GUARDED_VERBS
+            else None
+        )
+        if busy is not None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="dock_operation_in_progress",
+                translation_placeholders={"operation": busy},
+            )
+
         if self._connection_type is ConnectionType.CLOUD_ONLY:
             await self._prime_robot.send_simple_command(verb)
             return
@@ -815,7 +907,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         timeout every time.
         """
         if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await self._prime_robot.send_simple_command("dock")
+            # THROUGH _async_send_verb, not around it. "dock" is listed
+            # in _DOCK_GUARDED_VERBS, but this branch called
+            # send_simple_command() directly and skipped the guard
+            # entirely -- so Return to base was the one control that
+            # still fired while the dock was mid-cycle, which is exactly
+            # the case the guard exists for.
+            #
+            # The Classic branch below keeps its own pause-then-wait
+            # dance and needs no guard: those rules come from the Prime
+            # app's spec and Classic was never checked against them.
+            await self._async_send_verb("dock")
             return
         if self.activity == VacuumActivity.CLEANING:
             await self.async_pause()

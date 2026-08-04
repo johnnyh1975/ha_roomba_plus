@@ -1192,11 +1192,31 @@ MOP_RANK_LABELS: Final[dict[int, str]] = {
     85: "Deep",
 }
 
+#: `detectedPad` wire values.
+#:
+#: TWO SPELLINGS FOR ONE VALUE, and it is the vendor's own inconsistency
+#: rather than a transcription slip: their sample robot states report
+#: `reusablewet` for the Braava jet m6 and `reusableWet` for another
+#: platform. Only the camelCase form was here, so a Braava showed
+#: "Unknown" for a fitted wet pad.
+#:
+#: Found by running these gates against iRobot's own simulator data.
+#: No tester could have found it -- it needs two robots that differ only
+#: in how a string was capitalised, and nobody owns both.
+#:
+#: `padPlate` and `noPad` come from the same source and were missing
+#: outright. They are the CARRIER PLATE, not a cloth: a bare plate
+#: clicked in reads `padPlate`, established by one robot reading `noPad`
+#: and then `padPlate` with nothing but the plastic plate refitted
+#: (@utkjmitch). The labels say plate for that reason.
 PAD_LABELS: Final[dict[str, str]] = {
     "reusableDry": "Dry (reusable)",
     "reusableWet": "Wet (reusable)",
+    "reusablewet": "Wet (reusable)",
     "dispDry": "Dry (disposable)",
     "dispWet": "Wet (disposable)",
+    "padPlate": "Plate fitted",
+    "noPad": "No plate",
     "invalid": "No pad",
 }
 
@@ -1501,3 +1521,207 @@ def room_slug(value: str) -> str:
     ascii_only = "".join(c for c in decomposed if not _ud.combining(c))
     slug = _re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
     return _re.sub(r"_+", "_", slug) or "room"
+
+
+#: Severity and remaining capability per Prime error code, from the
+#: iRobot app's own `error_allowed_modes` config (res/raw). 171 codes.
+#:
+#: WHY THIS IS SAFE WHERE LABELS ARE NOT. PrimeErrorSensor deliberately
+#: shows a raw number, because iRobot gives Prime and Classic DIFFERENT
+#: help articles for the same code and no text of ours would be sourced.
+#: A severity bucket is not a label -- it is the vendor's own
+#: classification of the code, and it answers the question a bare number
+#: cannot: is this serious.
+#:
+#:   p2            13 codes, the urgent ones -- 68 camera fault, 114/115
+#:                 battery, 266 subscription expired
+#:   standard      10 codes the robot can work around, and every one of
+#:                 them carries allowed_modes != 0
+#:   p3            142 codes, the bulk
+#:   maintanance   2 codes -- vendor's own spelling, kept verbatim so a
+#:                 future diff against their data still matches
+#:   internal      3, contextual 1
+#:
+#: `allowed_modes` is a bitmask of what the robot can still do. Zero on
+#: 144 of 171 codes. Non-zero says "partially operable" -- 671 (pad wash
+#: blocked) reads 5, which fits the dock's own "switched to vacuum only".
+#:
+#: THE INDIVIDUAL BITS ARE NOT DECODED and deliberately so. Bin-full (36)
+#: reads 3 and pad-wash-blocked (671) reads 5, which rules out the
+#: obvious vacuum/mop reading, and guessing a bit layout to print a
+#: prettier attribute is how this project has been wrong before. The
+#: number is exposed as-is; whether it is zero is the part that means
+#: something today.
+PRIME_ERROR_SEVERITY: Final[dict[int, tuple[str, int]]] = {
+    1: ('p3', 0),
+    2: ('p3', 0),
+    4: ('p3', 0),
+    5: ('p3', 0),
+    6: ('p3', 0),
+    7: ('p3', 0),
+    9: ('p3', 0),
+    10: ('p3', 0),
+    12: ('p3', 0),
+    14: ('p3', 0),
+    16: ('p3', 0),
+    18: ('p3', 0),
+    19: ('p3', 0),
+    22: ('p3', 0),
+    24: ('p3', 0),
+    26: ('p3', 0),
+    29: ('p3', 0),
+    30: ('p3', 0),
+    32: ('p3', 0),
+    33: ('p3', 0),
+    35: ('standard', 5),
+    36: ('standard', 3),
+    42: ('p3', 0),
+    44: ('p3', 0),
+    46: ('p3', 0),
+    47: ('p3', 0),
+    48: ('p3', 0),
+    66: ('p2', 0),
+    68: ('p2', 0),
+    69: ('p3', 0),
+    101: ('p3', 0),
+    102: ('p3', 0),
+    103: ('p3', 0),
+    104: ('p3', 0),
+    105: ('p3', 0),
+    106: ('p3', 0),
+    107: ('p3', 0),
+    109: ('p3', 0),
+    110: ('p3', 0),
+    111: ('p3', 0),
+    114: ('p2', 0),
+    115: ('p2', 0),
+    117: ('p3', 0),
+    119: ('p3', 0),
+    120: ('p3', 0),
+    121: ('p3', 0),
+    201: ('p3', 0),
+    202: ('p3', 0),
+    207: ('p3', 0),
+    210: ('p3', 0),
+    215: ('p3', 0),
+    216: ('p3', 0),
+    218: ('p3', 0),
+    222: ('p3', 0),
+    224: ('p3', 0),
+    228: ('p3', 0),
+    231: ('standard', 5),
+    234: ('p3', 5),
+    237: ('p3', 0),
+    238: ('p3', 0),
+    239: ('p3', 0),
+    251: ('p2', 0),
+    266: ('p2', 0),
+    268: ('p3', 0),
+    283: ('p3', 0),
+    284: ('p2', 0),
+    285: ('p3', 0),
+    286: ('contextual', 0),
+    287: ('internal', 2),
+    290: ('internal', 5),
+    350: ('p3', 3),
+    353: ('p3', 3),
+    360: ('p3', 0),
+    365: ('p3', 0),
+    450: ('p3', 5),
+    451: ('standard', 5),
+    455: ('p3', 5),
+    457: ('p3', 0),
+    464: ('p3', 7),
+    510: ('p3', 3),
+    513: ('p3', 5),
+    517: ('p3', 5),
+    520: ('p3', 0),
+    653: ('standard', 5),
+    654: ('standard', 5),
+    660: ('p3', 0),
+    668: ('standard', 5),
+    669: ('p3', 5),
+    670: ('p3', 5),
+    671: ('standard', 5),
+    672: ('standard', 5),
+    751: ('p3', 5),
+    752: ('p3', 5),
+    756: ('standard', 5),
+    757: ('p3', 0),
+    1000: ('p3', 0),
+    1001: ('p3', 0),
+    1008: ('p3', 0),
+    1010: ('p3', 0),
+    1025: ('p3', 0),
+    1026: ('p3', 0),
+    1028: ('p2', 0),
+    1029: ('p2', 0),
+    1030: ('p2', 0),
+    1034: ('p3', 4),
+    3100: ('p3', 0),
+    3110: ('p3', 0),
+    3120: ('p3', 0),
+    3130: ('p3', 0),
+    3140: ('p3', 0),
+    3150: ('p3', 0),
+    3160: ('p3', 0),
+    3171: ('p3', 0),
+    3172: ('p3', 0),
+    3181: ('p3', 0),
+    3182: ('p3', 0),
+    3190: ('p3', 0),
+    3191: ('p3', 0),
+    3210: ('p2', 0),
+    3211: ('internal', 7),
+    3212: ('p2', 0),
+    3310: ('p2', 0),
+    3410: ('p3', 0),
+    3420: ('p3', 0),
+    3431: ('p3', 0),
+    3432: ('p3', 0),
+    3510: ('p3', 0),
+    3511: ('p3', 0),
+    3512: ('p3', 0),
+    3520: ('p3', 0),
+    3521: ('p3', 0),
+    3522: ('p3', 0),
+    3530: ('p3', 0),
+    3531: ('p3', 0),
+    3532: ('p3', 0),
+    3540: ('p3', 0),
+    3541: ('p3', 0),
+    3542: ('p3', 0),
+    3600: ('p3', 0),
+    3610: ('p3', 0),
+    3621: ('p3', 0),
+    3622: ('p3', 0),
+    3623: ('p3', 0),
+    3624: ('p3', 0),
+    3625: ('p3', 0),
+    3626: ('p3', 0),
+    3627: ('p3', 0),
+    3628: ('p3', 0),
+    3629: ('p3', 0),
+    3630: ('p3', 0),
+    3640: ('p3', 0),
+    3650: ('p3', 0),
+    3660: ('p3', 0),
+    3670: ('p3', 0),
+    3671: ('p3', 0),
+    3672: ('p3', 0),
+    3673: ('p3', 0),
+    3680: ('p3', 0),
+    3681: ('p3', 0),
+    3690: ('p3', 0),
+    3810: ('p3', 0),
+    3821: ('p3', 0),
+    3822: ('p3', 0),
+    3823: ('p3', 0),
+    3824: ('p3', 0),
+    3830: ('p3', 0),
+    3840: ('p3', 0),
+    4001: ('maintanance', 0),
+    4002: ('p3', 0),
+    4003: ('maintanance', 0),
+    4004: ('p3', 0),
+}

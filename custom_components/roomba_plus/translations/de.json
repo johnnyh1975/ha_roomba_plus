@@ -1034,6 +1034,12 @@
           "normal": "Normal",
           "deep": "Intensiv"
         }
+      },
+      "prime_map": {
+        "name": "Karte",
+        "state": {
+          "follow_robot": "Roboter folgen"
+        }
       }
     },
     "image": {
@@ -1288,6 +1294,9 @@
     },
     "favorite_not_found": {
       "message": "Kein ausführbarer Favorit mit der ID {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "Die Station ist gerade beschäftigt ({operation}). Der Roboter nimmt bis zum Abschluss keine Befehle an."
     }
   },
   "selector": {

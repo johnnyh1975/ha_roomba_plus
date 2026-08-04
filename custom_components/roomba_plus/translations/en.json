@@ -1034,6 +1034,12 @@
           "normal": "Normal",
           "deep": "Deep"
         }
+      },
+      "prime_map": {
+        "name": "Map",
+        "state": {
+          "follow_robot": "Follow the robot"
+        }
       }
     },
     "image": {
@@ -1288,6 +1294,9 @@
     },
     "favorite_not_found": {
       "message": "No runnable favorite with id {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "The dock is busy {operation}. The robot will not act on commands until it finishes."
     }
   },
   "selector": {

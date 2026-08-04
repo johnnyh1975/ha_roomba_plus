@@ -92,7 +92,11 @@ async def async_setup_entry(
     # none would.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
-        from .select_prime import PRIME_SELECTS, PrimeSettingSelect  # noqa: PLC0415
+        from .select_prime import (  # noqa: PLC0415
+            PRIME_SELECTS,
+            PrimeMapSelect,
+            PrimeSettingSelect,
+        )
 
         cap, _dock_cap = get_prime_capability_flags(config_entry)
         async_add_entities([
@@ -105,6 +109,11 @@ async def async_setup_entry(
             or cap is None
             or getattr(cap, description.cap_attr, None) != 0
         ])
+        # Always, even on a single-map account: an entity that appears
+        # and disappears as maps come and go is worse than a select with
+        # one option, because an automation pointing at a vanished entity
+        # fails for a reason unrelated to automations.
+        async_add_entities([PrimeMapSelect(data.blid, config_entry)])
         return
 
     roomba = config_entry.runtime_data.roomba

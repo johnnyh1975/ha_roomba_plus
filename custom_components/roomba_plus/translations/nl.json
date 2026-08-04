@@ -1034,6 +1034,12 @@
           "normal": "Normaal",
           "deep": "Diep"
         }
+      },
+      "prime_map": {
+        "name": "Kaart",
+        "state": {
+          "follow_robot": "Robot volgen"
+        }
       }
     },
     "image": {
@@ -1288,6 +1294,9 @@
     },
     "favorite_not_found": {
       "message": "Geen uitvoerbare favoriet met id {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "Het station is bezig ({operation}). De robot accepteert pas opdrachten als het klaar is."
     }
   },
   "selector": {

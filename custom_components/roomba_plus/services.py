@@ -1010,6 +1010,22 @@ def async_register_services(hass: HomeAssistant) -> None:
     Each service is guarded by has_service() — only registers on first call,
     subsequent entries reuse the same handlers.
     """
+    # LATE, AND IT DOES AVOID A CYCLE -- just not one this check can
+    # see. prime_schedule_services imports prime_schedule_switch, which
+    # imports from the package __init__, which imports this module. The
+    # checker only looks for a DIRECT back-import, so it reported "none
+    # of these avoids a cycle" and moving the import to the top turned
+    # the whole test suite into 32 collection errors.
+    #
+    # The Prime schedule write services live in their own module because
+    # they share the read-modify-write-under-lock discipline with
+    # prime_schedule_switch.py rather than with anything here.
+    from .prime_schedule_services import (  # noqa: PLC0415
+        async_register_prime_schedule_services,
+    )
+
+    async_register_prime_schedule_services(hass)
+
     _RESET_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_ids})
 
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ROOM):
@@ -1516,6 +1532,12 @@ def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
     for svc in (
         "run_favorite",
+        # Registered from prime_schedule_services, removed here with the
+        # rest -- a test asserts that the two lists agree, which is how
+        # this was caught rather than by a leaked service after reload.
+        "create_schedule",
+        "update_schedule",
+        "delete_schedule",
         SERVICE_CLEAN_ROOM,
         SERVICE_SMART_START,
         SERVICE_CLEAN_OVERDUE_ROOMS,

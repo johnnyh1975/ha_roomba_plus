@@ -421,6 +421,14 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             "trail_points_added": 0,
             "trail_skipped_no_point": 0,
             "trail_skipped_no_xy": 0,
+            #: The OUTER retry loop's own failures. Separate from
+            #: decode_failed, which only covers a payload that arrived
+            #: and could not be read -- these are the cases where
+            #: nothing arrived at all, and they used to be invisible in
+            #: a diagnostics download.
+            "watch_failures": 0,
+            "last_watch_error": None,
+            "watch_retry_backoff_s": None,
             "decode_ok": 0,
             "decode_failed": 0,
             "last_error": None,
@@ -492,13 +500,38 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         stats = data.live_map_stats
         try:
             for sample in getattr(message, "updates", None) or []:
+                # A TUPLE, NOT AN OBJECT WITH .x AND .y.
+                #
+                # This read `getattr(point, "x", None)` and skipped every
+                # sample when it came back None -- which it always did,
+                # because PositionSample.point is `(x, y)`. So the trail
+                # list stayed empty on every robot, forever, while
+                # `position_points` counted the samples arriving.
+                #
+                # That is the whole missing-robot-marker story:
+                # @DaRealGuGu's capture showed 2267 messages and 5553
+                # points with no marker on the map, and the marker is
+                # only drawn when this list is non-empty. What he saw
+                # instead was the trajectories layer from the downloaded
+                # bundle, which looks like a trail and is not one.
+                #
+                # Both getattr() calls were defensive code written
+                # against a shape nobody had checked. The defensiveness
+                # is what hid it: an exception would have been found in a
+                # day.
                 point = getattr(sample, "point", None)
                 if point is None:
                     stats["trail_skipped_no_point"] = (
                         stats.get("trail_skipped_no_point", 0) + 1
                     )
                     continue
-                x_m, y_m = getattr(point, "x", None), getattr(point, "y", None)
+                try:
+                    x_m, y_m = point
+                except (TypeError, ValueError):
+                    stats["trail_skipped_no_xy"] = (
+                        stats.get("trail_skipped_no_xy", 0) + 1
+                    )
+                    continue
                 if x_m is None or y_m is None:
                     stats["trail_skipped_no_xy"] = (
                         stats.get("trail_skipped_no_xy", 0) + 1
@@ -723,17 +756,47 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     "(unexpected -- it's meant to run forever) -- retrying in %.0fs",
                     self._blid, backoff,
                 )
+                self._record_watch_failure(
+                    "the stream ended on its own", backoff
+                )
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception(
                     "roomba_plus: watch_live_map() for %s ended unexpectedly -- retrying "
                     "in %.0fs (this is this entity's own outer safety net; the library "
                     "itself already retries connection drops internally, so reaching "
                     "this suggests something else went wrong)", self._blid, backoff,
                 )
+                self._record_watch_failure(repr(exc), backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+
+    def _record_watch_failure(self, detail: str, backoff: float) -> None:
+        """Puts a watcher failure where a diagnostics download can see it.
+
+        THE OUTER RETRY LOOP WAS SILENT IN DIAGNOSTICS. It logged, and
+        only the DECODE path ever wrote to `last_error` -- so a capture
+        showing every counter at zero and `last_error: null` could not
+        distinguish "nothing arrived" from "this task has been crashing
+        and retrying since setup".
+
+        @chairstacker hit exactly that: all counters zero, mid-mission,
+        no error anywhere. And his own aside is what points at this
+        loop -- he saw the map's timestamp move at roughly four-minute
+        intervals rather than the two to twelve seconds he was used to.
+        `backoff` doubles from 5s up to 300s, so a four-minute gap is
+        what a grown backoff looks like from the outside.
+
+        The retry count matters as much as the message: one failure at
+        startup is noise, forty is the whole story.
+        """
+        stats = self._config_entry.runtime_data.live_map_stats
+        if stats is None:
+            return
+        stats["watch_failures"] = stats.get("watch_failures", 0) + 1
+        stats["last_watch_error"] = detail
+        stats["watch_retry_backoff_s"] = backoff
 
     @property
     def available(self) -> bool:
@@ -3050,6 +3113,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # room cleaning. Checked when the image is requested, and the
         # cloud is only called when it has actually moved.
         self._rendered_for_map_version: str | None = None
+        #: Which map that version belongs to. Without it, a robot moving
+        #: between floors would render a different map while the version
+        #: it is compared against stays put.
+        self._rendered_map_id: str | None = None
 
     async def _async_refresh_rooms(self) -> None:
         """Reads the current map's rooms and renders them."""
@@ -3066,8 +3133,15 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # One image per entity, so the current map wins where the robot
         # says which one it is on; otherwise the first is as good a
         # choice as any, since with one map there is no ambiguity.
-        current = await backend._current_map_id()  # noqa: SLF001
-        p2map_id = current if current in map_ids else map_ids[0]
+        # A USER CHOICE OUTRANKS THE ROBOT'S OWN REPORT, and only when
+        # it is still a map this account has -- a map deleted in the app
+        # must not leave the image stuck on nothing.
+        chosen = getattr(self._config_entry.runtime_data, "prime_selected_map_id", None)
+        if chosen in map_ids:
+            p2map_id = chosen
+        else:
+            current = await backend._current_map_id()  # noqa: SLF001
+            p2map_id = current if current in map_ids else map_ids[0]
 
         polygons, names, preferences = await async_build_prime_room_polygons(
             self._config_entry, p2map_id
@@ -3396,22 +3470,72 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         return self._png
 
     async def _async_refresh_if_map_changed(self) -> None:
+        """Re-reads the rooms when the map ON SCREEN has changed.
+
+        THIS WATCHED p2maps[0] WHILE RENDERING A DIFFERENT MAP.
+        _async_refresh_rooms() picks the map the robot says it is
+        standing on and only falls back to the first one when that is
+        unknown -- so on a two-map account the two could diverge, and
+        then:
+
+          - a change to the map being shown went unnoticed, because the
+            version being compared belonged to the other map, and the
+            image quietly went stale
+          - a change to the OTHER map triggered a pointless refresh
+
+        @chairstacker has two maps and edited the older one, which is
+        exactly the arrangement where this shows.
+
+        Comparing the id as well as the version matters just as much: a
+        robot that moves between floors changes which map is rendered
+        without either map's version moving at all.
+        """
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_status_coordinator", None
         )
         version: str | None = None
+        map_id: str | None = None
         if coordinator is not None and coordinator.data:
             current = coordinator.data.get("ro-currentstate") or {}
+            mission = current.get("cleanMissionStatus") or {}
+            reported = mission.get("p2mapId") or mission.get("p2map_id")
             p2maps = current.get("p2maps") or []
             if isinstance(p2maps, list) and p2maps:
-                first = p2maps[0]
-                if isinstance(first, dict):
-                    version = first.get("active_p2mapv_id") or first.get("last_p2mapv_ts")
+                entries = [e for e in p2maps if isinstance(e, dict)]
+                # The same choice _async_refresh_rooms() makes: the map
+                # the robot reports, or the first one when it does not
+                # report a usable one.
+                # Same order of preference as _async_refresh_rooms():
+                # the user's choice, then the robot's report, then the
+                # first. The two MUST agree -- watching one map while
+                # rendering another is the bug this check just had.
+                selected = getattr(
+                    self._config_entry.runtime_data, "prime_selected_map_id", None
+                )
+                chosen = next(
+                    (e for e in entries if e.get("p2map_id") == selected),
+                    None,
+                ) or next(
+                    (e for e in entries if e.get("p2map_id") == reported),
+                    entries[0] if entries else None,
+                )
+                if chosen is not None:
+                    map_id = chosen.get("p2map_id")
+                    version = (
+                        chosen.get("active_p2mapv_id")
+                        or chosen.get("last_p2mapv_ts")
+                    )
 
-        if version is not None and version == self._rendered_for_map_version:
+        unchanged = (
+            version is not None
+            and version == self._rendered_for_map_version
+            and map_id == self._rendered_map_id
+        )
+        if unchanged:
             return
         await self._async_refresh_rooms()
         self._rendered_for_map_version = version
+        self._rendered_map_id = map_id
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

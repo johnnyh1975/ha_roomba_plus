@@ -107,6 +107,12 @@ class PrimeDockCommand:
     #: Attribute on the DOCK capability object, not the robot one. A
     #: robot without a self-emptying base still reports robot caps.
     dock_cap_attr: str
+    #: Dock sub-state values in which the app offers this control, taken
+    #: from its own res/raw availability specs. None means no state rule
+    #: was found for this control.
+    ready_states: tuple[int, ...] | None = None
+    #: Which DockInfo field carries that sub-state.
+    state_attr: str | None = None
 
 
 #: The dock controls the iRobot app shows, as confirmed wire strings.
@@ -142,13 +148,31 @@ class PrimeDockCommand:
 #: There is no `stopwashpad` in the enum at all, so washing evidently
 #: runs to completion.
 PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
-    PrimeDockCommand(key="prime_empty_bin", command="evac", dock_cap_attr="evac"),
-    PrimeDockCommand(key="prime_wash_pad", command="washpad", dock_cap_attr="pad_wash"),
     PrimeDockCommand(
-        key="prime_stop_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry"
+        key="prime_empty_bin", command="evac", dock_cap_attr="evac",
+        # spec_dock_controls_evac_status: Available at 301, 355, 305.
+        # Disabled at 351-354, 360, 365, 302.
+        ready_states=(301, 355, 305), state_attr="state",
     ),
     PrimeDockCommand(
-        key="prime_start_pad_dry", command="drypad", dock_cap_attr="pad_dry"
+        key="prime_wash_pad", command="washpad", dock_cap_attr="pad_wash",
+        # spec_dock_control_pad_wash_status: Available at 601 only.
+        # Disabled at 602, 603 and the whole 649-699 error family.
+        ready_states=(601,), state_attr="pw_state",
+    ),
+    PrimeDockCommand(
+        key="prime_stop_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry",
+        # spec_dock_control_stop_pad_dry_status: Available at 702 -- the
+        # state that means drying is actually running. Stopping something
+        # that is not running is the one control where the app's rule is
+        # the opposite of the start button's.
+        ready_states=(702,), state_attr="pd_state",
+    ),
+    PrimeDockCommand(
+        key="prime_start_pad_dry", command="drypad", dock_cap_attr="pad_dry",
+        # spec_dock_control_pad_dry_status: Available at 701, 703.
+        # Disabled across 749-757.
+        ready_states=(701, 703), state_attr="pd_state",
     ),
 )
 
@@ -182,6 +206,92 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
     @property
     def suggested_object_id(self) -> str:
         return self._command.key
+
+    @property
+    def available(self) -> bool:
+        """Offered only when the dock could actually act on it.
+
+        THESE RULES ARE THE APP'S OWN. `res/raw/spec_dock_control_*.json`
+        in the Prime APK are availability state machines mapping dock
+        state to Available/Disabled, and until now this class had no
+        `available` at all -- every dock button was pressable whenever
+        the capability existed.
+
+        What that cost: @chairstacker pressed Wash Pad with a tank
+        removed, the robot spoke a complaint and the dock reported 671.
+        The app would not have offered the button, because pw_state was
+        not 601.
+
+        Three blanket rules apply to every control, and they are the ones
+        that matter most:
+
+          - a dock error in 500-599 disables all of them
+          - so does a running cycle (clean, spot, dock)
+          - so does another dock command already in flight
+
+        UNKNOWN MEANS AVAILABLE, deliberately. A robot that does not
+        report a sub-state keeps its button: taking function away from a
+        working robot because a field is missing would be the worse
+        mistake, and this project has made it before by gating on a
+        capability flag rather than on a field being present.
+        """
+        if not super().available:
+            return False
+
+        state = self._current_state
+        dock = getattr(state, "dock", None) if state is not None else None
+        if dock is None:
+            return True
+
+        # A dock error blocks every control, whatever the sub-states say.
+        error = getattr(dock, "error", None)
+        if isinstance(error, int) and 500 <= error <= 599:
+            return False
+
+        # And so does a mission: the dock will not wash, dry or empty
+        # while the robot is out working.
+        mission = getattr(state, "mission", None)
+        cycle = getattr(mission, "cycle", None) if mission is not None else None
+        if cycle in ("clean", "spot", "dock"):
+            return False
+
+        rule = self._command
+        if rule.ready_states is None or rule.state_attr is None:
+            return True
+        current = getattr(dock, rule.state_attr, None)
+        # DockState is an IntEnum on the model, a plain int on older
+        # payloads. Both compare correctly against the plain ints above.
+        value = getattr(current, "value", current)
+        if not isinstance(value, int):
+            return True
+        return value in rule.ready_states
+
+    @property
+    def _current_state(self) -> Any:
+        """The parsed ro-currentstate shadow, or None if not seeded."""
+        from roombapy_prime.models import CurrentStateShadow  # noqa: PLC0415
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-currentstate")
+        if raw is None:
+            return None
+        return CurrentStateShadow.from_json(raw)
+
+    async def async_added_to_hass(self) -> None:
+        """Follows the status coordinator so availability keeps up.
+
+        Without this the rules above would be evaluated once and then
+        frozen -- a button correctly hidden during a mission would stay
+        hidden after it, which is worse than never hiding it.
+        """
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )
 
     async def async_press(self) -> None:
         robot = self._config_entry.runtime_data.prime_robot

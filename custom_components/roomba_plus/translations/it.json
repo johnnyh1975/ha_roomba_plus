@@ -1034,6 +1034,12 @@
           "normal": "Normale",
           "deep": "Profondo"
         }
+      },
+      "prime_map": {
+        "name": "Mappa",
+        "state": {
+          "follow_robot": "Segui il robot"
+        }
       }
     },
     "image": {
@@ -1288,6 +1294,9 @@
     },
     "favorite_not_found": {
       "message": "Nessun preferito eseguibile con ID {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "La base è occupata ({operation}). Il robot non accetterà comandi fino al termine."
     }
   },
   "selector": {

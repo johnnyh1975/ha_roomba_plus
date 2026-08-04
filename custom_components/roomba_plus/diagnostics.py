@@ -703,6 +703,33 @@ async def _build_diagnostics(
             # died". A large seconds_ago on a robot that has been
             # active means the connection is gone, whatever else says.
             "push_freshness": _push_freshness(data),
+            # WITHOUT THIS PREFIX, TWO SUBSCRIPTIONS DIE SILENTLY.
+            #
+            # watch_live_map() and watch_mission_timeline() both build
+            # their topic as "{irbt_topic_prefix}/things/{blid}/..." and
+            # both raise immediately when it is None. The outer retry
+            # loops catch that, wait, and double the backoff to five
+            # minutes -- so the symptom is a map that updates every few
+            # minutes instead of every few seconds, with nothing broken
+            # anywhere a user can see.
+            #
+            # Everything else keeps working, which is what makes it hard
+            # to spot: the shadow watcher uses shadow topics and needs no
+            # prefix, so nine shadows seed, push_freshness stays fresh
+            # and the robot reports as connected.
+            #
+            # It comes from `deployment["irbtTopics"]` in the login
+            # response via a plain .get() -- deliberately not a hard gate,
+            # because the key name was uncertain when that code was
+            # written. A missing key therefore costs two features and
+            # says nothing.
+            #
+            # @chairstacker's capture is what this is for: mid-mission,
+            # every live-map counter at zero, mission timeline empty, and
+            # no error anywhere.
+            "irbt_topic_prefix_present": bool(
+                getattr(data.prime_robot, "_irbt_topic_prefix", None)
+            ) if data.prime_robot is not None else None,
             # THE OTHER HALF of a silent stream. push_freshness says
             # nothing is arriving; this says whether the ROBOT is even
             # connected to the cloud to send anything.

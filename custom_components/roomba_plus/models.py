@@ -150,6 +150,24 @@ class RoombaData:
     # None if it couldn't be resolved (account/response shape edge case,
     # or genuinely no household found) -- calendar.py's own CLOUD_ONLY
     # branch treats that as "schedule data unavailable", not an error.
+    #: Which map the Rooms Map shows, when the user has picked one.
+    #:
+    #: None means "follow the robot" -- the map it reports standing on,
+    #: falling back to the first. That is what the image did before a
+    #: choice existed, and it stays the default: a user who never touches
+    #: the select sees no change.
+    #:
+    #: THE CHOICE IS SHARED, and that was decided by the person who would
+    #: live with it. One image entity per map was the other option, and
+    #: it looks better on paper -- two dashboards could show different
+    #: floors. @chairstacker asked for a select instead: he uses one map
+    #: constantly and the other rarely, and an entity per map gives no
+    #: way to keep the rare one off the dashboard at all.
+    #:
+    #: A user with two equally-used floors would answer differently.
+    #: Nobody is asking for that.
+    prime_selected_map_id: str | None = None
+
     prime_household_id: str | None = None
     # NEW: model/serial/firmware-adjacent data for a correct DeviceInfo (see
     # IRobotEntity.__init__'s own docstring for the bug this fixes -- every

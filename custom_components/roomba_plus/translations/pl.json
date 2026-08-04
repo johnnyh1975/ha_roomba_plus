@@ -1034,6 +1034,12 @@
           "normal": "Normalne",
           "deep": "Dokładne"
         }
+      },
+      "prime_map": {
+        "name": "Mapa",
+        "state": {
+          "follow_robot": "Podążaj za robotem"
+        }
       }
     },
     "image": {
@@ -1288,6 +1294,9 @@
     },
     "favorite_not_found": {
       "message": "Brak wykonywalnego ulubionego o identyfikatorze {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "Stacja jest zajęta ({operation}). Robot nie przyjmie poleceń, dopóki nie skończy."
     }
   },
   "selector": {
