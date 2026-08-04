@@ -1208,3 +1208,70 @@ class TestTheLabelFollowsTheSchedule:
 
         assert switch.unique_id == before
         assert switch.suggested_object_id == "schedule_S1"
+
+
+class TestQuietHoursAreNotCleaningSchedules:
+    """They arrive in the same list, and we rendered all of it.
+
+    @DaRealGuGu set Do Not Disturb in the OLD iRobot app and two
+    switches appeared in Home Assistant for his PRIME robot -- matching
+    the quiet-hours times, shown nowhere in the Roomba app. Deleting the
+    quiet hours made them go away again.
+
+    A switch for one is worse than a missing switch: toggling writes the
+    whole container back, so a user "turning off a schedule" would have
+    been rewriting their quiet hours from whatever we managed to parse.
+    """
+
+    def _switches(self, options):
+        from unittest.mock import MagicMock
+
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus.prime_schedule_switch import (
+            build_prime_schedule_switches,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "BLID"
+        parsed = HouseholdSchedule.from_json({"schedule_id": "S1", "options": options})
+        return build_prime_schedule_switches(entry, [("C1", [parsed])])
+
+    _CLEAN = {
+        "enabled": True, "frequency": "WEEKLY",
+        "start": {"day": [1], "hour": 9, "min": 0},
+        "commands": [{"command": {"command": "start"}}],
+    }
+
+    def test_a_cleaning_schedule_still_gets_a_switch(self):
+        assert len(self._switches(self._CLEAN)) == 1
+
+    def test_an_interval_does_not(self):
+        """Quiet hours are an interval and carry both ends; a cleaning
+        schedule only says when to start."""
+        quiet = {
+            "enabled": True, "frequency": "WEEKLY",
+            "start": {"day": [1, 2, 3, 4, 5], "hour": 6, "min": 15},
+            "end": {"day": [1, 2, 3, 4, 5], "hour": 9, "min": 55},
+        }
+
+        assert self._switches(quiet) == []
+
+    def test_end_commands_alone_are_enough_to_exclude_it(self):
+        entry = {**self._CLEAN, "end_commands": [{"command": {"command": "stop"}}]}
+
+        assert self._switches(entry) == []
+
+    def test_the_discriminator_is_the_shape_not_a_label(self):
+        """The app's own HouseholdScheduleType enum exists but lives in
+        native code and has never been read. If a cleaning schedule with
+        an end time ever turns up, this is the line that will be wrong --
+        pinned here so that shows as a failure rather than as a missing
+        switch somebody has to notice.
+        """
+        import inspect
+
+        from custom_components.roomba_plus import prime_schedule_switch
+
+        source = inspect.getsource(prime_schedule_switch.build_prime_schedule_switches)
+        assert "options.end is not None or options.end_commands" in source

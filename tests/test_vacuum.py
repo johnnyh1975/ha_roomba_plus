@@ -2186,3 +2186,74 @@ class TestReturnToBaseGoesThroughTheDockGuard:
         await self._dock(entity)
 
         entity._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+
+class TestUndeliveredCommandsAreReported:
+    """`send_simple_command()` returns whether the broker acknowledged
+    the publish, and every call site threw that away.
+
+    A command that never reached iRobot looked exactly like one the robot
+    chose to ignore: the press succeeded, the service returned, nothing
+    happened. A field report described it as "no reaction from the logo"
+    for start, locate and dry pad alike -- three controls, one silent
+    transport, four days spent looking at the controls.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unacknowledged_command_raises(self):
+        from unittest.mock import AsyncMock
+
+        from homeassistant.exceptions import HomeAssistantError
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = False
+
+        with pytest.raises(HomeAssistantError, match="never reached"):
+            await _send_confirmed(robot, "start")
+
+    @pytest.mark.asyncio
+    async def test_an_acknowledged_command_is_silent(self):
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = True
+
+        await _send_confirmed(robot, "start")
+
+    @pytest.mark.asyncio
+    async def test_none_is_not_treated_as_failure(self):
+        """Only an explicit False means "not delivered". A library that
+        returns None has not reported a failure, and turning that into
+        one would break every command against an older version."""
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = None
+
+        await _send_confirmed(robot, "start")
+
+    def test_no_call_site_bypasses_it(self):
+        """The point is that ALL of them go through the check -- one
+        forgotten call site puts the silent failure back."""
+        import inspect
+
+        from custom_components.roomba_plus import button_prime, vacuum
+
+        for module in (vacuum, button_prime):
+            source = inspect.getsource(module)
+            for line in source.splitlines():
+                stripped = line.strip()
+                # Only actual calls. The name appears in comments and
+                # docstrings all over these modules, and matching those
+                # would make the test fail for prose.
+                if not stripped.startswith("await ") or (
+                    "send_simple_command(" not in stripped
+                ):
+                    continue
+                assert "_send_confirmed" in stripped, f"{module.__name__}: {stripped}"

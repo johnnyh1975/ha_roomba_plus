@@ -2540,14 +2540,41 @@ class TestPrimeMapFlushOnRemoval:
         await entity.async_will_remove_from_hass()
 
     @pytest.mark.asyncio
-    async def test_the_watch_task_is_still_cancelled(self):
+    async def test_the_watch_task_is_cancelled_and_waited_for(self):
         """The flush was inserted ahead of existing cleanup -- which must
-        still happen, or a reload leaks a background task per cycle."""
-        from unittest.mock import MagicMock
+        still happen, or a reload leaks a background task per cycle.
+
+        AND THE TASK IS AWAITED. `cancel()` only requests a stop; it
+        returns before the task has unwound, so the livemap unsubscribe
+        in watch_live_map()'s finally could still be pending when
+        async_unload_entry disconnects the robot on the next line.
+
+        This asserted only the cancel, which is why the missing await
+        went unnoticed.
+        """
+        import asyncio
 
         entity = self._entity()
-        entity._watch_task = MagicMock()
+
+        async def _forever():
+            await asyncio.sleep(3600)
+
+        task = asyncio.ensure_future(_forever())
+        entity._watch_task = task
 
         await entity.async_will_remove_from_hass()
 
-        entity._watch_task.cancel.assert_called_once()
+        assert task.cancelled(), "the task was cancelled but never awaited"
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_task_does_not_raise_out_of_removal(self):
+        """Cancellation is the expected outcome here, not an error --
+        letting CancelledError escape would abort the rest of the unload
+        and leave the robot connected."""
+        import asyncio
+
+        entity = self._entity()
+        task = asyncio.ensure_future(asyncio.sleep(3600))
+        entity._watch_task = task
+
+        await entity.async_will_remove_from_hass()
