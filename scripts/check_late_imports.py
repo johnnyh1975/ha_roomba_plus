@@ -49,6 +49,12 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "calendar -> calendar_rooms": (
+        "Prime-only path inside a module shared by both generations -- a "
+        "Classic robot's calendar never edits schedules, because nothing "
+        "writes cleanSchedule2 yet"
+    ),
+    "calendar -> prime_schedule_services": "as calendar -> calendar_rooms",
     "services -> prime_schedule_services": (
         "IT DOES AVOID A CYCLE -- a transitive one this check cannot see. "
         "prime_schedule_services imports prime_schedule_switch, which imports "
