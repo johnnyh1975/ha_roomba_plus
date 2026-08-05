@@ -298,6 +298,194 @@ async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict:
     return {"household_schedule_id": created_id}
 
 
+_WEEKDAY_TO_WIRE = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
+
+
+async def async_create_schedule_from_calendar(
+    hass: HomeAssistant,
+    config_entry: Any,
+    *,
+    name: str | None,
+    weekday: int,
+    hour: int,
+    minute: int,
+    frequency: str,
+    room_ids: list[str],
+    note: str,
+) -> None:
+    """Creates a schedule from the calendar dialog.
+
+    Goes through the same handler as the service rather than building a
+    second write path. That matters more than the small amount of glue
+    it costs: the create path derives from an existing schedule for a
+    reason found over four field rounds, and a parallel implementation
+    would eventually drift from it.
+
+    `note` is what the room matcher understood. It goes to the LOG, not
+    into the event -- calendar events are regenerated from the schedule
+    rather than stored, so the canonical room labels appear by
+    themselves on the next read. This is the record for anyone reading
+    the log, so a
+    mis-read is visible where the user typed it.
+    """
+    from datetime import time as _time  # noqa: PLC0415
+
+    call_data: dict[str, Any] = {
+        "entity_id": "",  # supplied below; _prime_entry_for is bypassed
+        "days": [_WEEKDAY_TO_WIRE[weekday]],
+        "time": _time(hour=hour, minute=minute),
+        "frequency": frequency,
+        "enabled": True,
+    }
+    if name:
+        call_data["name"] = name
+    if room_ids:
+        call_data["rooms"] = room_ids
+
+    data = config_entry.runtime_data
+    containers = await _read_containers_or_error(config_entry)
+    template = None
+    for _cid, schedules in containers:
+        for schedule in schedules:
+            if getattr(schedule.options, "enabled", None) is not None:
+                template = schedule.options
+                break
+        if template:
+            break
+    if template is None:
+        raise ServiceValidationError(
+            "This household has no existing schedule to derive from — create "
+            "one in the iRobot app first. A schedule built from literals is "
+            "refused by the server; deriving is the only field-proven path."
+        )
+
+    options = _reshaped_options(template, call_data, containers, config_entry)
+    if not name:
+        options = replace(options, name=f"HA {hour:02d}:{minute:02d}")
+    await data.prime_robot.create_schedules(data.prime_household_id, [options])
+    await _refresh(config_entry)
+    _LOGGER.info("roomba_plus: created schedule from calendar -- %s", note)
+
+
+async def async_update_schedule_from_calendar(
+    hass: HomeAssistant,
+    config_entry: Any,
+    schedule_id: str,
+    *,
+    name: str | None,
+    weekday: int,
+    hour: int,
+    minute: int,
+    frequency: str,
+    room_ids: list[str],
+    note: str,
+) -> None:
+    """Rewrites an existing schedule from an edited calendar event.
+
+    THE EDIT IS A REPLACEMENT, NOT A PATCH, and that is the honest
+    reading of what the calendar dialog does: it hands back the whole
+    event, so every field it can express is authoritative. A user who
+    changes only the time still sends the title and description they
+    see, and those are the ones we wrote back after the last edit.
+
+    Which is why round-tripping the description matters. `Küche, Flur`
+    parses to the same two rooms it was written from, so changing the
+    time does not silently drop the room selection -- the failure mode
+    this would otherwise have.
+
+    Shares the read-modify-write discipline with everything else in this
+    file: the container is re-read INSIDE the lock, because
+    `update_schedules()` replaces the whole thing and a list built from
+    a stale read is not a smaller list, it is a deletion.
+    """
+    from datetime import time as _time  # noqa: PLC0415
+
+    data = config_entry.runtime_data
+    call_data = {
+        "entity_id": "",  # supplied below; _prime_entry_for is bypassed
+        "name": name,
+        "days": [_WEEKDAY_TO_WIRE[weekday]],
+        "time": _time(hour=hour, minute=minute),
+        "frequency": frequency,
+        "rooms": room_ids or None,
+    }
+
+    async with _container_lock(config_entry):
+        containers = await _read_containers_or_error(config_entry)
+        target = None
+        container_id = None
+        for cid, schedules in containers:
+            for schedule in schedules:
+                if schedule.schedule_id == schedule_id:
+                    target, container_id = schedule, cid
+                    break
+            if target is not None:
+                break
+        if target is None:
+            raise ServiceValidationError(
+                "That schedule no longer exists on the robot -- it may have been "
+                "deleted in the iRobot app. Reload the integration to catch up."
+            )
+
+        options = _reshaped_options(
+            target.options, call_data, containers, config_entry
+        )
+        rest = [
+            s for s in dict(containers)[container_id]
+            if s.schedule_id != schedule_id
+        ]
+        await data.prime_robot.update_schedules(
+            data.prime_household_id,
+            container_id,
+            [*rest, replace(target, options=options)],
+        )
+    await _refresh(config_entry)
+    _LOGGER.info("roomba_plus: updated schedule from calendar -- %s", note)
+
+
+async def async_delete_schedule_by_id(
+    hass: HomeAssistant, config_entry: Any, schedule_id: str
+) -> None:
+    """Deletes a schedule by its id, for the calendar's delete action.
+
+    Shares the container lock and the sole-occupant decision with the
+    service handler, including the part that matters most: the decision
+    is made from a read taken INSIDE the lock, because deleting a
+    container that only LOOKED like a single occupant would take a
+    schedule added in between with it.
+    """
+    data = config_entry.runtime_data
+    containers = await _read_containers_or_error(config_entry)
+    container_id = next(
+        (
+            cid for cid, schedules in containers
+            if any(s.schedule_id == schedule_id for s in schedules)
+        ),
+        None,
+    )
+    if container_id is None:
+        raise ServiceValidationError(
+            f"Schedule {schedule_id} no longer exists on the robot"
+        )
+
+    async with _container_lock(config_entry.entry_id, container_id):
+        containers = await _read_containers_or_error(config_entry)
+        remaining = [
+            s
+            for cid, schedules in containers if cid == container_id
+            for s in schedules if s.schedule_id != schedule_id
+        ]
+        if remaining:
+            await data.prime_robot.update_schedules(
+                data.prime_household_id, container_id, remaining
+            )
+        else:
+            await data.prime_robot.delete_schedule(
+                data.prime_household_id, container_id
+            )
+    await _refresh(config_entry)
+
+
 async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict:
     config_entry, entry = _prime_entry_for(hass, call.data["entity_id"])
     data = config_entry.runtime_data

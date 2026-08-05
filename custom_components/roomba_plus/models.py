@@ -178,6 +178,24 @@ class RoombaData:
     #:
     #: A user with two equally-used floors would answer differently.
     #: Nobody is asking for that.
+    #: Where the dock was last SEEN, as (x_mm, y_mm), from the position
+    #: stream rather than from the map bundle.
+    #:
+    #: THE BUNDLE REMEMBERS WHERE THE DOCK STOOD WHEN THE MAP WAS BUILT.
+    #: @utkjmitch's map draws it on a spot now occupied by a treadmill,
+    #: while the iRobot app shows it correctly -- so the app sources it
+    #: from something fresher than the `dockPose` feature, which is the
+    #: only dock data the bundle carries.
+    #:
+    #: A docked robot is that fresher source, and we already receive it:
+    #: when the phase reaches `charge`, the last position in the stream
+    #: is the dock, to within the robot's own accuracy.
+    #:
+    #: Not persisted. It re-learns on the first mission after a restart,
+    #: and until then the bundle value stands -- which is the behaviour
+    #: this had all along, so nothing is lost by waiting.
+    prime_observed_dock: tuple[float, float] | None = None
+
     prime_selected_map_id: str | None = None
 
     prime_household_id: str | None = None

@@ -36,8 +36,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.calendar import CalendarEntity, CalendarEvent
+from homeassistant.components.calendar import (
+    CalendarEntity,
+    CalendarEntityFeature,
+    CalendarEvent,
+)
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
@@ -199,6 +204,21 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         """Only refresh on messages that actually touch the schedule —
         same gate as the existing sensor.*_next_clean sensor."""
         return "cleanSchedule2" in new_state or "cleanSchedule" in new_state
+
+
+#: Home Assistant recurrence rules this robot can actually express.
+#:
+#: The dialog allows far more than a Roomba does -- "every third Tuesday
+#: until October" is a perfectly good RRULE and there is no schedule
+#: frequency for it. Those are REFUSED rather than rounded down to
+#: weekly: a rule quietly turned into something else is the failure this
+#: project has spent the week chasing in other forms, and it would be
+#: worse here because the robot would then run on days nobody chose.
+_RRULE_TO_FREQUENCY: dict[str, str] = {
+    "FREQ=WEEKLY": "WEEKLY",
+    "FREQ=WEEKLY;INTERVAL=2": "BI_WEEKLY",
+    "FREQ=MONTHLY": "MONTHLY",
+}
 
 
 class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
@@ -457,6 +477,223 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         if seconds <= 0:
             return end
         return start + dt_util.dt.timedelta(seconds=seconds)
+
+    _attr_supported_features = (
+        CalendarEntityFeature.CREATE_EVENT
+        | CalendarEntityFeature.UPDATE_EVENT
+        | CalendarEntityFeature.DELETE_EVENT
+    )
+
+    async def async_create_event(self, **kwargs: Any) -> None:
+        """Creates a schedule from Home Assistant's own calendar dialog.
+
+        WHY THIS EXISTS ALONGSIDE THE SERVICE. Nobody finds Developer
+        Tools -> Actions; everybody finds a calendar with a plus button.
+        The service is for people who already know what they want. This
+        is how somebody learns the feature exists at all -- and the
+        calendar already SHOWS schedules, so a user seeing one there
+        reasonably expects to be able to add one.
+
+        WHAT THE DIALOG CANNOT EXPRESS, and how each is handled:
+
+          - THE END TIME. A schedule says when it starts and never how
+            long it takes. Home Assistant insists on an end; it is
+            ignored. Harmless, and the alternative is refusing every
+            creation over a field the robot has no concept of.
+          - ROOMS. No field for them, so the summary is read against the
+            robot's own room list -- see calendar_rooms. Nothing
+            recognised means the whole home, which is the common case
+            and the one a plain title gives you.
+          - WETNESS. Left out. Pulling a number out of prose is a
+            different proposition from matching a name against a closed
+            list, and it is the rarer setting.
+          - RECURRENCE beyond what the robot has. Refused, not rounded.
+
+        WHAT WAS UNDERSTOOD BECOMES THE EVENT, by a route worth being
+        precise about: events are not stored, they are regenerated from
+        the schedule on every read. So the summary a user sees afterwards
+        is built from the room labels the robot itself uses, and their
+        own wording is gone entirely.
+
+        Someone typing "kuche und flur" gets back "Küche, Flur" -- a
+        mis-read shows up at the place they typed it, without anything
+        having to remember what they wrote.
+        """
+        from .calendar_rooms import (  # noqa: PLC0415
+            AmbiguousRoomError,
+            describe_match,
+            match_rooms,
+        )
+        from .prime_schedule_services import async_create_schedule_from_calendar  # noqa: PLC0415
+
+        start = kwargs.get("dtstart")
+        if start is None:
+            raise ServiceValidationError("A start time is required.")
+        if not isinstance(start, dt_stdlib.datetime):
+            raise ServiceValidationError(
+                "All-day events cannot become schedules -- a robot needs a "
+                "time of day to start at."
+            )
+
+        frequency = self._frequency_from_rrule(kwargs.get("rrule"))
+        local_start = dt_util.as_local(start)
+        summary = kwargs.get("summary") or ""
+
+        try:
+            room_ids = match_rooms(summary, self._room_names())
+        except AmbiguousRoomError as err:
+            raise ServiceValidationError(str(err)) from err
+
+        await async_create_schedule_from_calendar(
+            self.hass,
+            self._config_entry,
+            name=summary or None,
+            weekday=local_start.weekday(),
+            hour=local_start.hour,
+            minute=local_start.minute,
+            frequency=frequency,
+            room_ids=room_ids,
+            note=describe_match(room_ids, self._room_names()),
+        )
+
+    async def async_update_event(
+        self,
+        uid: str,
+        event: dict[str, Any],
+        recurrence_id: str | None = None,
+        recurrence_range: str | None = None,
+    ) -> None:
+        """Rewrites a schedule from an edited calendar event.
+
+        WITHOUT THIS, EDITING IS DELETE-AND-RECREATE. Home Assistant only
+        offers a save button when the entity advertises UPDATE_EVENT, so
+        a user opening a schedule to shift it by an hour previously had
+        no way to do it -- which works, and which nobody expects.
+
+        The edit replaces rather than patches, because that is what the
+        dialog hands back: the whole event, including the title and
+        description the user is looking at. Those are not their own
+        words: events are regenerated from the schedule, so what the
+        dialog opens with is already the canonical room labels.
+
+        Which is what makes editing safe. "Küche, Flur" parses back to
+        the same two rooms, so changing only the time does not silently
+        drop the room selection -- the failure mode this would otherwise
+        have.
+
+        RECURRENCE EDITS OF A SINGLE OCCURRENCE ARE REFUSED. A robot
+        schedule has no notion of "this one only": every occurrence comes
+        from the same rule. Accepting the edit and applying it to all of
+        them would change days the user did not choose.
+        """
+        from .calendar_rooms import (  # noqa: PLC0415
+            AmbiguousRoomError,
+            describe_match,
+            match_rooms,
+        )
+        from .prime_schedule_services import (  # noqa: PLC0415
+            async_update_schedule_from_calendar,
+        )
+
+        if recurrence_range == "THISEVENT":
+            raise ServiceValidationError(
+                "A robot schedule has no single occurrence to change -- every "
+                "run comes from the same rule. Choose to edit all events, or "
+                "delete this schedule and create another."
+            )
+
+        start = event.get("dtstart")
+        if start is None:
+            raise ServiceValidationError("A start time is required.")
+        if not isinstance(start, dt_stdlib.datetime):
+            raise ServiceValidationError(
+                "All-day events cannot become schedules -- a robot needs a "
+                "time of day to start at."
+            )
+
+        frequency = self._frequency_from_rrule(event.get("rrule"))
+        local_start = dt_util.as_local(start)
+        summary = event.get("summary") or ""
+        # Both fields, same as create: a user types the rooms wherever it
+        # suits them, and neither field is labelled for it.
+        text = f"{summary} {event.get('description') or ''}"
+        try:
+            room_ids = match_rooms(text, self._room_names())
+        except AmbiguousRoomError as err:
+            raise ServiceValidationError(str(err)) from err
+
+        await async_update_schedule_from_calendar(
+            self.hass,
+            self._config_entry,
+            uid,
+            name=summary or None,
+            weekday=local_start.weekday(),
+            hour=local_start.hour,
+            minute=local_start.minute,
+            frequency=frequency,
+            room_ids=room_ids,
+            note=describe_match(room_ids, self._room_names()),
+        )
+
+    async def async_delete_event(
+        self, uid: str, recurrence_id: str | None = None, recurrence_range: str | None = None
+    ) -> None:
+        """Deletes the schedule behind an event.
+
+        The half that translates without loss: click, delete, gone. No
+        fields, no assumptions, and it closes a real gap -- removing a
+        schedule otherwise means finding its switch and calling a
+        service.
+
+        `recurrence_id` and `recurrence_range` are accepted and ignored:
+        a robot schedule has no individual occurrences to delete, so
+        deleting "this one" and "all of them" are the same act. Saying
+        so is better than pretending to support a distinction that does
+        not exist.
+        """
+        from .prime_schedule_services import async_delete_schedule_by_id  # noqa: PLC0415
+
+        await async_delete_schedule_by_id(self.hass, self._config_entry, uid)
+
+    @staticmethod
+    def _frequency_from_rrule(rrule: str | None) -> str:
+        """The robot frequency for a Home Assistant recurrence rule.
+
+        A missing rule means ONCE -- a single-occurrence event is exactly
+        what a one-off schedule is, and the server deletes a fired one by
+        itself within minutes (confirmed in the field), so nothing is
+        left behind.
+
+        Anything the robot cannot express is refused. Rounding "every
+        third Tuesday" down to weekly would run the robot on days nobody
+        chose, and the user would have no way to tell from the calendar
+        that it had happened.
+        """
+        if not rrule:
+            return "ONCE"
+        normalised = ";".join(
+            part.strip().upper() for part in str(rrule).split(";") if part.strip()
+        )
+        # BYDAY is redundant here: the weekday comes from the start time,
+        # and a rule naming the same day adds nothing to refuse over.
+        normalised = ";".join(
+            p for p in normalised.split(";") if not p.startswith("BYDAY=")
+        )
+        frequency = _RRULE_TO_FREQUENCY.get(normalised)
+        if frequency is None:
+            raise ServiceValidationError(
+                f"This robot cannot express '{rrule}'. It supports weekly, "
+                "every two weeks, monthly, and one-off schedules. For anything "
+                "else, use the roomba_plus.create_schedule action."
+            )
+        return frequency
+
+    def _room_names(self) -> dict[str, str]:
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        names = getattr(coordinator, "room_names", None)
+        return names if isinstance(names, dict) else {}
 
     def _robot_has_stopped(self) -> bool:
         """Whether the robot is demonstrably not cleaning right now.

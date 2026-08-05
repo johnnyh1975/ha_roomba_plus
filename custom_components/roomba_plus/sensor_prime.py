@@ -1401,6 +1401,16 @@ _PART_COUNT_UNITS: dict[str, str | None] = {
     "minutes": UnitOfTime.HOURS,   # converted in native_value
     "combo_missions": "routines",
     "pad_washes_used": "pad washes",
+    # THE LAST TWO OF THE SEVEN, from the app's own RobotHealthCountType
+    # enum -- neither has appeared in any catalogue response yet.
+    #
+    # Added anyway, because the cost of being ready is one line each and
+    # the cost of not being is a sensor that shows a bare number when a
+    # robot finally reports one. The enum is complete: Minutes,
+    # Missions, ComboMissions, Evacs, Battery, PadWashesUsed, Sqft --
+    # so this table now covers every type the app knows.
+    "battery": "charge cycles",
+    "sqft": "ft²",
 }
 
 

@@ -3266,6 +3266,36 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
+    def _dock_position(self) -> tuple[float, float] | None:
+        """Where to draw the dock: seen beats remembered.
+
+        The map bundle's `dockPose` records where the dock stood when
+        the map was BUILT, and nothing corrects it when the dock moves.
+        @utkjmitch's map put it on a spot now occupied by a treadmill
+        while the iRobot app showed it correctly -- so the app reads
+        something fresher, and `dockPose` is the only dock data the
+        bundle carries.
+
+        A robot reporting `charge` is standing on the dock, and its
+        position comes through the same stream in the same coordinates.
+        That observation wins when it exists.
+
+        The bundle stays as the fallback rather than being dropped: it
+        is available immediately, on every account, without waiting for
+        a mission to end. A remembered dock in roughly the right place
+        beats no dock at all, which is what a fresh install would
+        otherwise show.
+        """
+        observed = getattr(
+            self._config_entry.runtime_data, "prime_observed_dock", None
+        )
+        if isinstance(observed, (tuple, list)) and len(observed) >= 2:
+            return (float(observed[0]), float(observed[1]))
+        if self._floor_plan.dock is not None:
+            dx, dy, _orientation = self._floor_plan.dock
+            return (dx, dy)
+        return None
+
     def _render_png(self) -> bytes:
         """Draws the polygons, reusing the Classic renderer's transform."""
         from PIL import Image, ImageDraw  # noqa: PLC0415

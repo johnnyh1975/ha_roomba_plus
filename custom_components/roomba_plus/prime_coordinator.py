@@ -563,6 +563,31 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+    def _note_dock_position(self) -> None:
+        """Records where the robot is while charging, as the dock.
+
+        The FIRST point of a mission is also at the dock, and it is
+        tempting to use -- but the stream only starts once it is asked
+        for, by which time the robot has begun to move. The last point
+        while charging is the one that is unambiguously on the dock.
+
+        Where the first point earns its keep is as a cross-check: if the
+        two ends of a mission agree, the dock did not move during it.
+        Not done here, because a disagreement has no better answer than
+        the docked reading anyway.
+        """
+        data = self.config_entry.runtime_data
+        positions = getattr(data, "prime_positions", None)
+        if not positions:
+            return
+        last = positions[-1]
+        if not isinstance(last, (tuple, list)) or len(last) < 2:
+            return
+        try:
+            data.prime_observed_dock = (float(last[0]), float(last[1]))
+        except (TypeError, ValueError):
+            return
+
     def _note_phase_for_timer(self, shadows: dict[str, Any]) -> None:
         """Feeds phase transitions to MissionTimerStore.
 
@@ -589,6 +614,27 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             phase = status.get("phase")
             if phase is None:
                 return
+            # A DOCKED ROBOT IS STANDING ON THE DOCK, which makes the
+            # last position in the stream a fresher dock location than
+            # the map bundle's -- the bundle remembers where the dock
+            # stood when the map was built, and a moved dock is never
+            # corrected there.
+            #
+            # OBSERVED BEFORE THE TRAIL IS CLEARED, a few lines below.
+            # A new mission number empties the list, and a reading
+            # taken afterwards would find nothing. In practice the
+            # number changes when the next mission STARTS rather
+            # than while charging, so the two rarely meet -- but the
+            # order is the difference between rarely and never.
+            #
+            # Read at `charge` rather than at the end of the mission:
+            # the trail is cleared when the NEXT mission starts, so it
+            # is still intact here, and `charge` is the one phase where
+            # the robot is unambiguously on the dock rather than on its
+            # way to it.
+            if phase == "charge":
+                self._note_dock_position()
+
             # THE TRAIL IS CLEARED ON A NEW MISSION NUMBER, WHATEVER
             # THE PHASE. It used to sit inside the `phase == "run"`
             # branch below, which requires catching a shadow update
