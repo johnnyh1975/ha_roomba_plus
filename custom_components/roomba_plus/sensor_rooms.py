@@ -163,6 +163,50 @@ def _get_planned_room_order(data: Any) -> list[str]:
     return result
 
 
+def _prime_room_time_estimates(
+    config_entry: Any, planned_order: list[str]
+) -> list[int | None]:
+    """Per-room estimates in seconds, from the Prime time-estimates call.
+
+    MATCHED BY ROOM NAME, because the planned order is names and the
+    estimates are keyed by region id. The schedule coordinator already
+    keeps that mapping for the switch labels, so this reuses it rather
+    than building a second one that could disagree.
+
+    A room with no usable estimate contributes None rather than a
+    substitute, and the caller already knows what to do with that: the
+    progress sensor treats an incomplete plan as no answer, which is the
+    right outcome. A percentage built on half the rooms would be
+    confidently wrong.
+    """
+    estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
+    if not isinstance(getattr(estimates, "by_region", None), dict):
+        return [None] * len(planned_order)
+
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    room_names = getattr(coordinator, "room_names", None) or {}
+    by_name = {
+        str(name).lower(): str(rid) for rid, name in room_names.items() if name
+    }
+
+    from roombapy_prime.models import TimeEstimates  # noqa: PLC0415
+
+    out: list[int | None] = []
+    for room_name in planned_order:
+        rid = by_name.get((room_name or "").lower())
+        best = (
+            TimeEstimates.best(estimates.by_region.get(rid) or [])
+            if rid else None
+        )
+        if best is None or not best.is_confident or best.seconds is None:
+            out.append(None)
+            continue
+        out.append(int(best.seconds))
+    return out
+
+
 def _compute_room_time_estimates(
     config_entry: Any, planned_order: list[str]
 ) -> list[int | None]:
@@ -178,7 +222,15 @@ def _compute_room_time_estimates(
     """
     cc = config_entry.runtime_data.cloud_coordinator
     if cc is None:
-        return [None] * len(planned_order)
+        # PRIME HAS ITS OWN SOURCE, and having none was why
+        # mission_progress read "unknown" on every Prime robot: this
+        # returned nothing but a list of Nones, and the sensor has no
+        # percentage to compute without estimates.
+        #
+        # `/v1/time-estimates` is the Prime equivalent of what the cloud
+        # coordinator provides on Classic -- per-room predictions from
+        # the robot's own history, fetched once at setup.
+        return _prime_room_time_estimates(config_entry, planned_order)
 
     # v2.7.5 (TP-EST-FIX): per-room params in lastCommand.regions take
     # priority over cleanMissionStatus global fields. cleanMissionStatus

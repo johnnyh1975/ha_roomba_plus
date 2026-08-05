@@ -444,6 +444,37 @@ def _robot_cloud_connection(data: Any) -> dict[str, Any]:
     }
 
 
+def _shape_of(value: Any, depth: int = 0) -> Any:
+    """Structure of a payload without its contents.
+
+    Keys and types, with values truncated hard. Written for the Prime
+    mission timeline, which is modelled from the app's source and has
+    never been seen on the wire -- the mapping that would light up four
+    dead sensors needs the field names and nothing else.
+
+    Numbers are kept: a duration or an area is not private, and seeing
+    that `duration_m` holds 43 rather than 43.0 is exactly the kind of
+    detail that decides whether a mapping works first time. Strings are
+    cut to eight characters, which leaves an id recognisable as an id
+    and unusable as an id.
+    """
+    if depth > 4:
+        return "…"
+    if isinstance(value, dict):
+        return {str(k): _shape_of(v, depth + 1) for k, v in list(value.items())[:40]}
+    if isinstance(value, list):
+        if not value:
+            return []
+        # One sample rather than the whole list: a timeline of forty
+        # missions has one shape and forty sets of values.
+        return [_shape_of(value[0], depth + 1), f"…and {len(value) - 1} more"]
+    if isinstance(value, str):
+        return value[:8] + "…" if len(value) > 8 else value
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return type(value).__name__
+
+
 def _push_freshness(data: Any) -> dict[str, Any]:
     """How long since ANY Prime push message arrived.
 
@@ -807,6 +838,27 @@ async def _build_diagnostics(
                 # next, from the same robot, with an update and restart
                 # in between. Without this note that reads like a
                 # regression.
+                # THE SHAPE, NOT JUST WHETHER THERE IS ONE.
+                #
+                # This reported a bare True/False and threw the rest
+                # away. One capture already came back True -- the
+                # timeline had arrived, and we recorded only that fact.
+                #
+                # It matters because the Prime mission history is
+                # modelled but has NEVER been seen on the wire. Four
+                # sensors (clean streak, last mission, last duration,
+                # area cleaned today) read a store that the Prime path
+                # does not fill, and the mapping to fill it is a small
+                # function -- once somebody knows what the wire actually
+                # looks like. Building it against a model instead cost
+                # four field rounds the last time (create_schedules).
+                #
+                # Keys and types only, values truncated: enough to write
+                # the mapping, not enough to carry a household around in
+                # a bug report.
+                "mission_data_shape": _shape_of(
+                    getattr(mission_coordinator, "data", None)
+                ),
                 "mission_data_note": (
                     "the timeline arrives by push and is not persisted; "
                     "empty until the robot runs a mission after startup"

@@ -371,3 +371,187 @@ run_favorite:
       example: "01KRQ4S1RP493P1WKCG71C90D9"
       selector:
         text:
+
+create_schedule:
+  name: Create schedule
+  description: >-
+    Creates a cleaning schedule on the robot itself, so it runs even when Home
+    Assistant is not. Derived from an existing schedule, so the household needs
+    at least one already.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    entity_id:
+      name: Robot
+      description: The vacuum entity of the Prime robot.
+      required: true
+      selector:
+        entity:
+          integration: roomba_plus
+          domain: vacuum
+    name:
+      name: Name
+      description: >-
+        A label of your choosing. The iRobot app calls every schedule "Regular
+        Schedule" and offers no way to rename one, so this is the only place a
+        schedule can be given a name that means something.
+      example: Kitchen, weekday mornings
+      selector:
+        text:
+    days:
+      name: Days
+      description: Weekdays the schedule runs on.
+      required: true
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: mon
+            - label: Tuesday
+              value: tue
+            - label: Wednesday
+              value: wed
+            - label: Thursday
+              value: thu
+            - label: Friday
+              value: fri
+            - label: Saturday
+              value: sat
+            - label: Sunday
+              value: sun
+    time:
+      name: Time
+      description: When the mission starts, in the robot's own time zone.
+      required: true
+      selector:
+        time:
+    frequency:
+      name: Frequency
+      description: >-
+        ONCE fires a single time and the server then deletes the schedule by
+        itself, within minutes — confirmed in the field, and it happens even
+        when the mission is cut short. Use it for "clean the kitchen tomorrow
+        at nine".
+      default: WEEKLY
+      selector:
+        select:
+          options: [WEEKLY, BI_WEEKLY, MONTHLY, ONCE]
+    rooms:
+      name: Rooms
+      description: >-
+        Room names as they appear on the schedule switches. Leave empty to
+        clean everywhere.
+      example: '["Kitchen", "Hallway"]'
+      selector:
+        object:
+    pad_wetness:
+      name: Pad wetness
+      description: >-
+        1 to 3, applied per room. Confirmed to be stored exactly as sent, and
+        confirmed to override the robot's global setting — so this is the level
+        at which wetness actually takes effect.
+      selector:
+        number:
+          min: 1
+          max: 3
+          mode: slider
+    enabled:
+      name: Enabled
+      description: Create it switched on, or off to arm it later.
+      default: true
+      selector:
+        boolean:
+
+update_schedule:
+  name: Update schedule
+  description: >-
+    Changes an existing schedule. Only the fields you supply are touched; the
+    rest keep their current values.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: switch
+  fields:
+    entity_id:
+      name: Schedule
+      description: The schedule switch to change.
+      required: true
+      selector:
+        entity:
+          integration: roomba_plus
+          domain: switch
+    name:
+      name: Name
+      description: A new label for the schedule.
+      selector:
+        text:
+    days:
+      name: Days
+      description: Replaces the weekdays entirely rather than adding to them.
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: mon
+            - label: Tuesday
+              value: tue
+            - label: Wednesday
+              value: wed
+            - label: Thursday
+              value: thu
+            - label: Friday
+              value: fri
+            - label: Saturday
+              value: sat
+            - label: Sunday
+              value: sun
+    time:
+      name: Time
+      selector:
+        time:
+    frequency:
+      name: Frequency
+      selector:
+        select:
+          options: [WEEKLY, BI_WEEKLY, MONTHLY, ONCE]
+    rooms:
+      name: Rooms
+      description: Replaces the room list entirely.
+      example: '["Kitchen", "Hallway"]'
+      selector:
+        object:
+    pad_wetness:
+      name: Pad wetness
+      description: 1 to 3, applied to every room in the schedule.
+      selector:
+        number:
+          min: 1
+          max: 3
+          mode: slider
+    enabled:
+      name: Enabled
+      selector:
+        boolean:
+
+delete_schedule:
+  name: Delete schedule
+  description: >-
+    Removes a schedule from the robot. The switch disappears within a refresh
+    cycle. Other schedules in the same household are left alone.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: switch
+  fields:
+    entity_id:
+      name: Schedule
+      description: The schedule switch to delete.
+      required: true
+      selector:
+        entity:
+          integration: roomba_plus
+          domain: switch

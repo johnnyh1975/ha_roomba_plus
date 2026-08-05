@@ -90,6 +90,7 @@ from .map_renderer import (
     ROBOT_DIAMETER_MM_DEFAULT,
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
+from .prime_mission_import import records_from_history
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
@@ -1116,6 +1117,90 @@ def _unknown_sku_issue_url(sku: str | None) -> str:
         f"{ISSUE_TRACKER_URL}/new"
         f"?title={quote(title)}&body={quote(body)}&labels={quote('sku-table')}"
     )
+
+
+async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> None:
+    """Fetches the robot's own per-room and whole-mission estimates.
+
+    Two things read them. The schedule calendar gives every occurrence a
+    flat hour because a schedule says when it starts and never how long
+    it takes -- a tester watched a scheduled mission finish in minutes
+    while the entity stayed "On" for the rest of the hour. And
+    `mission_progress` computes a percentage from elapsed time against
+    per-room estimates, which on Prime it has never had.
+
+    ONCE AT SETUP. These are predictions from the robot's own cleaning
+    history; they shift over weeks. A request per refresh would be a
+    cloud call for something that barely moves.
+
+    Failures are swallowed. Both callers already work without estimates,
+    just less well, and a setup that failed over a prediction would be a
+    poor trade.
+    """
+    from roombapy_prime.models import TimeEstimates  # noqa: PLC0415
+
+    robot = config_entry.runtime_data.prime_robot if config_entry.runtime_data else None
+    if robot is None:
+        return
+    try:
+        raw = await robot.get_time_estimates()
+        config_entry.runtime_data.prime_time_estimates = TimeEstimates.from_json(raw)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "roomba_plus: no time estimates for this robot -- the calendar keeps "
+            "its flat one-hour window and mission progress stays unavailable, "
+            "which is where both were before", exc_info=True,
+        )
+
+
+async def _async_import_prime_missions(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+    store: Any,
+) -> None:
+    """Imports a Prime robot's mission history into the mission store.
+
+    Same endpoint the Classic path uses, `GET /v1/{blid}/missionhistory`,
+    and the shape is settled rather than assumed: the app's own
+    restservices package returns a bare `List<MissionHistory>`, and every
+    field of the vendor's 20-entry sample maps onto the parsed entry.
+
+    ONCE AT SETUP, NOT ON A SCHEDULE. The history only grows when a
+    mission ends, and the four sensors reading it are summaries rather
+    than live values -- polling it would be a cloud request per interval
+    for data that changes a few times a week. A restart picks up
+    whatever accumulated meanwhile.
+
+    Failures are logged and swallowed. An empty mission store is the
+    state this has been in all along; a setup that fails because the
+    history could not be fetched would be a worse outcome than the
+    problem it fixes.
+    """
+    robot = config_entry.runtime_data.prime_robot if config_entry.runtime_data else None
+    if robot is None:
+        return
+    try:
+        from roombapy_prime.models.mission_history import (  # noqa: PLC0415
+            parse_mission_history,
+        )
+
+        raw = await robot.get_mission_history(robot.blid)
+        entries = parse_mission_history(raw)
+        records = records_from_history(entries, robot.blid)
+        added = sum(store.append_validated(record) for record in records)
+        if added:
+            await store.async_save(hass, config_entry.entry_id)
+        _LOGGER.debug(
+            "roomba_plus: imported %d of %d mission history entries for %s "
+            "(the rest were already known)",
+            added, len(records), robot.blid,
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "roomba_plus: could not import Prime mission history -- the "
+            "mission-based sensors will stay empty, which is where they were "
+            "before this ran", exc_info=True,
+        )
 
 
 async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:

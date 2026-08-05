@@ -589,8 +589,54 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             phase = status.get("phase")
             if phase is None:
                 return
+            # THE TRAIL IS CLEARED ON A NEW MISSION NUMBER, WHATEVER
+            # THE PHASE. It used to sit inside the `phase == "run"`
+            # branch below, which requires catching a shadow update
+            # while the robot is actually cleaning -- and a Prime robot
+            # may push `ro-currentstate` only around the edges of a run.
+            # Every capture from the field shows `phase: charge`.
+            #
+            # @chairstacker ended up with four missions' trails on one
+            # map and could only clear it by reloading the integration.
+            # The mission number had moved each time; we were not
+            # looking when it did.
+            #
+            # `nMssn` increments when a mission STARTS, so acting on a
+            # change is not premature -- it cannot wipe a run the user
+            # has not seen the end of, because by then the next one has
+            # begun.
+            #
+            # The "prime" fallback is deliberate and inert: with no
+            # number at all the value never changes and the trail is
+            # never cleared, which is the old behaviour rather than a
+            # trail that clears at random.
+            mission_id = str(status.get("nMssn") or status.get("mssnM") or "prime")
+            # THE FIRST OBSERVATION DOES CLEAR, and that is deliberate:
+            # `prime_positions` lives on runtime_data and is rebuilt on
+            # every reload, so anything in it at that point came from
+            # before and belongs to no mission this coordinator knows.
+            #
+            # An earlier attempt here skipped the first clear to protect
+            # a restored trail. There is no restored trail -- it was a
+            # guard against an imagined problem, and the existing test
+            # said so.
+            #
+            # The one exception is the inert fallback: a robot reporting
+            # no number at all gets "prime", which never changes again,
+            # so clearing on the way to it would be a single arbitrary
+            # wipe for no benefit.
+            if mission_id != self._trail_mission_id:
+                previous = self._trail_mission_id
+                self._trail_mission_id = mission_id
+                if mission_id == "prime" and previous is None:
+                    return
+                positions = getattr(
+                    self.config_entry.runtime_data, "prime_positions", None
+                )
+                if positions is not None:
+                    positions.clear()
+
             if phase == "run":
-                mission_id = str(status.get("nMssn") or status.get("mssnM") or "prime")
                 # A NEW MISSION CLEARS THE TRAIL.
                 #
                 # Positions only ever accumulated before: the path from
@@ -602,13 +648,6 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # Keyed on the mission id changing rather than on the
                 # phase, because a robot that pauses and resumes re-enters
                 # "run" with the same mission and should keep its trail.
-                if mission_id != self._trail_mission_id:
-                    self._trail_mission_id = mission_id
-                    positions = getattr(
-                        self.config_entry.runtime_data, "prime_positions", None
-                    )
-                    if positions is not None:
-                        positions.clear()
                 store.on_phase_run(mission_id, self.hass, self.config_entry.entry_id)
             else:
                 # Anything that is not "run" ends the running segment --

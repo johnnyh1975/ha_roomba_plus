@@ -143,6 +143,18 @@ class RoombaData:
     # toggled in the iRobot app stayed wrong in Home Assistant until a
     # reload, and an automation using that switch as a condition acted
     # on it. See PrimeScheduleCoordinator's docstring.
+    #: Per-room and whole-mission time estimates, fetched once at setup.
+    #:
+    #: FETCHED ONCE, NOT POLLED. These are the robot's own predictions
+    #: from its cleaning history -- they shift over weeks, not minutes,
+    #: and a request per refresh would be a cloud call for something
+    #: that barely moves.
+    #:
+    #: None means never fetched or the fetch failed. Callers fall back
+    #: to whatever they did before rather than showing a zero: an
+    #: estimate is an improvement on a guess, not a prerequisite.
+    prime_time_estimates: "Any | None" = None
+
     prime_schedule_coordinator: "PrimeScheduleCoordinator | None" = None
     # NEW: household_id for THIS robot, resolved once via
     # PrimeRobot.get_household_id() during _async_setup_entry_prime() --

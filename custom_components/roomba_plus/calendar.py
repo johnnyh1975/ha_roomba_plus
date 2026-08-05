@@ -403,6 +403,81 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             now - DEFAULT_EVENT_DURATION, now + _NEXT_EVENT_LOOKAHEAD
         )
 
+    def _estimated_end(self, occurrence: tuple) -> Any:
+        """When this occurrence is expected to finish.
+
+        The parser gives every occurrence a flat hour, because a schedule
+        says when it starts and never how long it takes. The robot does
+        know: `/v1/time-estimates` returns a prediction per room and one
+        for a whole mission, from its own cleaning history.
+
+        So a schedule naming rooms gets the sum of those rooms, and one
+        cleaning everywhere gets the whole-mission figure. Neither is
+        exact -- they are predictions -- which is why the phase check
+        below still overrides them: an estimate is about the future, a
+        robot on its dock is about the present.
+
+        The flat hour remains the fallback, for a robot that offers no
+        estimates and for rooms it has not learned yet. It is a poor
+        estimate rather than a wrong one, and it is what this did
+        before.
+        """
+        start, end = occurrence[0], occurrence[1]
+        region_ids = occurrence[2] if len(occurrence) > 2 else None
+        estimates = getattr(
+            self._config_entry.runtime_data, "prime_time_estimates", None
+        )
+        # Checked by SHAPE, not for None. runtime_data is a MagicMock
+        # under test and something unexpected in the field, and either
+        # sails past `is None` and then fails on arithmetic. What this
+        # needs is a mapping of regions; anything else is no estimate.
+        if not isinstance(getattr(estimates, "by_region", None), dict):
+            return end
+
+        from roombapy_prime.models import TimeEstimates  # noqa: PLC0415
+
+        seconds = 0.0
+        if region_ids:
+            for rid in region_ids:
+                best = TimeEstimates.best(estimates.by_region.get(str(rid)) or [])
+                # ONE UNKNOWN ROOM DISCARDS THE WHOLE SUM. A partial
+                # total would be confidently short, and an event that
+                # ends too early is worse than one that ends too late:
+                # it reports "no mission running" while the robot is
+                # still working.
+                if best is None or best.seconds is None:
+                    return end
+                seconds += best.seconds
+        else:
+            best = TimeEstimates.best(estimates.mission)
+            if best is None or best.seconds is None:
+                return end
+            seconds = best.seconds
+
+        if seconds <= 0:
+            return end
+        return start + dt_util.dt.timedelta(seconds=seconds)
+
+    def _robot_has_stopped(self) -> bool:
+        """Whether the robot is demonstrably not cleaning right now.
+
+        Deliberately narrow: True only when the phase is one of the
+        settled resting states. Anything else -- unknown, missing, a
+        phase nobody has catalogued -- returns False and leaves the
+        estimated window standing, because ending an event on a phase we
+        do not understand would be worse than ending it late.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        raw = (coordinator.data or {}).get("ro-currentstate") if coordinator else None
+        if raw is None:
+            return False
+        phase = (raw.get("cleanMissionStatus") or {}).get("phase")
+        mission = None
+        del mission
+        return phase in ("charge", "stop", "hmPostMsn", "hmUsrDock")
+
     @property
     def event(self) -> CalendarEvent | None:
         """REAL BUG FOUND AND FIXED (this session, chairstacker, see
@@ -417,7 +492,27 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         (start <= now < end) first, falling back to the next upcoming
         one only if nothing is currently ongoing."""
         now = dt_util.now()
-        ongoing = [o for o in self._cached_occurrences if o[0] <= now < o[1]]
+        # A SCHEDULED EVENT ENDS WHEN THE ROBOT STOPS, not when an
+        # invented window runs out.
+        #
+        # A schedule says when it starts and never how long it takes, so
+        # occurrences are given a flat hour. The robot is not obliged to
+        # take one: @chairstacker ran a scheduled mission that finished
+        # in minutes and watched this entity stay "On" long after the
+        # robot had docked.
+        #
+        # An estimate is a guess about the future; a robot sitting on its
+        # dock is an observation about the present, and the observation
+        # wins. Only ONGOING occurrences are cut short this way -- an
+        # upcoming one has not started, so a parked robot says nothing
+        # about it.
+        if self._robot_has_stopped():
+            ongoing = []
+        else:
+            ongoing = [
+                o for o in self._cached_occurrences
+                if o[0] <= now < self._estimated_end(o)
+            ]
         if ongoing:
             start, end, region_ids, name = min(ongoing, key=lambda o: o[0])
             return _to_calendar_event(start, end, self._zone_labels(region_ids))
