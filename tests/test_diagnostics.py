@@ -927,3 +927,68 @@ class TestTheTopicPrefixIsVisible:
         for value in (None, ""):
             robot = SimpleNamespace(_irbt_topic_prefix=value)
             assert bool(getattr(robot, "_irbt_topic_prefix", None)) is False
+
+
+class TestTheTimelineShapeIsReported:
+    """Diagnostics reported a bare True/False for the mission timeline
+    and threw the rest away. One capture already came back True -- the
+    data had arrived, and we recorded only that it had.
+
+    It matters because the Prime mission history is modelled from the
+    app's source and has never been seen on the wire. Four sensors read
+    a store the Prime path does not fill, and the mapping to fill it is
+    a small function once somebody knows the field names. Building it
+    against a model instead cost four field rounds last time.
+    """
+
+    def _shape(self, value):
+        from custom_components.roomba_plus.diagnostics import _shape_of
+
+        return _shape_of(value)
+
+    def test_field_names_survive(self):
+        """The whole point: the mapping needs the names."""
+        shape = self._shape({"duration_m": 43, "square_feet_covered": 545})
+
+        assert set(shape) == {"duration_m", "square_feet_covered"}
+
+    def test_numbers_are_kept_whole(self):
+        """A duration is not private, and 43 against 43.0 is exactly the
+        detail that decides whether a mapping works first time."""
+        assert self._shape({"duration_m": 43})["duration_m"] == 43
+        assert self._shape({"area": 43.5})["area"] == 43.5
+
+    def test_identifiers_become_unusable(self):
+        """Recognisable as an id, useless as one."""
+        shape = self._shape({"mission_id": "01KZ5SQYY0RE609VYNQKF34W6X"})
+
+        assert shape["mission_id"].startswith("01KZ5SQY")
+        assert "VYNQKF34W6X" not in shape["mission_id"]
+
+    def test_a_list_yields_one_sample_and_a_count(self):
+        """Forty missions have one shape and forty sets of values."""
+        shape = self._shape([{"a": 1}, {"a": 2}, {"a": 3}])
+
+        assert shape == [{"a": 1}, "…and 2 more"]
+
+    def test_an_empty_list_stays_empty(self):
+        assert self._shape([]) == []
+
+    def test_depth_is_bounded(self):
+        """A cyclic or very deep payload must not turn a diagnostics
+        download into a recursion error."""
+        deep = {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}}
+
+        assert "…" in str(self._shape(deep))
+
+    def test_unknown_types_are_named_not_rendered(self):
+        from datetime import UTC, datetime
+
+        assert self._shape(datetime.now(tz=UTC)) == "datetime"
+
+    def test_the_builder_reports_it(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert '"mission_data_shape"' in inspect.getsource(diagnostics)

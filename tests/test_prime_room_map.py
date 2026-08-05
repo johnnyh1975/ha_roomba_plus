@@ -1898,3 +1898,87 @@ class TestTheImageFollowsTheSelection:
 
         entity._async_refresh_rooms.assert_awaited_once()
         assert entity._rendered_map_id == "M_BATH"
+
+
+class TestTheTrailClearsOnANewMissionNumber:
+    """It used to require catching a shadow update while the robot was
+    cleaning, and a Prime robot may push `ro-currentstate` only around
+    the edges of a run -- every field capture shows `phase: charge`.
+
+    @chairstacker ended up with four missions' trails on one map and
+    could only clear it by reloading the integration. The mission number
+    had moved each time; we were not looking when it did.
+    """
+
+    def _coordinator(self, points=5):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        coordinator = object.__new__(PrimeStatusCoordinator)
+        coordinator._trail_mission_id = None
+        coordinator.hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "E"
+        entry.runtime_data = SimpleNamespace(
+            prime_positions=[(1.0, 2.0, 0.0)] * points,
+            mission_timer_store=MagicMock(),
+        )
+        coordinator.config_entry = entry
+        return coordinator
+
+    @staticmethod
+    def _shadow(phase, nmssn):
+        return {
+            "ro-currentstate": {
+                "cleanMissionStatus": {"phase": phase, "nMssn": nmssn}
+            }
+        }
+
+    def _positions(self, coordinator):
+        return coordinator.config_entry.runtime_data.prime_positions
+
+    def test_a_new_mission_clears_even_while_charging(self):
+        """The case that was broken. Both captures around a mission read
+        `charge`, and the number moved in between."""
+        coordinator = self._coordinator()
+        coordinator._note_phase_for_timer(self._shadow("charge", 306))
+        self._positions(coordinator).extend([(1.0, 2.0, 0.0)] * 5)
+
+        coordinator._note_phase_for_timer(self._shadow("charge", 307))
+
+        assert self._positions(coordinator) == []
+
+    def test_the_same_mission_keeps_its_trail(self):
+        coordinator = self._coordinator()
+        coordinator._note_phase_for_timer(self._shadow("run", 306))
+        self._positions(coordinator).extend([(1.0, 2.0, 0.0)] * 5)
+
+        coordinator._note_phase_for_timer(self._shadow("charge", 306))
+
+        assert len(self._positions(coordinator)) == 5
+
+    def test_a_robot_reporting_no_number_never_clears(self):
+        """The fallback is inert on purpose: with no number the value
+        never changes, which is the old behaviour rather than a trail
+        that clears at random."""
+        coordinator = self._coordinator()
+        for phase in ("run", "charge", "run"):
+            coordinator._note_phase_for_timer(
+                {"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}}
+            )
+            self._positions(coordinator).extend([(1.0, 2.0, 0.0)])
+
+        assert len(self._positions(coordinator)) > 5
+
+    def test_four_missions_leave_only_the_last(self):
+        """His case, end to end."""
+        coordinator = self._coordinator(points=0)
+        for number in (306, 307, 308, 309):
+            self._positions(coordinator).extend([(1.0, 2.0, 0.0)] * 10)
+            coordinator._note_phase_for_timer(self._shadow("charge", number))
+
+        assert self._positions(coordinator) == []
