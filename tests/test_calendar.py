@@ -716,3 +716,174 @@ class TestAFailedReadDoesNotCostTheCalendarEntity:
 
         assert cal._cached_occurrences == ["previous"]
         cal.async_write_ha_state.assert_not_called()
+
+
+class TestCalendarEventsCanBeEdited:
+    """Without UPDATE_EVENT, Home Assistant shows no save button, so
+    editing a schedule meant deleting it and creating another -- which
+    works, and which nobody expects.
+
+    The edit REPLACES rather than patches, because that is what the
+    dialog hands back: the whole event, including the title and
+    description the user is looking at. Those are the ones written back
+    after the last edit, which is why round-tripping them matters.
+    """
+
+    def _calendar(self, rooms=None):
+        import datetime as dt_stdlib
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = object.__new__(PrimeScheduleCalendar)
+        cal.hass = MagicMock()
+        cal._config_entry = MagicMock()
+        cal._room_names = lambda: (
+            {"13": "Küche", "10": "Flur"} if rooms is None else rooms
+        )
+        cal._sent = AsyncMock()
+        del dt_stdlib
+        return cal
+
+    async def _update(self, cal, event, uid="S1", **kwargs):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus import prime_schedule_services as svc
+
+        with patch.object(
+            svc, "async_update_schedule_from_calendar", cal._sent
+        ):
+            await cal.async_update_event(uid, event, **kwargs)
+
+    def _event(self, **kwargs):
+        import datetime as dt
+
+        base = {
+            "summary": "Küche, Flur",
+            "dtstart": dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC),
+            "rrule": "FREQ=WEEKLY",
+        }
+        base.update(kwargs)
+        return base
+
+    def test_the_entity_advertises_editing(self):
+        from homeassistant.components.calendar import CalendarEntityFeature
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        # A cached_property, so neither a plain attribute nor one with
+        # `.fget` -- read it off an instance.
+        features = self._calendar().supported_features
+
+        assert features & CalendarEntityFeature.UPDATE_EVENT
+        assert features & CalendarEntityFeature.CREATE_EVENT
+        assert features & CalendarEntityFeature.DELETE_EVENT
+
+    @pytest.mark.asyncio
+    async def test_rooms_survive_a_time_change(self):
+        """The failure mode this design exists to avoid: a user who
+        changes only the hour must not silently lose their rooms."""
+        cal = self._calendar()
+
+        await self._update(cal, self._event())
+
+        assert cal._sent.await_args.kwargs["room_ids"] == ["13", "10"]
+
+    @pytest.mark.asyncio
+    async def test_rooms_are_read_from_the_description_too(self):
+        cal = self._calendar()
+
+        await self._update(cal, self._event(summary="Morning", description="Flur"))
+
+        assert cal._sent.await_args.kwargs["room_ids"] == ["10"]
+
+    @pytest.mark.asyncio
+    async def test_the_new_time_is_passed_through(self):
+        cal = self._calendar()
+
+        await self._update(cal, self._event())
+
+        kwargs = cal._sent.await_args.kwargs
+        assert (kwargs["hour"], kwargs["minute"]) == (9, 30)
+
+    @pytest.mark.asyncio
+    async def test_editing_one_occurrence_is_refused(self):
+        """A robot schedule has no notion of "this one only": every run
+        comes from the same rule. Applying such an edit to all of them
+        would change days the user did not choose."""
+        from homeassistant.exceptions import ServiceValidationError
+
+        cal = self._calendar()
+
+        with pytest.raises(ServiceValidationError, match="single occurrence"):
+            await self._update(cal, self._event(), recurrence_range="THISEVENT")
+        cal._sent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unsupported_recurrence_is_refused(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        cal = self._calendar()
+
+        with pytest.raises(ServiceValidationError):
+            await self._update(cal, self._event(rrule="FREQ=DAILY"))
+        cal._sent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_all_day_edit_is_refused(self):
+        import datetime as dt
+
+        from homeassistant.exceptions import ServiceValidationError
+
+        cal = self._calendar()
+
+        with pytest.raises(ServiceValidationError):
+            await self._update(cal, self._event(dtstart=dt.date(2026, 8, 4)))
+
+
+class TestTheEventShowsWhatWasUnderstood:
+    """Events are not stored, they are regenerated from the schedule on
+    every read. So a user who types "kuche und flur" sees "Küche, Flur"
+    afterwards, and their own wording is gone entirely -- a mis-read
+    shows up at the place they typed it, without anything having to
+    remember what they wrote.
+
+    That is also what makes editing safe: the dialog opens on the
+    canonical labels, which parse back to the same rooms.
+    """
+
+    _ROOMS = {"13": "Küche", "10": "Flur"}
+
+    def test_the_summary_is_built_from_room_labels(self):
+        import inspect
+
+        from custom_components.roomba_plus import calendar as cal_mod
+
+        source = inspect.getsource(cal_mod._to_calendar_event)
+        assert "_event_summary(zone_labels)" in source
+
+    def test_typed_text_and_canonical_text_give_the_same_rooms(self):
+        """The round trip that editing depends on."""
+        from custom_components.roomba_plus.calendar_rooms import (
+            describe_match,
+            match_rooms,
+        )
+
+        typed = match_rooms("kuche und flur", self._ROOMS)
+        canonical = describe_match(typed, self._ROOMS)
+
+        assert match_rooms(canonical, self._ROOMS) == typed
+
+    def test_a_whole_house_schedule_stays_whole_house(self):
+        """Nothing recognised must not become something recognised on
+        the way back."""
+        from custom_components.roomba_plus.calendar_rooms import (
+            describe_match,
+            match_rooms,
+        )
+
+        empty = match_rooms("Tuesday clean", self._ROOMS)
+        canonical = describe_match(empty, self._ROOMS)
+
+        assert empty == []
+        assert match_rooms(canonical, self._ROOMS) == []

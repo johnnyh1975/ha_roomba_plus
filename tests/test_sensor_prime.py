@@ -1143,3 +1143,36 @@ class TestErrorSeverityFromTheVendorsOwnConfig:
         prettier attribute is how this project has been wrong before."""
         assert self._severity(36)[1] == 3
         assert self._severity(671)[1] == 5
+
+
+class TestEveryCountTypeTheAppKnows:
+    """`RobotHealthCountType` has exactly seven values, from the app's
+    own enum: Minutes, Missions, ComboMissions, Evacs, Battery,
+    PadWashesUsed, Sqft.
+
+    Five had appeared in catalogue responses. Battery and Sqft had not,
+    and were added anyway -- one line each against a sensor that would
+    otherwise show a bare number the day a robot reports one.
+    """
+
+    def _units(self):
+        from custom_components.roomba_plus.sensor_prime import _PART_COUNT_UNITS
+
+        return _PART_COUNT_UNITS
+
+    def test_all_seven_are_covered(self):
+        units = self._units()
+        for wire in ("minutes", "missions", "combo_missions", "evacs",
+                     "battery", "pad_washes_used", "sqft"):
+            assert wire in units, wire
+
+    def test_pad_washes_is_the_confirmed_name(self):
+        """`PadWashesUsed` in the enum confirms what part 202 reports --
+        the part this project deliberately named after its counter
+        rather than guessing which component it belongs to."""
+        assert self._units()["pad_washes_used"] == "pad washes"
+
+    def test_an_unknown_type_gets_no_unit(self):
+        """A wrong unit on a number is worse than none: it invites
+        arithmetic that does not hold."""
+        assert self._units().get("furlongs") is None

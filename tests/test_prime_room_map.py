@@ -1982,3 +1982,95 @@ class TestTheTrailClearsOnANewMissionNumber:
             coordinator._note_phase_for_timer(self._shadow("charge", number))
 
         assert self._positions(coordinator) == []
+
+
+class TestTheDockIsDrawnWhereItWasSeen:
+    """The map bundle's `dockPose` records where the dock stood when the
+    map was BUILT, and nothing corrects it when the dock moves.
+
+    @utkjmitch's map put the dock on a spot now occupied by a treadmill,
+    while the iRobot app showed it correctly on the same map. `dockPose`
+    is the only dock data the bundle carries, so the app reads something
+    fresher -- and a robot reporting `charge` is standing on the dock,
+    reporting its position through the same stream in the same
+    coordinates.
+    """
+
+    def _image(self, *, observed=None, bundle=(1000.0, 2000.0, 0.0)):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_observed_dock=observed)
+        entity._config_entry = entry
+        entity._floor_plan = SimpleNamespace(dock=bundle)
+        return entity
+
+    def test_an_observation_wins_over_the_bundle(self):
+        assert self._image(observed=(500.0, 600.0))._dock_position() == (500.0, 600.0)
+
+    def test_the_bundle_is_the_fallback_not_a_last_resort(self):
+        """Available immediately, on every account, without waiting for
+        a mission to end. A remembered dock in roughly the right place
+        beats no dock at all."""
+        assert self._image()._dock_position() == (1000.0, 2000.0)
+
+    def test_no_source_draws_nothing(self):
+        assert self._image(bundle=None)._dock_position() is None
+
+    def test_a_malformed_observation_falls_back(self):
+        for bad in ((1.0,), "nope", 7):
+            assert self._image(observed=bad)._dock_position() == (1000.0, 2000.0)
+
+
+class TestTheDockIsLearnedWhileCharging:
+    """Read at `charge` rather than at the end of the mission: the trail
+    is cleared when the NEXT mission starts, so it is still intact here,
+    and `charge` is the one phase where the robot is unambiguously on
+    the dock rather than on its way to it."""
+
+    def _coordinator(self, positions, phase="charge"):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        coordinator = object.__new__(PrimeStatusCoordinator)
+        coordinator._trail_mission_id = "m1"
+        coordinator.hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "E"
+        entry.runtime_data = SimpleNamespace(
+            prime_positions=positions,
+            prime_observed_dock=None,
+            mission_timer_store=MagicMock(),
+        )
+        coordinator.config_entry = entry
+        shadows = {"ro-currentstate": {
+            "cleanMissionStatus": {"phase": phase, "nMssn": 1}
+        }}
+        coordinator._note_phase_for_timer(shadows)
+        return entry.runtime_data
+
+    def test_the_last_point_while_charging_becomes_the_dock(self):
+        data = self._coordinator([(10.0, 20.0, 0.0), (700.0, 800.0, 1.5)])
+
+        assert data.prime_observed_dock == (700.0, 800.0)
+
+    def test_a_running_robot_teaches_nothing(self):
+        """It is somewhere in the middle of the floor."""
+        data = self._coordinator([(700.0, 800.0, 0.0)], phase="run")
+
+        assert data.prime_observed_dock is None
+
+    def test_an_empty_trail_teaches_nothing(self):
+        """A robot docked since startup has no positions, and the bundle
+        value stands -- which is the behaviour this had all along."""
+        data = self._coordinator([])
+
+        assert data.prime_observed_dock is None
