@@ -346,7 +346,10 @@ class TestParsePrimeScheduleOccurrences:
         result = parse_prime_schedule_occurrences([schedule], start, end)
 
         assert len(result) == 1
-        occ_start, occ_end, region_ids, name = result[0]
+        # Five fields: the schedule id travels with the occurrence,
+        # because a calendar event without a uid cannot be deleted or
+        # edited -- Home Assistant has nothing to pass back.
+        occ_start, occ_end, region_ids, name, schedule_id, mode = result[0]
         assert occ_start.weekday() == 1  # Tuesday (roomba day 2, 0=Sunday convention)
         assert occ_end == occ_start + DEFAULT_EVENT_DURATION
         assert region_ids == ["23"]
@@ -425,7 +428,8 @@ class TestParsePrimeScheduleOccurrences:
 
         result = parse_prime_schedule_occurrences([later, earlier], start, end)
 
-        assert [name for *_rest, name in result] == ["Earlier", "Later"]
+        # Read by position now that a fifth field follows the name.
+        assert [occ[3] for occ in result] == ["Earlier", "Later"]
 
 
 class TestBiweeklyOccurrencesDirect:
@@ -458,3 +462,57 @@ class TestBiweeklyOccurrencesDirect:
         end = start + datetime.timedelta(days=28)
 
         assert _biweekly_occurrences("not-a-number", 8, 0, anchor, start, end) == []
+
+
+class TestAOnceScheduleIsDrawnOnce:
+    """@DaRealGuGu created a single cleaning from the Home Assistant
+    calendar. The robot stored it as ONCE and the iRobot app showed it
+    that way; Home Assistant painted it on every Thursday for the next
+    two months.
+
+    The frequency gate lets ONCE through -- correctly, the run exists --
+    and the generator then repeated it, because repeating is all it
+    knows how to do.
+    """
+
+    def _occurrences(self, frequency):
+        import datetime as dt
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.schedule_parser import (
+            parse_prime_schedule_occurrences,
+        )
+
+        schedule = SimpleNamespace(
+            schedule_id="S1",
+            options=SimpleNamespace(
+                enabled=True, deleted=None, frequency=frequency, name=None,
+                start=SimpleNamespace(day=[4], hour=8, min=26),
+                commands=[],
+            ),
+        )
+        start = dt.datetime(2026, 8, 1, tzinfo=dt.UTC)
+        end = dt.datetime(2026, 9, 30, tzinfo=dt.UTC)
+        return parse_prime_schedule_occurrences([schedule], start, end)
+
+    def test_once_produces_a_single_run(self):
+        from roombapy_prime.models.schedules_dnd import ScheduleFrequency
+
+        assert len(self._occurrences(ScheduleFrequency.ONCE)) == 1
+
+    def test_weekly_still_repeats(self):
+        """The fix must not flatten the common case."""
+        from roombapy_prime.models.schedules_dnd import ScheduleFrequency
+
+        assert len(self._occurrences(ScheduleFrequency.WEEKLY)) > 4
+
+    def test_the_single_run_is_the_earliest_one(self):
+        """The robot fires it once and the server deletes the schedule
+        within minutes afterwards, so there is never a later one to
+        draw."""
+        from roombapy_prime.models.schedules_dnd import ScheduleFrequency
+
+        once = self._occurrences(ScheduleFrequency.ONCE)
+        weekly = self._occurrences(ScheduleFrequency.WEEKLY)
+
+        assert once[0][0] == weekly[0][0]

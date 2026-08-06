@@ -236,3 +236,87 @@ class TestRegionsAreReadThroughEitherShape:
     def test_nonsense_yields_nothing_rather_than_raising(self):
         for value in (None, "x", 7, {}, {"command": "x"}, {"regions": "x"}):
             assert self._regions(value) == []
+
+
+class TestFourSilentSignatureBugs:
+    """All four found by @utkjmitch from overnight debug logs, and all
+    four the same species: a call signature or an attribute changed in
+    one layer and not the other, invisible because the failure output
+    matches the boring case.
+
+    No history. No save button. No progress. Each read as "nothing to
+    report" and each failed on EVERY call, not occasionally.
+    """
+
+    def test_the_history_sync_passes_the_blid(self):
+        """`get_mission_history()` requires it, and the call never
+        supplied one -- so the wrapper reported "imported 0 missions",
+        which reads exactly like a robot with no history.
+
+        The comment beside this call already documents the previous life
+        of the same bug: a required `days` argument that made every sync
+        fail silently since the feature shipped. Fixing that one moved
+        the TypeError up a line rather than ending it."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync)
+        assert "get_mission_history(robot.blid)" in source
+        # Only actual calls -- the module docstring names the method in
+        # prose, and matching that would fail the test for a sentence.
+        calls = [
+            line for line in source.splitlines()
+            if "await robot.get_mission_history" in line
+        ]
+        assert calls and all("robot.blid" in line for line in calls)
+
+    def test_the_status_coordinator_owns_the_trail_id(self):
+        """`_note_phase_for_timer` lives on PrimeStatusCoordinator and
+        touches `self._trail_mission_id`, which was only ever initialised
+        in PrimeCoordinator -- a different class it does not inherit
+        from.
+
+        So the whole phase-update block raised on its first line, hourly,
+        on every install: the trail clearing, the observed dock position
+        and the mission timer's on_phase_run all never ran."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        coordinator = object.__new__(PrimeStatusCoordinator)
+        PrimeStatusCoordinator.__init__(
+            coordinator, MagicMock(), MagicMock(), "BLID", MagicMock()
+        )
+
+        assert coordinator._trail_mission_id is None
+
+    def test_the_calendar_update_locks_a_container(self):
+        """`_container_lock()` takes an entry AND a container id. The
+        calendar glue passed only the entry, so every edit raised
+        TypeError -- the handler existed, was reachable once events
+        carried a uid, and could not complete."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_schedule_services
+
+        source = inspect.getsource(
+            prime_schedule_services.async_update_schedule_from_calendar
+        )
+        assert "_container_lock(config_entry, container_id)" in source
+
+    def test_an_edit_without_rooms_does_not_ask_to_resolve_none(self):
+        """The key's presence is what triggers the room rewrite, so
+        setting it to None asked the resolver to iterate nothing. The
+        create path already only set it when non-empty."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_schedule_services
+
+        source = inspect.getsource(
+            prime_schedule_services.async_update_schedule_from_calendar
+        )
+        assert '"rooms": room_ids or None' not in source
+        assert "if room_ids:" in source

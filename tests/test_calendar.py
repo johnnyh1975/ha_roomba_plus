@@ -860,7 +860,7 @@ class TestTheEventShowsWhatWasUnderstood:
         from custom_components.roomba_plus import calendar as cal_mod
 
         source = inspect.getsource(cal_mod._to_calendar_event)
-        assert "_event_summary(zone_labels)" in source
+        assert "_event_summary(zone_labels, mode)" in source
 
     def test_typed_text_and_canonical_text_give_the_same_rooms(self):
         """The round trip that editing depends on."""
@@ -998,3 +998,135 @@ class TestAnInterimDockDoesNotEndTheEvent:
         """Older payloads, and robots that do not report it."""
         assert self._stopped("charge", None) is True
         assert self._stopped("run", None) is False
+
+
+class TestEventsCarryAnIdentity:
+    """WITHOUT A UID, DELETE AND EDIT CANNOT BE CALLED AT ALL.
+
+    Home Assistant passes the uid back when a user acts on an event, and
+    an event without one has nothing to pass -- so both handlers looked
+    complete and were unreachable. It went unnoticed because creating
+    needs no uid, and creating was the only direction anyone exercised:
+    the delete tests ran through the services rather than the calendar.
+    """
+
+    def test_the_event_builder_accepts_one(self):
+        import datetime as dt
+
+        from custom_components.roomba_plus.calendar import _to_calendar_event
+
+        start = dt.datetime(2026, 8, 5, 9, 0, tzinfo=dt.UTC)
+        event = _to_calendar_event(start, start, ["Kitchen"], uid="S1")
+
+        assert event.uid == "S1"
+
+    def test_without_one_it_is_none_rather_than_invented(self):
+        import datetime as dt
+
+        from custom_components.roomba_plus.calendar import _to_calendar_event
+
+        start = dt.datetime(2026, 8, 5, 9, 0, tzinfo=dt.UTC)
+
+        assert _to_calendar_event(start, start, []).uid is None
+
+
+class TestClassicIdentityIsTheWeekday:
+    """In a format with one entry per day there is nothing else to
+    identify with."""
+
+    def _round_trip(self, weekday):
+        from custom_components.roomba_plus.calendar import (
+            _classic_uid,
+            _weekday_from_uid,
+        )
+
+        return _weekday_from_uid(_classic_uid(weekday))
+
+    def test_every_weekday_survives_the_round_trip(self):
+        assert [self._round_trip(d) for d in range(7)] == list(range(7))
+
+    def test_a_prime_schedule_id_is_not_mistaken_for_one(self):
+        """Prime uids are schedule ids and must not be read as weekdays,
+        or a delete would take the wrong entry."""
+        from custom_components.roomba_plus.calendar import _weekday_from_uid
+
+        assert _weekday_from_uid("hh_abc_s_AE3C") is None
+        assert _weekday_from_uid(None) is None
+        assert _weekday_from_uid("weekday-") is None
+
+    def test_a_weekday_outside_the_week_is_refused(self):
+        from custom_components.roomba_plus.calendar import _weekday_from_uid
+
+        assert _weekday_from_uid("weekday-7") is None
+        assert _weekday_from_uid("weekday-x") is None
+
+
+class TestPrimeOccurrencesCarryTheScheduleId:
+    def test_the_parser_appends_it(self):
+        import inspect
+
+        from custom_components.roomba_plus import schedule_parser
+
+        source = inspect.getsource(
+            schedule_parser.parse_prime_schedule_occurrences
+        )
+        assert 'getattr(schedule, "schedule_id", None)' in source
+
+    def test_reading_it_tolerates_the_shorter_classic_tuple(self):
+        """Classic occurrences have four fields, Prime five. Widening one
+        must not break the other."""
+        from custom_components.roomba_plus.calendar import _uid_of
+
+        assert _uid_of((1, 2, [], "name")) is None
+        assert _uid_of((1, 2, [], "name", "S1")) == "S1"
+
+
+class TestTheEventSaysWhatTheMissionWillDo:
+    """The iRobot app shows both -- "En profondeur, Aspiration + lavage"
+    above the room list -- and a schedule that mops is a different thing
+    from one that vacuums over the same rooms.
+    """
+
+    def _summary(self, mode=None, rooms=None):
+        from custom_components.roomba_plus.calendar import _event_summary
+
+        return _event_summary(rooms if rooms is not None else ["Küche"], mode)
+
+    def test_the_mode_appears_with_the_rooms(self):
+        assert self._summary("vacuum, then mop") == (
+            "Cleaning (vacuum, then mop): Küche"
+        )
+
+    def test_a_whole_house_schedule_still_gets_it(self):
+        assert self._summary("mop", rooms=[]) == "Cleaning (mop)"
+
+    def test_without_a_mode_nothing_changes(self):
+        """The Classic path carries none, and neither does a Prime
+        schedule whose command has no regions."""
+        assert self._summary() == "Cleaning: Küche"
+
+
+class TestOperatingModeLabels:
+    """A bitmask in name only here: every value seen in a schedule
+    command is a single mode, and the app shows one phrase per mission
+    rather than a combination."""
+
+    def _label(self, value):
+        from custom_components.roomba_plus.calendar import _mode_label
+
+        return _mode_label(value)
+
+    def test_the_values_seen_in_the_field(self):
+        """512 is what @DaRealGuGu's schedule carried, and the app called
+        it "Aspiration + lavage"."""
+        assert self._label(512) == "vacuum, then mop"
+        assert self._label(2) == "vacuum"
+        assert self._label(4) == "mop"
+        assert self._label(32) == "vacuum and mop together"
+
+    def test_an_unrecognised_mode_is_left_out(self):
+        """Silence reads as "we did not recognise this". A guessed label
+        would be a wrong claim about what the robot is going to do."""
+        assert self._label(1024) is None
+        assert self._label(None) is None
+        assert self._label("mop") is None

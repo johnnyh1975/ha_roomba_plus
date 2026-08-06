@@ -120,14 +120,20 @@ class TestCalendarEventDuration:
 
         assert end == start + dt.timedelta(minutes=30)
 
-    def test_a_whole_house_schedule_uses_the_mission_total(self):
+    def test_a_whole_house_schedule_keeps_the_flat_hour(self):
+        """NO WHOLE-MISSION FIGURE EXISTS. The app simulator's response
+        had one and the real response does not, so this was built
+        against a shape no robot returns.
+
+        Summing every region would be a different number from what the
+        robot does -- the rooms are not the whole floor. A poor estimate
+        rather than a wrong one."""
         import datetime as dt
 
         start = dt.datetime(2026, 8, 4, 9, 0, tzinfo=dt.UTC)
+        flat = start + dt.timedelta(hours=1)
 
-        end = self._end((start, start + dt.timedelta(hours=1), []))
-
-        assert end == start + dt.timedelta(minutes=84)
+        assert self._end((start, flat, [])) == flat
 
     def test_one_unknown_room_discards_the_whole_sum(self):
         """A partial total would be confidently short, and an event that
@@ -177,3 +183,54 @@ class TestTheRobotOverridesTheEstimate:
         worse than ending it late."""
         assert self._stopped("somethingNew") is False
         assert self._stopped(None) is False
+
+
+class TestTheScheduleSModeSelectsTheEstimate:
+    """Every region carries dozens of estimates, one per parameter
+    combination. Taking the first would quote the duration of a mode the
+    schedule does not run -- @DaRealGuGu's first entry is
+    `operatingMode 512` while his robot last ran `4`."""
+
+    def _end(self, mode):
+        import datetime as dt
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from roombapy_prime.models import TimeEstimates
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        response = {
+            "smart_maps": [{
+                "smart_map_id": "M1",
+                "areas": [{"area_id": "10", "area_type": "region", "estimates": [
+                    {"value": 3120, "unit": "seconds",
+                     "params": {"operatingMode": 512}},
+                    {"value": 600, "unit": "seconds",
+                     "params": {"operatingMode": 4}},
+                ]}],
+            }],
+        }
+        cal = object.__new__(PrimeScheduleCalendar)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_time_estimates=TimeEstimates.from_json(response)
+        )
+        cal._config_entry = entry
+        start = dt.datetime(2026, 8, 4, 9, 0, tzinfo=dt.UTC)
+        flat = start + dt.timedelta(hours=1)
+        occurrence = (start, flat, ["10"], None, "S1", mode)
+        return (cal._estimated_end(occurrence) - start).total_seconds()
+
+    def test_the_mopping_estimate_is_used_for_a_mopping_schedule(self):
+        assert self._end(4) == 600
+
+    def test_the_vacuum_then_mop_estimate_for_that_mode(self):
+        assert self._end(512) == 3120
+
+    def test_a_mode_with_no_estimate_falls_back_to_the_flat_hour(self):
+        """Rather than quoting some other mode's duration."""
+        assert self._end(32) == 3600
+
+    def test_without_a_mode_any_estimate_will_do(self):
+        assert self._end(None) in (600, 3120)
