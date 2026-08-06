@@ -55,6 +55,11 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "writes cleanSchedule2 yet"
     ),
     "calendar -> prime_schedule_services": "as calendar -> calendar_rooms",
+    "__init__ -> prime_mission_sync": (
+        "Prime-only, and scheduled as a task rather than awaited -- pulling it "
+        "in at module level would load the Prime history path on every Classic "
+        "setup as well"
+    ),
     "services -> prime_schedule_services": (
         "IT DOES AVOID A CYCLE -- a transitive one this check cannot see. "
         "prime_schedule_services imports prime_schedule_switch, which imports "
