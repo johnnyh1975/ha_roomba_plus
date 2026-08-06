@@ -850,7 +850,30 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Best-effort, and deliberately after `parts` is computed: a
         # failure here must not cost the parts sensors their data.
-        if self.config_entry is not None:
+        # THE FIRST RUN OF THIS FIRES BEFORE runtime_data EXISTS, and it
+        # cannot be made to work by trying harder.
+        #
+        # Setup awaits this coordinator's async_config_entry_first_refresh()
+        # BEFORE assigning config_entry.runtime_data further down the same
+        # function. So the first attempt reaches for runtime data that is
+        # not there yet, raises AttributeError, and the best-effort except
+        # below files it at DEBUG.
+        #
+        # The next attempt is this coordinator's own interval -- SIX
+        # HOURS. Net effect: after every restart or reload, clean streak,
+        # last mission, last duration and area cleaned today read
+        # "unknown" for six hours. Which is also why they were reported
+        # as permanently unknown: nobody watches a sensor for six hours
+        # (@utkjmitch, who found it in a debug log and named the
+        # ordering as the cause).
+        #
+        # Skipping that first run costs nothing -- it could never have
+        # succeeded -- and setup schedules the real first sync once
+        # runtime_data is in place. The except stays: it protects the
+        # PARTS data, which is what this coordinator is for.
+        if self.config_entry is not None and getattr(
+            self.config_entry, "runtime_data", None
+        ) is not None:
             try:
                 from .prime_mission_sync import (  # noqa: PLC0415
                     async_sync_prime_missions,

@@ -3370,7 +3370,29 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # geometry without covering anything.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
 
-        for feature in (live_bundle.get("trajectories") or {}).get("features") or []:
+        # THE BUNDLE'S TRAJECTORIES FILL A GAP, they do not compete with
+        # the live trail.
+        #
+        # Our own trail only exists while Home Assistant is watching. A
+        # restart mid-mission loses it; the bundle has the whole path,
+        # because iRobot recorded it. That is what this layer is for.
+        #
+        # But it also carries the PREVIOUS mission until the robot
+        # uploads a new bundle, which is why @chairstacker saw the old
+        # route persist as a thin line under the new one and could only
+        # clear it by reloading. Our trail had already been cleared; the
+        # bundle brought the old path back.
+        #
+        # So: once we have points of our own, they are the better
+        # answer and this layer stands down. With none -- a fresh start,
+        # a restart mid-run -- the bundle fills in.
+        have_own_trail = bool(
+            getattr(self._config_entry.runtime_data, "prime_positions", None)
+        )
+        for feature in (
+            [] if have_own_trail
+            else (live_bundle.get("trajectories") or {}).get("features") or []
+        ):
             coords = (feature.get("geometry") or {}).get("coordinates")
             try:
                 points = [

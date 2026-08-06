@@ -90,7 +90,6 @@ from .map_renderer import (
     ROBOT_DIAMETER_MM_DEFAULT,
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
-from .prime_mission_import import records_from_history
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
@@ -1153,56 +1152,6 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         )
 
 
-async def _async_import_prime_missions(
-    hass: HomeAssistant,
-    config_entry: RoombaConfigEntry,
-    store: Any,
-) -> None:
-    """Imports a Prime robot's mission history into the mission store.
-
-    Same endpoint the Classic path uses, `GET /v1/{blid}/missionhistory`,
-    and the shape is settled rather than assumed: the app's own
-    restservices package returns a bare `List<MissionHistory>`, and every
-    field of the vendor's 20-entry sample maps onto the parsed entry.
-
-    ONCE AT SETUP, NOT ON A SCHEDULE. The history only grows when a
-    mission ends, and the four sensors reading it are summaries rather
-    than live values -- polling it would be a cloud request per interval
-    for data that changes a few times a week. A restart picks up
-    whatever accumulated meanwhile.
-
-    Failures are logged and swallowed. An empty mission store is the
-    state this has been in all along; a setup that fails because the
-    history could not be fetched would be a worse outcome than the
-    problem it fixes.
-    """
-    robot = config_entry.runtime_data.prime_robot if config_entry.runtime_data else None
-    if robot is None:
-        return
-    try:
-        from roombapy_prime.models.mission_history import (  # noqa: PLC0415
-            parse_mission_history,
-        )
-
-        raw = await robot.get_mission_history(robot.blid)
-        entries = parse_mission_history(raw)
-        records = records_from_history(entries, robot.blid)
-        added = sum(store.append_validated(record) for record in records)
-        if added:
-            await store.async_save(hass, config_entry.entry_id)
-        _LOGGER.debug(
-            "roomba_plus: imported %d of %d mission history entries for %s "
-            "(the rest were already known)",
-            added, len(records), robot.blid,
-        )
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug(
-            "roomba_plus: could not import Prime mission history -- the "
-            "mission-based sensors will stay empty, which is where they were "
-            "before this ran", exc_info=True,
-        )
-
-
 async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
     """Entirely separate setup path for CLOUD_ONLY (V4/Prime) entries.
 
@@ -1516,6 +1465,42 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     platforms = list(PRIME_PLATFORMS)
     platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
+
+    # THE FIRST MISSION-HISTORY SYNC BELONGS HERE, not on the parts
+    # coordinator's first refresh.
+    #
+    # That refresh is awaited BEFORE runtime_data is assigned above, so
+    # its sync attempt raised AttributeError every single time and was
+    # filed at DEBUG by a best-effort except. The next attempt was that
+    # coordinator's own interval -- SIX HOURS -- which is why clean
+    # streak, last mission, last duration and area cleaned today read
+    # "unknown" after every restart, and why they were reported as
+    # permanently unknown: nobody watches a sensor for six hours
+    # (@utkjmitch, who found it in a debug log and named the ordering).
+    #
+    # A task rather than an await: the history is a cloud round trip,
+    # and a robot with no history is a perfectly normal answer. Neither
+    # is worth delaying setup for.
+    async def _first_mission_sync() -> None:
+        from .prime_mission_sync import async_sync_prime_missions  # noqa: PLC0415
+
+        try:
+            count = await async_sync_prime_missions(config_entry)
+            _LOGGER.debug(
+                "roomba_plus: first mission history sync imported %s missions",
+                count,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: first mission history sync failed -- the "
+                "mission-based sensors stay empty until the next scheduled "
+                "sync, which is where they were before this ran",
+                exc_info=True,
+            )
+
+    hass.async_create_task(
+        _first_mission_sync(), name="roomba_plus_prime_first_mission_sync"
+    )
 
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid

@@ -290,6 +290,29 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             coordinator.async_add_listener(self._handle_coordinator_update)
         )
 
+        # AND THE STATUS COORDINATOR, because this entity's on/off
+        # depends on what the robot is DOING, not only on which
+        # schedules exist.
+        #
+        # The schedule coordinator runs every fifteen minutes, which is
+        # fine for something that changes when somebody edits it. The
+        # phase check added in a25 reads the status coordinator -- and
+        # nobody was listening to it, so the state could only move on
+        # the fifteen-minute tick.
+        #
+        # @chairstacker's capture shows exactly that: a mission ran
+        # 18:20 to 18:28, and the entity switched on at 18:28:23 and off
+        # at 18:43:23. Fifteen minutes apart to the second, both edges
+        # late. The logic was right and hung off a source that could not
+        # reach it.
+        status = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if status is not None:
+            self.async_on_remove(
+                status.async_add_listener(self._handle_coordinator_update)
+            )
+
         # A FAILED FIRST READ MUST COST THE CONTENT, NOT THE ENTITY.
         #
         # An exception raised here propagates out of async_added_to_hass
@@ -710,7 +733,25 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         raw = (coordinator.data or {}).get("ro-currentstate") if coordinator else None
         if raw is None:
             return False
-        phase = (raw.get("cleanMissionStatus") or {}).get("phase")
+        status = raw.get("cleanMissionStatus") or {}
+        phase = status.get("phase")
+        # THE CYCLE DECIDES, NOT THE PHASE ALONE.
+        #
+        # A robot docks DURING a mission -- to wash its pad, to recharge
+        # and resume -- and phase alone cannot tell that apart from
+        # finishing. @chairstacker foresaw it before it was built, and
+        # his own capture from two days earlier proves it:
+        #
+        #     phase=padWash  cycle=clean    mid-mission
+        #     phase=charge   cycle=none     finished
+        #
+        # So a running cycle keeps the event open whatever the phase
+        # says. Anything other than an explicitly idle cycle counts as
+        # running: an unknown value should not end an event, for the
+        # same reason an unknown phase does not.
+        cycle = status.get("cycle")
+        if cycle is not None and str(cycle) not in ("none", ""):
+            return False
         mission = None
         del mission
         return phase in ("charge", "stop", "hmPostMsn", "hmUsrDock")
