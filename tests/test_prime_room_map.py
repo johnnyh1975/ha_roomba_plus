@@ -2074,3 +2074,40 @@ class TestTheDockIsLearnedWhileCharging:
         data = self._coordinator([])
 
         assert data.prime_observed_dock is None
+
+
+class TestTheBundleTrajectoriesFillAGap:
+    """They do not compete with the live trail.
+
+    Our own trail only exists while Home Assistant is watching -- a
+    restart mid-mission loses it, while the bundle has the whole path
+    because iRobot recorded it. That is what the layer is for.
+
+    But the bundle also carries the PREVIOUS mission until the robot
+    uploads a new one, which is why @chairstacker saw the old route
+    persist as a thin line under the new one and could only clear it by
+    reloading. Our trail had already been cleared; the bundle brought
+    the old path back.
+    """
+
+    def _source(self):
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        return inspect.getsource(PrimeRoomsImage)
+
+    def test_the_layer_is_gated_on_having_our_own_points(self):
+        source = self._source()
+
+        assert "have_own_trail = bool(" in source
+        assert "[] if have_own_trail" in source
+
+    def test_the_gate_reads_the_live_positions(self):
+        """The same list the trail is drawn from and that a new mission
+        clears -- so the layer returns by itself when there is nothing
+        of our own to show."""
+        source = self._source()
+        gate = source[source.index("have_own_trail = bool("):]
+
+        assert "prime_positions" in gate[:200]

@@ -887,3 +887,114 @@ class TestTheEventShowsWhatWasUnderstood:
 
         assert empty == []
         assert match_rooms(canonical, self._ROOMS) == []
+
+
+class TestTheCalendarFollowsTheRobotNotOnlyTheSchedule:
+    """Two coordinators, and both matter.
+
+    The schedule coordinator says WHICH schedules exist and runs every
+    fifteen minutes, which is fine for something that changes only when
+    somebody edits it. The status coordinator says what the robot is
+    DOING, and this entity's on/off depends on it.
+
+    Listening to the schedule coordinator alone meant the phase check
+    read a value nobody was watching. @chairstacker's capture shows it:
+    a mission ran 18:20 to 18:28, and the entity switched on at 18:28:23
+    and off at 18:43:23 -- fifteen minutes apart to the second, both
+    edges late.
+    """
+
+    def _added(self, *, status=True, schedule=True):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = object.__new__(PrimeScheduleCalendar)
+        listened = []
+
+        def _coordinator(tag):
+            coordinator = MagicMock()
+            coordinator.async_add_listener.side_effect = (
+                lambda cb: listened.append(tag) or (lambda: None)
+            )
+            return coordinator
+
+        cal._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                prime_schedule_coordinator=_coordinator("schedule") if schedule else None,
+                prime_status_coordinator=_coordinator("status") if status else None,
+            )
+        )
+        cal.async_on_remove = MagicMock()
+        with patch.object(
+            type(cal).__mro__[1], "async_added_to_hass", new=AsyncMock()
+        ):
+            asyncio.run(PrimeScheduleCalendar.async_added_to_hass(cal))
+        return listened
+
+    def test_both_coordinators_are_listened_to(self):
+        assert set(self._added()) == {"schedule", "status"}
+
+    def test_a_missing_status_coordinator_does_not_stop_the_rest(self):
+        """The schedule half still works; only the phase check goes
+        blind, which is where this was before."""
+        assert self._added(status=False) == ["schedule"]
+
+    def test_without_schedules_there_is_nothing_to_watch_for(self):
+        """No schedule coordinator means no occurrences to show, so
+        following the robot's phase would answer a question nobody
+        asked. The early return is correct and this pins it."""
+        assert self._added(schedule=False) == []
+
+
+class TestAnInterimDockDoesNotEndTheEvent:
+    """A robot docks DURING a mission -- to wash its pad, to recharge and
+    resume -- and the phase alone cannot tell that apart from finishing.
+
+    @chairstacker foresaw this before it was built, and his own capture
+    from two days earlier proves it:
+
+        phase=padWash  cycle=clean    mid-mission
+        phase=charge   cycle=none     finished
+    """
+
+    def _stopped(self, phase, cycle):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = object.__new__(PrimeScheduleCalendar)
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {
+                "cleanMissionStatus": {"phase": phase, "cycle": cycle}
+            }
+        }
+        cal._config_entry = entry
+        return cal._robot_has_stopped()
+
+    def test_a_pad_wash_mid_mission_keeps_the_event_open(self):
+        """His exact capture."""
+        assert self._stopped("padWash", "clean") is False
+
+    def test_charging_mid_mission_keeps_it_open_too(self):
+        """A robot that returns to recharge and resumes is still on the
+        same mission -- the case that would otherwise look most like
+        finishing."""
+        assert self._stopped("charge", "clean") is False
+
+    def test_an_idle_cycle_on_the_dock_ends_it(self):
+        assert self._stopped("charge", "none") is True
+
+    def test_an_unknown_cycle_does_not_end_it(self):
+        """For the same reason an unknown phase does not: ending an
+        event on a value nobody has catalogued is worse than ending it
+        late."""
+        assert self._stopped("charge", "somethingNew") is False
+
+    def test_without_a_cycle_the_phase_still_decides(self):
+        """Older payloads, and robots that do not report it."""
+        assert self._stopped("charge", None) is True
+        assert self._stopped("run", None) is False

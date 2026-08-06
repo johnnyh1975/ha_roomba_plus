@@ -947,3 +947,62 @@ class TestQueryIsCalledWithItsRequiredArgument:
         source += inspect.getsource(prime_mission_sync._async_sync_locked)
 
         assert "days=3650" in source
+
+
+class TestTheFirstSyncRunsWhenItCanSucceed:
+    """The sync used to ride the parts coordinator's first refresh, and
+    setup awaits that refresh BEFORE assigning `config_entry.runtime_data`.
+
+    So the first attempt reached for runtime data that did not exist,
+    raised AttributeError, and a best-effort except filed it at DEBUG.
+    The next attempt was that coordinator's own interval -- six hours.
+
+    Net effect: after every restart, clean streak, last mission, last
+    duration and area cleaned today read "unknown" for six hours. Which
+    is also why they were reported as permanently unknown -- nobody
+    watches a sensor for six hours (@utkjmitch).
+    """
+
+    def test_the_coordinator_skips_a_run_that_cannot_work(self):
+        """Skipping costs nothing: it could never have succeeded."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_coordinator
+
+        source = " ".join(inspect.getsource(prime_coordinator).split())
+        assert 'getattr( self.config_entry, "runtime_data", None ) is not None' in source
+
+    def test_setup_schedules_the_real_first_sync(self):
+        import inspect
+
+        import custom_components.roomba_plus as init_mod
+
+        source = inspect.getsource(init_mod)
+        assert "roomba_plus_prime_first_mission_sync" in source
+
+    def test_it_is_scheduled_after_runtime_data_is_assigned(self):
+        """The whole point. Ordering, asserted by position rather than by
+        hope."""
+        import inspect
+
+        import custom_components.roomba_plus as init_mod
+
+        source = inspect.getsource(init_mod)
+        assigned = source.rindex("config_entry.runtime_data = RoombaData(")
+        scheduled = source.index("roomba_plus_prime_first_mission_sync")
+
+        assert assigned < scheduled
+
+    def test_a_failing_sync_does_not_break_setup(self):
+        """A robot with no history is a perfectly normal answer, and a
+        cloud round trip is not worth failing a setup over."""
+        import inspect
+
+        import custom_components.roomba_plus as init_mod
+
+        source = inspect.getsource(init_mod)
+        start = source.index("async def _first_mission_sync")
+        body = source[start:start + 1200]
+
+        assert "except Exception" in body
+        assert "hass.async_create_task" in source[start:start + 1600]
