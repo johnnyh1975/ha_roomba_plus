@@ -47,6 +47,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
 
+from .calendar_modes import match_mode
+from .classic_schedule_write import (
+    ScheduleFormatError,
+    legacy_with_entry,
+    legacy_without_day,
+    reject_unsupported,
+    schedule_key,
+)
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 from .schedule_parser import (
@@ -96,34 +104,277 @@ _EVENT_DESCRIPTION = (
 )
 
 
-def _event_summary(zone_labels: list[str]) -> str:
+#: `regions[].params.operatingMode`, as the app itself labels it.
+#:
+#: A bitmask in name only here: every value observed in a schedule
+#: command is a single mode, and the app shows one phrase per mission
+#: rather than a combination. So this maps the values that actually
+#: appear rather than decomposing bits -- an unknown value is left out
+#: entirely, which reads as "we did not recognise this" instead of as a
+#: wrong claim about what the robot will do.
+_OPERATING_MODE_LABELS: dict[int, str] = {
+    2: "vacuum",
+    4: "mop",
+    32: "vacuum and mop together",
+    512: "vacuum, then mop",
+}
+
+
+def _mode_label(mode: Any) -> str | None:
+    """What a scheduled mission will actually do, if we recognise it."""
+    try:
+        return _OPERATING_MODE_LABELS.get(int(mode))
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_summary(zone_labels: list[str], mode: str | None = None) -> str:
     """Bare "Cleaning" for whole-house (no zone_labels at all, whether
     because this tier has no region concept or this specific entry
     doesn't reference one) or "Cleaning: {label}" for one/more
     specific zones."""
+    # THE MODE MATTERS AS MUCH AS THE ROOMS. The iRobot app shows both
+    # -- "En profondeur, Aspiration + lavage" above the room list -- and
+    # a schedule that mops is a different thing from one that vacuums,
+    # even over the same rooms.
+    head = _EVENT_SUMMARY if not mode else f"{_EVENT_SUMMARY} ({mode})"
     if not zone_labels:
-        return _EVENT_SUMMARY
-    return f"{_EVENT_SUMMARY}: {', '.join(zone_labels)}"
+        return head
+    return f"{head}: {', '.join(zone_labels)}"
 
 
 def _to_calendar_event(
-    start: dt_stdlib.datetime, end: dt_stdlib.datetime, zone_labels: list[str],
+    start: dt_stdlib.datetime,
+    end: dt_stdlib.datetime,
+    zone_labels: list[str],
+    uid: str | None = None,
+    mode: str | None = None,
 ) -> CalendarEvent:
+    """One occurrence, with the identity Home Assistant needs to act on it.
+
+    WITHOUT A UID, DELETE AND EDIT CANNOT BE CALLED AT ALL. Home
+    Assistant passes the uid back when a user acts on an event, and an
+    event without one has nothing to pass -- so the handlers looked
+    complete and were unreachable.
+
+    That went unnoticed because creating needs no uid, and it was the
+    only direction anyone exercised: the delete tests ran through the
+    services rather than the calendar. A path nobody walked looked like
+    a path that worked.
+
+    Prime uses the schedule id. Classic uses the weekday, because in a
+    format with one entry per day there is nothing else to identify.
+    """
     return CalendarEvent(
         start=start, end=end,
-        summary=_event_summary(zone_labels), description=_EVENT_DESCRIPTION,
+        summary=_event_summary(zone_labels, mode), description=_EVENT_DESCRIPTION,
+        uid=uid,
     )
 
 
+def _mode_of(occurrence: tuple) -> str | None:
+    """The operating-mode label an occurrence carries, if any.
+
+    By position, like `_uid_of`: Classic occurrences are shorter and
+    must not break when the Prime tuple grows.
+    """
+    return _mode_label(occurrence[5]) if len(occurrence) > 5 else None
+
+
+def _uid_of(occurrence: tuple) -> str | None:
+    """The schedule id an occurrence carries, if it carries one.
+
+    Read by position rather than unpacked, because the Classic path
+    produces four-element occurrences and the Prime path five. Widening
+    one tuple should not break the other -- and a missing id means no
+    uid, which is exactly the old behaviour rather than an error.
+    """
+    return occurrence[4] if len(occurrence) > 4 else None
+
+
+def _classic_uid(weekday: int) -> str:
+    """A Classic occurrence's identity: its weekday, Sunday first."""
+    return f"weekday-{weekday}"
+
+
+def _weekday_from_uid(uid: str | None) -> int | None:
+    """The weekday back out of a Classic uid, or None if it is not one."""
+    if not uid or not str(uid).startswith("weekday-"):
+        return None
+    try:
+        weekday = int(str(uid).split("-", 1)[1])
+    except (ValueError, IndexError):
+        return None
+    return weekday if 0 <= weekday < 7 else None
+
+
+def _frequency_word(rrule: str | None) -> str | None:
+    """The FREQ of an RRULE, for the formats that only do weekly."""
+    if not rrule:
+        return None
+    for chunk in str(rrule).replace("RRULE:", "").split(";"):
+        key, _, value = chunk.partition("=")
+        if key.strip().upper() == "FREQ":
+            return value.strip().upper()
+    return None
+
+
 class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
-    """Read-only calendar of the robot's own cleaning schedule."""
+    """The robot's own cleaning schedule, readable and writable.
+
+    WRITING IS FIELD-CONFIRMED on a 900-series: the schedule was read,
+    written back unchanged, read again identical, and the iRobot app
+    still showed it afterwards. That last step is the one that counts --
+    this project has a setting which accepts a write, reads back
+    changed, and is ignored entirely.
+
+    LESS THAN THE PRIME CALENDAR CAN DO, and deliberately so. The legacy
+    format holds one entry per weekday and nothing else: no frequency,
+    no rooms, no name, no second cleaning on the same day. What it
+    cannot express is refused rather than approximated, because
+    approximating would put a robot on the floor at a time nobody chose.
+    """
 
     _attr_translation_key = "schedule"
+    _attr_supported_features = (
+        CalendarEntityFeature.CREATE_EVENT
+        | CalendarEntityFeature.UPDATE_EVENT
+        | CalendarEntityFeature.DELETE_EVENT
+    )
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_schedule"
+
+    def _schedule_state(self) -> tuple[str | None, dict[str, Any]]:
+        """The robot's schedule and the key it lives under."""
+        reported = self.vacuum_state or {}
+        key = schedule_key(reported)
+        current = reported.get(key) if key else None
+        return key, current if isinstance(current, dict) else {}
+
+    def _weekday_of(self, event: dict[str, Any]) -> tuple[int, int, int]:
+        """A calendar event as (robot weekday, hour, minute).
+
+        Python counts from Monday, the robot from Sunday.
+        """
+        start = event.get("dtstart")
+        if start is None:
+            raise ServiceValidationError("A start time is required.")
+        if not isinstance(start, dt_stdlib.datetime):
+            raise ServiceValidationError(
+                "All-day events cannot become schedules -- a robot needs a "
+                "time of day to start at."
+            )
+        local = dt_util.as_local(start)
+        return (local.weekday() + 1) % 7, local.hour, local.minute
+
+    async def _async_write(self, schedule: dict[str, Any], key: str) -> None:
+        """Sends the schedule and lets a refusal surface.
+
+        `set_preference()` publishes to the robot over local MQTT with
+        nothing in between to validate it, so the shape has to be right
+        before it is sent rather than corrected afterwards.
+        """
+        roomba = self._config_entry.runtime_data.roomba
+        if roomba is None:
+            raise ServiceValidationError("Not connected to the robot.")
+        await self.hass.async_add_executor_job(
+            roomba.set_preference, key, schedule
+        )
+
+    async def async_create_event(self, **kwargs: Any) -> None:
+        """Adds a weekly cleaning on one weekday.
+
+        REPLACES THAT DAY IF IT ALREADY HAS ONE. The format holds a
+        single entry per weekday and has nowhere to put a second, so
+        this is the only thing "create" can mean here. Refusing instead
+        would leave no way to change a day's time at all.
+        """
+
+        key, current = self._schedule_state()
+        if key is None:
+            raise ServiceValidationError(
+                "This robot does not report a schedule, so there is nothing "
+                "to write to."
+            )
+        try:
+            reject_unsupported(
+                frequency=_frequency_word(kwargs.get("rrule")),
+                rooms=None,
+                name=kwargs.get("summary"),
+            )
+            weekday, hour, minute = self._weekday_of(kwargs)
+            schedule = legacy_with_entry(
+                current, weekday=weekday, hour=hour, minute=minute
+            )
+        except ScheduleFormatError as err:
+            raise ServiceValidationError(str(err)) from err
+        await self._async_write(schedule, key)
+
+    async def async_update_event(
+        self,
+        uid: str,
+        event: dict[str, Any],
+        recurrence_id: str | None = None,
+        recurrence_range: str | None = None,
+    ) -> None:
+        """Moves a weekly cleaning.
+
+        MOVING ACROSS WEEKDAYS CLEARS THE OLD ONE. The uid carries the
+        weekday the occurrence came from, so an edit that lands on a
+        different day switches the original off rather than leaving two
+        cleanings where the user asked for one.
+        """
+
+        if recurrence_range == "THISEVENT":
+            raise ServiceValidationError(
+                "A robot schedule has no single occurrence to change -- every "
+                "run comes from the same weekly entry."
+            )
+        key, current = self._schedule_state()
+        if key is None:
+            raise ServiceValidationError(
+                "This robot does not report a schedule, so there is nothing "
+                "to write to."
+            )
+        try:
+            reject_unsupported(
+                frequency=_frequency_word(event.get("rrule")),
+                rooms=None,
+                name=event.get("summary"),
+            )
+            weekday, hour, minute = self._weekday_of(event)
+            previous = _weekday_from_uid(uid)
+            if previous is not None and previous != weekday:
+                current = legacy_without_day(current, previous)
+            schedule = legacy_with_entry(
+                current, weekday=weekday, hour=hour, minute=minute
+            )
+        except ScheduleFormatError as err:
+            raise ServiceValidationError(str(err)) from err
+        await self._async_write(schedule, key)
+
+    async def async_delete_event(
+        self,
+        uid: str,
+        recurrence_id: str | None = None,
+        recurrence_range: str | None = None,
+    ) -> None:
+        """Switches a weekday off, keeping its time for later."""
+
+        key, current = self._schedule_state()
+        weekday = _weekday_from_uid(uid)
+        if key is None or weekday is None:
+            raise ServiceValidationError(
+                "That schedule entry cannot be identified on the robot."
+            )
+        try:
+            schedule = legacy_without_day(current, weekday)
+        except ScheduleFormatError as err:
+            raise ServiceValidationError(str(err)) from err
+        await self._async_write(schedule, key)
 
     def _zone_labels(self, region_ids: list[str]) -> list[str]:
         """Resolves region_ids into display names via the SAME
@@ -176,12 +427,18 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         ongoing = [(s, e, r) for s, e, r in occurrences if s <= now < e]
         if ongoing:
             start, end, region_ids = min(ongoing, key=lambda o: o[0])
-            return _to_calendar_event(start, end, self._zone_labels(region_ids))
+            return _to_calendar_event(
+                start, end, self._zone_labels(region_ids),
+                uid=_classic_uid((start.weekday() + 1) % 7),
+            )
         future = [(s, e, r) for s, e, r in occurrences if s > now]
         if not future:
             return None
         start, end, region_ids = min(future, key=lambda o: o[0])
-        return _to_calendar_event(start, end, self._zone_labels(region_ids))
+        return _to_calendar_event(
+            start, end, self._zone_labels(region_ids),
+            uid=_classic_uid((start.weekday() + 1) % 7),
+        )
 
     async def async_get_events(
         self,
@@ -194,7 +451,14 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
             self.vacuum_state, start_date, end_date
         )
         return [
-            _to_calendar_event(s, e, self._zone_labels(region_ids))
+            _to_calendar_event(
+                s, e, self._zone_labels(region_ids),
+                # THE WEEKDAY IS THE IDENTITY. In a format with one entry
+                # per day there is nothing else to identify, and Home
+                # Assistant needs something to pass back when the user
+                # deletes or edits.
+                uid=_classic_uid((s.weekday() + 1) % 7),
+            )
             for s, e, region_ids in occurrences
         ]
 
@@ -271,7 +535,12 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_schedule"
-        self._cached_occurrences: list[tuple[Any, Any, list[str], str | None]] = []
+        #: (start, end, region_ids, name, schedule_id). The last field
+        #: is what gives each event a uid, and without a uid Home
+        #: Assistant cannot call delete or edit at all.
+        self._cached_occurrences: list[
+            tuple[Any, Any, list[str], str | None, str | None]
+        ] = []
         self._cached_room_names: dict[str, str] = {}
 
     async def async_added_to_hass(self) -> None:
@@ -481,8 +750,17 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
 
         seconds = 0.0
         if region_ids:
+            # THE MODE THE SCHEDULE ACTUALLY USES. Every region carries
+            # dozens of estimates, one per parameter combination, and
+            # taking the first would quote the duration of a mode this
+            # schedule does not run -- @DaRealGuGu's first entry is
+            # `operatingMode 512` while his robot last ran `4`.
+            mode = occurrence[5] if len(occurrence) > 5 else None
+            params = {"operatingMode": mode} if mode is not None else {}
             for rid in region_ids:
-                best = TimeEstimates.best(estimates.by_region.get(str(rid)) or [])
+                best = TimeEstimates.best(
+                    estimates.by_region.get(str(rid)) or [], **params
+                )
                 # ONE UNKNOWN ROOM DISCARDS THE WHOLE SUM. A partial
                 # total would be confidently short, and an event that
                 # ends too early is worse than one that ends too late:
@@ -492,10 +770,15 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
                     return end
                 seconds += best.seconds
         else:
-            best = TimeEstimates.best(estimates.mission)
-            if best is None or best.seconds is None:
-                return end
-            seconds = best.seconds
+            # NO WHOLE-MISSION FIGURE EXISTS. The app's simulator response
+            # had one and the real response does not -- a schedule that
+            # names no rooms cleans everywhere, and summing every region
+            # would be a different number from what the robot does
+            # (rooms are not the whole floor).
+            #
+            # So the flat hour stands for whole-house schedules. A poor
+            # estimate rather than a wrong one.
+            return end
 
         if seconds <= 0:
             return end
@@ -563,7 +846,11 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         summary = kwargs.get("summary") or ""
 
         try:
-            room_ids = match_rooms(summary, self._room_names())
+            # BOTH FIELDS, as the edit path already does: a user types
+            # where it suits them, and neither is labelled for rooms or
+            # for a mode.
+            text = f"{summary} {kwargs.get('description') or ''}"
+            room_ids = match_rooms(text, self._room_names())
         except AmbiguousRoomError as err:
             raise ServiceValidationError(str(err)) from err
 
@@ -577,6 +864,10 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             frequency=frequency,
             room_ids=room_ids,
             note=describe_match(room_ids, self._room_names()),
+            # None leaves the derived schedule's mode alone. Guessing
+            # one would change what the robot does to the floor on the
+            # strength of a word that may not have been meant that way.
+            operating_mode=match_mode(text),
         )
 
     async def async_update_event(
@@ -656,6 +947,10 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             frequency=frequency,
             room_ids=room_ids,
             note=describe_match(room_ids, self._room_names()),
+            # None leaves the derived schedule's mode alone. Guessing
+            # one would change what the robot does to the floor on the
+            # strength of a word that may not have been meant that way.
+            operating_mode=match_mode(text),
         )
 
     async def async_delete_event(
@@ -792,13 +1087,21 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
                 if o[0] <= now < self._estimated_end(o)
             ]
         if ongoing:
-            start, end, region_ids, name = min(ongoing, key=lambda o: o[0])
-            return _to_calendar_event(start, end, self._zone_labels(region_ids))
+            chosen = min(ongoing, key=lambda o: o[0])
+            start, end, region_ids = chosen[0], chosen[1], chosen[2]
+            return _to_calendar_event(
+                start, end, self._zone_labels(region_ids),
+                uid=_uid_of(chosen), mode=_mode_of(chosen),
+            )
         future = [o for o in self._cached_occurrences if o[0] > now]
         if not future:
             return None
-        start, end, region_ids, name = min(future, key=lambda o: o[0])
-        return _to_calendar_event(start, end, self._zone_labels(region_ids))
+        chosen = min(future, key=lambda o: o[0])
+        start, end, region_ids = chosen[0], chosen[1], chosen[2]
+        return _to_calendar_event(
+            start, end, self._zone_labels(region_ids),
+            uid=_uid_of(chosen), mode=_mode_of(chosen),
+        )
 
     async def async_get_events(
         self,

@@ -184,6 +184,35 @@ def _apply_wetness(commands: list, wetness: int) -> list:
     return updated
 
 
+def _set_operating_mode(commands: list, mode: int) -> list:
+    """Template commands with every region's operating mode replaced.
+
+    APPLIED TO EVERY REGION, not just the first. A schedule with mixed
+    modes is possible on paper and has never been seen, and a user who
+    writes "mop" means the whole run -- leaving some rooms on the old
+    mode would be a schedule nobody asked for.
+
+    Regions that carry no `params` at all are given one. A region
+    without params inherits the robot's global settings, and adding a
+    mode there is exactly the intent.
+    """
+    import copy  # noqa: PLC0415
+
+    updated = copy.deepcopy([c for c in commands if isinstance(c, dict)])
+    for command in updated:
+        inner = command.get("command") if isinstance(command.get("command"), dict) else command
+        if not isinstance(inner, dict):
+            continue
+        for region in inner.get("regions") or []:
+            if isinstance(region, dict):
+                params = region.get("params")
+                if not isinstance(params, dict):
+                    params = {}
+                    region["params"] = params
+                params["operatingMode"] = int(mode)
+    return updated
+
+
 def _set_regions(commands: list, regions: list[dict]) -> list:
     """Template commands with their regions replaced by the requested ones."""
     import copy  # noqa: PLC0415
@@ -237,6 +266,11 @@ def _reshaped_options(template_options: Any, call_data: dict, containers: list,
     if "rooms" in call_data:
         regions = _resolve_rooms(config_entry, call_data["rooms"], containers)
         commands = _set_regions(commands, regions)
+    # AFTER the regions, because setting regions replaces them wholesale
+    # and would drop a mode applied first. Source order has caused real
+    # bugs in this project before.
+    if call_data.get("operating_mode") is not None:
+        commands = _set_operating_mode(commands, call_data["operating_mode"])
     if "pad_wetness" in call_data:
         commands = _apply_wetness(commands, call_data["pad_wetness"])
     changes["commands"] = commands
@@ -312,6 +346,7 @@ async def async_create_schedule_from_calendar(
     frequency: str,
     room_ids: list[str],
     note: str,
+    operating_mode: int | None = None,
 ) -> None:
     """Creates a schedule from the calendar dialog.
 
@@ -341,6 +376,8 @@ async def async_create_schedule_from_calendar(
         call_data["name"] = name
     if room_ids:
         call_data["rooms"] = room_ids
+    if operating_mode is not None:
+        call_data["operating_mode"] = operating_mode
 
     data = config_entry.runtime_data
     containers = await _read_containers_or_error(config_entry)
@@ -379,6 +416,7 @@ async def async_update_schedule_from_calendar(
     frequency: str,
     room_ids: list[str],
     note: str,
+    operating_mode: int | None = None,
 ) -> None:
     """Rewrites an existing schedule from an edited calendar event.
 
@@ -407,13 +445,45 @@ async def async_update_schedule_from_calendar(
         "days": [_WEEKDAY_TO_WIRE[weekday]],
         "time": _time(hour=hour, minute=minute),
         "frequency": frequency,
-        "rooms": room_ids or None,
+        "operating_mode": operating_mode,
     }
+    # ONLY WHEN THERE ARE ROOMS. The key's presence is what triggers the
+    # room rewrite, so setting it to None asked _resolve_rooms to
+    # iterate nothing -- the create path already only sets it when
+    # non-empty, and this one did not.
+    if room_ids:
+        call_data["rooms"] = room_ids
 
-    async with _container_lock(config_entry):
+    # THE LOCK IS PER CONTAINER, and the container is not known until
+    # the schedule has been found -- so the read that finds it has to
+    # happen first, and the lock is taken around the decision and the
+    # write, exactly as the service handlers do.
+    #
+    # Calling it without a container id raised TypeError on every
+    # calendar edit (@utkjmitch). The handler existed, was reachable
+    # once events carried a uid, and could not complete.
+    containers = await _read_containers_or_error(config_entry)
+    target = None
+    container_id = None
+    for _cid, _schedules in containers:
+        for _schedule in _schedules:
+            if _schedule.schedule_id == schedule_id:
+                container_id = _cid
+                break
+        if container_id is not None:
+            break
+    if container_id is None:
+        raise ServiceValidationError(
+            "That schedule no longer exists on the robot -- it may have been "
+            "deleted in the iRobot app. Reload the integration to catch up."
+        )
+
+    async with _container_lock(config_entry, container_id):
+        # RE-READ INSIDE THE LOCK. update_schedules() replaces the whole
+        # container, so the list written must come from a read nothing
+        # could have changed since.
         containers = await _read_containers_or_error(config_entry)
         target = None
-        container_id = None
         for cid, schedules in containers:
             for schedule in schedules:
                 if schedule.schedule_id == schedule_id:

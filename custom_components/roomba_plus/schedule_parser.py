@@ -289,7 +289,12 @@ def parse_prime_schedule_occurrences(
     schedules: list[Any],
     start: datetime.datetime,
     end: datetime.datetime,
-) -> list[tuple[datetime.datetime, datetime.datetime, list[str], str | None]]:
+) -> list[
+    tuple[
+        datetime.datetime, datetime.datetime, list[str],
+        str | None, str | None, int | None,
+    ]
+]:
     """Prime's own equivalent of parse_schedule_occurrences_with_regions(),
     for a list of roombapy_prime HouseholdSchedule objects (from
     get_schedules()) instead of a local vacuum_state dict.
@@ -372,16 +377,62 @@ def parse_prime_schedule_occurrences(
         minute = schedule_start.min or 0
 
         region_ids: list[str] = []
+        operating_mode: int | None = None
         if options.commands:
             first_command = options.commands[0]
             if isinstance(first_command, dict):
+                # WHAT THE MISSION WILL DO, from the first region's
+                # params. The app shows it above the room list, and a
+                # schedule that mops is a different thing from one that
+                # vacuums over the same rooms.
+                #
+                # Read from the first region rather than checked across
+                # all of them: a mixed-mode schedule is possible on
+                # paper, has never been seen, and the app shows one
+                # label per mission.
+                for _region in (first_command.get("regions") or []):
+                    if isinstance(_region, dict):
+                        operating_mode = (
+                            _region.get("params") or {}
+                        ).get("operatingMode")
+                        break
                 region_ids = [
                     rid for r in (first_command.get("regions") or []) if (rid := extract_region_id(r))
                 ]
 
+        # A ONCE SCHEDULE HAS EXACTLY ONE RUN, and it was being drawn as
+        # a weekly one. @DaRealGuGu created a single cleaning from the
+        # calendar; the robot stored it as ONCE and the iRobot app showed
+        # it that way, while Home Assistant painted it on every Thursday
+        # for the next two months.
+        #
+        # The frequency gate above lets ONCE through -- correctly, the
+        # run does exist -- and then the generator below repeats it,
+        # because that is all it knows how to do. Taking the first
+        # occurrence is the whole fix: the robot fires it once, and the
+        # server deletes the schedule within minutes afterwards
+        # (@utkjmitch), so there is never a second one to draw.
+        # WHAT THE MISSION WILL DO, from the first region's params. The
+        # app shows it above the room list, and a schedule that mops is
+        # a different thing from one that vacuums over the same rooms.
+        #
+        # Read from the first region rather than checked across all of
+        # them: a mixed-mode schedule is possible on paper and has never
+        # been seen, and one label per mission is what the app shows.
+        once = options.frequency == ScheduleFrequency.ONCE
         for roomba_day in schedule_start.day or []:
-            for occurrence in _weekly_occurrences(roomba_day, hour, minute, start, end):
-                results.append((occurrence, occurrence + DEFAULT_EVENT_DURATION, region_ids, options.name))
+            generated = _weekly_occurrences(roomba_day, hour, minute, start, end)
+            for occurrence in (generated[:1] if once else generated):
+                # THE SCHEDULE ID TRAVELS WITH THE OCCURRENCE. Without
+                # it the calendar cannot give its events a uid, and
+                # Home Assistant needs one to call delete or edit at
+                # all -- so those handlers existed and were unreachable.
+                results.append((
+                    occurrence, occurrence + DEFAULT_EVENT_DURATION,
+                    region_ids, options.name,
+                    getattr(schedule, "schedule_id", None),
+                    operating_mode,
+                ))
 
     results.sort(key=lambda item: item[0])
     return results

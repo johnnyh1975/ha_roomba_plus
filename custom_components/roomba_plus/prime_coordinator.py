@@ -438,6 +438,20 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         self.blid = blid
         self.prime_robot = prime_robot
+        #: THE CLASS THAT READS THIS IS NOT THE CLASS THAT SET IT.
+        #
+        #: `_note_phase_for_timer` lives here and touches
+        #: `self._trail_mission_id`, which was only ever initialised in
+        #: PrimeCoordinator -- a different class that this one does not
+        #: inherit from. So the whole phase-update block raised
+        #: AttributeError on its first line, every time, and a
+        #: best-effort `except` filed it at DEBUG.
+        #
+        #: Everything downstream of that line therefore never ran: the
+        #: status-side trail clearing, the observed dock position, and
+        #: the mission timer store's on_phase_run. Found by @utkjmitch
+        #: from overnight debug logs, hourly, on every install.
+        self._trail_mission_id: str | None = None
 
     async def async_start(self) -> None:
         """Seeds initial data by fetching ALL eight named shadows once,

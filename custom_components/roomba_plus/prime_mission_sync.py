@@ -252,7 +252,12 @@ async def _async_sync_locked(
     applied to one layer and not the next.
     """
     try:
-        history = await robot.get_mission_history()
+        # THE BLID IS REQUIRED, and this call has never supplied it.
+        # The comment below documents the previous life of the same bug
+        # -- a required `days` argument that made every sync fail
+        # silently since the feature shipped. Fixing that one moved the
+        # TypeError up a line rather than ending it (@utkjmitch).
+        history = await robot.get_mission_history(robot.blid)
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: could not read mission history", exc_info=True)
         return 0

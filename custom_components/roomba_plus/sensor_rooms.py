@@ -186,6 +186,14 @@ def _prime_room_time_estimates(
     coordinator = getattr(
         config_entry.runtime_data, "prime_schedule_coordinator", None
     )
+    # REGION IDS FIRST, NAMES ONLY AS A FALLBACK.
+    #
+    # The estimates are indexed by region id and so are the schedules --
+    # matching them through names was a detour that fails on a room
+    # without one. @DaRealGuGu's region 11 has no name in its map
+    # metadata while the other three do, and one room without an
+    # estimate discards the whole calculation, so a single nameless room
+    # would have left mission progress permanently blank.
     room_names = getattr(coordinator, "room_names", None) or {}
     by_name = {
         str(name).lower(): str(rid) for rid, name in room_names.items() if name
@@ -195,7 +203,10 @@ def _prime_room_time_estimates(
 
     out: list[int | None] = []
     for room_name in planned_order:
-        rid = by_name.get((room_name or "").lower())
+        # The planned order may already be ids; if it is, use them
+        # directly rather than looking for a name that will not match.
+        key = str(room_name or "")
+        rid = key if key in estimates.by_region else by_name.get(key.lower())
         best = (
             TimeEstimates.best(estimates.by_region.get(rid) or [])
             if rid else None
