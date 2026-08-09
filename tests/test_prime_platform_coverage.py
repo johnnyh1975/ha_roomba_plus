@@ -56,6 +56,7 @@ _PLATFORM_TO_MODULE: dict[Platform, str] = {
     Platform.BINARY_SENSOR: "binary_sensor",
     Platform.SWITCH: "switch",
     Platform.CALENDAR: "calendar",
+    Platform.TODO: "todo",
     Platform.IMAGE: "image",
     Platform.BUTTON: "button",
     Platform.SELECT: "select",

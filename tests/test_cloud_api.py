@@ -521,22 +521,30 @@ class TestUpdateFailureSuppression:
 
     @pytest.mark.asyncio
     async def test_success_stamps_last_success_time(self):
-        """A successful _async_update_data call must set _last_success_time."""
+        """A successful `_async_update_data` sets `_last_success_time`.
+
+        THIS TEST USED TO ASSERT NOTHING AND SAY SO. It swallowed every
+        exception and closed with a comment -- "confirmed via logic trace
+        of _async_update_data" -- in place of the assertion its own
+        docstring promised. It could not fail, and it counted towards
+        coverage while covering nothing.
+
+        The timestamp is what the grace-period logic reads, so a
+        regression here would silently change how long stale data is
+        served after the cloud goes away.
+        """
         coord = _make_coordinator()
-        # Patch asyncio.timeout so we don't need a real event loop context
-        with patch("custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"):
-            with patch.object(coord, "_normalize_and_merge", return_value=_GOOD_DATA, create=True):
-                # Call minimally — just enough to stamp success time
-                # We simulate success by having the fetch succeed
-                coord.api.get_mission_history = AsyncMock(return_value=[])
-                coord.api.get_automations = AsyncMock(return_value={})
-                try:
-                    await coord._async_update_data()
-                except Exception:
-                    pass  # normalisation internals may fail; success time is our only concern
-        # Either it stamped or an unrelated internal error fired — check for None change
-        # The important assertion: on clean success it gets set
-        # (integration test; confirmed via logic trace of _async_update_data)
+        coord._last_success_time = None
+        with patch(
+            "custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"
+        ), patch.object(
+            coord, "_normalize_and_merge", return_value=_GOOD_DATA, create=True
+        ):
+            coord.api.get_mission_history = AsyncMock(return_value=[])
+            coord.api.get_automations = AsyncMock(return_value={})
+            await coord._async_update_data()
+
+        assert coord._last_success_time is not None
 
     @pytest.mark.asyncio
     async def test_cloud_error_within_grace_period_returns_last_data(self):

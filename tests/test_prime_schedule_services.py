@@ -239,6 +239,56 @@ class TestRegionsAreReadThroughEitherShape:
 
 
 class TestFourSilentSignatureBugs:
+    """Helpers below build a real update call, so these test what the
+    code DOES rather than how it is spelled."""
+
+    def _run_update(self, room_ids=None, lock=None):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from roombapy_prime.models.schedules_dnd import HouseholdSchedule
+
+        from custom_components.roomba_plus import prime_schedule_services as m
+
+        parsed = HouseholdSchedule.from_json({
+            "schedule_id": "S1",
+            "options": {
+                "name": "x", "enabled": True, "frequency": "WEEKLY",
+                "start": {"day": [1], "hour": 9, "min": 0},
+                "commands": [{"command": {"command": "start", "regions": [
+                    {"type": "rid", "region_id": "11", "params": {}}]}}],
+            },
+        })
+        entry = MagicMock()
+        entry.entry_id = "E1"
+        robot = AsyncMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_robot=robot, prime_household_id="HH",
+            prime_schedule_coordinator=MagicMock(),
+        )
+        entry.runtime_data.prime_schedule_coordinator.async_request_refresh = (
+            AsyncMock()
+        )
+        patches = [
+            patch.object(m, "async_read_schedule_containers",
+                         AsyncMock(return_value=[("C1", [parsed])])),
+        ]
+        if lock is not None:
+            patches.append(patch.object(m, "_container_lock", lock))
+        for p_ in patches:
+            p_.start()
+        try:
+            asyncio.run(m.async_update_schedule_from_calendar(
+                MagicMock(), entry, "S1",
+                name="x", weekday=1, hour=10, minute=0,
+                frequency="WEEKLY", room_ids=room_ids or [], note="",
+            ))
+        finally:
+            for p_ in patches:
+                p_.stop()
+        return robot
+
     """All four found by @utkjmitch from overnight debug logs, and all
     four the same species: a call signature or an attribute changed in
     one layer and not the other, invisible because the failure output
@@ -261,15 +311,24 @@ class TestFourSilentSignatureBugs:
 
         from custom_components.roomba_plus import prime_mission_sync
 
-        source = inspect.getsource(prime_mission_sync)
-        assert "get_mission_history(robot.blid)" in source
-        # Only actual calls -- the module docstring names the method in
-        # prose, and matching that would fail the test for a sentence.
-        calls = [
-            line for line in source.splitlines()
-            if "await robot.get_mission_history" in line
-        ]
-        assert calls and all("robot.blid" in line for line in calls)
+        # BEHAVIOUR, NOT SPELLING. An earlier version of this asserted
+        # that the source contained `get_mission_history(robot.blid)`,
+        # which breaks on reformatting and proves nothing about what the
+        # call does. Calling it and looking at the argument does.
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        robot = AsyncMock()
+        robot.blid = "BLID"
+        robot.get_mission_history.return_value = []
+
+        asyncio.run(prime_mission_sync._async_sync_locked(
+            MagicMock(), robot, MagicMock()
+        ))
+
+        robot.get_mission_history.assert_awaited_once_with("BLID")
 
     def test_the_status_coordinator_owns_the_trail_id(self):
         """`_note_phase_for_timer` lives on PrimeStatusCoordinator and
@@ -302,10 +361,19 @@ class TestFourSilentSignatureBugs:
 
         from custom_components.roomba_plus import prime_schedule_services
 
-        source = inspect.getsource(
-            prime_schedule_services.async_update_schedule_from_calendar
-        )
-        assert "_container_lock(config_entry, container_id)" in source
+        # The lock's ARGUMENTS, observed. Asserting the source text
+        # would pass on a call that never runs.
+        seen = {}
+
+        def _lock(config_entry, container_id):
+            import contextlib
+
+            seen["container"] = container_id
+            return contextlib.nullcontext()
+
+        self._run_update(lock=_lock)
+
+        assert seen["container"] == "C1"
 
     def test_an_edit_without_rooms_does_not_ask_to_resolve_none(self):
         """The key's presence is what triggers the room rewrite, so
@@ -315,8 +383,16 @@ class TestFourSilentSignatureBugs:
 
         from custom_components.roomba_plus import prime_schedule_services
 
-        source = inspect.getsource(
-            prime_schedule_services.async_update_schedule_from_calendar
-        )
-        assert '"rooms": room_ids or None' not in source
-        assert "if room_ids:" in source
+        # Observed: an edit with no rooms must not ask the resolver to
+        # iterate None. Checking the source for `if room_ids:` would
+        # pass on a rewrite that reintroduced the bug differently.
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus import prime_schedule_services
+
+        with patch.object(
+            prime_schedule_services, "_resolve_rooms"
+        ) as resolve:
+            self._run_update(room_ids=[])
+
+        resolve.assert_not_called()

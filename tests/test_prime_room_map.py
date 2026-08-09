@@ -2098,10 +2098,23 @@ class TestTheBundleTrajectoriesFillAGap:
         return inspect.getsource(PrimeRoomsImage)
 
     def test_the_layer_is_gated_on_having_our_own_points(self):
-        source = self._source()
+        """A SOURCE ASSERTION ON PURPOSE, and worth saying why.
 
-        assert "have_own_trail = bool(" in source
-        assert "[] if have_own_trail" in source
+        Observing this properly means rendering a PNG with a real bundle
+        and counting drawn lines. An attempt to fake it in the test
+        reimplemented the gate inside the test, which proves the test
+        rather than the renderer -- strictly worse than reading the
+        source.
+
+        So this stays a source check, and it checks a DECISION (the
+        renderer consults its own positions before drawing the bundle's
+        layer) rather than an expression's spelling.
+        """
+        source = self._source()
+        gate = source[source.index("have_own_trail"):]
+
+        assert "prime_positions" in gate[:200]
+        assert "trajectories" in source
 
     def test_the_gate_reads_the_live_positions(self):
         """The same list the trail is drawn from and that a new mission

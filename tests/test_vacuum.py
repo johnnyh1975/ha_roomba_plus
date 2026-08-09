@@ -2257,3 +2257,66 @@ class TestUndeliveredCommandsAreReported:
                 ):
                     continue
                 assert "_send_confirmed" in stripped, f"{module.__name__}: {stripped}"
+
+
+class TestACombosRoomCleaningIsNotTakenAway:
+    """`is_mop()` answers "can it mop" by looking for `detectedPad`. A
+    Combo has a pad AND brushes AND stable region ids, so gating
+    CLEAN_AREA on `not is_mop()` excluded it as though it were a Braava.
+
+    @connormxy's j7+ Combo advertised no CLEAN_AREA, Home Assistant
+    filtered the entity out of its own service picker, and he reinstalled
+    three integrations looking for the cause. His diagnostics show the
+    cloud coordinator holding twelve regions the whole time.
+
+    The fourteenth site of this same mistake, and `is_mop`'s own
+    docstring already said which one to use.
+
+    THE FLAG ITSELF CANNOT BE ASSERTED HERE: this test environment runs
+    Home Assistant 2025.1, where `VacuumEntityFeature.CLEAN_AREA` does
+    not exist. So these check the predicate that decides it, which is
+    where the bug was.
+    """
+
+    def _excluded(self, state):
+        from custom_components.roomba_plus.const import is_braava
+
+        return is_braava(state)
+
+    def test_a_combo_is_not_excluded(self):
+        """A pad and brushes -- rooms are addressable by region id."""
+        # His actual sku. `is_braava` reads the first letter, and falls
+        # back to `is_mop` only when there is none -- which is why the
+        # sku belongs in the fixture rather than being left out.
+        combo = {"sku": "c755020", "detectedPad": "reusableWet"}
+
+        assert not self._excluded(combo)
+
+    def test_a_plain_vacuum_is_not_excluded(self):
+        assert not self._excluded({"sku": "i755840"})
+
+    def test_a_braava_is_excluded(self):
+        """A Braava targets rooms through padWetness rather than region
+        segments -- the exclusion this gate was always meant to
+        express."""
+        assert self._excluded({"sku": "m613840", "detectedPad": "reusableWet"})
+
+    def test_the_old_predicate_would_have_excluded_the_combo(self):
+        """Pinning why this was wrong, not only that it changed."""
+        from custom_components.roomba_plus.const import is_mop
+
+        combo = {"sku": "c755020", "detectedPad": "reusableWet"}
+
+        from custom_components.roomba_plus.const import is_braava as _b
+
+        assert is_mop(combo) is True
+        assert _b(combo) is False
+
+    def test_the_gate_asks_about_braavas_not_about_pads(self):
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        source = inspect.getsource(vacuum.IRobotVacuum.supported_features.fget)
+        assert "not is_braava(" in source
+        assert "not is_mop(" not in source

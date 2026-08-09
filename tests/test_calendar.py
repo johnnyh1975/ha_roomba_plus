@@ -855,12 +855,18 @@ class TestTheEventShowsWhatWasUnderstood:
     _ROOMS = {"13": "Küche", "10": "Flur"}
 
     def test_the_summary_is_built_from_room_labels(self):
-        import inspect
+        """Read off the produced event, not out of the source: a summary
+        assertion that matches a call expression passes on any spelling
+        and fails on a reformat."""
+        import datetime as dt
 
-        from custom_components.roomba_plus import calendar as cal_mod
+        from custom_components.roomba_plus.calendar import _to_calendar_event
 
-        source = inspect.getsource(cal_mod._to_calendar_event)
-        assert "_event_summary(zone_labels, mode)" in source
+        start = dt.datetime(2026, 8, 6, 9, 0, tzinfo=dt.UTC)
+        event = _to_calendar_event(start, start, ["Küche", "Flur"])
+
+        assert "Küche" in event.summary
+        assert "Flur" in event.summary
 
     def test_typed_text_and_canonical_text_give_the_same_rooms(self):
         """The round trip that editing depends on."""
@@ -1130,3 +1136,71 @@ class TestOperatingModeLabels:
         assert self._label(1024) is None
         assert self._label(None) is None
         assert self._label("mop") is None
+
+
+class TestTheCalendarViewIsActuallyFilled:
+    """`async_get_events` is what fills the calendar VIEW, and it
+    unpacked the occurrence tuple into a fixed four names.
+
+    That tuple has grown twice -- a schedule id so events could carry a
+    uid, and an operating mode alongside it -- and the unpack raised
+    ValueError on every call. An exception here produces an EMPTY
+    calendar rather than a visible error: @chairstacker's entity was
+    present, enabled and listed, with nothing in it.
+
+    Every existing test passed throughout, because none of them called
+    this method. The `event` property was widened at the time and this
+    was not, which is why the state moved and the view did not.
+    """
+
+    async def _events(self, occurrences):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = object.__new__(PrimeScheduleCalendar)
+        cal._fetch_room_names = AsyncMock(return_value={"11": "Kitchen"})
+        cal._fetch_occurrences = AsyncMock(return_value=occurrences)
+        cal._config_entry = MagicMock()
+        import datetime as dt
+
+        return await PrimeScheduleCalendar.async_get_events(
+            cal, MagicMock(),
+            dt.datetime(2026, 8, 1, tzinfo=dt.UTC),
+            dt.datetime(2026, 8, 30, tzinfo=dt.UTC),
+        )
+
+    def _occurrence(self, *extra):
+        import datetime as dt
+
+        start = dt.datetime(2026, 8, 6, 9, 0, tzinfo=dt.UTC)
+        return (start, start + dt.timedelta(hours=1), ["11"], "Regular", *extra)
+
+    @pytest.mark.asyncio
+    async def test_the_current_six_field_tuple_produces_an_event(self):
+        events = await self._events([self._occurrence("S1", 512)])
+
+        assert len(events) == 1
+        assert events[0].uid == "S1"
+        assert "Kitchen" in events[0].summary
+
+    @pytest.mark.asyncio
+    async def test_a_shorter_tuple_still_works(self):
+        """Classic occurrences are shorter, and widening one path must
+        not break the other."""
+        events = await self._events([self._occurrence()])
+
+        assert len(events) == 1
+        assert events[0].uid is None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_schedule_gives_an_empty_calendar(self):
+        assert await self._events([]) == []
+
+    @pytest.mark.asyncio
+    async def test_every_occurrence_becomes_an_event(self):
+        """The count is the thing: an exception here loses all of them at
+        once, which looks like a robot with no schedules."""
+        events = await self._events([self._occurrence("S1", 2)] * 4)
+
+        assert len(events) == 4

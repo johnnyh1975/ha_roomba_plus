@@ -324,6 +324,32 @@ class TestAsyncSetupEntryCapabilityGating:
         assert any(isinstance(e, PrimeSuctionLevelSensor) for e in created)
 
     @pytest.mark.asyncio
+    async def test_an_absent_cap_keeps_the_entities(self):
+        """THE CONTRACT, OBSERVED. None means unknown -- the shadow has
+        not arrived -- and only an explicit 0 means absent. A robot that
+        has not reported its capabilities yet must get its entities
+        rather than lose them.
+
+        This replaces two assertions that looked for
+        `cap is None or cap.scrub != 0` in the source. Those passed on
+        any spelling of the expression and failed on a reformat, and the
+        behaviour tests beside them already covered 0 and non-zero --
+        the None case, which is the half that once cost a bug, was
+        covered by neither."""
+        from custom_components.roomba_plus import sensor as sensor_mod
+
+        created: list = []
+        await sensor_mod.async_setup_entry(
+            MagicMock(), self._entry_with_cap(None),
+            lambda e, **kw: created.extend(e),
+        )
+        keys = {
+            getattr(e.entity_description, "key", "") for e in created
+        }
+
+        assert "prime_detected_pad" in keys
+        assert "prime_suction_level" in keys or "suction_level" in keys
+    @pytest.mark.asyncio
     async def test_dock_cap_zero_excludes_pad_wash_and_dry(self):
         from custom_components.roomba_plus import sensor as sensor_mod
         from custom_components.roomba_plus.sensor_prime import (
@@ -748,17 +774,6 @@ class TestDockCapabilityGating:
         assert "dock_cap_known" in source
         assert "not dock_cap_known or" in source
 
-    def test_the_robot_capability_contract_is_untouched(self):
-        """`cap.scrub` and `cap.suction_lvl` keep the original rule:
-        None means unknown, only an explicit 0 means absent."""
-        import inspect
-
-        from custom_components.roomba_plus import sensor
-
-        source = inspect.getsource(sensor.async_setup_entry)
-
-        assert "cap is None or cap.scrub != 0" in source
-        assert "cap is None or cap.suction_lvl != 0" in source
 
 
 class TestCapabilityGatesHandleNone:

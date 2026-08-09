@@ -236,22 +236,25 @@ class TestPrimeRoomCleaning:
         assert params["twoPass"] is True
         assert params["suctionLevel"] == 2
 
-    def test_operating_mode_is_deliberately_not_offered(self):
-        """The confirmed payload carries it, and it stays out anyway.
+    def test_operating_mode_is_offered_now_that_its_values_are_known(self):
+        """IT USED TO BE DELIBERATELY OMITTED, and this test used to pin
+        that. The reason was honest: "exposing a setting whose valid
+        range we cannot determine invites a call that is silently
+        rejected, or accepted and wrong."
 
-        It relates to the fitted mop pad, and the compatibility rule
-        lives robot-side where this code cannot check it -- our own
-        diagnostic script says exactly that when reporting the value.
-        Exposing a setting whose valid range we cannot determine invites
-        a call that is silently rejected, or accepted and wrong.
+        The range is determined now -- 2 vacuum, 4 mop, 32 both at once,
+        512 vacuum then mop -- confirmed from schedules on two accounts,
+        from the app's own operating_mode_defaults, and from a real
+        robot's last start command. A user asked for the control
+        (@arielgr) and the objection no longer applies.
 
-        This test exists so the omission reads as a decision rather than
-        an oversight."""
+        The test is kept, inverted: the reversal of a documented
+        decision should be as visible as the decision was."""
         import inspect
 
         from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
 
-        assert "operating_mode" not in inspect.signature(
+        assert "operating_mode" in inspect.signature(
             PrimeRoomCleaning.clean_rooms
         ).parameters
 
