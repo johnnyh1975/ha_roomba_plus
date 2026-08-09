@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a28-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a29-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -33,6 +33,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - [Known limitations](#known-limitations)
 - [Installation](#installation)
 - [Getting started](#getting-started)
+- [Companion Lovelace card](#companion-lovelace-card)
 - [Migration](#migration)
 - [Documentation](#documentation)
 - [Data privacy & data flow](#data-privacy--data-flow)
@@ -318,6 +319,32 @@ Enter email and password, or clear both fields to disable cloud. A connection te
 ### Reconfiguration (IP/password change)
 
 Settings → Devices → Roomba+ → ⋮ → **Reconfigure** — no need to remove and re-add.
+
+---
+
+## Companion Lovelace card
+
+**[roomba_plus_card](https://github.com/johnnyh1975/roomba_plus_card)** — a dashboard card built for
+this integration: the map, room buttons and mission history in one place.
+
+Install it through HACS as a custom repository of type **Dashboard** (older HACS versions call it
+*Lovelace*). It is a separate project with its own releases, which is why it is not part of this
+download — keeping a card and an integration in step across two release schedules would be work for
+no benefit.
+
+**You may not need it.** Home Assistant's own vacuum card already carries start, stop, return, locate
+and suction level, and any other control this integration provides is an entity you can place beside
+it with a plain Entities card:
+
+```yaml
+type: entities
+entities:
+  - vacuum.your_robot
+  - select.your_robot_prime_cleaning_mode
+```
+
+The companion card earns its place when you want the map and the room buttons together, not for one
+or two controls.
 
 ---
 

@@ -49,6 +49,20 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "services -> select_prime": (
+        "as room_cleaning -> select_prime: select_prime pulls in the room "
+        "cleaning backend, so importing it at module level here closes the "
+        "same cycle"
+    ),
+    "room_cleaning -> select_prime": (
+        "a real cycle: select_prime imports room_cleaning back, so this one "
+        "cannot move to module level"
+    ),
+    "todo -> todo_prime": (
+        "Prime-only path inside a module shared by both generations -- the "
+        "Classic list is built from lifetime hours, the Prime one from parts "
+        "the robot counts itself"
+    ),
     "calendar -> calendar_rooms": (
         "Prime-only path inside a module shared by both generations -- a "
         "Classic robot's calendar never edits schedules, because nothing "
