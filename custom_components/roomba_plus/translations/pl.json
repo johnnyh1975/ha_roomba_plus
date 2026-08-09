@@ -167,7 +167,10 @@
           "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)",
           "map_room_labels": "Rysuj nazwy pomieszczeń na obrazie mapy",
           "prime_favorite_buttons": "Utwórz przycisk dla każdego zapisanego ulubionego",
-          "enable_schedule_calendar": "Pokaż harmonogramy sprzątania jako kalendarz"
+          "enable_schedule_calendar": "Pokaż harmonogramy sprzątania jako kalendarz",
+          "map_clean_zones": "Pokaż strefy sprzątania",
+          "map_keepout_zones": "Pokaż strefy zakazane",
+          "map_nomop_zones": "Pokaż strefy bez mopowania"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
@@ -1039,6 +1042,15 @@
         "name": "Mapa",
         "state": {
           "follow_robot": "Podążaj za robotem"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Tryb sprzątania",
+        "state": {
+          "vacuum": "Odkurzanie",
+          "mop": "Mopowanie",
+          "vacuum_and_mop": "Odkurzanie i mopowanie",
+          "vacuum_then_mop": "Odkurzanie, potem mopowanie"
         }
       }
     },

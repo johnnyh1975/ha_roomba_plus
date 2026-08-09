@@ -45,6 +45,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -299,7 +300,9 @@ class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
             return
         try:
             versions = await robot.get_active_map_versions()
+            record_success("map name read")
         except Exception:  # noqa: BLE001
+            record_failure("map name read", "listing map names")
             _LOGGER.debug(
                 "roomba_plus: could not read map names for %s -- the select "
                 "will offer only 'follow the robot'", self._blid, exc_info=True,
@@ -322,3 +325,122 @@ class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
             if match is not None:
                 self._config_entry.runtime_data.prime_selected_map_id = match
         self.async_write_ha_state()
+
+
+class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
+    """What a cleaning started from Home Assistant will do.
+
+    ASKED FOR BY A USER (@arielgr): the iRobot app offers vacuum, mop, or
+    both when starting a clean, and this integration had a suction-level
+    control and nothing for the mode. The values had been confirmed for
+    weeks; nobody had asked until he did.
+
+    NOT A ROBOT SETTING. Suction level lives in `rw-settings` and the app
+    shows it; the mode is sent per command, in the regions of a start.
+    So this is a preference of ours -- and rather than leave it a claim
+    nobody can check, it is REFLECTED FROM THE ROBOT'S OWN LAST START.
+
+    WHY THE STATUS FIELD IS NOT THE SOURCE, though it looks like one.
+    `cleanMissionStatus.operatingMode` uses a different vocabulary from
+    the command:
+
+        command 32  (vacuum and mop)   ->  status 6
+        command 512 (vacuum then mop)  ->  status 4
+        pad wash, no command at all    ->  status 6
+
+    A 6 cannot be told apart from a pad wash, so reading the status would
+    make this jump to "vacuum and mop" while the dock cleaned a pad --
+    and an automation reading it would get an answer about maintenance.
+
+    `rw-software.lastCommand` carries the real thing, in the command's
+    own vocabulary. **Only a `start` counts**: `drypad` and `washpad`
+    also carry regions and a mode, and neither is a cleaning choice.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_translation_key = "prime_cleaning_mode"
+    _attr_icon = "mdi:auto-mode"
+
+    #: The four the app offers, in the command's vocabulary.
+    MODES: dict[str, int] = {
+        "vacuum": 2,
+        "mop": 4,
+        "vacuum_and_mop": 32,
+        "vacuum_then_mop": 512,
+    }
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_mode"
+        self._restored: str | None = None
+
+    @property
+    def suggested_object_id(self) -> str:
+        return "prime_cleaning_mode"
+
+    @property
+    def options(self) -> list[str]:
+        return list(self.MODES)
+
+    def _mode_from_last_start(self) -> str | None:
+        """The mode of the robot's last START command, if it had one.
+
+        Reads the first region's params rather than checking every one:
+        a mixed-mode command is possible on paper, has never been seen,
+        and the app shows a single mode per mission.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        shadows = getattr(coordinator, "data", None)
+        if not isinstance(shadows, dict):
+            return None
+        software = shadows.get("rw-software")
+        last = software.get("lastCommand") if isinstance(software, dict) else None
+        if not isinstance(last, dict) or last.get("command") != "start":
+            return None
+        for region in last.get("regions") or []:
+            if not isinstance(region, dict):
+                continue
+            mode = (region.get("params") or {}).get("operatingMode")
+            for name, value in self.MODES.items():
+                if mode == value:
+                    return name
+            # A mode outside the four is left unreported rather than
+            # rounded to the nearest one -- the select would then claim
+            # something the robot is not doing.
+            return None
+        return None
+
+    @property
+    def current_option(self) -> str | None:
+        """What the robot last started with, or what the user chose.
+
+        The robot wins when it has something to say. A user who picks a
+        mode and then starts a different one from the app should see the
+        app's choice, because that is what the machine actually did.
+        """
+        return self._mode_from_last_start() or self._restored
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in self.MODES:
+            raise ServiceValidationError(f"{option} is not a cleaning mode")
+        self._restored = option
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # RESTORED, NOT PERSISTED IN OPTIONS -- writing it into the config
+        # entry would reload the integration on every change.
+        last = await self.async_get_last_state()
+        if last is not None and last.state in self.MODES:
+            self._restored = last.state
+
+    @property
+    def selected_operating_mode(self) -> int | None:
+        """The value to send with a start, or None to leave it alone."""
+        option = self.current_option
+        return self.MODES.get(option) if option else None

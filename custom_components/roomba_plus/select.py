@@ -94,6 +94,7 @@ async def async_setup_entry(
         from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
         from .select_prime import (  # noqa: PLC0415
             PRIME_SELECTS,
+            PrimeCleaningModeSelect,
             PrimeMapSelect,
             PrimeSettingSelect,
         )
@@ -113,7 +114,13 @@ async def async_setup_entry(
         # and disappears as maps come and go is worse than a select with
         # one option, because an automation pointing at a vanished entity
         # fails for a reason unrelated to automations.
-        async_add_entities([PrimeMapSelect(data.blid, config_entry)])
+        async_add_entities([
+            PrimeMapSelect(data.blid, config_entry),
+            # Asked for by a user: the app offers vacuum / mop / both
+            # when starting a clean, and this had a suction control and
+            # nothing for the mode.
+            PrimeCleaningModeSelect(data.blid, config_entry),
+        ])
         return
 
     roomba = config_entry.runtime_data.roomba

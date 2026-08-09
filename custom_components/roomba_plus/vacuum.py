@@ -34,6 +34,7 @@ from .const import (
     DOMAIN,
     ATTR_BIN_FULL,
     has_carpet_boost,
+    is_braava,
     is_mop,
     ATTR_BIN_PRESENT,
     ATTR_CLEANED_AREA,
@@ -225,6 +226,24 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
           - not a Braava mop (Braava uses padWetness Select, not room segments)
         """
         flags = SUPPORT_IROBOT
+        # SUCTION ON THE VACUUM CARD, for Prime.
+        #
+        # @arielgr went looking for suction and cleaning mode on the card
+        # that opens when you click the robot, because that is where the
+        # iRobot app puts them. Both existed only as separate select
+        # entities under Configuration, which is a different screen.
+        #
+        # Home Assistant renders a speed control on the vacuum card when
+        # the entity advertises FAN_SPEED. Two Classic classes did;
+        # Prime, which uses this class directly, did not -- so the one
+        # control Home Assistant CAN show there was missing on the
+        # generation that has the richest settings.
+        #
+        # The mode has no equivalent vacuum feature and stays a select.
+        if self._config_entry is not None and getattr(
+            self._config_entry.runtime_data, "prime_robot", None
+        ) is not None:
+            flags |= VacuumEntityFeature.FAN_SPEED
         # ASKS THE BACKEND (this session), not map_capability.
         #
         # The service can clean rooms on Prime robots now, but this
@@ -241,10 +260,37 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if (
             self._config_entry is not None
             and async_get_room_cleaning_backend(self._config_entry) is not None
-            and not is_mop(self.vacuum_state)
+            # is_braava, NOT is_mop -- the fourteenth site of the same
+            # mistake, and the one that cost a user their room cleaning.
+            #
+            # `is_mop()` answers "can it mop" by looking for
+            # `detectedPad`. A Combo has a pad AND brushes AND stable
+            # region ids, so this excluded it as though it were a
+            # Braava: @connormxy's j7+ Combo advertised no CLEAN_AREA,
+            # Home Assistant filtered the entity out of its own picker,
+            # and he reinstalled three integrations looking for the
+            # cause.
+            #
+            # The intent was always "a Braava targets rooms through
+            # padWetness rather than region segments". That is a
+            # statement about Braavas, and `is_mop`'s own docstring says
+            # so: use is_braava() for anything about vacuum hardware.
+            and not is_braava(self.vacuum_state)
             and hasattr(VacuumEntityFeature, "CLEAN_AREA")  # HA 2026.3+ only; silently absent on older
         ):
             flags |= VacuumEntityFeature.CLEAN_AREA
+        else:
+            # SAY WHY IT IS ABSENT, ONCE.
+            #
+            # @connormxy uninstalled three integrations to find out that
+            # room cleaning was withheld -- there was no message, no log
+            # line, nothing to search for. Home Assistant simply filtered
+            # his robot out of its own service picker.
+            #
+            # A capability that silently fails to appear is a poor way to
+            # say "excluded". This does not fix the exclusion; it makes
+            # the exclusion findable.
+            self._log_clean_area_absent()
         return flags
 
     # ── Activity ──────────────────────────────────────────────────────────
@@ -892,6 +938,81 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     async def async_pause(self) -> None:
         """Pause the cleaning cycle."""
         await self._async_send_verb("pause")
+
+    #: Prime's own three, in the robot's wire values. The names match
+    #: the iRobot app rather than Home Assistant's eco/performance
+    #: vocabulary, because a user reading the card should see what the
+    #: app taught them.
+    PRIME_SUCTION: dict[str, int] = {"light": 2, "normal": 3, "deep": 4}
+
+    @property
+    def fan_speed_list(self) -> list[str]:
+        if self._prime_robot is None:
+            return list(FAN_SPEEDS)
+        return list(self.PRIME_SUCTION)
+
+    @property
+    def fan_speed(self) -> str | None:
+        """The robot's current suction level, from rw-settings.
+
+        None while the shadow has not arrived -- an unknown level should
+        read as unknown rather than defaulting to one the robot may not
+        be using.
+        """
+        if self._prime_robot is None:
+            return None
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        shadows = getattr(coordinator, "data", None)
+        settings = shadows.get("rw-settings") if isinstance(shadows, dict) else None
+        level = settings.get("suctionLevel") if isinstance(settings, dict) else None
+        for name, value in self.PRIME_SUCTION.items():
+            if level == value:
+                return name
+        return None
+
+    async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
+        """Writes the suction level the card selected.
+
+        The same `rw-settings` write the suction select already uses, so
+        the card and the select cannot disagree -- both read and write
+        the one value the robot holds.
+        """
+        if self._prime_robot is None:
+            return
+        value = self.PRIME_SUCTION.get(fan_speed)
+        if value is None:
+            raise ServiceValidationError(
+                f"{fan_speed} is not one of this robot's suction levels"
+            )
+        await self._prime_robot.set_setting("suctionLevel", value)
+
+    def _log_clean_area_absent(self) -> None:
+        """Explains a withheld CLEAN_AREA, at most once per entity.
+
+        WARNING RATHER THAN DEBUG, because the person who needs it does
+        not know to turn debug logging on -- they are looking at a
+        service picker that will not offer their robot. Once, because
+        `supported_features` is read on every state write.
+        """
+        if getattr(self, "_clean_area_explained", False):
+            return
+        self._clean_area_explained = True
+
+        if not hasattr(VacuumEntityFeature, "CLEAN_AREA"):
+            return  # Home Assistant older than 2026.3; nothing to explain
+        if is_braava(self.vacuum_state):
+            return  # a Braava targets rooms by pad wetness, by design
+
+        _LOGGER.warning(
+            "roomba_plus: room cleaning (vacuum.clean_area) is not offered for "
+            "%s because this integration has no room list for it. On a locally "
+            "connected robot that list comes from your iRobot account -- adding "
+            "those credentials, or defining smart zones, makes the rooms "
+            "available. Nothing is wrong with the robot.",
+            getattr(self, "_blid", "this robot"),
+        )
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Return the vacuum to its dock.

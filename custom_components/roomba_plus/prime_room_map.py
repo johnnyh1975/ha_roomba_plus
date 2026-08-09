@@ -30,6 +30,7 @@ constant rather than an inline 1000.
 from __future__ import annotations
 
 import logging
+from .structural_failures import record_failure, record_success
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -418,7 +419,9 @@ async def async_build_prime_floor_plan(
         if not url:
             return empty
         parsed = parse_map_bundle(await robot.download_map_bundle(url))
+        record_success("map bundle read")
     except Exception:  # noqa: BLE001
+        record_failure("map bundle read", "downloading the bundle")
         _LOGGER.debug(
             "roomba_plus: could not read the map bundle for %s", p2map_id, exc_info=True
         )

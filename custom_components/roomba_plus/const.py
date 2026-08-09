@@ -88,6 +88,10 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
     # identified for any of them, and a button that does nothing when
     # pressed is worse than one that is not there.
     Platform.BUTTON,
+    # The maintenance list, built from the parts a Prime robot counts
+    # itself -- see todo_prime.py for why it is not the Classic one
+    # with a different source.
+    Platform.TODO,
 ]
 # Platform.CALENDAR moved out of this list too (this session) -- same
 # gating as LOCAL_PLATFORMS, see the comment there.
@@ -160,6 +164,23 @@ DEFAULT_PRIME_FAVORITE_BUTTONS: Final = True
 
 CONF_MAP_ROOM_LABELS: Final = "map_room_labels"
 DEFAULT_MAP_ROOM_LABELS: Final = False
+
+#: Which zone layers the Rooms Map draws on top of the rooms.
+#:
+#: OFF BY DEFAULT, ALL OF THEM, and that is @chairstacker's own
+#: reasoning rather than caution on our part: "my map in the app is
+#: getting a little busy but it's still readable; the room map would
+#: face the same issue as soon as the zones are being displayed
+#: permanently". He asked for tick boxes, so tick boxes it is.
+#:
+#: Three separate options rather than one, because the three answer
+#: different questions -- where the robot should go, where it must not,
+#: and where it must not mop -- and somebody who wants keep-out zones on
+#: screen does not necessarily want clean zones there too.
+CONF_MAP_CLEAN_ZONES: Final = "map_clean_zones"
+CONF_MAP_KEEPOUT_ZONES: Final = "map_keepout_zones"
+CONF_MAP_NOMOP_ZONES: Final = "map_nomop_zones"
+DEFAULT_MAP_ZONES: Final = False
 
 CONF_MAP_ENABLED: Final = "map_enabled"
 CONF_MAP_SIZE_PX: Final = "map_size_px"
@@ -256,6 +277,9 @@ SERVICE_CLEAN_ROOM: Final = "clean_room"
 ATTR_ROOM_NAME: Final = "room_name"
 ATTR_ORDERED: Final = "ordered"
 ATTR_TWO_PASS: Final = "two_pass"
+#: Vacuum, mop, or both, per call. The select holds the everyday
+#: default; this is for a run that should differ from it.
+ATTR_CLEANING_MODE: Final = "cleaning_mode"
 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0) — optional structured field for
 # individual pass control per room within the same multi-room sequence.
 # Mutually exclusive with ATTR_ROOM_NAME at the service-call level.

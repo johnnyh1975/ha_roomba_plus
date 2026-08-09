@@ -167,7 +167,10 @@
           "correlation_entities": "Correla lo sporco con i sensori (opzionale)",
           "map_room_labels": "Disegnare i nomi delle stanze sulla mappa",
           "prime_favorite_buttons": "Creare un pulsante per ogni preferito salvato",
-          "enable_schedule_calendar": "Mostrare le programmazioni di pulizia come calendario"
+          "enable_schedule_calendar": "Mostrare le programmazioni di pulizia come calendario",
+          "map_clean_zones": "Mostra zone di pulizia",
+          "map_keepout_zones": "Mostra zone vietate",
+          "map_nomop_zones": "Mostra zone senza lavaggio"
         },
         "data_description": {
           "continuous": "Mantieni una connessione MQTT persistente con il robot. Consigliato.",
@@ -1039,6 +1042,15 @@
         "name": "Mappa",
         "state": {
           "follow_robot": "Segui il robot"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Modalità di pulizia",
+        "state": {
+          "vacuum": "Aspirazione",
+          "mop": "Lavaggio",
+          "vacuum_and_mop": "Aspirazione e lavaggio",
+          "vacuum_then_mop": "Aspirazione, poi lavaggio"
         }
       }
     },

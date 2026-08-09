@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry, RoombaData
 
+from .structural_failures import record_failure, record_success
+
 _LOGGER = logging.getLogger(__name__)
 
 # v2.6.3 A+D — phases used ONLY for mission start/stuck detection (not end).
@@ -1296,6 +1298,11 @@ def make_mission_callback(
                                     )
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug(
+                                # NOT INSTRUMENTED: an estimate is
+                                # legitimately absent for Auto pass mode
+                                # and for rooms the robot has not
+                                # learned, so a failure here is a normal
+                                # state rather than a defect.
                                 "AUTO-ADVANCE-ROOM: room time estimate lookup "
                                 "failed — continuing without estimates",
                                 exc_info=True,
@@ -1352,6 +1359,8 @@ def make_mission_callback(
                             )
                     except Exception:  # noqa: BLE001
                         _LOGGER.debug(
+                            # NOT INSTRUMENTED: the retry exists because
+                            # the first attempt legitimately finds nothing.
                             "AUTO-ADVANCE-ROOM: estimate retry failed — "
                             "continuing without estimates",
                             exc_info=True,
@@ -1658,7 +1667,9 @@ def make_map_retrain_callback(
             )
         try:
             await cloud_coordinator.async_request_refresh()
+            record_success("map retrain refresh")
         except Exception:  # noqa: BLE001
+            record_failure("map retrain refresh", "refreshing after a retrain")
             _LOGGER.debug(
                 "Roomba+ cloud: map retrain refresh failed for pmap(s) %s — "
                 "no map_retrain_completed event fired",

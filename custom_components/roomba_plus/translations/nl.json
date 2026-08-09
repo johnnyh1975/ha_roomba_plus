@@ -167,7 +167,10 @@
           "correlation_entities": "Vuil correleren met sensoren (optioneel)",
           "map_room_labels": "Kamernamen op de kaartafbeelding tekenen",
           "prime_favorite_buttons": "Een knop maken voor elke opgeslagen favoriet",
-          "enable_schedule_calendar": "Schoonmaakschema's als agenda tonen"
+          "enable_schedule_calendar": "Schoonmaakschema's als agenda tonen",
+          "map_clean_zones": "Reinigingszones tonen",
+          "map_keepout_zones": "Verboden zones tonen",
+          "map_nomop_zones": "Zones zonder dweilen tonen"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -1039,6 +1042,15 @@
         "name": "Kaart",
         "state": {
           "follow_robot": "Robot volgen"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigingsmodus",
+        "state": {
+          "vacuum": "Stofzuigen",
+          "mop": "Dweilen",
+          "vacuum_and_mop": "Stofzuigen en dweilen",
+          "vacuum_then_mop": "Stofzuigen, dan dweilen"
         }
       }
     },

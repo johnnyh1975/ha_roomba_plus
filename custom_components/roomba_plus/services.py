@@ -37,6 +37,7 @@ from .const import (
     ATTR_ROOM_NAME,
     ATTR_ROOM_PASSES,
     ATTR_ROOMS,
+    ATTR_CLEANING_MODE,
     ATTR_TWO_PASS,
     DOMAIN,
     EVENT_MAINTENANCE_RESET,
@@ -228,6 +229,17 @@ async def _async_clean_rooms_via_backend(
         )
 
     caller_two_pass: bool | None = call.data.get(ATTR_TWO_PASS)
+    # ONE MODE FOR THE WHOLE CALL, not per room. The payload allows a
+    # different mode per region, and nobody has asked for that -- a
+    # service field that mixes vacuum and mop across rooms would be
+    # harder to explain than it is useful.
+    from .select_prime import PrimeCleaningModeSelect  # noqa: PLC0415
+
+    caller_mode_name: str | None = call.data.get(ATTR_CLEANING_MODE)
+    caller_mode: int | None = (
+        PrimeCleaningModeSelect.MODES.get(caller_mode_name)
+        if caller_mode_name else None
+    )
     def _two_pass_for(index: int) -> bool | None:
         """Per-room value, else the caller-level one, else None.
 
@@ -252,7 +264,12 @@ async def _async_clean_rooms_via_backend(
         "clean_room: %s → rooms=%s (via %s)",
         entity_id, room_ids, type(backend).__name__,
     )
-    await backend.clean_rooms(room_ids, ordered=ordered, two_pass=two_pass)
+    await backend.clean_rooms(
+        room_ids, ordered=ordered, two_pass=two_pass,
+        # A single value applied to every room -- _per_room() spreads a
+        # one-element list across the whole call.
+        operating_mode=[caller_mode] if caller_mode is not None else None,
+    )
 
 
 async def async_handle_clean_room(call: ServiceCall) -> None:

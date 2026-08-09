@@ -54,6 +54,10 @@ from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    CONF_MAP_CLEAN_ZONES,
+    CONF_MAP_KEEPOUT_ZONES,
+    CONF_MAP_NOMOP_ZONES,
+    DEFAULT_MAP_ZONES,
     room_slug,
     CONF_MAP_ROOM_LABELS,
     DEFAULT_MAP_ROOM_LABELS,
@@ -70,6 +74,7 @@ from .const import (
     ROOM_TRANSITION_CANDIDATE_PHASES,
 )
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
 from .models import ConnectionType, MapCapability, RoombaConfigEntry
@@ -540,6 +545,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     continue
                 orientation_rad = getattr(sample, "orientation", None) or 0.0
                 stats["trail_points_added"] = stats.get("trail_points_added", 0) + 1
+                record_success("live trail points")
                 data.prime_positions.append((
                     float(x_m) * METRES_TO_MM,
                     float(y_m) * METRES_TO_MM,
@@ -553,6 +559,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             if len(data.prime_positions) > _MAX_PRIME_POSITIONS:
                 del data.prime_positions[:-_MAX_PRIME_POSITIONS]
         except Exception:  # noqa: BLE001
+            record_failure("live trail points", "appending a position")
             _LOGGER.debug("Prime map: could not add live positions", exc_info=True)
 
     async def async_will_remove_from_hass(self) -> None:
@@ -594,6 +601,9 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             try:
                 await self._map_store.async_save(self._map_save_payload())
             except Exception:  # noqa: BLE001
+                # NOT INSTRUMENTED: runs once when the entity is removed,
+                # where a failure has no next attempt to be compared
+                # against and nothing left to affect.
                 _LOGGER.debug("Prime map: flush on removal failed", exc_info=True)
 
     async def _async_watch_live_map(self) -> None:
@@ -679,6 +689,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                             async with session.get(message.livemap_url) as resp:
                                 if resp.status == 200:
                                     raw = await resp.read()
+                                    record_success("live bundle fetch")
                                     bundle = await self.hass.async_add_executor_job(
                                         parse_map_bundle, raw
                                     )
@@ -690,6 +701,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                                         bundle,
                                     )
                         except Exception:  # noqa: BLE001
+                            record_failure("live bundle fetch", "downloading the live map")
                             _LOGGER.debug(
                                 "Prime map: live bundle fetch failed", exc_info=True
                             )
@@ -891,6 +903,11 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         try:
             stored = await store.async_load()
         except Exception:  # noqa: BLE001
+            # DELIBERATELY NOT INSTRUMENTED. A fresh install has no
+            # stored map, so failing here is the normal first-run state
+            # rather than a defect -- reporting it would produce a false
+            # positive on every new setup and teach people to ignore the
+            # warning.
             _LOGGER.debug("Prime map: could not read stored map", exc_info=True)
             return
         if not stored or not stored.get("png_b64"):
@@ -3200,11 +3217,14 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         version = ""
         try:
             robot = self._config_entry.runtime_data.prime_robot
-            for entry in await robot.get_active_map_versions() or []:
+            versions = await robot.get_active_map_versions() or []
+            record_success("map version read")
+            for entry in versions:
                 if entry.get("p2map_id") == p2map_id:
                     version = entry.get("active_p2mapv_id") or ""
                     break
         except Exception:  # noqa: BLE001
+            record_failure("map version read", "listing active map versions")
             _LOGGER.debug("Prime map: could not read map versions", exc_info=True)
 
         floor_plan = (
@@ -3265,6 +3285,32 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         if self._polygons:
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+
+    @staticmethod
+    def _draw_zone_layer(draw, to_px, layer, *, outline, scale=1000.0) -> None:
+        """Outlines every polygon of one zone layer.
+
+        Outline only, never filled: a filled zone hides the room under
+        it, and the rooms are what the map is for. A reader needs to see
+        that a zone is there and where its edge runs, not to have it
+        painted over the floor.
+        """
+        for feature in (layer or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            for ring in coords or []:
+                try:
+                    # The scale is passed in rather than imported: this
+                    # module reads METRES_TO_MM through a late import
+                    # inside another method, and a static helper cannot
+                    # see it.
+                    points = [
+                        to_px(float(x) * scale, float(y) * scale)
+                        for x, y in ring
+                    ]
+                except (TypeError, ValueError):
+                    continue
+                if len(points) >= 3:
+                    draw.polygon(points, outline=outline)
 
     def _dock_position(self) -> tuple[float, float] | None:
         """Where to draw the dock: seen beats remembered.
@@ -3403,6 +3449,59 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 continue
             if len(points) >= 2:
                 draw.line(points, fill=(80, 150, 235), width=2)
+
+        # ZONES, EACH BEHIND ITS OWN TICK BOX and all off by default.
+        #
+        # @chairstacker asked for exactly this shape: "my map in the app
+        # is getting a little busy but it's still readable; the room map
+        # would face the same issue as soon as the zones are being
+        # displayed permanently. So, maybe there's a possibility for
+        # making their display optional."
+        #
+        # Three options rather than one, because the three answer
+        # different questions -- where the robot should go, where it must
+        # not, and where it must not mop -- and wanting keep-out zones on
+        # screen does not imply wanting clean zones too.
+        options = self._config_entry.options
+        if options.get(CONF_MAP_CLEAN_ZONES, DEFAULT_MAP_ZONES):
+            self._draw_zone_layer(
+                draw, to_px, live_bundle.get("cleanZones"),
+                outline=(120, 200, 120),
+            )
+            # Ad-hoc zones are clean zones the user drew for one run.
+            # Same colour, because they mean the same thing to a reader.
+            self._draw_zone_layer(
+                draw, to_px, live_bundle.get("adHocCleanZones"),
+                outline=(120, 200, 120),
+            )
+
+        keepout = options.get(CONF_MAP_KEEPOUT_ZONES, DEFAULT_MAP_ZONES)
+        nomop = options.get(CONF_MAP_NOMOP_ZONES, DEFAULT_MAP_ZONES)
+        if keepout or nomop:
+            # One raw list holds both kinds, told apart by `type`. The
+            # only two real values are KeepOutZone and NoMopZone -- a
+            # virtual wall is a KeepOutZone with a thin geometry, not a
+            # third type.
+            for feature in (live_bundle.get("policyZones") or {}).get("features") or []:
+                zone_type = str(
+                    (feature.get("properties") or {}).get("type") or ""
+                )
+                if zone_type == "KeepOutZone" and not keepout:
+                    continue
+                if zone_type == "NoMopZone" and not nomop:
+                    continue
+                if zone_type not in ("KeepOutZone", "NoMopZone"):
+                    # An unrecognised type is drawn only when both boxes
+                    # are ticked -- it belongs to neither, and guessing
+                    # which box governs it would hide it from somebody
+                    # who asked to see everything.
+                    if not (keepout and nomop):
+                        continue
+                self._draw_zone_layer(
+                    draw, to_px, {"features": [feature]},
+                    outline=(220, 120, 120) if zone_type == "KeepOutZone"
+                    else (200, 160, 220),
+                )
 
         for feature in (live_bundle.get("hazard") or {}).get("features") or []:
             coords = (feature.get("geometry") or {}).get("coordinates")

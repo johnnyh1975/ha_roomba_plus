@@ -445,7 +445,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     result["automations"] = await self.api.get_automations()
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug(
-                        "iRobot cloud: automations endpoint unavailable for %s "
+                        # NOT INSTRUMENTED: the message says it -- the endpoint
+                # may not exist for this account type, so a failure is a
+                # property of the account rather than a broken path.
+                "iRobot cloud: automations endpoint unavailable for %s "
                         "(endpoint may not exist for this account type)",
                         self.blid,
                     )
@@ -658,6 +661,9 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug(
+                    # NOT INSTRUMENTED: not every map has a UMF, so an
+                    # absent one is a property of the account rather
+                    # than a broken code path.
                     "iRobot cloud: UMF fetch failed for %s — "
                     "obstacle data unavailable this cycle",
                     self.blid,

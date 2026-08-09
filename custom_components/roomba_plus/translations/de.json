@@ -167,7 +167,10 @@
           "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)",
           "map_room_labels": "Raumnamen ins Kartenbild zeichnen",
           "prime_favorite_buttons": "Für jeden gespeicherten Favoriten einen Knopf anlegen",
-          "enable_schedule_calendar": "Reinigungspläne als Kalender anzeigen"
+          "enable_schedule_calendar": "Reinigungspläne als Kalender anzeigen",
+          "map_clean_zones": "Reinigungszonen zeichnen",
+          "map_keepout_zones": "Sperrzonen zeichnen",
+          "map_nomop_zones": "Wischverbotszonen zeichnen"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -1039,6 +1042,15 @@
         "name": "Karte",
         "state": {
           "follow_robot": "Roboter folgen"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigungsmodus",
+        "state": {
+          "vacuum": "Saugen",
+          "mop": "Wischen",
+          "vacuum_and_mop": "Saugen und Wischen",
+          "vacuum_then_mop": "Saugen, dann Wischen"
         }
       }
     },

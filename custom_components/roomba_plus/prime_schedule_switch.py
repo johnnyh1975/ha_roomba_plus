@@ -41,6 +41,7 @@ from homeassistant.core import callback
 from homeassistant.components.switch import SwitchEntity
 
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -117,7 +118,9 @@ async def async_read_schedule_containers(
 
     try:
         response = await robot.get_schedules(household_id)
+        record_success("schedule read")
     except Exception:  # noqa: BLE001
+        record_failure("schedule read", "get_schedules()")
         _LOGGER.debug("roomba_plus: get_schedules() failed", exc_info=True)
         return None
 

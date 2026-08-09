@@ -30,6 +30,7 @@ from homeassistant.const import EntityCategory
 
 from .const import CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 from .prime_commands import _send_confirmed
 from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
 
@@ -427,7 +428,12 @@ async def async_favorites_attribute(
         return []
     try:
         favorites = await robot.get_favorites()
+        record_success("favourite list")
     except Exception:  # noqa: BLE001
+        # A key-name mismatch dropped every favourite for weeks while
+        # this reported an empty list. An empty account and a broken
+        # parser looked identical.
+        record_failure("favourite list", "reading favourites")
         _LOGGER.debug("roomba_plus: could not read favorites", exc_info=True)
         return []
 
@@ -458,6 +464,7 @@ async def async_run_favorite(
 
     try:
         favorites = await robot.get_favorites()
+        record_success("favourite list")
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: could not read favorites", exc_info=True)
         return False

@@ -44,6 +44,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
+from .structural_failures import record_failure, record_success
+
 _LOGGER = logging.getLogger(__name__)
 
 #: One lock per config entry, guarding the read-then-append sequence.
@@ -258,7 +260,14 @@ async def _async_sync_locked(
         # silently since the feature shipped. Fixing that one moved the
         # TypeError up a line rather than ending it (@utkjmitch).
         history = await robot.get_mission_history(robot.blid)
+        # THE SUCCESS SIDE MATTERS AS MUCH AS THE FAILURE SIDE. Without
+        # it, a path that works would still be reported as structurally
+        # broken the first two times a cloud call happened to time out.
+        record_success("mission history import")
     except Exception:  # noqa: BLE001
+        # A missing argument here made this fail on every call for weeks
+        # while reporting "imported 0 missions". Now it says so.
+        record_failure("mission history import", "reading the history")
         _LOGGER.debug("roomba_plus: could not read mission history", exc_info=True)
         return 0
 
@@ -409,7 +418,11 @@ def estimate_room_seconds(
 
     try:
         records = store.query(days=3650)
+        record_success("room time estimates")
     except Exception:  # noqa: BLE001
+        # A missing argument here made this fail on every call for weeks
+        # while reporting "imported 0 missions". Now it says so.
+        record_failure("room time estimates", "reading estimates")
         _LOGGER.debug("roomba_plus: could not read mission history", exc_info=True)
         return [None] * len(room_ids)
 

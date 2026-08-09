@@ -15,6 +15,7 @@ from typing import Any, Final
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
+from .structural_failures import diagnostic_info
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -473,6 +474,16 @@ def _shape_of(value: Any, depth: int = 0) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     return type(value).__name__
+
+
+def _structural_diagnostics() -> dict[str, Any]:
+    """Sites that have failed and never once succeeded.
+
+    Six faults in four days were invisible because their symptom read as
+    "there is nothing here". This block is where that stops being
+    invisible in a diagnostics download.
+    """
+    return diagnostic_info()
 
 
 def _push_freshness(data: Any) -> dict[str, Any]:
@@ -1030,6 +1041,10 @@ async def _build_diagnostics(
         # Map and zone subsystem
         "map": map_diag,
         "rooms": room_diag,
+        # WHAT HAS NEVER WORKED. Empty on a healthy install; anything
+        # listed here is a code path that has failed every time it ran,
+        # which is a lead rather than a statistic.
+        "never_succeeded": _structural_diagnostics(),
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

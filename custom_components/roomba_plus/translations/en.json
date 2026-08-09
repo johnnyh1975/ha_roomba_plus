@@ -167,7 +167,10 @@
           "correlation_entities": "Correlate dirt with sensors (optional)",
           "map_room_labels": "Draw room names on the map image",
           "prime_favorite_buttons": "Create a button for each saved favorite",
-          "enable_schedule_calendar": "Show cleaning schedules as a calendar"
+          "enable_schedule_calendar": "Show cleaning schedules as a calendar",
+          "map_clean_zones": "Draw clean zones",
+          "map_keepout_zones": "Draw keep-out zones",
+          "map_nomop_zones": "Draw no-mop zones"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -1039,6 +1042,15 @@
         "name": "Map",
         "state": {
           "follow_robot": "Follow the robot"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Cleaning mode",
+        "state": {
+          "vacuum": "Vacuum",
+          "mop": "Mop",
+          "vacuum_and_mop": "Vacuum and mop",
+          "vacuum_then_mop": "Vacuum, then mop"
         }
       }
     },

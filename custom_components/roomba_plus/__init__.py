@@ -90,6 +90,7 @@ from .map_renderer import (
     ROBOT_DIAMETER_MM_DEFAULT,
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
+from .structural_failures import record_failure, record_success
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services, async_remove_services
 from .geometry_store import GeometryStore
@@ -1143,8 +1144,10 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         return
     try:
         raw = await robot.get_time_estimates()
+        record_success("time estimates")
         config_entry.runtime_data.prime_time_estimates = TimeEstimates.from_json(raw)
     except Exception:  # noqa: BLE001
+        record_failure("time estimates", "reading per-room estimates")
         _LOGGER.debug(
             "roomba_plus: no time estimates for this robot -- the calendar keeps "
             "its flat one-hour window and mission progress stays unavailable, "
@@ -1458,7 +1461,10 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         from .button_prime import async_favorites_attribute  # noqa: PLC0415
 
         prime_favorites.extend(await async_favorites_attribute(config_entry))
+        # AFTER the call, so a failure is not recorded as a success.
+        record_success("favourite list (setup)")
     except Exception:  # noqa: BLE001
+        record_failure("favourite list (setup)", "reading favourites at setup")
         _LOGGER.debug("Roomba+ Prime: could not read favorites", exc_info=True)
 
     from .const import PRIME_PLATFORMS
@@ -1486,11 +1492,13 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
 
         try:
             count = await async_sync_prime_missions(config_entry)
+            record_success("first mission sync")
             _LOGGER.debug(
                 "roomba_plus: first mission history sync imported %s missions",
                 count,
             )
         except Exception:  # noqa: BLE001
+            record_failure("first mission sync", "the post-setup import")
             _LOGGER.debug(
                 "roomba_plus: first mission history sync failed -- the "
                 "mission-based sensors stay empty until the next scheduled "
@@ -1558,6 +1566,9 @@ async def async_unload_entry(
                 await mts.async_save(hass, config_entry.entry_id)
             except Exception:  # noqa: BLE001
                 _LOGGER.debug(
+                    # NOT INSTRUMENTED: runs once at teardown, where a
+                    # failure has nowhere to be seen and no next attempt
+                    # to compare against.
                     "Roomba+ Prime: mission timer flush on unload failed",
                     exc_info=True,
                 )

@@ -49,6 +49,7 @@ from .const import (
     DOMAIN,
     MAP_UPDATING_NOT_READY,
 )
+from .structural_failures import record_failure, record_success
 from .models import ConnectionType, MapCapability
 
 if TYPE_CHECKING:
@@ -117,6 +118,7 @@ def _region_params(
     two_pass: list[bool | None] | None,
     suction_level: list[int | None] | None,
     index: int,
+    operating_mode: list[int | None] | None = None,
 ):
     """Per-region params, or None when the caller expressed no opinion.
 
@@ -126,9 +128,15 @@ def _region_params(
     """
     tp = _per_room(two_pass, index)
     sl = _per_room(suction_level, index)
-    if tp is None and sl is None:
+    # PER ROOM LIKE THE OTHER TWO. A caller that wants one room mopped
+    # and the rest vacuumed can say so; one that wants the same
+    # everywhere passes a single value and gets it applied throughout.
+    om = _per_room(operating_mode, index)
+    if tp is None and sl is None and om is None:
         return None
     fields = {}
+    if om is not None:
+        fields["operating_mode"] = om
     if tp is not None:
         fields["two_pass"] = tp
     if sl is not None:
@@ -173,6 +181,7 @@ class RoomCleaningBackend(ABC):
         ordered: bool = True,
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
+        operating_mode: list[int | None] | None = None,
     ) -> None:
         """Sends the robot to clean these rooms, in the order given.
 
@@ -226,6 +235,40 @@ class RoomCleaningBackend(ABC):
         user configured rather than replace it. Not built yet, and
         deliberately noted rather than guessed at.
         """
+
+
+def _selected_cleaning_mode(config_entry: Any) -> int | None:
+    """The mode the cleaning-mode select is showing, if there is one.
+
+    Read through the entity rather than from a stored preference,
+    because the select reflects the robot's own last start when it has
+    one -- so a user who chose in the iRobot app gets what the machine
+    actually did rather than a stale pick of ours.
+    """
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    hass = getattr(config_entry, "hass", None)
+    data = getattr(config_entry, "runtime_data", None)
+    if hass is None or data is None:
+        return None
+    try:
+        registry = er.async_get(hass)
+        unique = f"{data.blid}_prime_cleaning_mode"
+        entity_id = registry.async_get_entity_id("select", DOMAIN, unique)
+        if entity_id is None:
+            return None
+        state = hass.states.get(entity_id)
+        if state is None:
+            return None
+        # LATE ON PURPOSE: select_prime imports back into this module,
+        # so a module-level import here is a real cycle -- unlike the
+        # other flagged pairs in this project, which were only laziness.
+        from .select_prime import PrimeCleaningModeSelect  # noqa: PLC0415
+
+        return PrimeCleaningModeSelect.MODES.get(state.state)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: could not read the cleaning mode", exc_info=True)
+        return None
 
 
 class PrimeRoomCleaning(RoomCleaningBackend):
@@ -461,6 +504,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         ordered: bool = True,
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
+        operating_mode: list[int | None] | None = None,
     ) -> None:
 
         # SAME READINESS CHECK CLASSIC HAS. A robot rebuilding its map
@@ -492,6 +536,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             await self._send_region_command(
                 p2map_id, room_ids, ordered=ordered,
                 two_pass=two_pass, suction_level=suction_level,
+                operating_mode=operating_mode,
             )
             return
 
@@ -541,6 +586,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         await self._send_region_command(
             p2map_id, room_ids, ordered=ordered,
             two_pass=two_pass, suction_level=suction_level,
+            operating_mode=operating_mode,
         )
 
     async def _send_region_command(
@@ -551,6 +597,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         ordered: bool,
         two_pass: list[bool | None] | None,
         suction_level: list[int | None] | None,
+        operating_mode: list[int | None] | None = None,
     ) -> None:
         """Builds and sends the region command for one map.
 
@@ -586,7 +633,10 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     # payload only ever carried params the app itself
                     # set, and inventing a value here would override
                     # whatever the user configured on the robot.
-                    params=_region_params(CommandParams, two_pass, suction_level, i),
+                    params=_region_params(
+                        CommandParams, two_pass, suction_level, i,
+                        operating_mode=operating_mode,
+                    ),
                 )
                 for i, rid in enumerate(room_ids)
             ],
@@ -651,6 +701,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             )
         except Exception:  # noqa: BLE001
             _LOGGER.debug(
+                # NOT INSTRUMENTED: the plan is a convenience record for
+                # room progress, and a robot cleaning everywhere has no
+                # plan to write -- absence here is a normal state.
                 "roomba_plus: could not record the mission plan", exc_info=True
             )
 
@@ -741,6 +794,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         ordered: bool = True,
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
+        operating_mode: list[int | None] | None = None,
     ) -> None:
         """The Classic path, moved here verbatim from services.py.
 
@@ -802,6 +856,42 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             or _resolve_pmapv_id(state, pmap_id)
             or ""
         )
+        # WHAT THE USER CHOSE, from the cleaning-mode select. None when
+        # they never picked one, and then nothing is sent.
+        #
+        # This was deliberately left out until "somebody establishes what
+        # the values mean" -- see the note on the room payload above.
+        # They are established now: 2 vacuum, 4 mop, 32 both at once,
+        # 512 vacuum then mop, confirmed from schedules on two accounts
+        # and from the app's own operating_mode_defaults.
+        # THE CALLER'S CHOICE OUTRANKS THE SELECT.
+        #
+        # `clean_room` has a `cleaning_mode` field for a run that should
+        # differ from the everyday default -- it was described in
+        # services.yaml and never read, so the service accepted it and
+        # threw it away. The select's value is the fallback, which is
+        # what "leave empty to use the selector" in that description
+        # promises.
+        selected = _selected_cleaning_mode(self._config_entry)
+        def _mode_for(index: int) -> int | None:
+            """This room's mode: caller first, then the select.
+
+            A ONE-ELEMENT LIST APPLIES TO EVERY ROOM. The service passes
+            `[mode]` for a single choice, and reading it positionally
+            would give room one the caller's mode and every other room
+            the select's -- a schedule that mops the kitchen and vacuums
+            the hall, from one field nobody meant that way.
+            """
+            if operating_mode:
+                per_room = (
+                    operating_mode[index] if index < len(operating_mode)
+                    else operating_mode[0] if len(operating_mode) == 1
+                    else None
+                )
+                if per_room is not None:
+                    return per_room
+            return selected
+
         robot_two_pass = bool(state.get("twoPass", False))
         no_auto = bool(state.get("noAutoPasses", False))
 
@@ -815,6 +905,18 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     "type": "rid",
                     "params": {
                         "noAutoPasses": no_auto,
+                        # THE CLEANING MODE, when the user has expressed
+                        # one. Omitted entirely otherwise, so a robot
+                        # keeps whatever it would have done -- sending a
+                        # default here would decide for people who never
+                        # touched the control.
+                        # Per room, because the signature carries a list:
+                        # a caller that names one mode gets it everywhere,
+                        # and one that names none falls back to the select.
+                        **(
+                            {"operatingMode": _mode_for(i)}
+                            if _mode_for(i) is not None else {}
+                        ),
                         "twoPass": (
                             value if (value := _per_room(two_pass, i)) is not None
                             else robot_two_pass
@@ -1063,7 +1165,9 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # Cloud may not yet have the new state; failure is non-fatal.
         try:
             await self._data.cloud_coordinator.async_refresh()
+            record_success("post-command cloud refresh")
         except Exception:  # noqa: BLE001
+            record_failure("post-command cloud refresh")
             _LOGGER.debug("async_clean_segments: post-command cloud refresh failed (non-fatal)")
 
 def _classic_has_room_data(data: RoombaData, config_entry: RoombaConfigEntry) -> bool:

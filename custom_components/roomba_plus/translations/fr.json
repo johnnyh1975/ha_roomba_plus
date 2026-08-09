@@ -167,7 +167,10 @@
           "correlation_entities": "Corréler la saleté avec des capteurs (optionnel)",
           "map_room_labels": "Afficher les noms des pièces sur l'image de la carte",
           "prime_favorite_buttons": "Créer un bouton pour chaque favori enregistré",
-          "enable_schedule_calendar": "Afficher les programmes de nettoyage dans un calendrier"
+          "enable_schedule_calendar": "Afficher les programmes de nettoyage dans un calendrier",
+          "map_clean_zones": "Afficher les zones de nettoyage",
+          "map_keepout_zones": "Afficher les zones interdites",
+          "map_nomop_zones": "Afficher les zones sans lavage"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
@@ -1039,6 +1042,15 @@
         "name": "Carte",
         "state": {
           "follow_robot": "Suivre le robot"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Mode de nettoyage",
+        "state": {
+          "vacuum": "Aspiration",
+          "mop": "Lavage",
+          "vacuum_and_mop": "Aspiration et lavage",
+          "vacuum_then_mop": "Aspiration puis lavage"
         }
       }
     },

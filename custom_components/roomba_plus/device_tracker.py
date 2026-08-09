@@ -45,6 +45,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import roomba_reported_state
 from .const import MISSION_END_PHASES, POSE_POINT_CM_TO_MM
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -202,7 +203,9 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
             if backend is not None:
                 self._prime_rooms = await backend.available_rooms()
+                record_success("prime room names")
         except Exception:  # noqa: BLE001
+            record_failure("prime room names", "refreshing room names")
             _LOGGER.debug("roomba_plus: could not refresh Prime room names", exc_info=True)
 
     def _resolve_prime_room(self, data: Any) -> str | None:
@@ -388,6 +391,9 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
                     return area
             return async_area_for_room_name(self.hass, self._config_entry, room)
         except Exception:  # noqa: BLE001
+            # NOT INSTRUMENTED: an installation with no Home Assistant
+            # areas defined resolves nothing, and that is a normal
+            # configuration rather than a defect.
             _LOGGER.debug("roomba_plus: area resolution failed", exc_info=True)
             return None
 

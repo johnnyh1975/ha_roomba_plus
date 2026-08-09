@@ -58,6 +58,9 @@ from .const import (
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
     CONF_PRIME_FAVORITE_BUTTONS,
+    CONF_MAP_CLEAN_ZONES,
+    CONF_MAP_KEEPOUT_ZONES,
+    CONF_MAP_NOMOP_ZONES,
     CONF_MAP_ROOM_LABELS,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
@@ -76,6 +79,7 @@ from .const import (
     DEFAULT_MAP_SIZE_PX,
     DEFAULT_PRIME_FAVORITE_BUTTONS,
     DEFAULT_MAP_ROOM_LABELS,
+    DEFAULT_MAP_ZONES,
     DEFAULT_PRESENCE_MODE,
     DOMAIN,
     ROOMBA_SESSION,
@@ -1220,6 +1224,31 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                             default=options.get(
                                 CONF_MAP_ROOM_LABELS,
                                 DEFAULT_MAP_ROOM_LABELS,
+                            ),
+                        ): bool,
+                        # THREE TICK BOXES, ALL OFF BY DEFAULT.
+                        # @chairstacker's own design: his map in the app
+                        # is already busy, and permanent zones would do
+                        # the same here. Separate boxes because the three
+                        # answer different questions -- where the robot
+                        # should go, where it must not, and where it must
+                        # not mop.
+                        vol.Optional(
+                            CONF_MAP_CLEAN_ZONES,
+                            default=options.get(
+                                CONF_MAP_CLEAN_ZONES, DEFAULT_MAP_ZONES
+                            ),
+                        ): bool,
+                        vol.Optional(
+                            CONF_MAP_KEEPOUT_ZONES,
+                            default=options.get(
+                                CONF_MAP_KEEPOUT_ZONES, DEFAULT_MAP_ZONES
+                            ),
+                        ): bool,
+                        vol.Optional(
+                            CONF_MAP_NOMOP_ZONES,
+                            default=options.get(
+                                CONF_MAP_NOMOP_ZONES, DEFAULT_MAP_ZONES
                             ),
                         ): bool,
                     }

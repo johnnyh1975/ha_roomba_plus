@@ -48,6 +48,7 @@ from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
 
 from .calendar_modes import match_mode
+from .structural_failures import record_failure, record_success
 from .classic_schedule_write import (
     ScheduleFormatError,
     legacy_with_entry,
@@ -596,7 +597,9 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         # The next refresh fills it in.
         try:
             await self.async_update()
+            record_success("calendar first schedule read")
         except Exception:  # noqa: BLE001
+            record_failure("calendar first schedule read")
             _LOGGER.debug(
                 "roomba_plus: first schedule read failed for %s's calendar -- "
                 "starting empty, the next refresh will fill it", self._blid,
@@ -620,6 +623,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         try:
             await self.async_update()
         except Exception:  # noqa: BLE001
+            record_failure("calendar recompute")
             _LOGGER.debug(
                 "roomba_plus: schedule recompute failed for %s -- keeping the "
                 "previous occurrences", self._blid, exc_info=True,
@@ -714,6 +718,9 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         self._cached_occurrences = await self._fetch_occurrences(
             now - DEFAULT_EVENT_DURATION, now + _NEXT_EVENT_LOOKAHEAD
         )
+        # AFTER the fetch, not before -- recording success ahead of the
+        # call that can fail would make the detection useless.
+        record_success("calendar recompute")
 
     def _estimated_end(self, occurrence: tuple) -> Any:
         """When this occurrence is expected to finish.
@@ -1111,11 +1118,29 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
     ) -> list[CalendarEvent]:
         room_names = await self._fetch_room_names()
         occurrences = await self._fetch_occurrences(start_date, end_date)
+        # BY POSITION, NOT BY UNPACKING. The occurrence tuple has grown
+        # twice -- a schedule id in a28 so events could carry a uid, and
+        # an operating mode alongside it -- and a fixed four-way unpack
+        # here raised ValueError on every call.
+        #
+        # `async_get_events` is what fills the calendar VIEW, and an
+        # exception in it produces an EMPTY calendar rather than an
+        # error the user can see: @chairstacker's entity was present,
+        # enabled and listed, with nothing in it.
+        #
+        # The `event` property was widened at the time and this was not,
+        # which is why the state moved and the view did not.
         return [
             _to_calendar_event(
-                s, e, [room_names.get(rid, f"Zone {rid}") for rid in region_ids],
+                occurrence[0], occurrence[1],
+                [
+                    room_names.get(rid, f"Zone {rid}")
+                    for rid in occurrence[2]
+                ],
+                uid=_uid_of(occurrence),
+                mode=_mode_of(occurrence),
             )
-            for s, e, region_ids, _name in occurrences
+            for occurrence in occurrences
         ]
 
 

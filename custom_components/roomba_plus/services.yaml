@@ -33,6 +33,23 @@ clean_room:
       default: true
       selector:
         boolean:
+    cleaning_mode:
+      name: Cleaning mode
+      description: >-
+        Vacuum, mop, or both, for this run only. Leave empty to use whatever
+        the Cleaning mode selector shows — that is the everyday default, and
+        this field is for a run that should differ from it. Prime robots only.
+      selector:
+        select:
+          options:
+            - label: Vacuum
+              value: vacuum
+            - label: Mop
+              value: mop
+            - label: Vacuum and mop
+              value: vacuum_and_mop
+            - label: Vacuum, then mop
+              value: vacuum_then_mop
     two_pass:
       name: Two-pass cleaning
       description: >

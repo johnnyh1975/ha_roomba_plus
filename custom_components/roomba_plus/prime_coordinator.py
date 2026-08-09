@@ -63,6 +63,8 @@ from roombapy_prime import (
 )
 from roombapy_prime.models import MissionTimelineReport
 
+from .structural_failures import record_failure, record_success
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -193,7 +195,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                     self._request_parts_refresh_on_mission_end(report)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
-                    "roomba_plus: V4/Prime watch_mission_timeline() for %s ended without "
+                    # NOT INSTRUMENTED: a watcher ending is the normal
+                # shape of a disconnect, and the reconnect
+                # machinery already reports what matters.
+                "roomba_plus: V4/Prime watch_mission_timeline() for %s ended without "
                     "an exception (unexpected -- it's meant to run forever) -- retrying in %.0fs",
                     self.blid, backoff,
                 )
@@ -201,7 +206,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 raise
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception(
-                    "roomba_plus: V4/Prime watch_mission_timeline() for %s ended "
+                    # NOT INSTRUMENTED: a watcher ending is the normal
+                # shape of a disconnect, and the reconnect
+                # machinery already reports what matters.
+                "roomba_plus: V4/Prime watch_mission_timeline() for %s ended "
                     "unexpectedly -- retrying in %.0fs (this is the coordinator's own "
                     "outer safety net; the library itself already retries connection "
                     "drops internally, so reaching this suggests something else went wrong)",
@@ -261,7 +269,9 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 parts.async_request_refresh(),
                 name=f"roomba_plus_parts_after_mission_{self.blid}",
             )
+            record_success("parts refresh after mission")
         except Exception:  # noqa: BLE001
+            record_failure("parts refresh after mission", "refreshing consumables")
             _LOGGER.debug(
                 "roomba_plus: parts refresh after mission end failed", exc_info=True
             )
@@ -560,7 +570,10 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     self.async_set_updated_data(updated)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(
-                    "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended without "
+                    # NOT INSTRUMENTED: a watcher ending is the normal
+                # shape of a disconnect, and the reconnect
+                # machinery already reports what matters.
+                "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended without "
                     "an exception (unexpected -- it's meant to run forever) -- retrying in %.0fs",
                     self.blid, backoff,
                 )
@@ -568,7 +581,10 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 raise
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.exception(
-                    "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended "
+                    # NOT INSTRUMENTED: a watcher ending is the normal
+                # shape of a disconnect, and the reconnect
+                # machinery already reports what matters.
+                "roomba_plus: V4/Prime watch_named_shadows_updates() for %s ended "
                     "unexpectedly -- retrying in %.0fs (this is the coordinator's own outer "
                     "safety net; the library itself already retries connection drops "
                     "internally, so reaching this suggests something else went wrong)",
@@ -715,7 +731,15 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # elapsed delta rather than discarding it.
                 store.on_phase_other(self.hass, self.config_entry.entry_id)
         except Exception:  # noqa: BLE001
+            # THE SITE THAT HID THE WORST OF THE SIX. An attribute
+            # initialised on a different class made this raise on its
+            # first line, hourly, on every install -- taking the trail
+            # clearing, the observed dock position and the mission
+            # timer with it. Two releases of work that never ran a line.
+            record_failure("mission phase update", "reading the shadow phase")
             _LOGGER.debug("roomba_plus: mission timer phase update failed", exc_info=True)
+        else:
+            record_success("mission phase update")
 
 
 
@@ -894,7 +918,11 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
                 await async_sync_prime_missions(self.config_entry)
+                record_success("mission history sync (coordinator)")
             except Exception:  # noqa: BLE001
+                record_failure(
+                    "mission history sync (coordinator)", "the 6-hourly reconcile"
+                )
                 _LOGGER.debug(
                     "roomba_plus: mission history sync failed", exc_info=True
                 )
@@ -1003,7 +1031,9 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             table = await async_get_translations(
                 self.hass, self.hass.config.language, "common", {DOMAIN}
             )
+            record_success("weekday names")
         except Exception:  # noqa: BLE001
+            record_failure("weekday names")
             _LOGGER.debug(
                 "roomba_plus: could not load weekday names -- schedule labels "
                 "will fall back to rooms and time", exc_info=True,
@@ -1029,7 +1059,9 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             names = build_room_name_map(
                 parse_active_map_versions(raw), blid=self.blid
             )
+            record_success("prime room name refresh")
         except Exception:  # noqa: BLE001
+            record_failure("prime room name refresh")
             _LOGGER.debug(
                 "roomba_plus: could not refresh room names for %s -- keeping the "
                 "previous set", self.blid, exc_info=True,
