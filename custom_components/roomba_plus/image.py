@@ -3463,15 +3463,31 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # not, and where it must not mop -- and wanting keep-out zones on
         # screen does not imply wanting clean zones too.
         options = self._config_entry.options
+        # ZONES COME FROM WHICHEVER BUNDLE HAS THEM.
+        #
+        # The live bundle arrives on a map-update message -- only while a
+        # mission runs. @chairstacker ticked all three boxes, reloaded
+        # twice and saw nothing, which was correct behaviour and useless
+        # to him: zones barely change, and nobody inspects their keep-out
+        # areas mid-clean.
+        #
+        # The floor plan's bundle is fetched whenever the room map is
+        # built and carries the same three files.
+        def _zone_layer(name: str) -> Any:
+            layer = live_bundle.get(name)
+            if layer:
+                return layer
+            return (getattr(self._floor_plan, "zone_layers", None) or {}).get(name)
+
         if options.get(CONF_MAP_CLEAN_ZONES, DEFAULT_MAP_ZONES):
             self._draw_zone_layer(
-                draw, to_px, live_bundle.get("cleanZones"),
+                draw, to_px, _zone_layer("cleanZones"),
                 outline=(120, 200, 120),
             )
             # Ad-hoc zones are clean zones the user drew for one run.
             # Same colour, because they mean the same thing to a reader.
             self._draw_zone_layer(
-                draw, to_px, live_bundle.get("adHocCleanZones"),
+                draw, to_px, _zone_layer("adHocCleanZones"),
                 outline=(120, 200, 120),
             )
 
@@ -3482,7 +3498,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # only two real values are KeepOutZone and NoMopZone -- a
             # virtual wall is a KeepOutZone with a thin geometry, not a
             # third type.
-            for feature in (live_bundle.get("policyZones") or {}).get("features") or []:
+            for feature in (_zone_layer("policyZones") or {}).get("features") or []:
                 zone_type = str(
                     (feature.get("properties") or {}).get("type") or ""
                 )

@@ -128,7 +128,9 @@
       "demand_cleaning_not_supported": "This robot does not report the dirt-detection data that demand cleaning needs.",
       "integration_not_loaded": "The integration is not loaded. Restart Home Assistant and try again.",
       "room_schedule_no_rooms": "No rooms are known for this robot yet. Let it complete a mapping run first.",
-      "room_schedule_not_supported": "Room schedules need a robot that reports room data."
+      "room_schedule_not_supported": "Room schedules need a robot that reports room data.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "options": {
@@ -170,7 +172,8 @@
           "enable_schedule_calendar": "Show cleaning schedules as a calendar",
           "map_clean_zones": "Draw clean zones",
           "map_keepout_zones": "Draw keep-out zones",
-          "map_nomop_zones": "Draw no-mop zones"
+          "map_nomop_zones": "Draw no-mop zones",
+          "enable_maintenance_list": "Show maintenance as a to-do list"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -284,7 +287,9 @@
       "no_rest980_rooms_found": "No rooms found in your roomba_rest980 installation.",
       "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+.",
       "room_schedule_not_supported": "Per-room frequencies require a Smart Map robot with cloud credentials.",
-      "room_schedule_no_rooms": "No named rooms found on the Smart Map yet."
+      "room_schedule_no_rooms": "No named rooms found on the Smart Map yet.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "entity": {

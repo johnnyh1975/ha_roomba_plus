@@ -932,7 +932,22 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
                 "time of day to start at."
             )
 
-        frequency = self._frequency_from_rrule(event.get("rrule"))
+        # AN EDIT THAT SAYS NOTHING ABOUT RECURRENCE MUST NOT CHANGE IT.
+        #
+        # Home Assistant's edit dialog sends only what the user touched.
+        # Move a weekly schedule by an hour and no `rrule` comes with it
+        # -- and `_frequency_from_rrule(None)` answers ONCE, which is
+        # right for a NEW event and destroys an existing one.
+        #
+        # @DaRealGuGu shifted a Mon/Tue/Wed schedule to 21:00 and watched
+        # every occurrence but one disappear, in Home Assistant and in
+        # the iRobot app. The write succeeded; it wrote the wrong thing.
+        #
+        # So: no rrule on an edit means keep what the schedule has.
+        if event.get("rrule"):
+            frequency = self._frequency_from_rrule(event.get("rrule"))
+        else:
+            frequency = self._existing_frequency(uid)
         local_start = dt_util.as_local(start)
         summary = event.get("summary") or ""
         # Both fields, same as create: a user types the rooms wherever it
@@ -979,6 +994,23 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         from .prime_schedule_services import async_delete_schedule_by_id  # noqa: PLC0415
 
         await async_delete_schedule_by_id(self.hass, self._config_entry, uid)
+
+    def _existing_frequency(self, uid: str | None) -> str | None:
+        """The frequency the schedule already has, or None if unknown.
+
+        None tells the service to leave the field alone, which is what an
+        edit that never mentioned recurrence should do.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        for _container_id, container in getattr(coordinator, "data", None) or []:
+            for schedule in container or []:
+                if getattr(schedule, "schedule_id", None) != uid:
+                    continue
+                freq = getattr(getattr(schedule, "options", None), "frequency", None)
+                return getattr(freq, "value", freq)
+        return None
 
     @staticmethod
     def _frequency_from_rrule(rrule: str | None) -> str:

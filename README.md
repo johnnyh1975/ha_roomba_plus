@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a29-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a30-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -324,7 +324,7 @@ Settings → Devices → Roomba+ → ⋮ → **Reconfigure** — no need to remo
 
 ## Companion Lovelace card
 
-**[roomba_plus_card](https://github.com/johnnyh1975/roomba_plus_card)** — a dashboard card built for
+**[ha_roomba_plus_card](https://github.com/johnnyh1975/ha_roomba_plus_card)** — a dashboard card built for
 this integration: the map, room buttons and mission history in one place.
 
 Install it through HACS as a custom repository of type **Dashboard** (older HACS versions call it

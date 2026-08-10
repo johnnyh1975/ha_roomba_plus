@@ -1437,6 +1437,45 @@ def _read_backup_zip(zip_path: str) -> tuple[dict, dict[str, dict]]:
     return manifest, payloads
 
 
+async def _async_prime_snapshot(config_entry: Any) -> dict[str, Any]:
+    """The cloud-side state of a Prime robot, as it is right now.
+
+    Empty for a Classic robot, and empty rather than partial if the
+    cloud cannot be reached -- half a backup that looks whole is worse
+    than none, because it is the one somebody restores from.
+
+    Each piece is fetched separately and a failure drops only that
+    piece, named. A schedule list that could not be read should not cost
+    the room names that could.
+    """
+    data = getattr(config_entry, "runtime_data", None)
+    robot = getattr(data, "prime_robot", None)
+    if robot is None:
+        return {}
+
+    snapshot: dict[str, Any] = {}
+    failed: list[str] = []
+
+    async def _capture(name: str, coro: Any) -> None:
+        try:
+            snapshot[name] = await coro
+        except Exception:  # noqa: BLE001
+            failed.append(name)
+            _LOGGER.debug("roomba_plus: backup could not read %s", name, exc_info=True)
+
+    await _capture("map_versions", robot.get_active_map_versions())
+    await _capture("favorites", robot.get_favorites_raw())
+    household = getattr(data, "prime_household_id", None)
+    if household:
+        await _capture("schedules", robot.get_schedules(household))
+
+    if failed:
+        # NAMED IN THE FILE ITSELF, so a restore knows what it does not
+        # have rather than discovering it as an absence.
+        snapshot["incomplete"] = failed
+    return snapshot
+
+
 async def async_handle_create_backup(
     hass: HomeAssistant, call: ServiceCall
 ) -> dict[str, Any]:
@@ -1470,6 +1509,23 @@ async def async_handle_create_backup(
             continue
         payloads[prefix] = raw
         included.append(attr)
+
+    # PRIME KEEPS ITS DATA IN IROBOT'S CLOUD, so the local stores above
+    # find almost nothing and a backup would be an empty promise.
+    #
+    # "It is already in the cloud" is not a reason to skip it. A cloud
+    # can change its API, retire a version, or lose an account -- this
+    # project has spent weeks reverse-engineering one that did exactly
+    # the first. A local copy is insurance against precisely the thing
+    # nobody controls.
+    #
+    # Fetched rather than read: room names, schedules and favourites are
+    # not stored on disk, so this is a snapshot taken now rather than a
+    # copy of something kept.
+    prime_snapshot = await _async_prime_snapshot(config_entry)
+    if prime_snapshot:
+        payloads["prime_cloud"] = prime_snapshot
+        included.append("prime_cloud")
 
     manifest = {
         "version": 1,

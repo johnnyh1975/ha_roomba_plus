@@ -419,10 +419,50 @@ def parse_prime_schedule_occurrences(
         # Read from the first region rather than checked across all of
         # them: a mixed-mode schedule is possible on paper and has never
         # been seen, and one label per mission is what the app shows.
+        # A ONCE SCHEDULE HAS A DATE, NOT A POSITION IN A WINDOW.
+        #
+        # Taking the first generated occurrence was wrong in a way that
+        # only shows when you scroll: `_weekly_occurrences` yields runs
+        # INSIDE the requested window, so `[:1]` is "the first matching
+        # weekday you happen to be looking at". @DaRealGuGu saw the same
+        # single event land on 31 July, 29 June and 10 August depending
+        # on which month the calendar was showing.
+        #
+        # `options.after` is a real calendar date and is what a ONCE
+        # schedule is anchored to. Only the occurrence on or after it
+        # counts, and only once.
         once = options.frequency == ScheduleFrequency.ONCE
+        # THE ANCHOR'S REAL FIELDS, read from the model rather than
+        # guessed: ScheduleDateEntry carries `year`, `month` and
+        # `day_of_month`. A first attempt looked for `date` and `day`,
+        # found neither, and would have hidden every ONCE schedule
+        # instead of placing it -- the same shape of error it was written
+        # to fix.
+        once_anchor = None
+        if once:
+            after = getattr(options, "after", None)
+            year = getattr(after, "year", None)
+            month = getattr(after, "month", None)
+            day = getattr(after, "day_of_month", None)
+            if None not in (year, month, day):
+                try:
+                    once_anchor = datetime.date(int(year), int(month), int(day))
+                except ValueError:
+                    # An impossible date is not an anchor. Better no
+                    # placement than a wrong one.
+                    once_anchor = None
         for roomba_day in schedule_start.day or []:
             generated = _weekly_occurrences(roomba_day, hour, minute, start, end)
-            for occurrence in (generated[:1] if once else generated):
+            if once:
+                # Without an anchor the schedule cannot be placed, and
+                # drawing it at an arbitrary spot is worse than not
+                # drawing it: the server deletes a fired ONCE within
+                # minutes anyway, so an unplaceable one is almost
+                # certainly already spent.
+                generated = [
+                    o for o in generated if o.date() >= once_anchor
+                ][:1] if once_anchor is not None else []
+            for occurrence in generated:
                 # THE SCHEDULE ID TRAVELS WITH THE OCCURRENCE. Without
                 # it the calendar cannot give its events a uid, and
                 # Home Assistant needs one to call delete or edit at

@@ -94,14 +94,35 @@ def _describe(part: Any, name: str) -> tuple[str, str | None]:
 def _needs_attention(part: Any) -> bool:
     """Whether the robot says this part is due.
 
-    THE ROBOT'S OWN ARITHMETIC, not a threshold of ours. `count_remaining`
-    reaching zero is the robot saying so; anything above zero is it
-    saying not yet.
+    ZERO MEANS TWO OPPOSITE THINGS, depending on the category.
 
-    A part that reports no remaining count is treated as NOT due. It is
-    the safer direction: a list that nags about a part nobody can act on
-    gets ignored wholesale, and with it the items that mattered.
+    On a `replacement` part it means used up. On a `maintenance` part it
+    means **just done** -- the counter resets when the job is performed,
+    so a freshly washed pad reads zero and needs nothing.
+
+    @DaRealGuGu's robot made that plain. Two parts count the same 90 pad
+    washes:
+
+        212  replacement  count_remaining 210   the pad itself
+        202  maintenance  count_remaining 0     the wash
+
+    The pad has 210 washes of life left; the wash has zero *since the
+    last one*. Reading both the same way put an item on his list while
+    the iRobot app showed nothing due and the robot's own light ring was
+    clear.
+
+    The category was already being read -- for the verb, "Clean" versus
+    "Replace". It decides this too, and did not.
+
+    **HOW FAR THIS IS ESTABLISHED:** one account, one robot, and the app
+    agreeing. Whether a `maintenance` counter ever climbs to signal a job
+    that IS due is unknown, so nothing here treats it as due. Being quiet
+    about a real job is recoverable; nagging about a clean pad is how a
+    list gets ignored, and the items that mattered go with it.
     """
+    category = str(getattr(part, "counter_category", "") or "").lower()
+    if category == "maintenance":
+        return False
     remaining = getattr(part, "count_remaining", None)
     return isinstance(remaining, (int, float)) and remaining <= 0
 

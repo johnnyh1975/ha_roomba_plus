@@ -44,6 +44,7 @@ from .const import (
     CONF_BLOCKING_SENSORS,
     CONF_CONNECTION_TYPE,
     CONF_CONTINUOUS,
+    CONF_ENABLE_MAINTENANCE_LIST,
     CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
@@ -56,6 +57,7 @@ from .const import (
     CONF_SMART_ZONE_DATA,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
+    DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
@@ -891,7 +893,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     if ctx.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
-    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
+    platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
 
     # v3.2.1 — MQTT-watchdog stamp callback MUST be registered before the
     # platforms: entities register their on_message callbacks during setup,
@@ -961,7 +963,13 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     )
 
 
-def _calendar_platform_if_enabled(config_entry: RoombaConfigEntry) -> list[Platform]:
+def _optional_platforms(config_entry: RoombaConfigEntry) -> list[Platform]:
+    """The platforms the user has asked for, calendar and to-do list.
+
+    Renamed from `_calendar_platform_if_enabled` when the second one
+    arrived: a name that promises one thing and returns two is how a
+    caller ends up adding only half of them.
+    """
     """Returns [Platform.CALENDAR] unless the user has opted out via
     CONF_ENABLE_SCHEDULE_CALENDAR (default True -- see that constant's
     own docstring in const.py for why an opt-OUT, not opt-in).
@@ -979,9 +987,19 @@ def _calendar_platform_if_enabled(config_entry: RoombaConfigEntry) -> list[Platf
     itself were each, separately, missing from one spot). One small
     function, called from everywhere platforms lists are built, makes
     that whole bug class structurally impossible here."""
-    if config_entry.options.get(CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR):
-        return [Platform.CALENDAR]
-    return []
+    platforms: list[Platform] = []
+    if config_entry.options.get(
+        CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+    ):
+        platforms.append(Platform.CALENDAR)
+    # THE SAME GATE FOR THE MAINTENANCE LIST, and for the same reason a
+    # todo list takes a place in Home Assistant's navigation. That is the
+    # user's space; an integration should be asked into it.
+    if config_entry.options.get(
+        CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
+    ):
+        platforms.append(Platform.TODO)
+    return platforms
 
 
 def _remove_calendar_entity_if_disabled(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
@@ -1467,9 +1485,31 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         record_failure("favourite list (setup)", "reading favourites at setup")
         _LOGGER.debug("Roomba+ Prime: could not read favorites", exc_info=True)
 
+    # PRESENCE SCHEDULING FOR PRIME TOO.
+    #
+    # Six options -- the enable switch, the mode, the person entities and
+    # two delays -- were offered in the dialog, stored, and read by
+    # nobody on this path: `async_setup_entry` branches for CLOUD_ONLY
+    # and the manager was built in the Classic function.
+    #
+    # A user could switch presence scheduling on, pick their household
+    # and set two delays, and nothing would happen. No error, no message.
+    # **They did not merely not get the feature; they believed they had
+    # it**, and an automation built on it was silently inert.
+    #
+    # The manager itself is generation-aware now: Classic holds
+    # `schedHold`, Prime disables the schedules, because Prime accepts a
+    # write to `schedHold` and runs anyway (APK research 10: the field
+    # has no consumer in the Prime app at all).
+    if config_entry.options.get(CONF_PRESENCE_SCHEDULING_ENABLED):
+        config_entry.runtime_data.presence_manager = PresenceManager(
+            hass, config_entry
+        )
+        _LOGGER.debug("Roomba+ Prime: presence manager active")
+
     from .const import PRIME_PLATFORMS
     platforms = list(PRIME_PLATFORMS)
-    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
+    platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # THE FIRST MISSION-HISTORY SYNC BELONGS HERE, not on the parts
@@ -1536,7 +1576,7 @@ async def async_unload_entry(
     if config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
         from .const import PRIME_PLATFORMS
         platforms = list(PRIME_PLATFORMS)
-        platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
+        platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
         unload_ok = await hass.config_entries.async_unload_platforms(
             config_entry, platforms
         )
@@ -1595,7 +1635,7 @@ async def async_unload_entry(
     if data.map_capability == MapCapability.SMART:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
-    platforms.extend(p for p in _calendar_platform_if_enabled(config_entry) if p not in platforms)
+    platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry, platforms
@@ -1646,7 +1686,7 @@ async def _async_reload_on_options_change(
     CONF_ENABLE_SCHEDULE_CALENDAR (this session) is tracked here for a
     DIFFERENT reason than CONF_CONTINUOUS/CONF_DELAY: it doesn't affect
     the actual Roomba/cloud connection, only which platforms
-    _calendar_platform_if_enabled() returns -- but that list is only
+    _optional_platforms() returns -- but that list is only
     (re-)read at setup/unload time, so without a reload here, saving
     the option would silently do nothing until the user manually
     reloaded the integration. The data/options sync mechanism below is
@@ -1755,10 +1795,21 @@ class CannotConnect(exceptions.HomeAssistantError):
     """Raised when a connection to the Roomba cannot be established."""
 
 
-async def async_remove_config_entry_devices(
-    hass: HomeAssistant, config_entry: RoombaConfigEntry, devices: list[Any]
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry, device_entry: Any
 ) -> bool:
-    """Return whether stale devices can be removed from the device registry.
+    """Return whether a stale device can be removed from the device registry.
+
+    THE NAME AND THE SIGNATURE WERE BOTH WRONG, and the symptom was the
+    familiar one: nothing failed, the hook simply never ran. Home
+    Assistant looks for `async_remove_config_entry_device` -- singular --
+    and passes ONE device entry, not a list. Ours was plural and took a
+    list, so Home Assistant found no hook at all and refused every
+    removal with "Failed to remove device entry, rejected by
+    integration".
+
+    Anyone who replaced a robot and tried to delete the old device from
+    the UI hit a refusal with no explanation, and nothing in our logs.
 
     Called by HA when the user requests removal of a device that is no longer
     associated with any entity in this config entry. For Roomba+, each config

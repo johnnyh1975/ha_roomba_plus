@@ -128,7 +128,9 @@
       "demand_cleaning_not_supported": "Dieser Roboter meldet keine Verschmutzungsdaten, die für die Bedarfsreinigung nötig sind.",
       "integration_not_loaded": "Die Integration ist nicht geladen. Starte Home Assistant neu und versuche es erneut.",
       "room_schedule_no_rooms": "Für diesen Roboter sind noch keine Räume bekannt. Lass ihn zuerst eine Kartierungsfahrt abschließen.",
-      "room_schedule_not_supported": "Raumzeitpläne brauchen einen Roboter, der Raumdaten meldet."
+      "room_schedule_not_supported": "Raumzeitpläne brauchen einen Roboter, der Raumdaten meldet.",
+      "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
+      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
     }
   },
   "options": {
@@ -170,7 +172,8 @@
           "enable_schedule_calendar": "Reinigungspläne als Kalender anzeigen",
           "map_clean_zones": "Reinigungszonen zeichnen",
           "map_keepout_zones": "Sperrzonen zeichnen",
-          "map_nomop_zones": "Wischverbotszonen zeichnen"
+          "map_nomop_zones": "Wischverbotszonen zeichnen",
+          "enable_maintenance_list": "Wartung als Aufgabenliste anzeigen"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -284,7 +287,9 @@
       "no_rest980_rooms_found": "Keine Räume in deiner roomba_rest980-Installation gefunden.",
       "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt.",
       "room_schedule_not_supported": "Raum-Frequenzen erfordern einen Smart-Map-Roboter mit Cloud-Zugangsdaten.",
-      "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden."
+      "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden.",
+      "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
+      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
     }
   },
   "entity": {

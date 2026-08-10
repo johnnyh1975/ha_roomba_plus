@@ -29,6 +29,8 @@ constant rather than an inline 1000.
 
 from __future__ import annotations
 
+import dataclasses
+
 import logging
 from .structural_failures import record_failure, record_success
 from dataclasses import dataclass
@@ -225,6 +227,9 @@ class PrimeFloorPlan:
     #: guessing lines would draw thin strokes where solid regions belong.
     #: {room_id: name} from rooms.geojson, where the app appears to read
     #: them. Empty when the bundle has no rooms layer.
+    #: The raw `cleanZones`, `adHocCleanZones` and `policyZones` files,
+    #: unparsed. The renderer knows their shape; this only has to keep
+    #: them so they are available when no mission is running.
     room_names: dict[str, str]
     #: {room_id: ring_mm} from rooms.geojson. On several robots this is
     #: the ONLY place outlines exist -- get_map_metadata() returns names
@@ -238,6 +243,10 @@ class PrimeFloorPlan:
     carpet: list[list[tuple[float, float]]]
     #: Dock position and which way it faces, or None.
     dock: tuple[float, float, float] | None
+    #: The raw `cleanZones`, `adHocCleanZones` and `policyZones` files,
+    #: unparsed. The renderer knows their shape; this only has to keep
+    #: them so they are available when no mission is running.
+    zone_layers: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 def _room_names_from_bundle(features: Any) -> dict[str, str]:
@@ -442,6 +451,23 @@ async def async_build_prime_floor_plan(
     # So: .get() throughout, absent means empty, and nobody should ever
     # add a required-file list here.
     plan = PrimeFloorPlan(
+        # THE ZONE LAYERS, KEPT RATHER THAN DROPPED.
+        #
+        # The renderer read them from the LIVE bundle, which arrives on
+        # a map-update message -- that is, only while a mission runs.
+        # @chairstacker ticked the three zone boxes, reloaded twice, and
+        # saw nothing: correct, because a reload does not produce a live
+        # bundle. Only driving does.
+        #
+        # Zones barely ever change, and nobody checks their keep-out
+        # areas while the robot is mid-clean. This bundle is fetched
+        # whenever the room map is built and carries the same three
+        # files, so it is the right fallback.
+        zone_layers={
+            name: parsed.get(name)
+            for name in ("cleanZones", "adHocCleanZones", "policyZones")
+            if parsed.get(name)
+        },
         room_names=_room_names_from_bundle(parsed.get("rooms")),
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),
         borders=rings_mm(parsed.get("borders")),

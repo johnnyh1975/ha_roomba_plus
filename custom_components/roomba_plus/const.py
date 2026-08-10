@@ -22,14 +22,18 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.SWITCH,
     Platform.SELECT,
     Platform.DEVICE_TRACKER,
-    # v3.4.0 TODO — always present: filter/brush maintenance applies to
-    # every robot tier. "Reconfigure rooms" (SMART-tier only, see
-    # todo.py) simply never appears in the list on EPHEMERAL robots.
-    Platform.TODO,
+    # Platform.TODO moved out of this list: the maintenance list is now
+    # gated on CONF_ENABLE_MAINTENANCE_LIST for BOTH generations, added
+    # at runtime by __init__.py's _optional_platforms(). It arrived on
+    # Classic without an option and on Prime with one, which would have
+    # meant answering @chairstacker's complaint for one robot and not
+    # the other -- and his point, that a to-do list takes a place in the
+    # sidebar and should be asked for, says nothing about which robot it
+    # is.
 ]
 # Platform.CALENDAR moved out of this list (this session) -- now gated on
 # CONF_ENABLE_SCHEDULE_CALENDAR (default True, see const.py's own docstring
-# on that option) via __init__.py's _calendar_platform_if_enabled(), called
+# on that option) via __init__.py's _optional_platforms(), called
 # identically at all four platform-list build sites (Classic setup/unload,
 # Prime setup/unload).
 
@@ -88,10 +92,6 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
     # identified for any of them, and a button that does nothing when
     # pressed is worse than one that is not there.
     Platform.BUTTON,
-    # The maintenance list, built from the parts a Prime robot counts
-    # itself -- see todo_prime.py for why it is not the Classic one
-    # with a different source.
-    Platform.TODO,
 ]
 # Platform.CALENDAR moved out of this list too (this session) -- same
 # gating as LOCAL_PLATFORMS, see the comment there.
@@ -198,6 +198,25 @@ CONF_BRUSH_HOURS: Final = "brush_threshold_hours"
 # -- see async_step_settings()'s own connection_type branch for why each
 # tier gets a differently-scoped options form.
 CONF_ENABLE_SCHEDULE_CALENDAR: Final = "enable_schedule_calendar"
+#: The Prime maintenance list, and whether it exists at all.
+#:
+#: OFF BY DEFAULT, unlike the calendar. @chairstacker found a todo list
+#: in his sidebar that he had not asked for -- the second time something
+#: appeared there uninvited. A todo list is not a quiet entity: Home
+#: Assistant gives it a place in the navigation, which is the user's
+#: space rather than ours.
+#:
+#: The calendar defaults to on because it existed before there was an
+#: option and turning it off would have removed it from people who use
+#: it. This one has no such history, so it starts off and appears only
+#: when somebody asks.
+#: BOTH GENERATIONS. The list arrived on Classic without an option and
+#: on Prime with one, which would have meant the same complaint answered
+#: for one robot and not the other. @chairstacker's point -- that a to-do
+#: list takes a place in the sidebar and should be asked for -- says
+#: nothing about which robot it is.
+CONF_ENABLE_MAINTENANCE_LIST: Final = "enable_maintenance_list"
+DEFAULT_ENABLE_MAINTENANCE_LIST: Final = False
 
 # ── v1.7.0 — L5 Blocking sensors ─────────────────────────────────────────────
 CONF_BLOCKING_SENSORS: Final = "blocking_sensors"        # list[str] entity IDs
@@ -291,6 +310,10 @@ ATTR_ROOM_PASSES: Final = "room_passes"
 # Replaces the older flat smart_zone_labels dict; both are written on save
 # so that a rollback to an older version still sees the label names.
 CONF_SMART_ZONE_DATA: Final = "smart_zone_data"
+#: Written by the naming flow. `smart_zone_data` above is written only by
+#: the rest980 migration, so for anyone who named rooms through our own
+#: flow this is the key that holds them.
+CONF_SMART_ZONE_LABELS: Final = "smart_zone_labels"
 
 # ── v1.7.0 — Services ────────────────────────────────────────────────────────
 SERVICE_RESET_FILTER: Final = "reset_filter"

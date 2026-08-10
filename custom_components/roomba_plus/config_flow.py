@@ -50,6 +50,7 @@ from .const import (
     CONF_CONTINUOUS,
     CONF_DEMAND_CLEANING_ENABLED,
     CONF_DEMAND_MULTIPLIER,
+    CONF_ENABLE_MAINTENANCE_LIST,
     CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
@@ -73,6 +74,7 @@ from .const import (
     DEFAULT_CLEAN_DELAY_MIN,
     DEFAULT_CONTINUOUS,
     DEFAULT_DELAY,
+    DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
@@ -1220,6 +1222,13 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                             ),
                         ): bool,
                         vol.Optional(
+                            CONF_ENABLE_MAINTENANCE_LIST,
+                            default=options.get(
+                                CONF_ENABLE_MAINTENANCE_LIST,
+                                DEFAULT_ENABLE_MAINTENANCE_LIST,
+                            ),
+                        ): bool,
+                        vol.Optional(
                             CONF_MAP_ROOM_LABELS,
                             default=options.get(
                                 CONF_MAP_ROOM_LABELS,
@@ -1755,8 +1764,34 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if not has_smart_map(state):
             return self.async_create_entry(title="", data=self.config_entry.options)
 
-        # Collect all known region_ids from local state
+        # THREE SOURCES, NOT ONE.
+        #
+        # This read only `cleanSchedule2`, so a robot whose owner has
+        # never built a schedule WITH ROOMS offered nothing to name --
+        # the step opened and immediately reported itself finished
+        # (@connormxy). His robot knows its twelve rooms perfectly well;
+        # they simply are not in a schedule.
+        #
+        # `lastCommand` holds the regions of the most recent clean, and
+        # the cloud coordinator holds the full list. Either is a better
+        # answer than an empty screen.
         region_ids: set[str] = set()
+
+        last = state.get("lastCommand")
+        if isinstance(last, dict):
+            for region in last.get("regions") or []:
+                if isinstance(region, dict):
+                    rid = region.get("region_id") or region.get("id")
+                    if rid:
+                        region_ids.add(str(rid))
+
+        data = getattr(self.config_entry, "runtime_data", None)
+        coordinator = getattr(data, "cloud_coordinator", None)
+        for region in getattr(coordinator, "regions", None) or []:
+            rid = region.get("id") if isinstance(region, dict) else None
+            if rid:
+                region_ids.add(str(rid))
+
         for entry in state.get("cleanSchedule2", []):
             for region in entry.get("cmd", {}).get("regions", []):
                 rid = extract_region_id(region)
@@ -1824,7 +1859,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=new_options)
 
         if not unlabelled:
-            return self.async_create_entry(title="", data=self.config_entry.options)
+            # SAY WHY, rather than reporting success for doing nothing.
+            #
+            # This step opened and immediately announced itself finished
+            # (@connormxy), which reads as "done" when it means "found
+            # nothing". The two cases below are different problems and
+            # deserve different sentences.
+            return self.async_abort(
+                reason="no_rooms_to_name" if not region_ids
+                else "all_rooms_named"
+            )
 
         schema = vol.Schema({
             vol.Optional(f"zone_{rid}", default=f"Zone {rid}"): str

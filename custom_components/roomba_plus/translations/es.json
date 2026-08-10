@@ -128,7 +128,9 @@
       "demand_cleaning_not_supported": "Este robot no informa de los datos de detección de suciedad necesarios para la limpieza bajo demanda.",
       "integration_not_loaded": "La integración no está cargada. Reinicia Home Assistant e inténtalo de nuevo.",
       "room_schedule_no_rooms": "Todavía no se conocen habitaciones para este robot. Deja que complete un mapeo primero.",
-      "room_schedule_not_supported": "Las programaciones por habitación requieren un robot que informe de datos de habitaciones."
+      "room_schedule_not_supported": "Las programaciones por habitación requieren un robot que informe de datos de habitaciones.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "options": {
@@ -170,7 +172,8 @@
           "enable_schedule_calendar": "Mostrar las programaciones de limpieza como calendario",
           "map_clean_zones": "Dibujar zonas de limpieza",
           "map_keepout_zones": "Dibujar zonas prohibidas",
-          "map_nomop_zones": "Dibujar zonas sin fregado"
+          "map_nomop_zones": "Dibujar zonas sin fregado",
+          "enable_maintenance_list": "Mostrar el mantenimiento como lista de tareas"
         },
         "data_description": {
           "continuous": "Mantener una conexión MQTT persistente con el robot. Recomendado.",
@@ -284,7 +287,9 @@
       "no_rest980_rooms_found": "No se encontraron habitaciones en tu instalación de roomba_rest980.",
       "rest980_rooms_already_imported": "Todas las habitaciones de roomba_rest980 ya están nombradas en Roomba+.",
       "room_schedule_not_supported": "Las frecuencias por habitación requieren un robot con Smart Map y credenciales de nube.",
-      "room_schedule_no_rooms": "Aún no se han encontrado habitaciones con nombre en el Smart Map."
+      "room_schedule_no_rooms": "Aún no se han encontrado habitaciones con nombre en el Smart Map.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "entity": {

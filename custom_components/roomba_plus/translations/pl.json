@@ -128,7 +128,9 @@
       "demand_cleaning_not_supported": "Ten robot nie zgłasza danych wykrywania zabrudzeń wymaganych do sprzątania na żądanie.",
       "integration_not_loaded": "Integracja nie jest załadowana. Uruchom ponownie Home Assistant i spróbuj jeszcze raz.",
       "room_schedule_no_rooms": "Dla tego robota nie są jeszcze znane żadne pomieszczenia. Pozwól mu najpierw ukończyć mapowanie.",
-      "room_schedule_not_supported": "Harmonogramy pomieszczeń wymagają robota zgłaszającego dane pomieszczeń."
+      "room_schedule_not_supported": "Harmonogramy pomieszczeń wymagają robota zgłaszającego dane pomieszczeń.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "options": {
@@ -170,7 +172,8 @@
           "enable_schedule_calendar": "Pokaż harmonogramy sprzątania jako kalendarz",
           "map_clean_zones": "Pokaż strefy sprzątania",
           "map_keepout_zones": "Pokaż strefy zakazane",
-          "map_nomop_zones": "Pokaż strefy bez mopowania"
+          "map_nomop_zones": "Pokaż strefy bez mopowania",
+          "enable_maintenance_list": "Pokaż konserwację jako listę zadań"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
@@ -284,7 +287,9 @@
       "no_rest980_rooms_found": "Nie znaleziono pomieszczeń w instalacji roomba_rest980.",
       "rest980_rooms_already_imported": "Wszystkie pomieszczenia z roomba_rest980 są już nazwane w Roomba+.",
       "room_schedule_not_supported": "Częstotliwości dla poszczególnych pomieszczeń wymagają robota z Smart Map i danymi logowania do chmury.",
-      "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map."
+      "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "entity": {

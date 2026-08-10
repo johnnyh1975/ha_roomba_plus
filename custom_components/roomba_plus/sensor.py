@@ -70,6 +70,8 @@ from .sensor_prime import (
     PrimeDetectedPadSensor,
     PrimeDockStatusSensor,
     PrimeErrorSensor,
+    PrimePhaseSensor,
+    PrimeReadinessSensor,
     PrimeFailedMissionsSensor,
     PrimeFirmwareVersionSensor,
     PrimeConsumablePartSensor,
@@ -211,6 +213,11 @@ async def async_setup_entry(
             PrimeFirmwareVersionSensor(data.blid, config_entry),
             PrimeDockStatusSensor(data.blid, config_entry),
             PrimeErrorSensor(data.blid, config_entry),
+            # The most basic state sensor there is, and Prime did not
+            # have it -- found by comparing Classic value_fns against a
+            # real Prime shadow, not by anyone reporting it.
+            PrimePhaseSensor(data.blid, config_entry),
+            PrimeReadinessSensor(data.blid, config_entry),
             # NEW (this session): ro-stats-backed lifetime stats,
             # confirmed with real values (see StatsShadow's own
             # docstring). Four mission-outcome sensors reuse Classic's

@@ -16,6 +16,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from .structural_failures import diagnostic_info
+from .withheld_features import withheld_features
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -474,6 +475,22 @@ def _shape_of(value: Any, depth: int = 0) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     return type(value).__name__
+
+
+def _withheld_features(config_entry: Any, state: dict) -> dict:
+    """Capabilities this robot is not offered, and the condition that
+    withheld each one.
+
+    Best-effort: a diagnostics download that fails because of its own
+    explanatory block would be worse than one without it.
+    """
+    try:
+        return withheld_features(config_entry, state or {})
+    except Exception as exc:  # noqa: BLE001
+        # The failure itself, rather than a silent empty block -- a
+        # missing explanation would leave the same gap this exists to
+        # close.
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def _structural_diagnostics() -> dict[str, Any]:
@@ -1045,6 +1062,11 @@ async def _build_diagnostics(
         # listed here is a code path that has failed every time it ran,
         # which is a lead rather than a statistic.
         "never_succeeded": _structural_diagnostics(),
+        # WHY A CAPABILITY IS NOT ON OFFER. @connormxy's clean_area
+        # simply did not appear -- no error, no log line -- and he
+        # reinstalled three integrations to find out why. Empty when
+        # everything this robot could have, it has.
+        "withheld_features": _withheld_features(config_entry, state),
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

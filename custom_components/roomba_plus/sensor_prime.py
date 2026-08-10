@@ -40,7 +40,11 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
-from .const import ERROR_CODE_LABELS, PRIME_ERROR_SEVERITY
+from .const import (
+    ERROR_CODE_LABELS,
+    PRIME_ERROR_SEVERITY,
+    READINESS_STATE_LABELS,
+)
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 
@@ -1518,3 +1522,107 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
             "raw_count_remaining": part.count_remaining,
             "category": part.counter_category,
         }
+
+
+class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
+    """What the robot is doing right now.
+
+    THE MOST BASIC STATE SENSOR THERE IS, and Prime did not have it.
+    Classic has had `phase` since the beginning; the Prime branch builds
+    its own shorter list and this was never on it.
+
+    Somebody wanting an automation on "the robot is cleaning" goes
+    looking for this, does not find it, and concludes they have missed
+    something. Found by comparing every Classic `value_fn` against a
+    real Prime shadow rather than by anyone reporting it -- which is
+    itself the point: a missing sensor generates no error and no
+    complaint, only a person quietly giving up.
+
+    RAW, NOT TRANSLATED. `charge`, `run`, `stuck`, `evac`, `padWash` and
+    the rest are the robot's own words and are what every existing
+    automation and template in this ecosystem matches on. Prettifying
+    them here would break templates people copied from Classic
+    documentation.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="prime_phase",
+        translation_key="phase",
+        device_class=SensorDeviceClass.ENUM,
+    )
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_phase"
+
+    @property
+    def options(self) -> list[str]:
+        """Every phase confirmed in a field capture, plus the ones the
+        mission-status model names.
+
+        An ENUM sensor must declare its options or Home Assistant logs a
+        warning for each unlisted value it sees. A phase outside this
+        list reports as unknown rather than breaking the entity -- see
+        `native_value`.
+        """
+        return [
+            "charge", "run", "stuck", "evac", "padWash", "padDry",
+            "hmMidMsn", "hmPostMsn", "hmUsrDock", "pause", "new",
+        ]
+
+    @property
+    def native_value(self) -> str | None:
+        state = self._current_state
+        status = None if state is None else state.clean_mission_status
+        phase = getattr(status, "phase", None)
+        if phase is None:
+            return None
+        text = str(phase)
+        # AN UNLISTED PHASE READS AS UNKNOWN, not as itself. Home
+        # Assistant rejects an ENUM value outside `options`, and the
+        # entity would go unavailable rather than show one odd word --
+        # losing the ninety-nine phases that do work to display the one
+        # that does not.
+        return text if text in self.options else None
+
+
+class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
+    """Why the robot will not start, or that it will.
+
+    `notReady` is a code, not a flag: zero means ready, and each other
+    value names a specific obstacle -- bin full, tank empty, pad
+    missing. Classic renders those through READINESS_STATE_LABELS, and
+    the same table applies here because the codes come from the same
+    mission-status structure.
+
+    WHY THIS MATTERS MORE ON PRIME than the label suggests: a Prime
+    robot refuses a start silently. The command is accepted, nothing
+    happens, and this sensor is the only place that says why.
+    """
+
+    entity_description = SensorEntityDescription(
+        key="prime_readiness",
+        translation_key="readiness",
+    )
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_readiness"
+
+    @property
+    def native_value(self) -> str | None:
+        state = self._current_state
+        status = None if state is None else state.clean_mission_status
+        code = getattr(status, "not_ready", None)
+        if code is None:
+            return None
+        try:
+            code_int = int(code)
+        except (TypeError, ValueError):
+            return None
+        # THE CODE WHEN THERE IS NO LABEL, rather than nothing. An
+        # unmapped reason a user can quote in a report is worth more
+        # than a blank sensor -- @connormxy's error 236 is exactly the
+        # case, and it went unnamed because nothing displayed it.
+        return READINESS_STATE_LABELS.get(code_int) or f"Unknown ({code_int})"

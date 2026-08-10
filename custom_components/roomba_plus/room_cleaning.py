@@ -43,6 +43,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import (
+    CONF_SMART_ZONE_LABELS,
     room_slug,
     CONF_FLOOR,
     CONF_SMART_ZONE_DATA,
@@ -850,6 +851,24 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             (self._pmap_by_region.get(rid) for rid in room_ids if self._pmap_by_region.get(rid)),
             "",
         )
+        # AN EMPTY MAP ID IS NOT A NEUTRAL VALUE.
+        #
+        # @Echovictor37 sent a region command with `map_id=None` on a
+        # Combo 105: the broker returned a PUBACK **and the robot cleaned
+        # the whole house.** Not the requested room, and not nothing --
+        # accepted, effective, and not what was asked.
+        #
+        # This fell through to `""` and sent it. A user asking for the
+        # kitchen would get every room, with a success in the log.
+        # Refusing is the only honest answer: we cannot address a room
+        # without knowing its map.
+        if not pmap_id:
+            raise ServiceValidationError(
+                "The map these rooms belong to is not known yet, so a "
+                "room-targeted clean cannot be sent. Sending it anyway would "
+                "start a whole-house clean instead. Wait for the map to load, "
+                "or start the robot without naming rooms."
+            )
         user_pmapv_id: str = (
             (self._data.cloud_coordinator.active_user_pmapv_id
              if self._data.has_cloud else None)
@@ -1185,7 +1204,20 @@ def _classic_has_room_data(data: RoombaData, config_entry: RoombaConfigEntry) ->
     produce a service call that can only fail. An existing test caught
     that one.
     """
+    # TWO KEYS FOR THE SAME THING, and the check read the wrong one.
+    #
+    # The naming flow writes `smart_zone_labels`. `smart_zone_data` is
+    # written by exactly one path: the rest980 migration, for people
+    # arriving from another integration. So a user who named their rooms
+    # through our own flow still failed this check, and the docstring
+    # above -- "requiring cloud is too strict, room names live in
+    # options" -- described a route that did not exist for them.
+    #
+    # Either key answers the question the check is actually asking: does
+    # this robot have room names to work with.
     if config_entry.options.get(CONF_SMART_ZONE_DATA):
+        return True
+    if config_entry.options.get(CONF_SMART_ZONE_LABELS):
         return True
     coordinator = data.cloud_coordinator
     return coordinator is not None and coordinator.data is not None

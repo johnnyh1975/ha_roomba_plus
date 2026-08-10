@@ -128,7 +128,9 @@
       "demand_cleaning_not_supported": "Deze robot rapporteert geen vuildetectiegegevens die nodig zijn voor reiniging op verzoek.",
       "integration_not_loaded": "De integratie is niet geladen. Herstart Home Assistant en probeer het opnieuw.",
       "room_schedule_no_rooms": "Er zijn nog geen kamers bekend voor deze robot. Laat hem eerst een kartering voltooien.",
-      "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert."
+      "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "options": {
@@ -170,7 +172,8 @@
           "enable_schedule_calendar": "Schoonmaakschema's als agenda tonen",
           "map_clean_zones": "Reinigingszones tonen",
           "map_keepout_zones": "Verboden zones tonen",
-          "map_nomop_zones": "Zones zonder dweilen tonen"
+          "map_nomop_zones": "Zones zonder dweilen tonen",
+          "enable_maintenance_list": "Onderhoud als takenlijst tonen"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -284,7 +287,9 @@
       "no_rest980_rooms_found": "Geen kamers gevonden in je roomba_rest980-installatie.",
       "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+.",
       "room_schedule_not_supported": "Frequenties per kamer vereisen een Smart Map-robot met cloudgegevens.",
-      "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden."
+      "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "entity": {
