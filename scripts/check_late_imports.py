@@ -49,6 +49,10 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "presence_manager -> prime_schedule_switch": (
+        "a real cycle: prime_schedule_switch imports back into the presence "
+        "chain, so this one cannot move to module level"
+    ),
     "services -> select_prime": (
         "as room_cleaning -> select_prime: select_prime pulls in the room "
         "cleaning backend, so importing it at module level here closes the "
