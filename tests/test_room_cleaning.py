@@ -1306,3 +1306,149 @@ class TestTheFactoryNeverReadsHassOffTheConfigEntry:
         backend = PrimeRoomCleaning(data)
 
         assert backend is not None
+
+
+class TestBothZoneKeysCount:
+    """Two keys for the same thing, and the check read the wrong one.
+
+    The naming flow writes `smart_zone_labels`. `smart_zone_data` is
+    written by exactly one path — the rest980 migration, for people
+    arriving from another integration. So a user who named their rooms
+    through our own flow still failed this check, and the docstring
+    saying "requiring cloud is too strict, room names live in options"
+    described a route that did not exist for them.
+    """
+
+    def _has_rooms(self, options):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            _classic_has_room_data,
+        )
+
+        entry = MagicMock()
+        entry.options = options
+        data = SimpleNamespace(cloud_coordinator=None)
+        return _classic_has_room_data(data, entry)
+
+    def test_the_key_the_naming_flow_writes(self):
+        assert self._has_rooms({"smart_zone_labels": {"11": "Kitchen"}}) is True
+
+    def test_the_key_the_migration_writes(self):
+        assert self._has_rooms({"smart_zone_data": {"11": {}}}) is True
+
+    def test_neither_and_no_cloud_means_no(self):
+        assert self._has_rooms({}) is False
+
+    def test_an_empty_label_map_does_not_count(self):
+        """An empty dict is what a config entry looks like before anyone
+        has named anything -- it must not read as "rooms available"."""
+        assert self._has_rooms({"smart_zone_labels": {}}) is False
+
+
+class TestTheNamingFlowLooksBeyondSchedules:
+    """It read only `cleanSchedule2`, so a robot whose owner has never
+    built a schedule WITH ROOMS offered nothing to name -- the step
+    opened and immediately reported itself finished (@connormxy). His
+    robot knows its twelve rooms; they simply are not in a schedule.
+    """
+
+    def _source(self):
+        import inspect
+
+        from custom_components.roomba_plus import config_flow
+
+        src = inspect.getsource(config_flow)
+        i = src.index("THREE SOURCES, NOT ONE")
+        return src[i:i + 1600]
+
+    def test_the_last_command_is_read(self):
+        assert 'state.get("lastCommand")' in self._source()
+
+    def test_the_cloud_coordinator_is_read(self):
+        assert 'getattr(coordinator, "regions", None)' in self._source()
+
+    def test_schedules_are_still_read(self):
+        assert 'state.get("cleanSchedule2", [])' in self._source()
+
+
+class TestAnEmptyNamingStepSaysWhy:
+    """It announced itself finished, which reads as "done" when it means
+    "found nothing". The two cases are different problems."""
+
+    def _source(self):
+        import inspect
+
+        from custom_components.roomba_plus import config_flow
+
+        src = inspect.getsource(config_flow)
+        i = src.index("SAY WHY, rather than reporting success")
+        return src[i:i + 500]
+
+    def test_nothing_found_and_all_named_are_different_reasons(self):
+        source = self._source()
+
+        assert "no_rooms_to_name" in source
+        assert "all_rooms_named" in source
+
+    def test_it_aborts_rather_than_claiming_success(self):
+        assert "async_abort" in self._source()
+
+    def test_both_reasons_are_translated(self):
+        import json
+        import pathlib
+
+        for loc in ("de", "en", "fr"):
+            d = json.loads(
+                (pathlib.Path("custom_components/roomba_plus/translations")
+                 / f"{loc}.json").read_text()
+            )
+            abort = d.get("options", {}).get("abort", {})
+            assert "no_rooms_to_name" in abort, loc
+            assert "all_rooms_named" in abort, loc
+
+
+class TestAnEmptyMapIdIsRefusedRatherThanSent:
+    """@Echovictor37 sent a region command with `map_id=None` on a Combo
+    105: the broker returned a PUBACK **and the robot cleaned the whole
+    house.** Not the requested room, and not nothing — accepted,
+    effective, and not what was asked.
+
+    Our Prime room clean fell through to `""` and sent it. A user asking
+    for the kitchen would have got every room, with a success in the log.
+    """
+
+    def _source(self):
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        # The CLASSIC path is the one that fell through. Prime already
+        # refused a missing map with a HomeAssistantError -- checked
+        # before adding anything, after nearly building the guard twice.
+        return inspect.getsource(ClassicRoomCleaning)
+
+    def test_the_empty_case_is_rejected(self):
+        source = self._source()
+
+        assert "if not pmap_id:" in source
+        assert "ServiceValidationError" in source
+
+    def test_the_message_says_what_would_have_happened(self):
+        """"Cannot be sent" is half an answer. Somebody who knows a
+        whole-house clean was the alternative can decide whether to start
+        one deliberately."""
+        source = self._source()
+        i = source.index("if not pmap_id:")
+
+        assert "whole-house clean" in source[i:i + 700]
+
+    def test_it_refuses_before_building_the_payload(self):
+        """After would be too late: the point is that the payload is
+        valid enough to be accepted."""
+        source = self._source()
+
+        assert source.index("if not pmap_id:") < source.index('"regions":')

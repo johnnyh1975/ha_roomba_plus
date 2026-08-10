@@ -1945,3 +1945,86 @@ class TestTheRemovalListMatchesWhatIsRegistered:
         assert not orphans, (
             f"named in async_remove_services but never registered: {sorted(orphans)}"
         )
+
+
+class TestPrimeBackupsCaptureTheCloud:
+    """Prime keeps its data in iRobot's cloud, so the local stores find
+    almost nothing and a backup would be an empty promise.
+
+    "It is already in the cloud" is not a reason to skip it. A cloud can
+    change its API, retire a version, or lose an account -- this project
+    has spent weeks reverse-engineering one that did exactly the first.
+    """
+
+    def _entry(self, robot=None, household="HH"):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_robot=robot, prime_household_id=household
+        )
+        return entry
+
+    def _robot(self, **overrides):
+        from unittest.mock import AsyncMock
+
+        robot = AsyncMock()
+        robot.get_active_map_versions.return_value = [{"p2map_id": "M1"}]
+        robot.get_favorites_raw.return_value = [{"favoriteid": "F1"}]
+        robot.get_schedules.return_value = {"schedules": []}
+        for name, value in overrides.items():
+            getattr(robot, name).side_effect = value
+        return robot
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_snapshots_nothing(self):
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        assert await _async_prime_snapshot(self._entry()) == {}
+
+    @pytest.mark.asyncio
+    async def test_all_three_pieces_are_captured(self):
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        snapshot = await _async_prime_snapshot(self._entry(self._robot()))
+
+        assert set(snapshot) == {"map_versions", "favorites", "schedules"}
+
+    @pytest.mark.asyncio
+    async def test_one_failure_does_not_cost_the_others(self):
+        """A schedule list that could not be read should not cost the
+        room names that could."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        robot = self._robot(get_schedules=RuntimeError("cloud down"))
+        snapshot = await _async_prime_snapshot(self._entry(robot))
+
+        assert "map_versions" in snapshot
+        assert snapshot["incomplete"] == ["schedules"]
+
+    @pytest.mark.asyncio
+    async def test_what_is_missing_is_named_in_the_file(self):
+        """So a restore knows what it does not have, rather than
+        discovering it as an absence."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        robot = self._robot(
+            get_favorites_raw=RuntimeError("x"), get_schedules=RuntimeError("y")
+        )
+        snapshot = await _async_prime_snapshot(self._entry(robot))
+
+        assert snapshot["incomplete"] == ["favorites", "schedules"]
+
+    @pytest.mark.asyncio
+    async def test_without_a_household_schedules_are_skipped_silently(self):
+        """No household id is not a failure -- there is nothing to ask
+        for, and listing it as incomplete would suggest one."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        snapshot = await _async_prime_snapshot(
+            self._entry(self._robot(), household=None)
+        )
+
+        assert "schedules" not in snapshot
+        assert "incomplete" not in snapshot

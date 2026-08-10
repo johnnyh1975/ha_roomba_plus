@@ -2124,3 +2124,59 @@ class TestTheBundleTrajectoriesFillAGap:
         gate = source[source.index("have_own_trail = bool("):]
 
         assert "prime_positions" in gate[:200]
+
+
+class TestZonesDoNotNeedARunningMission:
+    """The live bundle arrives on a map-update message — only while a
+    mission runs. @chairstacker ticked all three zone boxes, reloaded
+    twice and saw nothing.
+
+    That was correct behaviour and useless to him: **zones barely ever
+    change, and nobody inspects their keep-out areas mid-clean.** The
+    tick boxes promised something permanent and delivered something
+    momentary.
+    """
+
+    def _resolve(self, live, stored):
+        """The renderer's own lookup, in the two states that matter."""
+        def _zone_layer(name):
+            layer = (live or {}).get(name)
+            if layer:
+                return layer
+            return (stored or {}).get(name)
+
+        return _zone_layer
+
+    def test_the_live_bundle_wins_while_a_mission_runs(self):
+        resolve = self._resolve(
+            {"policyZones": {"features": ["live"]}},
+            {"policyZones": {"features": ["stored"]}},
+        )
+
+        assert resolve("policyZones")["features"] == ["live"]
+
+    def test_the_stored_bundle_answers_when_the_robot_is_idle(self):
+        """His case: no mission, no live bundle, and three ticked boxes
+        that had nothing to draw."""
+        resolve = self._resolve({}, {"policyZones": {"features": ["stored"]}})
+
+        assert resolve("policyZones")["features"] == ["stored"]
+
+    def test_neither_is_still_nothing(self):
+        assert self._resolve({}, {})("policyZones") is None
+
+    def test_the_floor_plan_keeps_all_three_files(self):
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+
+        source = inspect.getsource(prime_room_map)
+        assert '"cleanZones", "adHocCleanZones", "policyZones"' in source
+
+    def test_the_renderer_consults_the_floor_plan(self):
+        import inspect
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        source = inspect.getsource(PrimeRoomsImage)
+        assert 'getattr(self._floor_plan, "zone_layers", None)' in source

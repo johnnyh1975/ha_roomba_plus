@@ -1074,3 +1074,188 @@ class TestPresenceUnavailable:
             "person.alice": "away",
             "person.bob": "unavailable",
         }) is False
+
+
+class TestTheCleanDelayIsHonoured:
+    """`CONF_CLEAN_DELAY_MIN` existed as an option, was offered in the
+    dialog, was stored -- and no code read it.
+
+    The two delays answer different questions: the away delay waits to
+    be sure everyone has really gone (somebody walking to the postbox
+    should not start a mission), and this one waits before cleaning,
+    because a car still on the drive is not a reason to send the robot
+    out. Somebody who set both got only the first.
+    """
+
+    def _manager(self, clean_delay):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        manager = object.__new__(PresenceManager)
+        entry = MagicMock()
+        entry.options = {
+            "clean_delay_min": clean_delay,
+            "presence_mode": "away_only",
+        }
+        entry.runtime_data = SimpleNamespace(roomba=MagicMock())
+        manager._entry = entry
+        manager._hass = MagicMock()
+        manager._away_task = None
+        manager._managed_hold = False
+        manager._did_unfreeze = False
+        manager._set_sched_hold = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_the_configured_minutes_are_waited(self):
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(15)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep:
+            await manager._away_delay(0)
+
+        assert (15 * 60) in [call.args[0] for call in sleep.await_args_list]
+
+    @pytest.mark.asyncio
+    async def test_zero_waits_only_once(self):
+        """The away delay still runs; the clean delay simply adds
+        nothing when it is not configured."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(0)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep:
+            await manager._away_delay(0)
+
+        assert sleep.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_an_arrival_during_the_clean_delay_stops_it(self):
+        """Cleaning must not start after somebody came home."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(15)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError()],
+        ):
+            await manager._away_delay(0)
+
+        manager._set_sched_hold.assert_not_awaited()
+
+
+class TestPrimePausesSchedulesInsteadOfHolding:
+    """`schedHold` is Classic's way of holding a schedule without
+    changing it. A Prime robot carries the field, accepts a write, reads
+    it back changed, **and runs anyway** — APK research 10 found it
+    appears once in the Prime app, with no serialisation annotation and
+    no consumer across 3801 classes. Inherited plumbing, not a control.
+
+    What Prime offers instead is `enabled` per schedule, which the app
+    itself uses.
+    """
+
+    def _manager(self, schedules):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        mgr = object.__new__(PresenceManager)
+        robot = AsyncMock()
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_robot=robot, prime_household_id="HH"
+        )
+        mgr._entry = entry
+        mgr._hass = MagicMock()
+        mgr._paused_schedule_ids = set()
+        mgr._set_sched_hold = AsyncMock()
+        return mgr, robot, schedules
+
+    def _schedule(self, sid, enabled=True):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            schedule_id=sid,
+            options=SimpleNamespace(enabled=enabled, deleted=None),
+        )
+
+    async def _pause(self, mgr, schedules, paused):
+        from unittest.mock import AsyncMock, patch
+
+        # The import is local inside the method, so the patch has to sit
+        # on the module it comes FROM, not on presence_manager.
+        with patch(
+            "custom_components.roomba_plus.prime_schedule_switch."
+            "async_read_schedule_containers",
+            AsyncMock(return_value=[("C1", schedules)]),
+        ):
+            await mgr._set_schedules_paused(paused)
+
+    @pytest.mark.asyncio
+    async def test_pausing_disables_an_enabled_schedule(self):
+        schedules = [self._schedule("S1")]
+        mgr, robot, _ = self._manager(schedules)
+
+        await self._pause(mgr, schedules, True)
+
+        assert schedules[0].options.enabled is False
+        robot.update_schedules.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resuming_re_enables_only_what_we_paused(self):
+        """Turning everything back on would enable a schedule the user
+        had deliberately switched off before leaving — the robot would
+        run on a day they had opted out of, and nothing in Home
+        Assistant would explain why."""
+        ours = self._schedule("S1")
+        theirs = self._schedule("S2", enabled=False)
+        mgr, _, _ = self._manager([ours, theirs])
+
+        await self._pause(mgr, [ours, theirs], True)
+        await self._pause(mgr, [ours, theirs], False)
+
+        assert ours.options.enabled is True
+        assert theirs.options.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_schedule_is_left_alone(self):
+        deleted = self._schedule("S1")
+        deleted.options.deleted = True
+        mgr, robot, _ = self._manager([deleted])
+
+        await self._pause(mgr, [deleted], True)
+
+        assert deleted.options.enabled is True
+        robot.update_schedules.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_still_uses_sched_hold(self):
+        """The field works there, and a paused Classic schedule still
+        looks scheduled in the app — which a disabled Prime one does
+        not."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        mgr = object.__new__(PresenceManager)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_robot=None)
+        mgr._entry = entry
+        mgr._paused_schedule_ids = set()
+        mgr._set_sched_hold = AsyncMock()
+
+        await PresenceManager._set_schedules_paused(mgr, True)
+
+        mgr._set_sched_hold.assert_awaited_once_with(True)

@@ -73,6 +73,12 @@ def _make_cloud_only_config_entry() -> MagicMock:
     "truthy" auto-generated MagicMock there would mask whether that
     guard is real)."""
     config_entry = MagicMock()
+    # The maintenance list is opt-in (CONF_ENABLE_MAINTENANCE_LIST,
+    # default off), so a realistic entry for THIS check is one where the
+    # user asked for it -- otherwise the class reads as unreachable when
+    # it is merely unrequested. The guard's own message says to add the
+    # data here rather than exempt the class, and it is right.
+    config_entry.options = {"enable_maintenance_list": True}
     data = config_entry.runtime_data
     data.connection_type = ConnectionType.CLOUD_ONLY
     data.blid = "TESTBLID"
@@ -129,11 +135,11 @@ class TestBackwardEveryCloudOnlyModuleIsListed:
     a real CLOUD_ONLY entry at all."""
 
     def test_every_module_referencing_cloud_only_is_in_prime_platforms(self) -> None:
-        """CARVED-OUT EXCEPTION (this session): calendar.py is
+        """CARVED-OUT EXCEPTIONS: calendar.py and todo_prime.py are
         deliberately NOT in the static PRIME_PLATFORMS list anymore --
         Platform.CALENDAR is now conditional on
         CONF_ENABLE_SCHEDULE_CALENDAR (default True), added at runtime
-        by __init__.py's _calendar_platform_if_enabled(), called
+        by __init__.py's _optional_platforms(), called
         identically at all four platform-list build sites (Classic
         setup/unload, Prime setup/unload). This is a deliberate,
         single, well-tested exception to the invariant this test
@@ -142,7 +148,12 @@ class TestBackwardEveryCloudOnlyModuleIsListed:
         be unconditionally listed)."""
         referencing = _platform_files_referencing_cloud_only()
         listed_modules = {_PLATFORM_TO_MODULE[p] for p in PRIME_PLATFORMS}
-        deliberately_conditional = {"calendar"}
+        # `todo` joins calendar for the same reason and a stronger one:
+        # a maintenance list takes a place in Home Assistant's sidebar,
+        # and @chairstacker found one there he had not asked for. It is
+        # gated on CONF_ENABLE_MAINTENANCE_LIST and, unlike the calendar,
+        # defaults to OFF.
+        deliberately_conditional = {"calendar", "todo"}
         missing = referencing - listed_modules - deliberately_conditional
         assert not missing, (
             f"{missing} reference ConnectionType.CLOUD_ONLY but are NOT in "
@@ -225,7 +236,12 @@ class TestNoPrimeEntityClassIsNeverBuilt:
                     declared[node.name] = path.name
 
         built: set[str] = set()
-        for platform in list(PRIME_PLATFORMS) + [Platform.CALENDAR]:
+        # The two conditional platforms are added by hand, exactly as
+        # __init__.py adds them at runtime when their option is on. A
+        # platform being opt-in must not make its entities look dead.
+        for platform in list(PRIME_PLATFORMS) + [
+            Platform.CALENDAR, Platform.TODO
+        ]:
             module = importlib.import_module(
                 f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
             )

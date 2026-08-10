@@ -488,6 +488,16 @@ class TestAOnceScheduleIsDrawnOnce:
             options=SimpleNamespace(
                 enabled=True, deleted=None, frequency=frequency, name=None,
                 start=SimpleNamespace(day=[4], hour=8, min=26),
+                # A ONCE schedule is anchored to a real date. Without one
+                # it cannot be placed, and the earlier version of this
+                # test did not supply it -- which is why it passed while
+                # the calendar drew the event wherever the user happened
+                # to be scrolled.
+                # THE MODEL'S REAL FIELDS. An earlier version of this
+                # fixture invented `date=`, which meant it agreed with
+                # the invented parser and neither was checked against
+                # ScheduleDateEntry.
+                after=SimpleNamespace(year=2026, month=8, day_of_month=7),
                 commands=[],
             ),
         )
@@ -506,13 +516,47 @@ class TestAOnceScheduleIsDrawnOnce:
 
         assert len(self._occurrences(ScheduleFrequency.WEEKLY)) > 4
 
-    def test_the_single_run_is_the_earliest_one(self):
-        """The robot fires it once and the server deletes the schedule
-        within minutes afterwards, so there is never a later one to
-        draw."""
+    def test_the_single_run_sits_on_its_anchor_date(self):
+        """NOT the first occurrence of the displayed window.
+        `_weekly_occurrences` yields runs inside the requested range, so
+        taking the first of them means "the first matching weekday you
+        happen to be looking at" -- @DaRealGuGu saw one event land on 31
+        July, 29 June and 10 August depending on the month shown.
+
+        `options.after` is the real date, and only the run on or after it
+        counts."""
         from roombapy_prime.models.schedules_dnd import ScheduleFrequency
 
         once = self._occurrences(ScheduleFrequency.ONCE)
-        weekly = self._occurrences(ScheduleFrequency.WEEKLY)
 
-        assert once[0][0] == weekly[0][0]
+        assert len(once) == 1
+        assert str(once[0][0].date()) >= "2026-08-07"
+
+    def test_without_an_anchor_nothing_is_drawn(self):
+        """Drawing it at an arbitrary spot is worse than not drawing it,
+        and a ONCE with no date is almost certainly already spent -- the
+        server deletes a fired one within minutes."""
+        import datetime as dt
+        from types import SimpleNamespace
+
+        from roombapy_prime.models.schedules_dnd import ScheduleFrequency
+
+        from custom_components.roomba_plus.schedule_parser import (
+            parse_prime_schedule_occurrences,
+        )
+
+        schedule = SimpleNamespace(
+            schedule_id="S1",
+            options=SimpleNamespace(
+                enabled=True, deleted=None, name=None, after=None,
+                frequency=ScheduleFrequency.ONCE,
+                start=SimpleNamespace(day=[4], hour=8, min=26), commands=[],
+            ),
+        )
+        result = parse_prime_schedule_occurrences(
+            [schedule],
+            dt.datetime(2026, 8, 1, tzinfo=dt.UTC),
+            dt.datetime(2026, 9, 30, tzinfo=dt.UTC),
+        )
+
+        assert result == []

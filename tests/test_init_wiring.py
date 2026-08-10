@@ -579,39 +579,39 @@ class TestDockContactConfirmedPrecedesMissionEnd:
         )
 
 
-class TestCalendarPlatformIfEnabled:
+class TestOptionalPlatforms:
     """NEW (this session) -- CONF_ENABLE_SCHEDULE_CALENDAR opt-out for
     Platform.CALENDAR, default True so existing installations keep
     their calendar entity after upgrading (see that constant's own
     docstring, const.py, for why default True specifically)."""
 
     def test_returns_calendar_platform_by_default(self):
-        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from custom_components.roomba_plus import _optional_platforms
         from homeassistant.const import Platform
 
         config_entry = MagicMock()
         config_entry.options = {}
 
-        assert _calendar_platform_if_enabled(config_entry) == [Platform.CALENDAR]
+        assert _optional_platforms(config_entry) == [Platform.CALENDAR]
 
     def test_returns_empty_when_explicitly_disabled(self):
-        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from custom_components.roomba_plus import _optional_platforms
         from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
 
         config_entry = MagicMock()
         config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: False}
 
-        assert _calendar_platform_if_enabled(config_entry) == []
+        assert _optional_platforms(config_entry) == []
 
     def test_returns_calendar_platform_when_explicitly_enabled(self):
-        from custom_components.roomba_plus import _calendar_platform_if_enabled
+        from custom_components.roomba_plus import _optional_platforms
         from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
         from homeassistant.const import Platform
 
         config_entry = MagicMock()
         config_entry.options = {CONF_ENABLE_SCHEDULE_CALENDAR: True}
 
-        assert _calendar_platform_if_enabled(config_entry) == [Platform.CALENDAR]
+        assert _optional_platforms(config_entry) == [Platform.CALENDAR]
 
 
 class TestRemoveCalendarEntityIfDisabled:

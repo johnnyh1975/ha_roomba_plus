@@ -184,3 +184,185 @@ class TestAnEmptyOrAbsentCoordinator:
         )
 
         assert len(added) == 1
+
+
+class TestZeroMeansTwoOppositeThings:
+    """On a `replacement` part, zero means used up. On a `maintenance`
+    part it means **just done** — the counter resets when the job is
+    performed, so a freshly washed pad reads zero and needs nothing.
+
+    @DaRealGuGu's robot made that plain. Two parts count the same 90 pad
+    washes:
+
+        212  replacement  count_remaining 210   the pad itself
+        202  maintenance  count_remaining 0     the wash
+
+    Reading both the same way put an item on his list while the iRobot
+    app showed nothing due and the robot's light ring was clear.
+    """
+
+    def _status(self, part_id):
+        from homeassistant.components.todo import TodoItemStatus
+
+        #: His actual parts, verbatim from the diagnostics.
+        real = {
+            "202": _part(count_type="pad_washes_used", count_used=90,
+                         count_remaining=0, counter_category="maintenance"),
+            "212": _part(count_type="pad_washes_used", count_used=90,
+                         count_remaining=210, counter_category="replacement"),
+            "148": _part(count_type="combo_missions", count_used=7,
+                         count_remaining=23, counter_category="replacement"),
+        }
+        items = _entity(real).todo_items
+        item = next(i for i in items if i.uid == f"part_{part_id}")
+        return item.status, TodoItemStatus
+
+    def test_the_wash_counter_at_zero_is_not_due(self):
+        """This is the one that appeared on his list and should not
+        have."""
+        status, cls = self._status("202")
+
+        assert status == cls.COMPLETED
+
+    def test_the_pad_with_life_left_is_not_due(self):
+        status, cls = self._status("212")
+
+        assert status == cls.COMPLETED
+
+    def test_his_whole_robot_produces_no_due_items(self):
+        """The app showed nothing due; so should we."""
+        from homeassistant.components.todo import TodoItemStatus
+
+        real = {
+            "202": _part(count_remaining=0, counter_category="maintenance"),
+            "212": _part(count_remaining=210, counter_category="replacement"),
+            "67": _part(count_remaining=4620, counter_category="replacement"),
+            "147": _part(count_remaining=60, counter_category="replacement"),
+        }
+        items = _entity(real).todo_items
+
+        assert not [
+            i for i in items if i.status == TodoItemStatus.NEEDS_ACTION
+        ]
+
+    def test_a_replacement_part_at_zero_is_still_due(self):
+        """The fix must not silence the case the list exists for."""
+        from homeassistant.components.todo import TodoItemStatus
+
+        spent = {"67": _part(count_remaining=0, counter_category="replacement")}
+        items = _entity(spent).todo_items
+
+        assert items[0].status == TodoItemStatus.NEEDS_ACTION
+
+    def test_a_maintenance_part_is_never_due_whatever_the_count(self):
+        """Deliberate, and only as far as one account and one robot
+        establish. Being quiet about a real job is recoverable; nagging
+        about a clean pad is how a list gets ignored."""
+        from custom_components.roomba_plus.todo_prime import _needs_attention
+
+        for remaining in (0, -5, 12, None):
+            assert _needs_attention(
+                _part(count_remaining=remaining, counter_category="maintenance")
+            ) is False
+
+
+class TestTheListIsAskedForRatherThanImposed:
+    """@chairstacker found a to-do list in his sidebar he had not asked
+    for -- **the second time something appeared there uninvited.**
+
+    A to-do list is not a quiet entity: Home Assistant gives it a place
+    in the navigation, which is the user's space rather than ours. So it
+    is gated on an option, and unlike the calendar it defaults to OFF.
+
+    The calendar defaults on because it existed before there was an
+    option, and turning it off would have taken it from people using it.
+    This one has no such history.
+    """
+
+    def _platforms(self, options):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus import _optional_platforms
+
+        entry = MagicMock()
+        entry.options = options
+        return _optional_platforms(entry)
+
+    def test_off_by_default(self):
+        from homeassistant.const import Platform
+
+        assert Platform.TODO not in self._platforms({})
+
+    def test_present_when_asked_for(self):
+        from homeassistant.const import Platform
+
+        assert Platform.TODO in self._platforms({"enable_maintenance_list": True})
+
+    def test_turning_it_off_removes_it(self):
+        from homeassistant.const import Platform
+
+        assert Platform.TODO not in self._platforms(
+            {"enable_maintenance_list": False}
+        )
+
+    def test_it_does_not_disturb_the_calendar(self):
+        """The two options are independent; enabling one must not carry
+        the other in."""
+        from homeassistant.const import Platform
+
+        platforms = self._platforms({"enable_maintenance_list": True})
+
+        assert Platform.CALENDAR in platforms
+
+    def test_the_option_is_labelled_in_every_locale(self):
+        import json
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus/translations")
+        for path in base.glob("*.json"):
+            data = json.loads(path.read_text())
+            labels = [
+                step.get("data", {}).get("enable_maintenance_list")
+                for step in data.get("options", {}).get("step", {}).values()
+                if isinstance(step, dict)
+            ]
+            assert any(labels), path.name
+
+
+class TestTheOptionAppliesToBothGenerations:
+    """The list arrived on Classic without an option and on Prime with
+    one. That would have meant answering @chairstacker's complaint for
+    one robot and not the other — and his point, that a to-do list takes
+    a place in the sidebar and should be asked for, says nothing about
+    which robot it is.
+    """
+
+    def test_neither_platform_list_carries_it_unconditionally(self):
+        import re
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/const.py"
+        ).read_text()
+        for name in ("LOCAL_PLATFORMS", "PRIME_PLATFORMS"):
+            match = re.search(rf"{name}[^=]*=\s*\[(.*?)\]", source, re.S)
+            # Only actual entries -- the comment inside the list explains
+            # why TODO left it, and matching that would fail the test for
+            # its own explanation.
+            entries = [
+                line.strip() for line in match.group(1).splitlines()
+                if line.strip().startswith("Platform.")
+            ]
+            assert "Platform.TODO," not in entries, name
+
+    def test_one_option_governs_both(self):
+        """A second constant would drift: two switches for one idea is
+        how the calendar and the list ended up different in the first
+        place."""
+        import inspect
+
+        from custom_components.roomba_plus import _optional_platforms
+
+        source = inspect.getsource(_optional_platforms)
+
+        assert source.count("CONF_ENABLE_MAINTENANCE_LIST") == 1

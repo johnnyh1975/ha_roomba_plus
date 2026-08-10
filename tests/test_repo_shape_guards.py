@@ -410,3 +410,52 @@ class TestSkipsCarryTheirReason:
 
         assert not bare, f"skips without a stated reason: {bare}"
 
+
+
+# ── device removal hook ──────────────────────────────────────────────────
+
+class TestHomeAssistantCanFindOurHooks:
+    """A hook Home Assistant looks up by name is only reachable if the
+    name matches exactly, and a mismatch fails the way everything else
+    has failed this week: nothing errors, the hook simply never runs.
+
+    `async_remove_config_entry_device` was written as `...devices`, and
+    took a list where Home Assistant passes one entry. So Home Assistant
+    found no hook and refused every device removal with "Failed to
+    remove device entry, rejected by integration" -- with nothing in our
+    logs, because our code was never reached.
+
+    Anyone who replaced a robot and tried to delete the old device from
+    the UI hit that refusal.
+    """
+
+    def test_the_removal_hook_has_the_name_home_assistant_looks_for(self):
+        import custom_components.roomba_plus as init
+
+        assert hasattr(init, "async_remove_config_entry_device")
+        assert not hasattr(init, "async_remove_config_entry_devices")
+
+    def test_it_takes_one_device_entry_not_a_list(self):
+        """Home Assistant calls it with `(hass, config_entry,
+        device_entry)`. A parameter named for a list is a sign the
+        signature was written from a guess."""
+        import inspect
+
+        import custom_components.roomba_plus as init
+
+        params = list(
+            inspect.signature(init.async_remove_config_entry_device).parameters
+        )
+        assert params == ["hass", "config_entry", "device_entry"]
+
+    @pytest.mark.asyncio
+    async def test_a_stale_device_may_be_removed(self):
+        """One config entry is one physical robot -- there are no child
+        devices, so anything offered for removal is safe to remove."""
+        from unittest.mock import MagicMock
+
+        import custom_components.roomba_plus as init
+
+        assert await init.async_remove_config_entry_device(
+            MagicMock(), MagicMock(), MagicMock()
+        ) is True

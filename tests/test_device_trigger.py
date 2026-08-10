@@ -385,3 +385,62 @@ class TestUnknownTriggerTypeDoesNotCrash:
             "TRIGGER_MAP_RETRAIN_COMPLETED",
         ):
             assert name in source
+
+
+class TestPrimeRobotsCanUseTheDeviceTriggers:
+    """The device triggers do not listen for events — they watch entity
+    STATE, found by `translation_key`. So Prime needed no trigger code at
+    all; it needed the entities the triggers look for.
+
+    **`phase` was the missing one**, and it is the most basic state
+    sensor there is. Without it, "when the robot starts cleaning" had
+    nothing to attach to on a Prime robot, and the trigger simply did not
+    appear in the automation editor — no error, no explanation.
+    """
+
+    def _keys_the_triggers_need(self):
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+        return set(re.findall(
+            r'_find_entity\(hass, device_id, "([a-z_]+)"\)', source
+        ))
+
+    def _prime_keys(self):
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        keys: set[str] = set()
+        for name in ("sensor_prime.py", "binary_sensor.py"):
+            keys |= set(re.findall(
+                r'translation_key="([a-z_]+)"', (base / name).read_text()
+            ))
+        return keys
+
+    def test_every_trigger_source_exists_on_prime(self):
+        missing = sorted(self._keys_the_triggers_need() - self._prime_keys())
+
+        assert not missing, (
+            "these device triggers have nothing to watch on a Prime robot, "
+            f"so they will not appear in the automation editor: {missing}"
+        )
+
+    def test_phase_in_particular(self):
+        """Named on its own because it carries four of the triggers —
+        started, finished, docked and stuck all read it."""
+        assert "phase" in self._prime_keys()
+
+    def test_the_triggers_watch_state_rather_than_events(self):
+        """Worth pinning: it is why adding one sensor was the whole fix.
+        A move to events would need Prime to fire them, which it does
+        not."""
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+        assert "state_trigger.async_attach_trigger" in source

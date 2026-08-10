@@ -1204,3 +1204,53 @@ class TestTheCalendarViewIsActuallyFilled:
         events = await self._events([self._occurrence("S1", 2)] * 4)
 
         assert len(events) == 4
+
+
+class TestAnEditThatSaysNothingAboutRecurrenceKeepsIt:
+    """Home Assistant's edit dialog sends only what the user touched.
+    Move a weekly schedule by an hour and no `rrule` comes with it --
+    and `_frequency_from_rrule(None)` answers ONCE, which is right for a
+    NEW event and destroys an existing one.
+
+    @DaRealGuGu shifted a Mon/Tue/Wed schedule to 21:00 and watched every
+    occurrence but one disappear, in Home Assistant and in the iRobot
+    app. **The write succeeded; it wrote the wrong thing.**
+    """
+
+    def _calendar(self, existing="WEEKLY"):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        cal = object.__new__(PrimeScheduleCalendar)
+        schedule = SimpleNamespace(
+            schedule_id="S1",
+            options=SimpleNamespace(frequency=existing),
+        )
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_schedule_coordinator=SimpleNamespace(
+                data=[("C1", [schedule])]
+            )
+        )
+        cal._config_entry = entry
+        return cal
+
+    def test_an_edit_without_an_rrule_reports_the_existing_frequency(self):
+        assert self._calendar("WEEKLY")._existing_frequency("S1") == "WEEKLY"
+
+    def test_an_unknown_schedule_reports_nothing(self):
+        """None tells the service to leave the field alone, which is what
+        an edit that never mentioned recurrence should do."""
+        assert self._calendar()._existing_frequency("SOMETHING_ELSE") is None
+
+    def test_the_handler_only_derives_when_an_rrule_is_present(self):
+        import inspect
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        source = inspect.getsource(PrimeScheduleCalendar.async_update_event)
+
+        assert 'if event.get("rrule"):' in source
+        assert "_existing_frequency(uid)" in source

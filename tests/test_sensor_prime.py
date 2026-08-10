@@ -208,7 +208,7 @@ class TestAsyncSetupEntryCloudOnlyBranch:
     completely different data source for a CLOUD_ONLY entry."""
 
     @pytest.mark.asyncio
-    async def test_adds_all_ten_prime_sensors(self):
+    async def test_adds_every_prime_sensor(self):
         from custom_components.roomba_plus import sensor as sensor_mod
         from custom_components.roomba_plus.models import ConnectionType
         from custom_components.roomba_plus.sensor_prime import (
@@ -253,7 +253,11 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # the moment the mission sensors were wired in, which is the
         # point at which you confirm the addition was deliberate rather
         # than an accident of a shared code path.
-        assert len(created) == 32
+        assert len(created) == 34, (
+            "phase and readiness were added: the most basic state sensor "
+            "there is plus the only place a Prime robot says why it will "
+            "not start"
+        )
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
         assert any(isinstance(e, PrimeBatterySensor) for e in created)
