@@ -175,6 +175,26 @@ automation:
 
 ---
 
+## Prime robots: what changed for automations
+
+Until v4.0.0a31 a Prime robot had **no `phase` sensor**, and every device trigger that watches
+robot state — "starts cleaning", "finishes cleaning", "docks", "gets stuck" — reads exactly that
+sensor. So those triggers did not appear in the automation editor at all for Prime users, with no
+error and no explanation. They work now.
+
+Two attributes are worth knowing about, both on the mission event sensor:
+
+```yaml
+# Rooms the last run left undone, with the mission that skipped them.
+# A room still waiting looks different from one picked up on the next pass.
+{{ state_attr('sensor.robot_mission_event', 'unfinished_rooms') }}
+# -> {"Kitchen": 61}
+```
+
+`readiness` says why a robot will not start. It matters more on Prime than the name suggests: **a
+Prime robot refuses a start silently**, and this is the only place that says why. An unmapped reason
+shows as its code rather than a blank, so it can be quoted in a report.
+
 ## Dashboard example
 
 A minimal dashboard combining the map, vacuum card, key sensors, and the

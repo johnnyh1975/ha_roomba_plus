@@ -557,6 +557,25 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 `calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Read-only, always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
+**Prime robots can write it, and three services do that directly** — the calendar entity is the
+usual way in, but a script may prefer the service:
+
+| Service | What it does |
+|---|---|
+| `roomba_plus.create_schedule` | adds a schedule: days, time, and optionally which rooms |
+| `roomba_plus.update_schedule` | changes an existing one, identified by its schedule id |
+| `roomba_plus.delete_schedule` | removes one |
+
+**An update replaces the whole schedule**, so anything you leave out keeps its current value rather
+than being cleared — the integration reads the schedule first and changes only what you named. That
+is not politeness: the cloud API has no partial update, and a naive write would silently drop the
+days you did not mention.
+
+Editing through the calendar dialog goes down the same path. Home Assistant sends only the fields
+the user touched, so a time change arrives with no recurrence information at all — which is why both
+the frequency and the day list are preserved rather than rebuilt from the occurrence that was
+clicked.
+
 #### Presence-aware scheduling — i/s/j/Braava
 
 Automatically unfreeze the cleaning schedule when everyone leaves home.
@@ -642,6 +661,97 @@ Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zo
 
 ---
 
+## The words on your screen come from iRobot
+
+This integration wrote its own error labels for years. A comparison against the vendor's own app
+found that **two of 126 matched** — and the differences were not stylistic:
+
+| ours | iRobot |
+|---|---|
+| Charging error | Charging Issue: unable to charge |
+| No charge current | Charging Issue: contacts need to be cleaned |
+| Right wheel error | Right wheel sensor issue |
+
+The second column tells somebody what to do. The first tells them something is wrong, which they
+already knew from the robot stopping.
+
+**112 codes now carry iRobot's own title and explanation**, in all eight supported languages, with
+our own catalogue answering for the 75 codes iRobot does not document. A code in neither — error
+236 has turned up on a real robot — shows as its number rather than an invented name.
+
+Part names follow the same rule: **"Maintenance – High-Efficiency Filter"** keeps this integration's
+grouping and takes iRobot's word for the part. So do the maintenance units — `evacs` reads "Dust
+Collection Left" in the app, so it does here too, rather than the obvious translation of the field
+name.
+
+The point is not tidiness. Somebody comparing the two screens should see the same words; a list
+saying "60 evacuations remaining" beside an app saying "Dust Collection Left" reads as two different
+measurements of two different things.
+
+## Every option, and what it costs you to leave it off
+
+Settings → Devices & Services → Roomba+ → **Configure**. Nothing here is required; the defaults are
+what a robot does out of the box.
+
+### The map
+
+| Option | Default | Notes |
+|---|---|---|
+| Enable the live cleaning map | on | Robots with position sensing only (900, i, s, j, Braava m) |
+| Map canvas size in pixels | 600 | 400–1200 |
+| Millimetres per pixel | 10 | 5–30. At 600 px, 10 gives you a 6 m × 6 m room |
+| Draw room names | on | |
+| Draw clean zones | off | |
+| Draw keep-out zones | off | |
+| Draw no-mop zones | off | |
+
+The three zone layers are off by default because they clutter a small canvas. **They no longer need
+a running mission** — earlier versions could only draw them from live mission data, so ticking the
+box and reloading showed nothing.
+
+### Entities you may not want
+
+| Option | Default | Notes |
+|---|---|---|
+| Show cleaning schedules as a calendar | **on** | |
+| Show maintenance as a to-do list | **off** | |
+| Create a button for each saved favorite | off | Prime robots. One button per favourite, which is a lot of buttons on a busy account |
+
+The calendar and the to-do list are the same kind of thing and default differently, which is
+deliberate: the calendar existed before the option did, and switching it off for people already
+using it would have taken something away. The to-do list arrived with its option.
+
+**Both take a place in Home Assistant's sidebar**, which is the user's space rather than an
+integration's — that is why the list has to be asked for.
+
+### Presence and demand cleaning
+
+| Option | Notes |
+|---|---|
+| Enable presence-aware scheduling | Pauses schedules while somebody is home |
+| Person or device_tracker entities | Who counts as "home" |
+| Presence mode | How they combine |
+| Away delay | How long everyone must be gone before schedules resume |
+| Delay before second robot start | Waits after the away delay before actually cleaning |
+| Enable demand cleaning | Starts a clean when the robot reports unusual dirt |
+
+**Both work on Prime robots as of v4.0.0a31.** They were offered and stored but read by nothing
+before that — configured fully, doing nothing, with no error to say so.
+
+### Blocking sensors
+
+| Option | Notes |
+|---|---|
+| Binary sensors that block a start | Door open, motion detected, anything ON that should stop a mission |
+| Blocking behaviour | Queue the start or drop it |
+| Blocking timeout | How long a queued start waits before giving up |
+
+### Multi-robot households
+
+| Option | Notes |
+|---|---|
+| Floor label | Free text, e.g. "Ground Floor". Groups robots in the fleet view |
+
 ## Events & device triggers
 
 Roomba+ fires events on the HA event bus that automations can react to
@@ -651,6 +761,11 @@ needed). See **[Automations & dashboards →](AUTOMATIONS.md)** for examples
 using these.
 
 Roomba+ fires events on the HA event bus that automations can react to directly (`platform: event`), and also exposes a curated subset as **device triggers** in the Automation editor (under "Device" — no YAML needed).
+
+**On Prime robots the device triggers arrived in v4.0.0a31**, and needed no trigger code — they
+watch entity state, and Prime was missing the `phase` sensor they all read. Adding one sensor was
+the whole fix. Before that, "when the robot starts cleaning" simply did not appear in the editor
+for Prime users, with no error to explain it.
 
 ### Event bus (v2.8.6+)
 

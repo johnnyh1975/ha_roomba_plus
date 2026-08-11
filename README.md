@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a30-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a31-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -177,6 +177,14 @@ is confirmed on real hardware, from a saved favorite and from a command built fr
 Prime robots additionally support per-room suction level, which Classic has no equivalent for.
 
 The remaining gap is **virtual walls**: keep-out and no-mop zones can be read but not written.
+
+**Error messages now come from iRobot** (August 2026). This integration wrote its own 126 error
+labels over the years; a comparison against the vendor's app found that **two** of them matched.
+The rest were not merely worded differently — "Charging error" where iRobot says "Charging Issue:
+contacts need to be cleaned". The second tells you what to do. The catalogue now uses the
+vendor's own titles and explanations, in all eight supported languages, and falls back to ours
+for the 75 codes iRobot does not document. Part names and maintenance units follow the same rule,
+so the words beside your robot match the words in the app.
 Everything else listed below works.
 
 **What works right now:**

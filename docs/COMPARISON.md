@@ -147,7 +147,7 @@
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| Presence-aware scheduling | ✅ `PresenceManager` + `schedHold` ★ | ❌ | ❌ |
+| Presence-aware scheduling | ✅ `PresenceManager`, both generations ★ | ❌ | ❌ |
 | Blocking sensors (prevent start) | ✅ configurable queue / abort ★ | ❌ | ❌ |
 | Demand cleaning (dirt threshold) | ✅ v2.4+, SMART + cloud ★ | ❌ | ❌ |
 | Weekday-aware dirt baseline | ✅ v2.5+ ★ | ❌ | ❌ |

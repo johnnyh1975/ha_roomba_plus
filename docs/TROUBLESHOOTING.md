@@ -163,6 +163,12 @@ After two or more resets of a given component, Roomba+ computes the median inter
 
 The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
 
+**Prime robots take a different route to the same result.** A Prime robot carries `schedHold` in its
+shadow, accepts a write to it, and runs anyway — iRobot's own app has no consumer for the field at
+all. Presence scheduling therefore disables each schedule instead, which is what the app does. One
+visible difference: a paused Classic schedule still looks scheduled in the iRobot app, while a
+paused Prime one looks switched off. It is — but it is not what Classic does.
+
 ---
 
 **`smart_start` queues forever / never starts**
@@ -178,6 +184,46 @@ Check that the blocking sensors are reporting correctly. Unavailable or unknown 
 The anomaly detection (v2.5+) uses your robot's personal performance history as the baseline. If the flag fires for a normal targeted single-room clean, the single-room area is far smaller than your typical full-home baseline — which is technically correct. The issue self-resolves: if the next mission is normal, the counter resets and the issue clears. Two consecutive anomalous missions are required to fire the issue.
 
 ---
+
+## A Prime robot that says it is cleaning and is not
+
+**Symptoms.** The vacuum shows `cleaning` for hours or days. Scheduled missions stop running and
+nothing reports an error. Commands from Home Assistant — start, stop, dock, find — are accepted and
+have no effect. The iRobot app shows the same phantom mission and its End Job button does not clear
+it.
+
+**What is happening.** A mission that ends in an error can leave the robot's cloud document stuck at
+`{phase: "run"}` with no terminal state ever written. The robot is fine and still talking — it keeps
+reporting its battery — but every consumer reading that document, including iRobot's own app, sees a
+mission that never ended.
+
+Observed on a Roomba Combo (Y351020) for **61 hours** after an error 48 mission, during which two
+daily schedules were skipped silently and every remote command was swallowed.
+
+**How to recognise it.** Roomba+ reports `phase` as **`stale`** when the robot's battery is rising
+while the document claims it is running — charging and cleaning are mutually exclusive, and the
+robot supplies both numbers. `readiness` will read `NONE` throughout: the sensor whose job is "why
+won't it start" has no answer, because the robot claims nothing is blocking.
+
+**Why this matters beyond the display.** In this state the robot ignores commands from everywhere —
+Home Assistant, the app, an automation — while accepting every one of them. A `vacuum.start` that
+does nothing is not a broken integration; it is a robot whose cloud document has stopped tracking
+it. If `phase` reads `stale`, that is the explanation, and the fix below is the whole of it.
+
+**What does not fix it:**
+
+- `vacuum.stop` from Home Assistant — delivered, no effect
+- End Job in the iRobot app — no write is even attempted
+- Running a mission with the physical button — a locally started mission appears nowhere in this
+  document, before, during or after
+- Docking at the end of that mission
+
+**What does fix it: power cycle the robot.** Hold the power button until the light ring goes dark,
+then wake it. On reconnect it re-reports its true state, and the cloud finalises the stuck record —
+in the observed case closing a 61-hour phantom as `ok` at a timestamp matching the reboot to the
+minute.
+
+Nothing softer reaches it, and no integration can do this for you.
 
 ## Cloud & history
 
