@@ -404,6 +404,34 @@ async def async_create_schedule_from_calendar(
     _LOGGER.info("roomba_plus: created schedule from calendar -- %s", note)
 
 
+def _days_for_update(
+    existing: list[Any] | None, weekday: int, explicit: list[int] | None
+) -> list[Any]:
+    """The day list a schedule should keep after an edit.
+
+    An explicit recurrence wins. Otherwise the schedule's own days are
+    preserved -- editing one occurrence of a repeating event must not
+    silently drop the other days.
+
+    Falls back to the edited occurrence's weekday only when the schedule
+    has no days at all, which is what a brand-new entry looks like.
+    """
+    if explicit:
+        return [_WEEKDAY_TO_WIRE[d] for d in explicit]
+    if existing:
+        # The schedule stores integers; `call_data` wants the wire
+        # abbreviations. A day outside 0-6 is dropped rather than
+        # crashing the whole edit -- losing one day of a series is
+        # recoverable, losing the edit is not.
+        wire = [
+            _WEEKDAY_TO_WIRE[d] for d in existing
+            if isinstance(d, int) and d in _WEEKDAY_TO_WIRE
+        ]
+        if wire:
+            return wire
+    return [_WEEKDAY_TO_WIRE[weekday]]
+
+
 async def async_update_schedule_from_calendar(
     hass: HomeAssistant,
     config_entry: Any,
@@ -417,6 +445,10 @@ async def async_update_schedule_from_calendar(
     room_ids: list[str],
     note: str,
     operating_mode: int | None = None,
+    #: The days an explicit recurrence rule named, when the edit
+    #: carried one. None means the edit said nothing about which days --
+    #: and then the schedule keeps its own.
+    explicit_days: list[int] | None = None,
 ) -> None:
     """Rewrites an existing schedule from an edited calendar event.
 
@@ -442,7 +474,17 @@ async def async_update_schedule_from_calendar(
     call_data = {
         "entity_id": "",  # supplied below; _prime_entry_for is bypassed
         "name": name,
-        "days": [_WEEKDAY_TO_WIRE[weekday]],
+        # THE WHOLE DAY LIST, NOT THE EDITED OCCURRENCE'S DAY.
+        #
+        # Home Assistant hands us one occurrence. @DaRealGuGu edited the
+        # Monday event of a Mon/Tue/Wed schedule and it became
+        # Monday-only -- the series collapsed to whichever day he
+        # happened to click.
+        #
+        # Same principle as the frequency fix one layer up: an edit that
+        # says nothing about recurrence must not change it, and the day
+        # list IS recurrence. Only an explicit rrule may replace it.
+        "days": [_WEEKDAY_TO_WIRE[weekday]],  # replaced below once target is known
         "time": _time(hour=hour, minute=minute),
         "frequency": frequency,
         "operating_mode": operating_mode,
@@ -497,6 +539,21 @@ async def async_update_schedule_from_calendar(
                 "deleted in the iRobot app. Reload the integration to catch up."
             )
 
+        # THE SERIES' OWN DAYS, not the edited occurrence's.
+        #
+        # Home Assistant hands us one occurrence. @DaRealGuGu edited the
+        # Monday event of a Mon/Tue/Wed schedule and it became
+        # Monday-only -- the series collapsed to whichever day he had
+        # clicked.
+        #
+        # Same principle as the frequency fix one layer up: an edit that
+        # says nothing about recurrence must not change it, and the day
+        # list IS recurrence. Only an explicit rrule may replace it.
+        call_data["days"] = _days_for_update(
+            getattr(getattr(target.options, "start", None), "day", None),
+            weekday,
+            explicit_days,
+        )
         options = _reshaped_options(
             target.options, call_data, containers, config_entry
         )

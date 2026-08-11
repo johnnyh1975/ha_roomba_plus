@@ -787,25 +787,25 @@
         "name": "Maintenance – Edge sweeping brush"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Maintenance – Multi-surface brush"
+        "name": "Maintenance – Main Brush(es)"
       },
       "prime_part_filter": {
-        "name": "Maintenance – Filter"
+        "name": "Maintenance – High-Efficiency Filter"
       },
       "prime_part_dirt_bag": {
-        "name": "Maintenance – Dirt disposal bag"
+        "name": "Maintenance – Dust Bag"
       },
       "prime_part_mop_pads": {
-        "name": "Maintenance – Washable mop pad"
+        "name": "Maintenance – DualClean Mop Pads"
       },
       "prime_part_cliff_sensors": {
         "name": "Maintenance – Cliff sensors"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Maintenance – Pad washing, cleaning due"
+        "name": "Maintenance – Dock Washing System"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Maintenance – Pad washing, replacement due"
+        "name": "Maintenance – Washable Mop Pad"
       },
       "prime_cleaning_mode": {
         "name": "Cleaning mode",

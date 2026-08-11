@@ -477,6 +477,56 @@ def _shape_of(value: Any, depth: int = 0) -> Any:
     return type(value).__name__
 
 
+def _vendor_capabilities(config_entry: Any) -> dict:
+    """The `digiCap` flags, as the robot reports them.
+
+    Empty for a Classic robot and for a Prime one that has not reported
+    them yet -- an absent block is not a robot that lacks the features.
+    """
+    # READ FROM THE SHADOW, not from the login response. The login
+    # entry carries `digiCap` too, but the integration never keeps it --
+    # and the unnamed shadow has the same block, refreshed with
+    # everything else.
+    data = getattr(config_entry, "runtime_data", None)
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return {}
+    # ALL THREE FAMILIES, ACROSS ALL THREE SHADOWS.
+    #
+    # `capabilityFromKey` gates 35 features, and they are not all in one
+    # place. Twenty-eight read the unnamed THING shadow (`cap.*`,
+    # `digiCap.*`), five read `ro-currentstate` (`dock.cap.*`), and two
+    # read `rw-settings` (`detergent`, `suctionLevel`).
+    #
+    # A first version of this looked in every shadow for the same three
+    # blocks, which happens to work -- but only because it searched
+    # everywhere rather than because it knew where to look. Scanning all
+    # of them is the right behaviour and now the documented reason: a
+    # robot that reports `dock.cap` somewhere unexpected still gets
+    # reported.
+    #
+    # A report showing one family and hiding the others invites the
+    # wrong conclusion about the two it hides.
+    out: dict[str, Any] = {}
+    for body in shadows.values():
+        if not isinstance(body, dict):
+            continue
+        for family in ("digiCap", "cap"):
+            block = body.get(family)
+            if isinstance(block, dict):
+                out.update({f"{family}.{k}": v for k, v in block.items()})
+        dock = body.get("dock")
+        if isinstance(dock, dict) and isinstance(dock.get("cap"), dict):
+            out.update({f"dock.cap.{k}": v for k, v in dock["cap"].items()})
+        # The two settings-shadow gates, which are plain top-level keys
+        # rather than a block: `detergent` and `suctionLevel`.
+        for flat in ("detergent", "suctionLevel"):
+            if flat in body:
+                out[flat] = body[flat]
+    return out
+
+
 def _withheld_features(config_entry: Any, state: dict) -> dict:
     """Capabilities this robot is not offered, and the condition that
     withheld each one.
@@ -1067,6 +1117,21 @@ async def _build_diagnostics(
         # reinstalled three integrations to find out why. Empty when
         # everything this robot could have, it has.
         "withheld_features": _withheld_features(config_entry, state),
+        # WHAT IROBOT'S OWN APP OFFERS ON THIS ROBOT.
+        #
+        # Reported, NOT enforced. `cwia` says whether iRobot's "Clean
+        # While Away" exists here -- it does not say whether OUR
+        # presence scheduling works, because ours disables schedules
+        # through `enabled`, which every Prime robot can do. Using the
+        # flag as a gate would hide a working feature.
+        #
+        # `ddAutomation` is the same shape: it says iRobot offers Dirt
+        # Detective, not that `clean_score` is missing.
+        #
+        # What it is good for is a report: somebody comparing our
+        # presence scheduling against the app's can see, in one line,
+        # whether the app has one at all.
+        "vendor_capabilities": _vendor_capabilities(config_entry),
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

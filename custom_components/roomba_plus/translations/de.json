@@ -787,25 +787,25 @@
         "name": "Wartung – Seitenbürste"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Wartung – Multiflächenbürste"
+        "name": "Wartung – Hauptbürste(n)"
       },
       "prime_part_filter": {
-        "name": "Wartung – Filter"
+        "name": "Wartung – Hocheffizienz-Filter"
       },
       "prime_part_dirt_bag": {
         "name": "Wartung – Staubbeutel"
       },
       "prime_part_mop_pads": {
-        "name": "Wartung – Waschbares Wischtuch"
+        "name": "Wartung – DualClean-Wischtücher"
       },
       "prime_part_cliff_sensors": {
         "name": "Wartung – Absturzsensoren"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Wartung – Tuchwäsche, Reinigung fällig"
+        "name": "Wartung – DockingDock-Waschsystem"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Wartung – Tuchwäsche, Austausch fällig"
+        "name": "Wartung – Waschbares Wischtuch"
       },
       "prime_cleaning_mode": {
         "name": "Reinigungsmodus",

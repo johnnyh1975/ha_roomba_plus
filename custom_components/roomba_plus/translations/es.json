@@ -787,25 +787,25 @@
         "name": "Mantenimiento – Cepillo lateral"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Mantenimiento – Cepillo multisuperficie"
+        "name": "Mantenimiento – cepillos multisuperficie"
       },
       "prime_part_filter": {
-        "name": "Mantenimiento – Filtro"
+        "name": "Mantenimiento – filtro de alta eficiencia"
       },
       "prime_part_dirt_bag": {
-        "name": "Mantenimiento – Bolsa de suciedad"
+        "name": "Mantenimiento – Bolsa para polvo"
       },
       "prime_part_mop_pads": {
-        "name": "Mantenimiento – Mopa lavable"
+        "name": "Mantenimiento – Mopas DualClean"
       },
       "prime_part_cliff_sensors": {
         "name": "Mantenimiento – Sensores de desnivel"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Mantenimiento – Lavado, limpieza pendiente"
+        "name": "Mantenimiento – sistema de lavado de la base"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Mantenimiento – Lavado, sustitución pendiente"
+        "name": "Mantenimiento – Mopa lavable"
       },
       "prime_cleaning_mode": {
         "name": "Modo de limpieza",

@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+
+from roombapy_prime.models.mission_history import parse_mission_history
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -219,6 +221,20 @@ def _room_durations(timeline: Any) -> dict[str, float]:
     return durations
 
 
+def _parsed(history: Any) -> list[Any]:
+    """The history as typed entries, whatever came back.
+
+    Already-typed entries pass through untouched. A caller that has done
+    its own parsing -- and every test in this file -- must not have the
+    work undone, and a second parse of a dataclass produces nothing at
+    all.
+    """
+    items = list(history or [])
+    if items and not isinstance(items[0], dict):
+        return items
+    return list(parse_mission_history(history) or [])
+
+
 async def async_sync_prime_missions(config_entry: RoombaConfigEntry) -> int:
     """Brings MissionStore up to date from Prime's mission history.
 
@@ -259,7 +275,30 @@ async def _async_sync_locked(
         # -- a required `days` argument that made every sync fail
         # silently since the feature shipped. Fixing that one moved the
         # TypeError up a line rather than ending it (@utkjmitch).
-        history = await robot.get_mission_history(robot.blid)
+        # THE PARSE STEP WAS MISSING, and that is why 46 missions
+        # imported as 0 (@utkjmitch, Y351020).
+        #
+        # `get_mission_history()` returns the RAW response by design --
+        # its own docstring calls conversion "a separate, optional step".
+        # Nothing here took that step, so this iterated plain dicts and
+        # asked them for attributes: `getattr(dict, "mission_id", None)`
+        # is None on every entry, so every entry converted to None and
+        # every one was dropped.
+        #
+        # SILENTLY, because dropping id-less entries is the correct
+        # handling of a malformed record. The data was not malformed; it
+        # was unparsed.
+        #
+        # THE THIRD LIFE OF THIS CALL SITE: a wrong `days` argument,
+        # then a missing `blid`, now a missing parse. Each fix moved the
+        # failure one layer deeper -- and no test covered the path,
+        # which is how.
+        #
+        # The structural-failure tracker cannot see this one, through no
+        # fault of its own: `record_success` fires after the fetch,
+        # which did succeed. The loss happens past the exception
+        # boundary, in data nothing watches.
+        history = _parsed(await robot.get_mission_history(robot.blid))
         # THE SUCCESS SIDE MATTERS AS MUCH AS THE FAILURE SIDE. Without
         # it, a path that works would still be reported as structurally
         # broken the first two times a cloud call happened to time out.

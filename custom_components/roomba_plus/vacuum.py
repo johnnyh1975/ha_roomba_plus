@@ -35,7 +35,6 @@ from .const import (
     ATTR_BIN_FULL,
     has_carpet_boost,
     is_braava,
-    is_mop,
     ATTR_BIN_PRESENT,
     ATTR_CLEANED_AREA,
     ATTR_CLEANING_TIME,
@@ -100,7 +99,22 @@ async def async_setup_entry(
     # has_carpet_boost() handles both 900-series (top-level key, absent from cap{})
     # and i/s/j-series (cap.carpetBoost == 1) correctly.
     constructor: type[IRobotVacuum]
-    if is_mop(state):
+    # `is_braava`, NOT `is_mop` -- AND THIS IS THE SECOND TIME.
+    #
+    # `is_mop()` is true for anything with a pad, which includes every
+    # Combo. @connormxy's c755020 was therefore built as a BraavaJet,
+    # whose `supported_features` deliberately excludes CLEAN_AREA
+    # because a Braava genuinely has no regions to clean.
+    #
+    # The same substitution was fixed inside the base class for him
+    # weeks ago. It was the right condition in a place this robot never
+    # reached -- the class was already wrong by then, so the corrected
+    # check never ran.
+    #
+    # His a30 diagnostics said so and I misread them: `withheld_features`
+    # came back EMPTY, meaning the base class considered CLEAN_AREA
+    # offered. It did. Nothing asked it.
+    if is_braava(state):
         constructor = BraavaJet
     elif has_carpet_boost(state):
         constructor = RoombaVacuumCarpetBoost

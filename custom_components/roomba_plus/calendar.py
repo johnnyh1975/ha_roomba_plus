@@ -647,7 +647,27 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_schedule_coordinator", None
         )
-        return dict(getattr(coordinator, "room_names", None) or {})
+        names = dict(getattr(coordinator, "room_names", None) or {})
+
+        # THE MAP BUNDLE KNOWS NAMES THE COORDINATOR DOES NOT.
+        #
+        # @utkjmitch's four-map account labels its rooms correctly on the
+        # rooms map -- his own `room1`-`room4` -- while the same rooms
+        # appear as `Zone 10`-`Zone 14` in these summaries. Two name
+        # sources, and only one of them was being read here.
+        #
+        # The bundle's names are filled in BEHIND the coordinator's, not
+        # over them: the coordinator reads the schedule, which is where
+        # a name the user set for scheduling would live. The bundle
+        # fills the gaps rather than winning them.
+        stored = getattr(
+            self._config_entry.runtime_data, "prime_room_names", None
+        )
+        if isinstance(stored, dict):
+            for rid, name in stored.items():
+                if name and str(rid) not in names:
+                    names[str(rid)] = name
+        return names
 
     async def _fetch_occurrences(
         self, start: dt_stdlib.datetime, end: dt_stdlib.datetime,

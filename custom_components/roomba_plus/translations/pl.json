@@ -787,25 +787,25 @@
         "name": "Konserwacja – Szczotka boczna"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Konserwacja – Szczotka wielopowierzchniowa"
+        "name": "Konserwacja – Szczotki główne"
       },
       "prime_part_filter": {
-        "name": "Konserwacja – Filtr"
+        "name": "Konserwacja – Filtr wysokowydajny"
       },
       "prime_part_dirt_bag": {
-        "name": "Konserwacja – Worek na zanieczyszczenia"
+        "name": "Konserwacja – Worek na kurz"
       },
       "prime_part_mop_pads": {
-        "name": "Konserwacja – Nakładka do prania"
+        "name": "Konserwacja – Nakładki mopujące DualClean"
       },
       "prime_part_cliff_sensors": {
         "name": "Konserwacja – Czujniki krawędzi"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Konserwacja – Mycie nakładki, czyszczenie"
+        "name": "Konserwacja – System mycia stacji dokującej"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Konserwacja – Mycie nakładki, wymiana"
+        "name": "Konserwacja – Nakładka mopująca z możliwością prania"
       },
       "prime_cleaning_mode": {
         "name": "Tryb sprzątania",

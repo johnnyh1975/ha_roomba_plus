@@ -40,6 +40,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
+from .prime_dirt import unfinished_missions
 from .const import (
     ERROR_CODE_LABELS,
     PRIME_ERROR_SEVERITY,
@@ -111,7 +112,43 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
         if current.room is not None:
             attrs["current_room_area"] = current.room.area
             attrs["current_room_pass_count"] = current.room.pass_count
+
+        # ROOMS THE LAST RUN LEFT UNDONE, and which mission left them.
+        #
+        # @chairstacker reported a mission that failed on a blocked door
+        # and left no trace anywhere: the robot came back, the history
+        # showed a completed entry, and nothing said a room had been
+        # skipped.
+        #
+        # `mission_last_unfinished` has carried the answer all along,
+        # and it is an object rather than a flag -- so this can say
+        # "room 11, mission 61" rather than "something was unfinished".
+        # With the mission number an automation can tell a room still
+        # waiting from one picked up on the next pass.
+        unfinished = self._unfinished_rooms()
+        if unfinished:
+            attrs["unfinished_rooms"] = unfinished
         return attrs
+
+    def _unfinished_rooms(self) -> dict[str, Any]:
+        """Best-effort: an attribute that cannot be built is left out
+        rather than taking the sensor down with it."""
+        data = self._config_entry.runtime_data
+        scores = getattr(data, "prime_clean_scores", None)
+        if not scores:
+            return {}
+        try:
+            found = unfinished_missions(scores)
+        except Exception:  # noqa: BLE001
+            # Silent on purpose: this module has no logger, and an
+            # attribute that cannot be built is not worth adding one for
+            # -- the sensor's own state is unaffected.
+            return {}
+        names = getattr(data, "prime_room_names", None) or {}
+        return {
+            names.get(rid, rid): info.get("mission_number")
+            for rid, info in found.items()
+        }
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -1555,6 +1592,21 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_phase"
 
+    def _battery_rising(self) -> bool:
+        """Whether the battery has climbed since the last reading.
+
+        Best-effort and deliberately conservative: it takes two samples
+        and a real increase, so a robot that briefly reports a higher
+        percentage mid-mission does not get called stale on one blip.
+        """
+        state = self._current_state
+        level = getattr(state, "bat_pct", None) if state else None
+        if not isinstance(level, (int, float)):
+            return False
+        previous = getattr(self, "_last_battery", None)
+        self._last_battery = level
+        return isinstance(previous, (int, float)) and level > previous
+
     @property
     def options(self) -> list[str]:
         """Every phase confirmed in a field capture, plus the ones the
@@ -1565,9 +1617,33 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         list reports as unknown rather than breaking the entity -- see
         `native_value`.
         """
+        # THE VENDOR'S OWN `Phase` ENUM, app 3.0.0, fifteen values.
+        #
+        # A first version of this list was assembled from field captures
+        # and guessed at two -- `pause` and `new` -- which are not in the
+        # enum at all, and missed five that are: `stop`, `hmUsrChrg`,
+        # `chargingError`, `mapUpd` and `refill`.
+        #
+        # A phase outside `options` makes Home Assistant reject the value
+        # and the entity goes unavailable, so a missing one is not a
+        # cosmetic gap: a robot returning to charge mid-mission would
+        # have taken the sensor down.
+        #
+        # The two guessed values are kept. They cost nothing if the robot
+        # never sends them, and removing them on the strength of one
+        # app version would be trading a confirmed list for a complete
+        # one -- Classic robots reach this code too.
         return [
-            "charge", "run", "stuck", "evac", "padWash", "padDry",
-            "hmMidMsn", "hmPostMsn", "hmUsrDock", "pause", "new",
+            "stop", "charge", "run", "stuck",
+            "hmPostMsn", "hmMidMsn", "hmUsrDock", "hmUsrChrg",
+            "chargingError", "mapUpd", "evac", "refill",
+            "padWash", "padDry",
+            # Not in the 3.0.0 enum; seen in older captures.
+            "pause", "new",
+            # Not a robot phase at all: this integration's own reading
+            # that the document has stopped tracking reality. See
+            # `native_value`.
+            "stale",
         ]
 
     @property
@@ -1578,6 +1654,37 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         if phase is None:
             return None
         text = str(phase)
+
+        # A ROBOT WHOSE BATTERY IS RISING IS NOT CLEANING.
+        #
+        # @utkjmitch's Y351020 errored mid-mission on a Saturday and the
+        # shadow froze at `{phase: "run", error: 48}` for **61 hours**.
+        # The robot kept updating `batPct` — 75 up to 96, so it was alive
+        # and talking — and never wrote a terminal phase.
+        #
+        # What that cost: two daily schedules silently skipped, the
+        # vacuum entity showing "cleaning" for two and a half days, and
+        # **every cloud command swallowed** — stop, start, dock and find,
+        # each broker-confirmed, none with any effect. iRobot's own app
+        # was equally fooled and could not end its own phantom mission.
+        # Only a power cycle cleared it.
+        #
+        # This does not unfreeze anything; nothing here can. It stops
+        # this sensor from repeating the lie, which is what a caller
+        # builds automations on. The vacuum entity and the app keep
+        # their own view.
+        #
+        # THE TEST IS THE ONE HE PROPOSED: charging and running are
+        # mutually exclusive, and the robot itself supplies both numbers.
+        #
+        # AND THIS READING IS ACTIONABLE, not just informative. In that
+        # state every command is swallowed -- start, stop, dock and find,
+        # each broker-confirmed, none with any effect. So `stale` is the
+        # answer to "why did my automation's start do nothing", and the
+        # answer is a power cycle rather than a bug report.
+        if text == "run" and self._battery_rising():
+            return "stale"
+
         # AN UNLISTED PHASE READS AS UNKNOWN, not as itself. Home
         # Assistant rejects an ENUM value outside `options`, and the
         # entity would go unavailable rather than show one odd word --

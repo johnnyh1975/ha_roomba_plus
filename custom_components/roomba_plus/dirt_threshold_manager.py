@@ -399,6 +399,13 @@ class DirtThresholdManager:
             )
             return
         record_success("prime clean score")
+        # KEPT FOR THE MISSION SENSOR, not only for the decision below.
+        #
+        # The same response says which rooms the last run left undone --
+        # @chairstacker's blocked-door mission that left no trace
+        # anywhere. Fetching it twice for two readers would double a
+        # cloud call to answer one question.
+        data.prime_clean_scores = response
 
         dirty = dirty_rooms(response)
         if not dirty:

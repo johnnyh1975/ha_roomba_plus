@@ -787,25 +787,25 @@
         "name": "Manutenzione – Spazzola laterale"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Manutenzione – Spazzola multisuperficie"
+        "name": "Manutenzione – Spazzole multiuso"
       },
       "prime_part_filter": {
-        "name": "Manutenzione – Filtro"
+        "name": "Manutenzione – Filtro ad alta efficienza"
       },
       "prime_part_dirt_bag": {
-        "name": "Manutenzione – Sacchetto raccoglipolvere"
+        "name": "Manutenzione – Sacchetto della polvere"
       },
       "prime_part_mop_pads": {
-        "name": "Manutenzione – Panno lavabile"
+        "name": "Manutenzione – Panni DualClean"
       },
       "prime_part_cliff_sensors": {
         "name": "Manutenzione – Sensori di dislivello"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Manutenzione – Lavaggio, pulizia necessaria"
+        "name": "Manutenzione – Sistema di lavaggio base"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Manutenzione – Lavaggio, sostituzione necessaria"
+        "name": "Manutenzione – Panno lavabile"
       },
       "prime_cleaning_mode": {
         "name": "Modalità di pulizia",

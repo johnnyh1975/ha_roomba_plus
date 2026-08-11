@@ -8,6 +8,8 @@ from typing import Final
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import Platform
 
+from .vendor_errors import vendor_error
+
 _LOGGER = logging.getLogger(__name__)
 
 # ── Domain ────────────────────────────────────────────────────────────────────
@@ -1059,6 +1061,28 @@ def get_localized_error_entry(code: int, language: str | None) -> dict[str, str]
     label instead — a v3.4.1 bug caught by test_const.py before release.
     """
     base = ERROR_CATALOGUE.get(code, {})
+    # THE VENDOR'S OWN TEXT WINS WHERE IT EXISTS.
+    #
+    # Of 126 labels written here, exactly two matched iRobot's. The rest
+    # were not merely worded differently: ours said "Charging error"
+    # where theirs says "Charging Issue: contacts need to be cleaned".
+    # The second tells somebody what to do; the first tells them
+    # something is wrong, which the stopped robot already said.
+    #
+    # Taken from app 3.0.0, where the catalogue ships as plain locale
+    # JSON. 112 codes in 25 languages, eight of them extracted.
+    #
+    # Ours still answers for the 75 codes iRobot does not document --
+    # @connormxy's 236 is in neither, so a robot can report a code its
+    # own maker has no text for.
+    vendor = vendor_error(code, language or "en")
+    if vendor and vendor.get("title"):
+        merged = dict(base or {})
+        merged["label"] = vendor["title"]
+        if vendor.get("content"):
+            merged["description"] = vendor["content"]
+        return merged
+
     if not base:
         return {}
     if not language or language == "en":

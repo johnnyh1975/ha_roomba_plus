@@ -130,6 +130,16 @@ class RoombaData:
     #: Bounded, because a long mission would otherwise grow without
     #: limit -- a tester's single run produced 904 points.
     prime_positions: list[tuple[float, float, float]] = field(default_factory=list)
+    #: The last `/v1/p2maps/clean-score` response, kept whole.
+    #:
+    #: Two readers want it: demand cleaning uses the scores, the mission
+    #: sensor uses `mission_last_unfinished`. Fetching it twice would
+    #: double a cloud call to answer one question.
+    prime_clean_scores: Any | None = None
+    #: {room_id: name} from the map bundle, which knows names the
+    #: schedule coordinator does not. Filled whenever a floor plan is
+    #: built, and read by the calendar to fill gaps in its own summaries.
+    prime_room_names: dict[str, str] = field(default_factory=dict)
     prime_coordinator: "PrimeCoordinator | None" = None
     prime_status_coordinator: "PrimeStatusCoordinator | None" = None
     #: Consumable parts (filter, brushes, pads, dirt bag). The only

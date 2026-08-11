@@ -51,19 +51,87 @@ _ACTION_BY_CATEGORY: dict[str, str] = {
     "replacement": "Replace",
 }
 
-#: Units as the robot counts them, from RobotHealthCountType. Complete
-#: as of the app's own enum -- Battery and Sqft have never appeared in a
-#: catalogue response but exist.
+#: Units as the robot counts them, worded as **iRobot words them**.
+#:
+#: The app's own strings differ from the obvious translation of the enum
+#: name, and the app is what the user reads beside this list:
+#:
+#:     evacsUnit           "Dust Collection Left"   not "evacuations"
+#:     missionsUnit        "Tasks Left"             not "missions"
+#:     comboMissionsUnit   "Routines Left"
+#:     hoursUnit           "Hours Left"
+#:
+#: Somebody comparing the two should see the same words. A list saying
+#: "60 evacuations remaining" beside an app saying "Dust Collection
+#: Left" reads as two different measurements of two different things.
 _UNITS: dict[str, str] = {
     "minutes": "hours",
-    "missions": "missions",
+    "missions": "tasks",
     "combo_missions": "routines",
-    "evacs": "evacuations",
+    "evacs": "dust collections",
     "pad_washes_used": "pad washes",
     "battery": "charge cycles",
     "sqft": "ft²",
 }
 
+
+
+#: Part id -> the dock capability flag that has to be present for it to
+#: mean anything. From `capabilityFromKey`, app 3.0.0.
+_PART_REQUIRES_DOCK_CAP: dict[str, str] = {
+    "147": "evac",   # dust bag -- needs an evacuating dock
+    "202": "pw",     # pad wash cleaning
+    "212": "pw",     # pad wash replacement
+}
+
+
+def _parts_the_robot_cannot_have(config_entry: Any) -> set[str]:
+    """Parts whose dock capability the robot reports as absent.
+
+    Explicit denial only. `dock.cap.evac == 0` means "this dock does not
+    evacuate"; a missing block means the robot said nothing, and
+    silence is not a denial.
+    """
+    data = getattr(config_entry, "runtime_data", None)
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return set()
+    caps: dict[str, Any] = {}
+    for body in shadows.values():
+        dock = body.get("dock") if isinstance(body, dict) else None
+        if isinstance(dock, dict) and isinstance(dock.get("cap"), dict):
+            caps.update(dock["cap"])
+    if not caps:
+        return set()
+    return {
+        part_id
+        for part_id, flag in _PART_REQUIRES_DOCK_CAP.items()
+        if caps.get(flag) == 0
+    }
+
+
+def _readable_part_name(hass: Any, part_id: str) -> str:
+    """The part's display name, or its id if we have none.
+
+    Reads the same translation the part sensors use, so the list and the
+    sensors agree. Falls back to the bare id rather than to a key --
+    "Replace 68" is a question somebody can ask; "Replace
+    prime_part_edge_brush" looks like a bug because it is one.
+    """
+    key = _KNOWN_PARTS.get(part_id)
+    if not isinstance(key, str):
+        return part_id
+    try:
+        from homeassistant.helpers.translation import (  # noqa: PLC0415
+            async_get_cached_translations,
+        )
+
+        cached = async_get_cached_translations(hass, hass.config.language, "entity")
+        name = cached.get(f"component.roomba_plus.entity.sensor.{key}.name")
+    except Exception:  # noqa: BLE001
+        name = None
+    return name or key.replace("prime_part_", "").replace("_", " ").title()
 
 def _describe(part: Any, name: str) -> tuple[str, str | None]:
     """An item's summary and description.
@@ -157,7 +225,22 @@ class PrimeMaintenanceTodo(IRobotEntity, TodoListEntity):
             return None
 
         items: list[TodoItem] = []
+        absent = _parts_the_robot_cannot_have(self._config_entry)
         for part_id, part in sorted(parts.items()):
+            # A DUST BAG ON A ROBOT WITH NO DOCK.
+            #
+            # @utkjmitch's dockless Combo 104 was told it had "60
+            # evacuations remaining" for a bag it does not have, in a
+            # station it does not own. The cloud reports the part
+            # regardless of the hardware; the list should not repeat it.
+            #
+            # Only parts whose capability the robot explicitly denies are
+            # hidden. A missing flag hides nothing -- a robot that did
+            # not answer is not a robot without the part, and a
+            # maintenance item wrongly hidden is worse than one wrongly
+            # shown.
+            if str(part_id) in absent:
+                continue
             known = _KNOWN_PARTS.get(str(part_id))
             # The part id when the name is unknown -- ugly and honest.
             # Inventing "Part 202" would put a label on screen that

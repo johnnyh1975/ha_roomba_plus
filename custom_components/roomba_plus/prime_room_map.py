@@ -450,6 +450,18 @@ async def async_build_prime_floor_plan(
     #
     # So: .get() throughout, absent means empty, and nobody should ever
     # add a required-file list here.
+    # KEPT WHERE OTHER READERS CAN SEE THEM.
+    #
+    # The calendar builds its summaries from the schedule coordinator's
+    # names and showed `Zone 10` for rooms this bundle names correctly
+    # (@utkjmitch, a four-map account). One fetch, two consumers.
+    names_for_others = _room_names_from_bundle(parsed.get("rooms"))
+    runtime = getattr(config_entry, "runtime_data", None)
+    if runtime is not None and names_for_others:
+        existing = dict(getattr(runtime, "prime_room_names", None) or {})
+        existing.update(names_for_others)
+        runtime.prime_room_names = existing
+
     plan = PrimeFloorPlan(
         # THE ZONE LAYERS, KEPT RATHER THAN DROPPED.
         #

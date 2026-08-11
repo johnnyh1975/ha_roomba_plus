@@ -787,25 +787,25 @@
         "name": "Onderhoud – Zijborstel"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Onderhoud – Multi-oppervlakteborstel"
+        "name": "Onderhoud – Hoofdborstel(s)"
       },
       "prime_part_filter": {
-        "name": "Onderhoud – Filter"
+        "name": "Onderhoud – Hoogrendementsfilter"
       },
       "prime_part_dirt_bag": {
         "name": "Onderhoud – Stofzak"
       },
       "prime_part_mop_pads": {
-        "name": "Onderhoud – Wasbare doek"
+        "name": "Onderhoud – DualClean-dweilpads"
       },
       "prime_part_cliff_sensors": {
         "name": "Onderhoud – Valsensoren"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Onderhoud – Doekwas, reiniging nodig"
+        "name": "Onderhoud – BasisDock wassysteem"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Onderhoud – Doekwas, vervanging nodig"
+        "name": "Onderhoud – Wasbaar dweilpad"
       },
       "prime_cleaning_mode": {
         "name": "Reinigingsmodus",

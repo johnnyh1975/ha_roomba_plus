@@ -787,25 +787,25 @@
         "name": "Maintenance – Brosse latérale"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Maintenance – Brosse multisurface"
+        "name": "Maintenance – Brosse(s) principale(s)"
       },
       "prime_part_filter": {
-        "name": "Maintenance – Filtre"
+        "name": "Maintenance – Filtre haute efficacité"
       },
       "prime_part_dirt_bag": {
-        "name": "Maintenance – Sac d'élimination de la saleté"
+        "name": "Maintenance – Sac à poussière"
       },
       "prime_part_mop_pads": {
-        "name": "Entretien – Lingette lavable"
+        "name": "Maintenance – Lingettes de lavage DualClean"
       },
       "prime_part_cliff_sensors": {
         "name": "Entretien – Capteurs de vide"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Entretien – Lavage, nettoyage requis"
+        "name": "Maintenance – Système de lavage de la Dock d’accueil"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Entretien – Lavage, remplacement requis"
+        "name": "Maintenance – Lingette de lavage lavable"
       },
       "prime_cleaning_mode": {
         "name": "Mode de nettoyage",

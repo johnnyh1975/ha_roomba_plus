@@ -787,25 +787,25 @@
         "name": "Manutenção – Escova lateral"
       },
       "prime_part_multi_surface_brush": {
-        "name": "Manutenção – Escova multissuperfície"
+        "name": "Manutenção – Escova(s) principal(is)"
       },
       "prime_part_filter": {
-        "name": "Manutenção – Filtro"
+        "name": "Manutenção – Filtro de alta eficiência"
       },
       "prime_part_dirt_bag": {
-        "name": "Manutenção – Saco de sujidade"
+        "name": "Manutenção – Saco de pó"
       },
       "prime_part_mop_pads": {
-        "name": "Manutenção – Pano lavável"
+        "name": "Manutenção – Mopas DualClean"
       },
       "prime_part_cliff_sensors": {
         "name": "Manutenção – Sensores de precipício"
       },
       "prime_part_pad_wash_cleaning": {
-        "name": "Manutenção – Lavagem, limpeza necessária"
+        "name": "Manutenção – Sistema de lavagem da base"
       },
       "prime_part_pad_wash_replacement": {
-        "name": "Manutenção – Lavagem, substituição necessária"
+        "name": "Manutenção – Mopa lavável"
       },
       "prime_cleaning_mode": {
         "name": "Modo de limpeza",
