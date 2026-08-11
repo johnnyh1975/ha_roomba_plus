@@ -1006,3 +1006,70 @@ class TestTheFirstSyncRunsWhenItCanSucceed:
 
         assert "except Exception" in body
         assert "hass.async_create_task" in source[start:start + 1600]
+
+
+class TestTheHistoryIsParsedBeforeItIsConverted:
+    """46 missions on the endpoint, 0 imported (@utkjmitch, Y351020).
+
+    `get_mission_history()` returns the **raw** response by design — its
+    own docstring calls conversion "a separate, optional step". Nothing
+    took that step, so this iterated plain dicts and asked them for
+    attributes: `getattr(dict, "mission_id", None)` is None on every
+    entry, so every entry converted to None and every one was dropped.
+
+    **Silently, because dropping id-less entries is the correct handling
+    of a malformed record.** The data was not malformed; it was
+    unparsed.
+
+    The third life of this call site: a wrong `days` argument, then a
+    missing `blid`, now a missing parse. Each fix moved the failure one
+    layer deeper — and no test covered the path, which is how.
+    """
+
+    def test_the_parser_is_called_on_the_response(self):
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync)
+
+        assert "parse_mission_history(" in source
+
+    def test_raw_dicts_convert_to_nothing(self):
+        """The failure mode itself, pinned: this is what the sync saw
+        for three releases."""
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
+        )
+
+        assert prime_entry_to_record({"missionId": "M1", "nMssn": 214}) is None
+
+    def test_a_parsed_entry_converts(self):
+        from roombapy_prime.models.mission_history import MissionHistoryEntry
+
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
+        )
+
+        entry = MissionHistoryEntry.from_json({
+            "missionId": "M1", "nMssn": 214, "durationM": 40, "sqft": 300,
+            # A record without a time cannot be placed in the store, so
+            # the converter rejects it -- correctly, and separately from
+            # the parse failure this class is about.
+            "timestamp": 1786000000, "startTime": 1786000000,
+        })
+
+        assert prime_entry_to_record(entry) is not None
+
+    def test_the_tracker_blind_spot_is_documented(self):
+        """`record_success` fires after the fetch, which did succeed. The
+        loss happens past the exception boundary, in data nothing
+        watches — so `never_succeeded` stayed empty while 46 missions
+        evaporated."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync)
+
+        assert "past the exception" in source

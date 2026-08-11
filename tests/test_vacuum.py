@@ -2320,3 +2320,55 @@ class TestACombosRoomCleaningIsNotTakenAway:
         source = inspect.getsource(vacuum.IRobotVacuum.supported_features.fget)
         assert "not is_braava(" in source
         assert "not is_mop(" not in source
+
+
+class TestOnlyARealBraavaGetsTheBraavaClass:
+    """`BraavaJet.supported_features` deliberately excludes CLEAN_AREA —
+    a Braava has no regions to clean, and that is right.
+
+    **The class was being chosen by `is_mop()`**, which is true for
+    anything with a pad, so every Combo was built as a Braava and
+    inherited an exclusion meant for a different robot.
+
+    The same `is_mop`/`is_braava` substitution was corrected inside the
+    base class weeks ago for @connormxy. It was the right condition in a
+    place his robot never reached: the class was already wrong.
+
+    His a30 diagnostics said so and it was misread — `withheld_features`
+    came back **empty**, meaning the base class considered the feature
+    offered. It did. Nothing asked it.
+    """
+
+    def _selection(self):
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        return inspect.getsource(vacuum.async_setup_entry)
+
+    def test_the_class_is_chosen_by_being_a_braava(self):
+        source = self._selection()
+
+        assert "if is_braava(state):" in source
+        assert "if is_mop(state):" not in source
+
+    def test_the_braava_exclusion_itself_is_left_alone(self):
+        """It is correct for the robot it was written for. The bug was
+        which robots reached it, not what it does."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import BraavaJet
+
+        doc = inspect.getdoc(BraavaJet.supported_features)
+
+        assert "never CLEAN_AREA" in doc
+
+    def test_a_combo_is_not_a_braava(self):
+        """c755020 starts with "c". The whole substitution turns on
+        that one letter."""
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        combo = {"sku": "c755020", "detectedPad": "reusableDry"}
+
+        assert not is_braava(combo)
+        assert is_mop(combo)

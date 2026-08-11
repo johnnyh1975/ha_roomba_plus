@@ -338,29 +338,99 @@ class TestIsMop:
         assert is_mop(STATE_EMPTY) is False
 
 
+class TestVendorTextTakesPrecedence:
+    """Of 126 labels written here, exactly two matched iRobot's.
+
+    Ours said "Left wheel off floor"; iRobot says "@val moved or on an
+    uneven surface". The first names a sensor reading, the second
+    describes what happened -- and it is what the user sees in the app
+    beside ours.
+    """
+
+    def test_a_code_the_vendor_documents_uses_their_wording(self):
+        from custom_components.roomba_plus.const import (
+            ERROR_CATALOGUE,
+            get_localized_error_entry,
+        )
+
+        entry = get_localized_error_entry(1, "en")
+
+        assert entry["label"] != ERROR_CATALOGUE[1]["label"]
+        assert "uneven surface" in entry["label"]
+
+    def test_their_explanation_replaces_ours(self):
+        from custom_components.roomba_plus.const import get_localized_error_entry
+
+        entry = get_localized_error_entry(46, "en")
+
+        assert "charge" in entry["description"].lower()
+
+    def test_the_placeholder_is_left_alone(self):
+        """`@val` is the robot's name in iRobot's own strings. A caller
+        that knows it substitutes; one that does not gets a sentence with
+        a placeholder rather than a mangled one."""
+        from custom_components.roomba_plus.const import get_localized_error_entry
+
+        assert "@val" in get_localized_error_entry(1, "en")["label"]
+
+    def test_a_code_only_we_know_still_answers(self):
+        """Ours covers 75 codes iRobot does not document. The vendor
+        text wins where both have an entry; ours answers where the
+        vendor is silent."""
+        from custom_components.roomba_plus.const import (
+            ERROR_CATALOGUE,
+            get_localized_error_entry,
+        )
+
+        ours_only = next(
+            c for c in ERROR_CATALOGUE
+            if __import__(
+                "custom_components.roomba_plus.vendor_errors",
+                fromlist=["vendor_error"],
+            ).vendor_error(c) is None and c != 0
+        )
+        entry = get_localized_error_entry(ours_only, "en")
+
+        assert entry["label"] == ERROR_CATALOGUE[ours_only]["label"]
+
+    def test_our_action_field_survives(self):
+        """iRobot has no equivalent, so replacing their two fields must
+        not drop our third."""
+        from custom_components.roomba_plus.const import get_localized_error_entry
+
+        assert "action" in get_localized_error_entry(1, "en")
+
+
+#: A code iRobot's own catalogue has no text for, so these tests keep
+#: exercising OUR translation chain rather than the vendor override that
+#: now sits in front of it.
+_OURS_ONLY = 3
+_DE_LABEL = "Rechtes Rad hebt ab"
+
+
 class TestGetLocalizedErrorEntry:
     """v3.4.1 — get_localized_error_entry() and the ERROR_CATALOGUE_TRANSLATIONS
     parallel structure in error_translations.py."""
 
     def test_none_language_returns_english_base(self):
-        entry = get_localized_error_entry(1, None)
-        assert entry == ERROR_CATALOGUE[1]
+        entry = get_localized_error_entry(_OURS_ONLY, None)
+        assert entry == ERROR_CATALOGUE[_OURS_ONLY]
 
     def test_en_language_returns_english_base(self):
-        entry = get_localized_error_entry(1, "en")
-        assert entry == ERROR_CATALOGUE[1]
+        entry = get_localized_error_entry(_OURS_ONLY, "en")
+        assert entry == ERROR_CATALOGUE[_OURS_ONLY]
 
     def test_de_returns_translated_text_not_english(self):
-        entry = get_localized_error_entry(1, "de")
-        assert entry["label"] != ERROR_CATALOGUE[1]["label"]
-        assert entry["label"] == "Linkes Rad hebt ab"
+        entry = get_localized_error_entry(_OURS_ONLY, "de")
+        assert entry["label"] != ERROR_CATALOGUE[_OURS_ONLY]["label"]
+        assert entry["label"] == _DE_LABEL
 
     def test_unsupported_language_falls_back_to_english(self):
         """A language never covered by ERROR_CATALOGUE_TRANSLATIONS (e.g.
         Japanese) must silently degrade to English, not raise or return
         blanks."""
-        entry = get_localized_error_entry(1, "ja")
-        assert entry == ERROR_CATALOGUE[1]
+        entry = get_localized_error_entry(_OURS_ONLY, "ja")
+        assert entry == ERROR_CATALOGUE[_OURS_ONLY]
 
     def test_unknown_error_code_returns_empty_dict_like_base(self):
         assert get_localized_error_entry(99999, None) == {}
@@ -371,15 +441,15 @@ class TestGetLocalizedErrorEntry:
         description/action missing) must never produce a blank string for
         the missing fields — each field falls back to English independently."""
         import custom_components.roomba_plus.const as const_module
-        partial = {"de": {1: {"label": "Nur Label übersetzt"}}}
+        partial = {"de": {_OURS_ONLY: {"label": "Nur Label übersetzt"}}}
         monkeypatch.setattr(
             "custom_components.roomba_plus.error_translations.ERROR_CATALOGUE_TRANSLATIONS",
             partial,
         )
-        entry = get_localized_error_entry(1, "de")
+        entry = get_localized_error_entry(_OURS_ONLY, "de")
         assert entry["label"] == "Nur Label übersetzt"
-        assert entry["description"] == ERROR_CATALOGUE[1]["description"]
-        assert entry["action"] == ERROR_CATALOGUE[1]["action"]
+        assert entry["description"] == ERROR_CATALOGUE[_OURS_ONLY]["description"]
+        assert entry["action"] == ERROR_CATALOGUE[_OURS_ONLY]["action"]
 
     def test_all_six_languages_present(self):
         assert set(ERROR_CATALOGUE_TRANSLATIONS.keys()) == {
@@ -546,3 +616,63 @@ class TestGetRobotProfile:
         debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
         assert not any("known iRobot product family" in r.message for r in info_records)
         assert any("unrecognised prefix" in r.message for r in debug_records)
+
+
+class TestThePlaceholdersAreRepairedOnTheWayOut:
+    """iRobot's own strings use more than one placeholder form, and two
+    of them are broken:
+
+        `@val`          667 times -- the normal one
+        `%robotName`    once, in English code 251
+        `@valUpewnij`   the placeholder run together with the next word,
+                        in Spanish and Polish -- a lost space
+
+    A user seeing `%robotName` or `@valUpewnij` reads a bug. It is
+    iRobot's, but it is ours to display.
+    """
+
+    def test_the_odd_english_placeholder_is_unified(self):
+        from custom_components.roomba_plus.vendor_errors import vendor_error
+
+        content = vendor_error(251, "en")["content"]
+
+        assert "%robotName" not in content
+        assert content.startswith("@val")
+
+    def test_no_locale_ships_a_glued_placeholder(self):
+        """One token to substitute, not five variants of it."""
+        import re
+
+        from custom_components.roomba_plus.vendor_errors import (
+            VENDOR_ERROR_TEXTS,
+            vendor_error,
+        )
+
+        glued = []
+        for code in VENDOR_ERROR_TEXTS:
+            for locale in ("en", "de", "es", "fr", "it", "nl", "pl", "pt"):
+                entry = vendor_error(code, locale)
+                if entry is None:
+                    continue
+                # CHECKED SEPARATELY, not concatenated. A title ending
+                # in `@val` beside a content starting with a capital
+                # letter reads as glued when the two are joined -- which
+                # is a seam in the test, not a fault in the data. The
+                # first version of this made exactly that mistake.
+                for text in (entry["title"], entry["content"]):
+                    glued += re.findall(r"@val\w+", text)
+
+        assert not glued, f"placeholder run into the next word: {set(glued)}"
+
+    def test_the_stored_catalogue_is_left_faithful(self):
+        """The repair happens on the way out, so the data stays a
+        faithful copy of what iRobot ships -- and regenerating it does
+        not have to reproduce our fixes."""
+        from custom_components.roomba_plus.vendor_errors import VENDOR_ERROR_TEXTS
+
+        assert "%robotName" in VENDOR_ERROR_TEXTS[251]["en"]["content"]
+
+    def test_an_ordinary_message_is_untouched(self):
+        from custom_components.roomba_plus.vendor_errors import vendor_error
+
+        assert vendor_error(46, "de")["title"] == "Akkustand zu niedrig für die Reinigung"

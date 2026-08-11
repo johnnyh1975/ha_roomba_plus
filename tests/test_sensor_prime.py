@@ -1195,3 +1195,183 @@ class TestEveryCountTypeTheAppKnows:
         """A wrong unit on a number is worse than none: it invites
         arithmetic that does not hold."""
         assert self._units().get("furlongs") is None
+
+
+class TestThePhaseOptionsMatchTheVendorEnum:
+    """A phase outside `options` makes Home Assistant reject the value
+    and the entity goes unavailable. A missing one is not a cosmetic
+    gap: a robot returning to charge mid-mission (`hmUsrChrg`) would
+    have taken the sensor down.
+
+    The first version of this list was assembled from field captures. It
+    guessed at two values that are not in the vendor enum, and missed
+    five that are.
+    """
+
+    #: `Phase`, app 3.0.0, in the JSON casing the shadow uses.
+    VENDOR_PHASES = {
+        "stop", "charge", "run", "stuck", "hmPostMsn", "hmMidMsn",
+        "hmUsrDock", "hmUsrChrg", "chargingError", "mapUpd", "evac",
+        "refill", "padWash", "padDry",
+    }
+
+    def _options(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        entity = object.__new__(PrimePhaseSensor)
+        entity._config_entry = MagicMock()
+        return set(PrimePhaseSensor.options.fget(entity))
+
+    def test_every_vendor_phase_is_offered(self):
+        missing = sorted(self.VENDOR_PHASES - self._options())
+
+        assert not missing, (
+            "these phases would make the entity unavailable rather than "
+            f"showing a value: {missing}"
+        )
+
+    def test_hm_usr_chrg_in_particular(self):
+        """Returning to charge mid-mission — the one most likely to be
+        hit, and the one a captures-only list would miss because it
+        happens on long cleans."""
+        assert "hmUsrChrg" in self._options()
+
+    def test_the_older_values_are_kept(self):
+        """They cost nothing if never sent, and dropping them on the
+        strength of one app version would trade a confirmed list for a
+        complete one — Classic robots reach this code too."""
+        assert {"pause", "new"} <= self._options()
+
+
+class TestUnfinishedRoomsAreVisible:
+    """@chairstacker reported a mission that failed on a blocked door
+    and **left no trace anywhere**: the robot came back, the history
+    showed a completed entry, and nothing said a room had been skipped.
+
+    `mission_last_unfinished` carried the answer the whole time, and it
+    is an object rather than a flag — so this says "room 11, mission 61"
+    rather than "something was unfinished". With the mission number an
+    automation can tell a room still waiting from one picked up on the
+    next pass.
+    """
+
+    def _attrs(self, scores, names=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeMissionEventSensor,
+        )
+
+        entity = object.__new__(PrimeMissionEventSensor)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_clean_scores=scores, prime_room_names=names or {}
+        )
+        entity._config_entry = entry
+        return entity._unfinished_rooms()
+
+    def _scores(self, regions):
+        return {"regions": regions}
+
+    def test_a_skipped_room_is_named_with_its_mission(self):
+        attrs = self._attrs(
+            self._scores([{
+                "region_id": "11",
+                "mission_last_unfinished": {"nMssn": 61, "missionId": "M1"},
+            }]),
+            names={"11": "Kitchen"},
+        )
+
+        assert attrs == {"Kitchen": 61}
+
+    def test_an_unnamed_room_falls_back_to_its_id(self):
+        """Ugly and honest — a room id somebody can match against the
+        map beats a room that does not appear."""
+        attrs = self._attrs(self._scores([{
+            "region_id": "11", "mission_last_unfinished": {"nMssn": 61},
+        }]))
+
+        assert attrs == {"11": 61}
+
+    def test_a_completed_run_reports_nothing(self):
+        assert self._attrs(self._scores([{"region_id": "11"}])) == {}
+
+    def test_no_scores_yet_is_not_an_error(self):
+        assert self._attrs(None) == {}
+
+    def test_rubbish_does_not_take_the_sensor_down(self):
+        """An attribute that cannot be built is left out; the sensor's
+        own state is unaffected."""
+        assert self._attrs("nonsense") == {}
+
+
+class TestAFrozenShadowIsNotReportedAsCleaning:
+    """@utkjmitch's Y351020 errored mid-mission on a Saturday and the
+    shadow froze at `{phase: "run", error: 48}` for **61 hours**. The
+    robot kept updating `batPct` — 75 up to 96, so it was alive and
+    talking — and never wrote a terminal phase.
+
+    Two daily schedules were silently skipped, the vacuum showed
+    "cleaning" for two and a half days, and **every cloud command was
+    swallowed**: stop, start, dock and find, each broker-confirmed, none
+    with any effect. iRobot's own app could not end its own phantom
+    mission. Only a power cycle cleared it.
+
+    Nothing here can unfreeze it. This stops the sensor repeating the
+    lie, which is what automations are built on — using the test he
+    proposed: **charging and running are mutually exclusive, and the
+    robot supplies both numbers.**
+    """
+
+    def _sensor(self, levels):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        entity = object.__new__(PrimePhaseSensor)
+        entity._config_entry = MagicMock()
+        readings = []
+        for level in levels:
+            state = SimpleNamespace(
+                bat_pct=level,
+                clean_mission_status=SimpleNamespace(phase="run"),
+            )
+            with patch.object(
+                type(entity), "_current_state",
+                new=PropertyMock(return_value=state),
+            ):
+                readings.append(entity.native_value)
+        return readings
+
+    def test_a_rising_battery_during_run_reads_stale(self):
+        """His exact case: 75 climbing while the document says run."""
+        assert self._sensor([75, 80])[-1] == "stale"
+
+    def test_one_reading_is_never_enough(self):
+        """A single sample cannot show a direction, and calling a robot
+        stale on its first update would be worse than the freeze."""
+        assert self._sensor([75])[0] == "run"
+
+    def test_a_falling_battery_is_a_real_mission(self):
+        """Which is what cleaning looks like."""
+        assert self._sensor([90, 85, 80])[-1] == "run"
+
+    def test_a_steady_battery_is_not_stale(self):
+        """Conservative on purpose: it takes a real increase."""
+        assert self._sensor([80, 80])[-1] == "run"
+
+    def test_stale_is_a_declared_option(self):
+        """An ENUM value outside `options` takes the entity down, which
+        would replace one silent failure with another."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        entity = object.__new__(PrimePhaseSensor)
+        entity._config_entry = MagicMock()
+
+        assert "stale" in PrimePhaseSensor.options.fget(entity)

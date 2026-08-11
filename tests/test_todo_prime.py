@@ -92,9 +92,20 @@ class TestTheDescriptionCarriesWhatIsLeft:
     def _description(self, **kwargs):
         return _entity({"212": _part(**kwargs)}).todo_items[0].description
 
-    def test_the_unit_comes_from_the_count_type(self):
+    def test_the_unit_uses_irobots_own_wording(self):
+        """`evacsUnit` in the app reads "Dust Collection Left", not
+        "evacuations" -- and the app is what the user has open beside
+        this list. Two different words for one measurement read as two
+        different measurements."""
         assert self._description(count_type="evacs", count_remaining=7) == (
-            "7 evacuations remaining"
+            "7 dust collections remaining"
+        )
+
+    def test_missions_are_tasks(self):
+        """`missionsUnit` reads "Tasks Left". The enum name is
+        `missions`; the user-facing word is not."""
+        assert "tasks" in self._description(
+            count_type="missions", count_remaining=4
         )
 
     def test_minutes_are_presented_as_hours(self):
@@ -366,3 +377,192 @@ class TestTheOptionAppliesToBothGenerations:
         source = inspect.getsource(_optional_platforms)
 
         assert source.count("CONF_ENABLE_MAINTENANCE_LIST") == 1
+
+
+class TestPartNamesUseIRobotsOwnWords:
+    """The part names in app 3.0.0 live in its locale files, in 25
+    languages. Ours were written here.
+
+    APK research 9 concluded the names had to be invented because the
+    catalogue endpoint did not carry them. That was right for 2.2.4 —
+    and 3.0.0 moved them into the app, so the real names are now
+    readable.
+
+    A user comparing the two screens should see the same words.
+    """
+
+    VENDOR = {
+        "en": {
+            "prime_part_filter": "High-Efficiency Filter",
+            "prime_part_dirt_bag": "Dust Bag",
+            "prime_part_multi_surface_brush": "Main Brush(es)",
+        },
+        "de": {
+            "prime_part_filter": "Hocheffizienz-Filter",
+            "prime_part_dirt_bag": "Staubbeutel",
+            "prime_part_multi_surface_brush": "Hauptbürste(n)",
+        },
+    }
+
+    def _sensor_names(self, locale):
+        import json
+        import pathlib
+
+        data = json.loads(
+            (pathlib.Path("custom_components/roomba_plus/translations")
+             / f"{locale}.json").read_text()
+        )
+        return data["entity"]["sensor"]
+
+    def test_english_carries_the_app_wording(self):
+        """PREFIX KEPT, WORD TAKEN. Classic names every consumable
+        "Maintenance – <part>", and a second vocabulary for the same
+        concept in the same entity list reads as two integrations.
+
+        So the grouping stays ours and the part name becomes iRobot's:
+        "Maintenance – High-Efficiency Filter"."""
+        names = self._sensor_names("en")
+
+        for key, expected in self.VENDOR["en"].items():
+            assert names[key]["name"].endswith(expected), key
+            assert names[key]["name"].startswith("Maintenance"), key
+
+    def test_german_carries_the_app_wording(self):
+        names = self._sensor_names("de")
+
+        for key, expected in self.VENDOR["de"].items():
+            assert names[key]["name"].endswith(expected), key
+
+    def test_every_locale_names_every_mapped_part(self):
+        """A part named in one language and not another is worse than
+        one named in none: the gap only shows for users of that
+        language."""
+        for locale in ("en", "de", "es", "fr", "it", "nl", "pl", "pt"):
+            names = self._sensor_names(locale)
+            for key in self.VENDOR["en"]:
+                assert names.get(key, {}).get("name"), f"{locale}/{key}"
+
+    def test_parts_the_vendor_does_not_name_keep_ours(self):
+        """`edge_brush` and `cliff_sensors` have no counterpart in the
+        app's list. Leaving them is right; inventing a mapping to a
+        vendor name that means something else would be worse than our
+        own wording."""
+        names = self._sensor_names("en")
+
+        assert names["prime_part_edge_brush"]["name"]
+        assert names["prime_part_cliff_sensors"]["name"]
+
+
+class TestPartNamesAreReadableInTheList:
+    """@utkjmitch's maintenance list read:
+
+        Replace prime_part_dirt_bag   completed  60 evacuations remaining
+        Replace 68                    needs_action  0 hours remaining
+
+    **A translation key is not a name.** `_KNOWN_PARTS` maps ids to
+    translation keys, and Home Assistant does not translate to-do item
+    summaries — they are plain text. The readable name was already
+    loaded for the sensors; it just was not being looked up.
+
+    On this list the wording was the bug and the judgement was sound:
+    the two due items agreed with the iRobot app.
+    """
+
+    def _name(self, part_id, cached=None):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.todo_prime import _readable_part_name
+
+        hass = MagicMock()
+        hass.config.language = "en"
+        with patch(
+            "homeassistant.helpers.translation.async_get_cached_translations",
+            return_value=cached or {},
+        ):
+            return _readable_part_name(hass, part_id)
+
+    def test_a_translated_name_is_used(self):
+        name = self._name("72", {
+            "component.roomba_plus.entity.sensor.prime_part_filter.name":
+                "Maintenance – High-Efficiency Filter",
+        })
+
+        assert name == "Maintenance – High-Efficiency Filter"
+
+    def test_an_untranslated_key_still_reads_as_words(self):
+        """Never as a raw key. "Dirt Bag" is wrong in style, not in
+        meaning; `prime_part_dirt_bag` is just a bug on screen."""
+        name = self._name("147")
+
+        assert "prime_part" not in name
+        assert name == "Dirt Bag"
+
+    def test_an_unknown_id_falls_back_to_its_number(self):
+        """Ugly and honest: a number somebody can quote beats a name we
+        invented. @utkjmitch's 68, 69 and 149 are not in our table, and
+        guessing at them from one household is how wrong mappings get
+        made."""
+        assert self._name("68") == "68"
+
+    def test_a_broken_translation_lookup_does_not_break_the_list(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.todo_prime import _readable_part_name
+
+        hass = MagicMock()
+        hass.config.language = "en"
+        with patch(
+            "homeassistant.helpers.translation.async_get_cached_translations",
+            side_effect=RuntimeError("boom"),
+        ):
+            assert _readable_part_name(hass, "147") == "Dirt Bag"
+
+
+class TestPartsTheRobotCannotHaveAreHidden:
+    """@utkjmitch's **dockless** Combo 104 was told it had "60
+    evacuations remaining" for a dust bag it does not have, in a station
+    it does not own. The cloud reports the part regardless of the
+    hardware.
+
+    **Explicit denial only.** `dock.cap.evac == 0` means "this dock does
+    not evacuate"; a missing block means the robot said nothing, and a
+    maintenance item wrongly hidden is worse than one wrongly shown.
+    """
+
+    def _absent(self, dock_caps):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.todo_prime import (
+            _parts_the_robot_cannot_have,
+        )
+
+        entry = MagicMock()
+        shadows = (
+            {"ro-currentstate": {"dock": {"cap": dock_caps}}}
+            if dock_caps is not None else None
+        )
+        entry.runtime_data = SimpleNamespace(
+            prime_status_coordinator=SimpleNamespace(data=shadows)
+        )
+        return _parts_the_robot_cannot_have(entry)
+
+    def test_a_dockless_robot_loses_its_dust_bag(self):
+        assert "147" in self._absent({"evac": 0, "pw": 0})
+
+    def test_a_docked_robot_keeps_it(self):
+        assert "147" not in self._absent({"evac": 1})
+
+    def test_silence_hides_nothing(self):
+        """A robot that did not answer is not a robot without the part."""
+        assert self._absent(None) == set()
+        assert self._absent({}) == set()
+
+    def test_a_missing_flag_hides_nothing(self):
+        """Only a reported zero counts. An absent key is not a denial."""
+        assert self._absent({"pw": 1}) == set()
+
+    def test_pad_wash_parts_follow_the_wash_capability(self):
+        absent = self._absent({"pw": 0})
+
+        assert {"202", "212"} <= absent

@@ -1254,3 +1254,68 @@ class TestAnEditThatSaysNothingAboutRecurrenceKeepsIt:
 
         assert 'if event.get("rrule"):' in source
         assert "_existing_frequency(uid)" in source
+
+
+class TestCalendarSummariesUseEveryNameSource:
+    """@utkjmitch's four-map account labels its rooms correctly on the
+    rooms map — his own `room1`–`room4` — while the **same rooms** appear
+    as `Zone 10`–`Zone 14` in calendar summaries.
+
+    Two name sources: the map bundle knows names the schedule
+    coordinator does not, and only the coordinator was being read here.
+
+    The bundle fills gaps **behind** the coordinator rather than over it:
+    the coordinator reads the schedule, which is where a name a user set
+    for scheduling would live.
+    """
+
+    def _names(self, coordinator_names, bundle_names):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        entity = object.__new__(PrimeScheduleCalendar)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_room_names=bundle_names)
+        entity._config_entry = entry
+        coordinator = SimpleNamespace(room_names=coordinator_names)
+        return PrimeScheduleCalendar._fetch_room_names.__wrapped__(
+            entity, coordinator
+        ) if hasattr(
+            PrimeScheduleCalendar._fetch_room_names, "__wrapped__"
+        ) else None
+
+    def test_the_bundle_names_are_read(self):
+        """Pinned at the source level: the calendar consults
+        `prime_room_names`, which the room map fills."""
+        import inspect
+
+        from custom_components.roomba_plus import calendar as cal
+
+        source = inspect.getsource(cal)
+
+        assert 'prime_room_names' in source
+        assert "fills the gaps rather than winning them" in source
+
+    def test_the_room_map_stores_what_it_parsed(self):
+        """One fetch, two consumers — rather than the calendar making its
+        own call for names the map already has."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+
+        source = inspect.getsource(prime_room_map)
+
+        assert "runtime.prime_room_names = existing" in source
+
+    def test_the_runtime_field_exists(self):
+        """The last three times a field like this was used it did not
+        exist, and the attribute read as None for ever."""
+        import dataclasses
+
+        from custom_components.roomba_plus.models import RoombaData
+
+        names = {f.name for f in dataclasses.fields(RoombaData)}
+
+        assert "prime_room_names" in names

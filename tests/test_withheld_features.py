@@ -110,3 +110,127 @@ class TestItIsInTheDiagnostics:
         from custom_components.roomba_plus import diagnostics
 
         assert '"withheld_features"' in inspect.getsource(diagnostics)
+
+
+class TestVendorCapabilitiesAreReportedNotEnforced:
+    """`cwia` says whether iRobot's own "Clean While Away" exists on this
+    robot. It does **not** say whether ours works — ours disables
+    schedules through `enabled`, which every Prime robot can do.
+
+    **Using the flag as a gate would hide a working feature.**
+    `ddAutomation` is the same shape: it says iRobot offers Dirt
+    Detective, not that `clean_score` is missing.
+
+    What it is good for is a report: somebody comparing our presence
+    scheduling against the app's can see in one line whether the app has
+    one at all.
+    """
+
+    def _caps(self, shadows):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _vendor_capabilities
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_status_coordinator=SimpleNamespace(data=shadows)
+        )
+        return _vendor_capabilities(entry)
+
+    def test_all_three_families_are_reported(self):
+        """App 3.0.0 gates 35 features and they sit in three places:
+        `digiCap.*` for software, `cap.*` for the robot, `dock.cap.*`
+        for the dock. Showing one and hiding two invites the wrong
+        conclusion about the two."""
+        caps = self._caps({"shadow": {
+            "digiCap": {"cwia": True, "ddAutomation": False},
+            "cap": {"scrub": 1, "multiPass": 2},
+            "dock": {"cap": {"evac": 1, "pwo": 0}},
+        }})
+
+        assert caps["digiCap.cwia"] is True
+        assert caps["digiCap.ddAutomation"] is False
+        assert caps["cap.scrub"] == 1
+        assert caps["dock.cap.evac"] == 1
+
+    def test_the_prefix_keeps_the_families_apart(self):
+        """`cap.matter` and `digiCap.matter` are different questions --
+        hardware support and software support -- and a flat key would
+        lose one."""
+        caps = self._caps({"shadow": {
+            "cap": {"matter": 1}, "digiCap": {"matter": False},
+        }})
+
+        assert caps["cap.matter"] == 1
+        assert caps["digiCap.matter"] is False
+
+    def test_a_robot_without_the_block_reports_nothing(self):
+        """An absent block is not a robot that lacks the features."""
+        assert self._caps({"shadow": {}}) == {}
+        assert self._caps(None) == {}
+
+    def test_nothing_gates_on_them(self):
+        """The whole point. If a future change starts refusing a feature
+        because a flag is false, this test should be the thing that
+        objects."""
+        import inspect
+
+        from custom_components.roomba_plus import presence_manager
+        from custom_components.roomba_plus import dirt_threshold_manager
+
+        for module in (presence_manager, dirt_threshold_manager):
+            source = inspect.getsource(module)
+            assert "cwia" not in source, module.__name__
+            assert "ddAutomation" not in source, module.__name__
+
+
+class TestTheGatesLiveInThreeShadows:
+    """`capabilityFromKey` gates 35 features and they are not all in one
+    place: 28 read the unnamed THING shadow (`cap.*`, `digiCap.*`), five
+    read `ro-currentstate` (`dock.cap.*`), and two read `rw-settings`
+    (`detergent`, `suctionLevel`).
+
+    The last two are plain top-level keys rather than a block, which is
+    why a scan for three nested families missed them.
+    """
+
+    def _caps(self, shadows):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _vendor_capabilities
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_status_coordinator=SimpleNamespace(data=shadows)
+        )
+        return _vendor_capabilities(entry)
+
+    def test_the_dock_gates_are_found_in_current_state(self):
+        caps = self._caps({
+            "ro-currentstate": {"dock": {"cap": {"evac": 1, "pwo": 0, "fr": 1}}},
+        })
+
+        assert caps["dock.cap.evac"] == 1
+        assert caps["dock.cap.pwo"] == 0
+
+    def test_the_settings_gates_are_found_flat(self):
+        """`detergent` and `suctionLevel` are top-level in `rw-settings`,
+        not inside a `cap` block."""
+        caps = self._caps({"rw-settings": {"detergent": 1, "suctionLevel": 3}})
+
+        assert caps["detergent"] == 1
+        assert caps["suctionLevel"] == 3
+
+    def test_all_three_shadows_contribute_at_once(self):
+        caps = self._caps({
+            "shadow": {"digiCap": {"cwia": True}, "cap": {"scrub": 1}},
+            "ro-currentstate": {"dock": {"cap": {"pw": 1}}},
+            "rw-settings": {"detergent": 0},
+        })
+
+        assert {"digiCap.cwia", "cap.scrub", "dock.cap.pw", "detergent"} <= set(caps)
+
+    def test_a_robot_reporting_none_of_them_gets_an_empty_block(self):
+        assert self._caps({"rw-settings": {"name": "Robot"}}) == {}

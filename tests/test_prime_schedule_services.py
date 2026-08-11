@@ -396,3 +396,44 @@ class TestFourSilentSignatureBugs:
             self._run_update(room_ids=[])
 
         resolve.assert_not_called()
+
+
+class TestAnEditKeepsTheWholeSeriesDays:
+    """Home Assistant hands us one occurrence. @DaRealGuGu edited the
+    Monday event of a Mon/Tue/Wed schedule and it became **Monday-only**
+    — the series collapsed to whichever day he had clicked.
+
+    Same principle as the frequency fix one layer up: an edit that says
+    nothing about recurrence must not change it, **and the day list IS
+    recurrence.**
+    """
+
+    def _days(self, existing, weekday=0, explicit=None):
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _days_for_update,
+        )
+
+        return _days_for_update(existing, weekday, explicit)
+
+    def test_the_series_keeps_all_its_days(self):
+        """His case: Mon/Tue/Wed edited from the Monday occurrence."""
+        assert self._days([0, 1, 2], weekday=0) == ["mon", "tue", "wed"]
+
+    def test_editing_a_wednesday_does_not_move_the_series(self):
+        assert self._days([0, 1, 2], weekday=2) == ["mon", "tue", "wed"]
+
+    def test_an_explicit_rule_wins(self):
+        """A user who actually changed the recurrence gets what they
+        asked for."""
+        assert self._days([0, 1, 2], weekday=0, explicit=[4, 5]) == ["fri", "sat"]
+
+    def test_a_schedule_with_no_days_falls_back_to_the_occurrence(self):
+        """What a brand-new entry looks like."""
+        assert self._days(None, weekday=3) == ["thu"]
+        assert self._days([], weekday=3) == ["thu"]
+
+    def test_an_unusable_day_does_not_lose_the_edit(self):
+        """Losing one day of a series is recoverable; losing the edit is
+        not."""
+        assert self._days([0, 99, 2], weekday=0) == ["mon", "wed"]
+        assert self._days([99], weekday=5) == ["sat"]
