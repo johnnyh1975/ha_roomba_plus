@@ -3564,7 +3564,20 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             if len(trail) >= 2:
                 draw.line(trail, fill=(120, 200, 255), width=2)
 
-        if self._floor_plan.dock is not None:
+        # SEEN BEATS REMEMBERED -- and `_dock_position()` was written to
+        # say so and never called.
+        #
+        # `dockPose` records where the dock stood when the map was
+        # BUILT. @utkjmitch's map drew it on a spot now occupied by a
+        # treadmill while the iRobot app showed it correctly, so the app
+        # reads something fresher.
+        #
+        # He reported that correction as unreachable in a frozen-shadow
+        # state, which is true -- and it was unreachable in every state,
+        # because nothing invoked it. Found by listing private helpers
+        # whose name appears exactly once in the component.
+        dock_xy = self._dock_position()
+        if dock_xy is not None:
             # THE SAME WHITE RING AS THE ROBOT, for the same reason.
             #
             # The dock reads clearly against the trail (a difference of
@@ -3583,8 +3596,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # 600-pixel render -- about five and six pixels on a typical
             # dashboard card. Indistinguishable by size, and a viewer
             # who spots one dot still cannot tell which it is.
-            dx, dy, _orientation = self._floor_plan.dock
-            px, py = to_px(dx, dy)
+            px, py = to_px(*dock_xy)
             draw.rectangle(
                 (px - 8, py - 8, px + 8, py + 8),
                 fill=(200, 200, 90), outline=(255, 255, 255), width=2,

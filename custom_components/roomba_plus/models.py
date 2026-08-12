@@ -140,6 +140,19 @@ class RoombaData:
     #: schedule coordinator does not. Filled whenever a floor plan is
     #: built, and read by the calendar to fill gaps in its own summaries.
     prime_room_names: dict[str, str] = field(default_factory=dict)
+    #: The HomeAssistant instance, for callers that only hold the config
+    #: entry.
+    #:
+    #: `prime_mission_sync._hass_of()` and `room_cleaning.py` have read
+    #: this field since they were written; **nothing ever assigned it.**
+    #: So every Prime-side store save resolved `hass=None`, the profile
+    #: store was never persisted, and mission records re-imported from
+    #: the cloud on every restart -- "first mission history sync
+    #: imported N missions" on every boot rather than only the first.
+    #:
+    #: Found by @utkjmitch, who traced it from `mission_progress`
+    #: reading `unknown` on a robot with 50 imported missions.
+    hass_ref: Any = None
     prime_coordinator: "PrimeCoordinator | None" = None
     prime_status_coordinator: "PrimeStatusCoordinator | None" = None
     #: Consumable parts (filter, brushes, pads, dirt bag). The only

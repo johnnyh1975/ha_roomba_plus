@@ -667,7 +667,65 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             for rid, name in stored.items():
                 if name and str(rid) not in names:
                     names[str(rid)] = name
+
+        # EVERY MAP, NOT JUST THE ONE BEING DRAWN.
+        #
+        # `prime_room_names` is filled when a floor plan is BUILT, and
+        # only the map image builds one -- for the map it is showing. On
+        # a four-map account (@utkjmitch) that names rooms on more than
+        # one map, a schedule referencing another map's rooms still got
+        # `Zone 13`, `Zone 14`.
+        #
+        # So the a31 fix healed exactly half: rooms on the displayed map
+        # got their names, rooms anywhere else did not. Asking the room
+        # cleaning backend covers the rest, and it already knows every
+        # map on the account.
+        # Filled behind both of the above, so a name the schedule or the
+        # displayed map already supplied always wins.
+        for rid, name in (await self._names_from_all_maps()).items():
+            names.setdefault(rid, name)
         return names
+
+    async def _names_from_all_maps(self) -> dict[str, str]:
+        """Room names from every map on the account.
+
+        Best-effort and quiet: a map that will not load leaves its rooms
+        as zone numbers, which is what they already were. Runs on the
+        same refresh as the rest of this cache, not per event.
+        """
+        from .prime_room_map import (  # noqa: PLC0415
+            async_build_prime_room_polygons,
+        )
+        from .room_cleaning import (  # noqa: PLC0415
+            async_get_room_cleaning_backend,
+        )
+
+        # The whole lookup is best-effort: a caller that cannot even
+        # resolve a backend gets zone numbers, which is what it had.
+        try:
+            backend = async_get_room_cleaning_backend(
+                self._config_entry, getattr(self, "hass", None)
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        if backend is None:
+            return {}
+        try:
+            map_ids = await backend._all_map_ids()  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            return {}
+        found: dict[str, str] = {}
+        for map_id in map_ids or []:
+            try:
+                _polys, names, _prefs = await async_build_prime_room_polygons(
+                    self._config_entry, map_id
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            for rid, name in (names or {}).items():
+                if name:
+                    found.setdefault(str(rid), name)
+        return found
 
     async def _fetch_occurrences(
         self, start: dt_stdlib.datetime, end: dt_stdlib.datetime,

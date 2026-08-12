@@ -263,8 +263,82 @@ def _raw_dirt_density(records: list[dict]) -> StateType:
     return round(_statistics.median(densities), 3)
 
 
+def _raw_dirt_density_trend(records: list[dict]) -> StateType:
+    """Dirt density trend: rising / stable / falling / unknown.
+
+    THE INPUT `_classify_dirt_cause` WAS WAITING FOR. That classifier
+    was written before this existed, so it could not be called at all --
+    it needs a direction and this module produced only a per-record
+    density.
+
+    Deliberately the same shape as `_raw_cleaning_speed_trend`: median
+    of the 5 most recent against the previous 10, a 10% threshold, and
+    the same gap filter. Those numbers were judged once for the speed
+    trend; inventing different ones here would mean two windows
+    disagreeing about the same history, and the pair is compared against
+    each other.
+
+    Records must be newest-first (cloud API order), as there.
+    """
+    filtered: list[float] = []
+    prev_ts: float | None = None
+    skip_remaining = 0
+
+    for r in records:
+        ts_raw = r.get("startTime") or r.get("timestamp")
+        ts = float(ts_raw) if ts_raw else None
+        if ts is not None and prev_ts is not None:
+            # The first cleans after a long absence are catching-up runs
+            # on an abnormally dirty floor -- exactly the false "rising"
+            # this classifier must not report as brush wear.
+            if (prev_ts - ts) / 86400 > 7:
+                skip_remaining = 3
+        if skip_remaining > 0:
+            skip_remaining -= 1
+            if ts is not None:
+                prev_ts = ts
+            continue
+        # Same formula as `_raw_dirt_density`, inline: a shared helper
+        # for five lines would be a third place to keep in step.
+        dirt = r.get("dirt")
+        sqft = r.get("sqft")
+        if dirt is not None and sqft and float(sqft) > 0:
+            filtered.append(float(dirt) / (float(sqft) * SQFT_TO_M2))
+        if ts is not None:
+            prev_ts = ts
+
+    if len(filtered) < 6:
+        return "unknown"
+    recent = _statistics.median(filtered[:5])
+    older = _statistics.median(filtered[5:min(15, len(filtered))])
+    if older == 0:
+        return "unknown"
+    delta = (recent - older) / older
+    if delta > 0.10:
+        return "rising"
+    if delta < -0.10:
+        return "falling"
+    return "stable"
+
+
 def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
     """Classify the most probable cause of rising dirt density.
+
+    **UNCALLED, AND IT CANNOT BE CALLED YET.** It needs a dirt TREND and
+    this module produces only a dirt DENSITY (`_raw_dirt_density`) --
+    one number per record, with nothing computing a direction over
+    time. The speed half exists (`_raw_cleaning_speed_trend`) and is
+    already surfaced as an attribute.
+
+    So this is half a feature rather than a disconnected one: the logic
+    was written before the input it needs. Building the missing trend is
+    a real change with its own judgement calls (window length, how many
+    records make a direction), not a wiring fix.
+
+    Kept because the classification itself is the hard part and is
+    sound: rising dirt with declining speed is debris the brush is not
+    picking up, and rising dirt with steady speed is a dirty floor.
+    That distinction is worth having when somebody builds the trend.
 
     F5b — 3-signal classification eliminating threshold-based guessing:
       brush_wear  — debris not captured, sensor re-fires (rising dirt + declining speed)
@@ -657,6 +731,26 @@ class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
             trend = _raw_cleaning_speed_trend(records)
             if trend is not None:
                 attrs["trend"] = trend
+
+            # WHY THE FLOOR IS GETTING DIRTIER, which one trend alone
+            # cannot say.
+            #
+            # Rising dirt with DECLINING speed is debris the brush is
+            # not picking up -- the sensor re-fires on the same mess and
+            # the robot slows down carrying it. Rising dirt with steady
+            # speed is a floor that is genuinely dirtier.
+            #
+            # `_classify_dirt_cause` has held that distinction since
+            # v3.2 and could never be called: it needs a dirt TREND and
+            # this module produced only a per-record density. Both halves
+            # exist now.
+            dirt_trend = _raw_dirt_density_trend(records)
+            if dirt_trend is not None:
+                attrs["dirt_trend"] = dirt_trend
+                if dirt_trend == "rising" and trend is not None:
+                    attrs["dirt_cause"] = _classify_dirt_cause(
+                        str(dirt_trend), str(trend)
+                    )
             # B1/B2-PRE — cache cleaning_speed_trend_value for F6a Repair and
             # RobotHealthSensor Signal 3.  Migrated from the now-deactivated
             # CloudRawSensor(key="cleaning_speed_trend") side-effect.

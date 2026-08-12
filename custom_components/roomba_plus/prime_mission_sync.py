@@ -103,6 +103,24 @@ def _as_iso(value: Any) -> str | None:
     return None
 
 
+def _first_timeline_error(entry: Any) -> Any:
+    """The first error code in a mission's timeline, or None.
+
+    First rather than last: the error that ended a mission is the one
+    worth recording, and a robot that recovers from one obstacle and
+    fails on another is rarer than one that stops at the first.
+
+    Best-effort -- a timeline this cannot read leaves the field as it
+    was, which is what it would have been anyway.
+    """
+    for event in getattr(entry, "timeline", None) or []:
+        error = getattr(event, "error", None)
+        code = getattr(error, "value", None) if error is not None else None
+        if isinstance(code, int):
+            return code
+    return None
+
+
 def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
     """One Prime history entry as a MissionStore record.
 
@@ -150,6 +168,18 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
         ("error_code", "error_code"),
     ):
         value = getattr(entry, source, None)
+        if target == "error_code" and value is None:
+            # THE PER-MISSION FIELD IS EMPTY AND THE TIMELINE IS NOT.
+            #
+            # @utkjmitch's 49-mission archive: `error_code` None on all
+            # 49 records, on a robot with 16 missions ending `stuck` --
+            # while the timelines carry 111 error events, **93 of them
+            # error 48**, the blocked-entrance code.
+            #
+            # So a mission that plainly failed reported no error at
+            # mission level. Taking the first timeline error gives the
+            # record the code the robot actually raised.
+            value = _first_timeline_error(entry)
         if value is not None:
             record[target] = value
 

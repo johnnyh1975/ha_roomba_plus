@@ -1239,14 +1239,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             return
         await backend.clean_segments(segment_ids)
 
-    def _get_two_pass(self) -> bool:
-        """Read twoPass preference from live robot state.
-
-        Mirrors what CleaningPassesSelect reads — no entity lookup needed.
-        Returns False when the preference is absent (Auto/One-pass modes).
-        """
-        return bool(self.vacuum_state.get("twoPass", False))
-
     # v3.5.0 — SEGMENT-DEBOUNCE (dixi83 field report): the number of
     # consecutive coordinator refreshes a segment mismatch must persist
     # before triggering HA's native "map vacuum segments to areas" remap
@@ -1303,6 +1295,23 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.async_create_segments_issue()
         else:
             self._segment_mismatch_streak = 0
+
+    def _get_two_pass(self) -> bool:
+        """Read twoPass preference from live robot state.
+
+        Mirrors what CleaningPassesSelect reads -- no entity lookup needed.
+        Returns False when the preference is absent (Auto/One-pass modes).
+
+        UNCALLED BY PRODUCTION CODE, and kept anyway. `select.py` reads
+        the same preference itself, so this is a second reader with no
+        consumer -- but it has its own tests, and deleting a tested
+        helper to satisfy a "nothing calls this" check would trade a
+        harmless duplicate for a lost intent.
+
+        If a caller ever needs the preference in `vacuum.py`, this is
+        it. If none appears, it costs four lines.
+        """
+        return bool(self.vacuum_state.get("twoPass", False))
 
     def _handle_prime_coordinator_update(self) -> None:
         """NEW (V4/Prime). Registered as prime_coordinator's listener in

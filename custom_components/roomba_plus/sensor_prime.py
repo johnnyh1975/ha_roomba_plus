@@ -30,6 +30,8 @@ matching where their Classic equivalents already live.
 """
 from __future__ import annotations
 
+import time
+
 from typing import Any, Final
 
 from homeassistant.components.sensor import (
@@ -45,6 +47,7 @@ from .const import (
     ERROR_CODE_LABELS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
+    get_localized_error_entry,
 )
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
@@ -1278,6 +1281,35 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
             attrs["severity"] = bucket
             attrs["allowed_modes"] = allowed_modes
             attrs["partially_operable"] = allowed_modes != 0
+
+        # THE VENDOR'S OWN TEXT, AS ATTRIBUTES.
+        #
+        # The state stays a raw code by this sensor's own argument
+        # above -- but that argument predates `vendor_errors.py`, whose
+        # catalogue was extracted from the **Prime** app's locale files.
+        # "No text of ours would be sourced" stopped being true the
+        # moment iRobot's arrived.
+        #
+        # For error 48 it reads "An obstacle blocked the entrance to a
+        # room", which on one field robot explained 93 timeline error
+        # events and every incomplete mission in its archive
+        # (@utkjmitch, who also wrote this patch).
+        #
+        # Attributes rather than state, so nothing built on the code
+        # breaks and the ENUM question never arises.
+        if status.error:
+            # Attributes are readable before the entity is added to
+            # hass -- the tests construct it bare -- so fall back to
+            # English rather than crash.
+            language = (
+                getattr(getattr(self, "hass", None), "config", None)
+                and self.hass.config.language
+            ) or "en"
+            entry = get_localized_error_entry(int(status.error), language)
+            if entry.get("label"):
+                attrs["error_title"] = entry["label"]
+            if entry.get("description"):
+                attrs["error_description"] = entry["description"]
         return attrs
 
 
@@ -1592,6 +1624,12 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_phase"
 
+    #: How long a `run` must have been running before a rising battery
+    #: may read as `stale`. Ten minutes is noise against the 61-hour
+    #: case this exists for, and far longer than any observed charge
+    #: tail.
+    _STALE_GRACE_SEC: Final = 600
+
     def _battery_rising(self) -> bool:
         """Whether the battery has climbed since the last reading.
 
@@ -1682,8 +1720,38 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         # each broker-confirmed, none with any effect. So `stale` is the
         # answer to "why did my automation's start do nothing", and the
         # answer is a power cycle rather than a bug report.
-        if text == "run" and self._battery_rising():
-            return "stale"
+        # BUT NOT IN THE FIRST MINUTES OF A RUN.
+        #
+        # A recharge-and-resume enters `run` while the battery reports
+        # are still climbing from the charge -- genuinely running AND
+        # genuinely rising, the one case where the mutual-exclusion test
+        # lies. Field-captured on this detector's first morning
+        # (@utkjmitch, Y351020): `charge` -> `run` at 37%, next reports
+        # 37 -> 40, and the sensor read `stale` twice before settling.
+        #
+        # The state this names is cured by a power cycle, so a false
+        # positive pages somebody for a healthy robot. The real freeze
+        # rises for HOURS -- waiting out the first ten minutes of a run
+        # costs detection nothing.
+        now = time.monotonic()
+        if text == "run" and getattr(self, "_last_phase", None) != "run":
+            self._run_since = now
+        self._last_phase = text
+        if text == "run":
+            # ASKED EVERY TIME, ACTED ON ONLY AFTER THE GRACE WINDOW.
+            #
+            # `_battery_rising()` keeps its own previous reading, so
+            # skipping it during the grace period would leave the
+            # history empty and the first post-grace reading would have
+            # nothing to compare against.
+            rising = self._battery_rising()
+            run_since = getattr(self, "_run_since", None)
+            grace_over = (
+                run_since is not None
+                and (now - run_since) >= self._STALE_GRACE_SEC
+            )
+            if rising and grace_over:
+                return "stale"
 
         # AN UNLISTED PHASE READS AS UNKNOWN, not as itself. Home
         # Assistant rejects an ENUM value outside `options`, and the

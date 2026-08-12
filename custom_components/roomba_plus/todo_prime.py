@@ -241,11 +241,20 @@ class PrimeMaintenanceTodo(IRobotEntity, TodoListEntity):
             # shown.
             if str(part_id) in absent:
                 continue
-            known = _KNOWN_PARTS.get(str(part_id))
-            # The part id when the name is unknown -- ugly and honest.
-            # Inventing "Part 202" would put a label on screen that
-            # matches nothing in the iRobot app.
-            name = known if isinstance(known, str) else str(part_id)
+            # A TRANSLATION KEY IS NOT A NAME, and this read one
+            # straight onto the screen.
+            #
+            # `_KNOWN_PARTS` maps ids to translation KEYS, and Home
+            # Assistant does not translate to-do summaries -- they are
+            # plain text. So the list read "Replace prime_part_dirt_bag"
+            # (@utkjmitch, twice, on a30 and again on a31 after a fix
+            # that was written but never wired to this line).
+            #
+            # The readable name is already loaded for the part sensors;
+            # it only had to be looked up. An unknown id still shows its
+            # number, which is ugly and honest: inventing "Part 202"
+            # would put a label on screen matching nothing in the app.
+            name = _readable_part_name(self.hass, str(part_id))
             summary, description = _describe(part, name)
             items.append(TodoItem(
                 uid=f"part_{part_id}",

@@ -151,6 +151,16 @@ class MissionStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current records to hass.storage."""
+        # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
+        # hold only a config entry resolve hass through
+        # `prime_mission_sync._hass_of()`, whose own docstring says a
+        # None return means "skip persistence, keep memory" -- and that
+        # every caller handles it. This one did not.
+        #
+        # Records stay in memory for the next attempt rather than
+        # crashing the sync that produced them.
+        if hass is None:
+            return
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({"records": self._records})
 

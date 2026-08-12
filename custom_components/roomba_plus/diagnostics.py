@@ -16,6 +16,10 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from .structural_failures import diagnostic_info
+from .const import (
+    CONF_PRIME_FAVORITE_BUTTONS,
+    DEFAULT_PRIME_FAVORITE_BUTTONS,
+)
 from .withheld_features import withheld_features
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
 from .models import ConnectionType, RoombaConfigEntry
@@ -411,7 +415,26 @@ def _prime_store_summary(data: Any) -> dict[str, Any]:
         # Needs at least five missions before it produces means at all,
         # so "has_stats: false" on a fresh install is correct rather than
         # a fault.
-        "has_stats": bool(getattr(store, "mission_count", 0) or 0),
+        # ANY LEARNED STATISTIC COUNTS, not just a mission counter.
+        #
+        # This read `bool(mission_count)`, and nothing on the Prime path
+        # increments `mission_count` -- so it reported `false` on a
+        # robot whose duration and area means were sitting right beside
+        # it, computed from 49 imported missions.
+        #
+        # It answered "has the Classic path run" while appearing to
+        # answer "are there stats", and cost @utkjmitch an hour of
+        # chasing the wrong absence.
+        "has_stats": any(
+            getattr(store, name, None)
+            for name in (
+                "mission_count",
+                "mission_duration_mean",
+                "mission_area_mean",
+                "learned_filter_hours",
+                "learned_brush_hours",
+            )
+        ),
     }
 
     summary["pose_derived_stores"] = "not applicable to Prime (no pose data)"
@@ -1132,6 +1155,27 @@ async def _build_diagnostics(
         # presence scheduling against the app's can see, in one line,
         # whether the app has one at all.
         "vendor_capabilities": _vendor_capabilities(config_entry),
+        # HOW MANY FAVOURITES REACHED US, and whether their buttons are
+        # switched on.
+        #
+        # @chairstacker's two favourites appear as buttons on v3.5.1 and
+        # not on the alpha. Everything between the fetch and the
+        # entities is wired correctly, so the answer is either "the
+        # option is off" or "the list arrived empty" -- and a report had
+        # no way to tell those apart.
+        "favourites": {
+            "count": len(
+                getattr(
+                    getattr(config_entry, "runtime_data", None),
+                    "prime_favorites",
+                    None,
+                )
+                or []
+            ),
+            "buttons_enabled": config_entry.options.get(
+                CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
+            ),
+        },
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

@@ -414,6 +414,18 @@ class RobotProfileStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist all learned state to hass.storage."""
+        # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
+        # hold only a config entry resolve hass through
+        # `prime_mission_sync._hass_of()`, whose own docstring says a
+        # None return means "skip persistence, keep memory" -- and that
+        # every caller handles it. This one did not.
+        #
+        # Before this guard the None went straight into Store() and
+        # raised AttributeError inside the caller's except -- the profile
+        # store was never persisted on the Prime path and nothing above
+        # debug level said so.
+        if hass is None:
+            return
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "learned_filter_hours": self.learned_filter_hours,

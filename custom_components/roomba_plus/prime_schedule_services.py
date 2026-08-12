@@ -332,7 +332,19 @@ async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict:
     return {"household_schedule_id": created_id}
 
 
-_WEEKDAY_TO_WIRE = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
+# THE ROBOT COUNTS FROM SUNDAY. This table counted from Monday, and a
+# Mon/Tue/Wed schedule edited on a30 came back as Tue/Wed/Thu -- every
+# day shifted by exactly one (@DaRealGuGu, confirmed in the iRobot app
+# and in his diagnostics: `days: [2, 3, 4]` for Tue/Wed/Thu).
+#
+# `_WEEKDAYS` at the top of this module already had it right, with
+# `sun: 0`. Two tables for one concept, disagreeing by one, in the same
+# file -- and the second was only reached once schedule EDITING existed,
+# which is why it survived until now.
+#
+# Derived from the correct one rather than written out again, so they
+# cannot drift apart a second time.
+_WEEKDAY_TO_WIRE = {value: name for name, value in _WEEKDAYS.items()}
 
 
 async def async_create_schedule_from_calendar(

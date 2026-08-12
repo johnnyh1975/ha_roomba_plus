@@ -819,6 +819,7 @@ def _build_runtime_data(ctx: _SetupContext) -> RoombaData:
         robot_profile_store=ctx.robot_profile_store,
         mission_timer_store=ctx.mission_timer_store,
         mission_archive=ctx.mission_archive,
+        hass_ref=ctx.hass,
     )
 
 
@@ -1452,6 +1453,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_household_id=household_id,
         prime_serial_info=serial_info,
         blocking_manager=blocking_manager,
+        hass_ref=hass,
     )
 
     async def _async_disconnect_on_stop(event: Any) -> None:
@@ -1479,11 +1481,29 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         from .button_prime import async_favorites_attribute  # noqa: PLC0415
 
         prime_favorites.extend(await async_favorites_attribute(config_entry))
+
         # AFTER the call, so a failure is not recorded as a success.
         record_success("favourite list (setup)")
     except Exception:  # noqa: BLE001
         record_failure("favourite list (setup)", "reading favourites at setup")
         _LOGGER.debug("Roomba+ Prime: could not read favorites", exc_info=True)
+
+    # NOTHING CALLED THIS, AND TWO THINGS READ WHAT IT WRITES.
+    #
+    # `_async_fetch_prime_time_estimates` fills
+    # `runtime_data.prime_time_estimates`; the calendar reads it to give
+    # occurrences a real duration, and `mission_progress` needs it for a
+    # denominator. Both got None for the whole life of the feature.
+    #
+    # @utkjmitch traced `mission_progress` reading `unknown` on a robot
+    # with 50 imported missions and found the profile-store half of it
+    # (`hass_ref`). This is the other half: the estimates the fallback
+    # sits in front of were never fetched at all.
+    #
+    # Found by checking which private functions appear exactly once in
+    # the source -- the same shape as `hass_ref` (read twice, written
+    # never) and `_readable_part_name` (written, never called).
+    await _async_fetch_prime_time_estimates(config_entry)
 
     # PRESENCE SCHEDULING FOR PRIME TOO.
     #
