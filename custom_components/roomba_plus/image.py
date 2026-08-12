@@ -3214,9 +3214,11 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             p2map_id = current if current in map_ids else map_ids[0]
         self._current_map_id = p2map_id
 
-        saved_bundle = self._stored_live_bundle
+        # Some lightweight callers (including HA's entity test helpers)
+        # construct the image without running async_added_to_hass().
+        saved_bundle = getattr(self, "_stored_live_bundle", None)
         if (
-            self._live_bundle is None
+            getattr(self, "_live_bundle", None) is None
             and isinstance(saved_bundle, dict)
             and saved_bundle.get("map_id") == p2map_id
             and isinstance(saved_bundle.get("bundle"), dict)
@@ -3830,8 +3832,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         will never display.
         """
         self._live_bundle = bundle
-        if self._live_bundle_store is not None and self._current_map_id is not None:
-            self._live_bundle_store.async_delay_save(
+        live_bundle_store = getattr(self, "_live_bundle_store", None)
+        current_map_id = getattr(self, "_current_map_id", None)
+        if live_bundle_store is not None and current_map_id is not None:
+            live_bundle_store.async_delay_save(
                 self._live_bundle_save_payload,
                 _LIVE_BUNDLE_SAVE_DELAY_SECONDS,
             )
@@ -3841,7 +3845,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         """Persist only the rendered live layers for the current map."""
         bundle = self._live_bundle if isinstance(self._live_bundle, dict) else {}
         return {
-            "map_id": self._current_map_id,
+            "map_id": getattr(self, "_current_map_id", None),
             "bundle": {
                 layer: bundle[layer]
                 for layer in _LIVE_BUNDLE_LAYERS

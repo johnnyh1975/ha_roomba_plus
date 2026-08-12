@@ -354,7 +354,7 @@ class TestAsyncSetupEntryCapabilityGating:
         assert "prime_detected_pad" in keys
         assert "prime_suction_level" in keys or "suction_level" in keys
     @pytest.mark.asyncio
-    async def test_dock_cap_zero_excludes_pad_wash_and_dry(self):
+    async def test_dock_cap_zero_disables_pad_wash_and_dry(self):
         from custom_components.roomba_plus import sensor as sensor_mod
         from custom_components.roomba_plus.sensor_prime import (
             PrimePadDryStatusSensor, PrimePadWashStatusSensor,
@@ -364,8 +364,12 @@ class TestAsyncSetupEntryCapabilityGating:
         created = []
         await sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
 
-        assert not any(isinstance(e, PrimePadWashStatusSensor) for e in created)
-        assert not any(isinstance(e, PrimePadDryStatusSensor) for e in created)
+        pad_sensors = [
+            e for e in created
+            if isinstance(e, (PrimePadWashStatusSensor, PrimePadDryStatusSensor))
+        ]
+        assert len(pad_sensors) == 2
+        assert all(not e._attr_entity_registry_enabled_default for e in pad_sensors)
 
 
 class TestDockStateLabel:
@@ -754,16 +758,15 @@ class TestDockCapabilityGating:
     Applying the same rule to a nested object that IS present was the
     mistake."""
 
-    def test_an_evac_only_dock_gets_no_pad_sensors(self):
+    def test_an_evac_only_dock_disables_pad_sensors(self):
         import inspect
 
         from custom_components.roomba_plus import sensor
 
         source = inspect.getsource(sensor.async_setup_entry)
 
-        # None and 0 both suppress; only a real capability creates.
-        assert "pad_wash not in (0, None)" in source
-        assert "pad_dry not in (0, None)" in source
+        assert "disabled=dock_cap_known and dock_cap.pad_wash in (0, None)" in source
+        assert "disabled=dock_cap_known and dock_cap.pad_dry in (0, None)" in source
 
     def test_a_missing_dock_cap_still_fails_open(self):
         """A robot whose shadow has not arrived must not silently lose
@@ -824,7 +827,7 @@ class TestCapabilityGatesHandleNone:
                     f"{path.name}: gating on cap.{field}, which is always None"
                 )
 
-    def test_dock_gates_treat_none_as_absent(self):
+    def test_dock_gates_disable_none_and_zero(self):
         import inspect
 
         from custom_components.roomba_plus import sensor
@@ -832,7 +835,7 @@ class TestCapabilityGatesHandleNone:
         source = inspect.getsource(sensor.async_setup_entry)
 
         for field in ("pad_wash", "pad_dry"):
-            assert f"{field} not in (0, None)" in source, field
+            assert f"{field} in (0, None)" in source, field
 
     def test_robot_gates_treat_none_as_unknown(self):
         """Deliberately the other way round, and it must stay that way:

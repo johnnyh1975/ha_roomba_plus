@@ -417,7 +417,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         current_map = await self._current_map_id()
         rooms: dict[str, str] = {}
         from_current: set[str] = set()
-        bundle_names = getattr(self._data, "prime_room_names", {}) or {}
+        bundle_names = getattr(self._data, "prime_room_names", None)
+        if not isinstance(bundle_names, dict):
+            bundle_names = {}
         map_ids = await self._all_map_ids()
 
         def add_room(name: str, p2map_id: str, room_id: str) -> None:
@@ -478,8 +480,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 floor_plan = await async_build_prime_floor_plan(
                     self._config_entry, p2map_id, version
                 )
-                for room_id, room_name in floor_plan.room_names.items():
-                    add_room(room_name, p2map_id, room_id)
+                if isinstance(floor_plan.room_names, dict):
+                    for room_id, room_name in floor_plan.room_names.items():
+                        add_room(room_name, p2map_id, room_id)
         except Exception:  # noqa: BLE001
             _LOGGER.debug("roomba_plus: could not read bundle room names", exc_info=True)
         return rooms
