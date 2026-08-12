@@ -194,6 +194,16 @@ class TestCoverageImageAttributes:
         datetime.datetime.fromisoformat(attrs["last_mission_end"])
 
 
+def test_prime_cleaning_map_does_not_advertise_card_rooms():
+    """Only the static Rooms Map is a xiaomi-vacuum-map-card source."""
+    from custom_components.roomba_plus.image import PrimeRoomsImage
+
+    entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+    entity._include_live = True
+
+    assert entity.extra_state_attributes == {}
+
+
 class TestCoverageImageIdentity:
     def test_unique_id_suffix(self):
         entity = _make_entity()

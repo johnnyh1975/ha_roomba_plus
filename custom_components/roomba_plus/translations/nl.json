@@ -1123,6 +1123,12 @@
     },
     "image": {
       "map": {
+        "name": "Schoonmaakkaart"
+      },
+      "raw_map": {
+        "name": "Ruwe livekaart"
+      },
+      "cleaning_map": {
         "name": "Reinigingskaart"
       },
       "coverage_map": {

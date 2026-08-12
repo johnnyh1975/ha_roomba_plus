@@ -422,6 +422,10 @@ class TestRoomNameMatching:
     def test_an_exact_name_matches(self):
         assert self._match(["Salon"]) == (["13"], [])
 
+    def test_a_unique_room_id_matches(self):
+        """Map cards select the API id while displaying the room name."""
+        assert self._match(["13"]) == (["13"], [])
+
     def test_case_does_not_matter(self):
         """Automations and voice assistants are inconsistent about it."""
         assert self._match(["salon"]) == (["13"], [])

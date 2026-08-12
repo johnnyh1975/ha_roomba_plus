@@ -86,12 +86,28 @@ def match_room_names(
     """
     by_name = {name.casefold(): rid for name, rid in available.items()}
     by_slug = {room_slug(name): rid for name, rid in available.items()}
+    # Map cards select stable region ids, whereas the service is normally
+    # called with room names.  Accept a bare id only when it is unique across
+    # the known maps; a duplicate needs its map-qualified value instead.
+    raw_ids: dict[str, list[str]] = {}
+    for room_id in available.values():
+        value = str(room_id)
+        raw_ids.setdefault(value.rsplit("/", 1)[-1], []).append(value)
+    by_id = {
+        room_id: values[0]
+        for room_id, values in raw_ids.items()
+        if len(values) == 1
+    }
 
     matched: list[str] = []
     unmatched: list[str] = []
     for raw in requested:
         wanted = raw.strip()
-        rid = by_name.get(wanted.casefold()) or by_slug.get(room_slug(wanted))
+        rid = (
+            by_name.get(wanted.casefold())
+            or by_slug.get(room_slug(wanted))
+            or by_id.get(wanted)
+        )
         if rid is None:
             unmatched.append(raw)
         elif rid not in matched:

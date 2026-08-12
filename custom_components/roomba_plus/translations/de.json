@@ -1125,6 +1125,12 @@
       "map": {
         "name": "Reinigungskarte"
       },
+      "raw_map": {
+        "name": "Rohe Live-Karte"
+      },
+      "cleaning_map": {
+        "name": "Reinigungskarte"
+      },
       "coverage_map": {
         "name": "Bedeckungskarte"
       },

@@ -207,6 +207,12 @@ async def async_setup_entry(
                 PrimeRoomsImage(
                     blid=data.blid, config_entry=config_entry, hass=hass
                 ),
+                PrimeRoomsImage(
+                    blid=data.blid,
+                    config_entry=config_entry,
+                    hass=hass,
+                    include_live=True,
+                ),
             ])
         return
 
@@ -377,8 +383,11 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
     same pattern already used for the REST-fetched map bundle.
     """
 
-    _attr_translation_key = "map"
-    _attr_entity_category = None
+    _attr_translation_key = "raw_map"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # This entity owns the V4 live-map subscription and dispatches its
+    # packets to the rendered map entities, so it cannot be disabled.
+    _attr_entity_registry_enabled_default = True
     _attr_content_type = "image/png"
 
     def __init__(self, prime_robot: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
@@ -3060,7 +3069,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             )
 
 class PrimeRoomsImage(IRobotEntity, ImageEntity):
-    """V4/Prime room map: polygons drawn, names exposed as attributes.
+    """V4/Prime static floor plan or live cleaning map.
 
     BUILT THE SAME WAY AS RoombaRoomsImage, on purpose. The canvas
     colour, the rotating ROOM_FILL_PALETTE fill, the fixed outline
@@ -3089,7 +3098,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     _attr_entity_category  = None
 
     def __init__(
-        self, blid: str, config_entry: RoombaConfigEntry, hass: Any
+        self,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        hass: Any,
+        *,
+        include_live: bool = False,
     ) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -3100,7 +3114,16 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # entity is never created.
         ImageEntity.__init__(self, hass)
         self._config_entry = config_entry
-        self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
+        self._include_live = include_live
+        # The rooms image is the xiaomi-vacuum-map-card source.  It must
+        # receive the live layers too: the card accepts one raster source,
+        # not a stack of image entities.
+        self._show_live_overlay = True
+        if include_live:
+            self._attr_translation_key = "cleaning_map"
+            self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_map"
+        else:
+            self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
         self._polygons: dict[str, list[tuple[float, float]]] = {}
         self._names: dict[str, str] = {}
@@ -3122,7 +3145,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         """Locale-independent slug. With has_entity_name plus a
         translation_key, HA would otherwise derive the entity_id from the
         TRANSLATED name and produce different ids per language."""
-        return "rooms_map"
+        return "prime_cleaning_map" if self._include_live else "rooms_map"
 
     @property
     def available(self) -> bool:
@@ -3131,38 +3154,42 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         Honest rather than a blank canvas: a robot that has not finished
         mapping has no rooms, and an empty image looks like a fault.
         """
-        return super().available and bool(self._polygons)
+        return super().available and bool(
+            self._polygons or getattr(self._floor_plan, "floor_plan", None)
+        )
 
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
-        self._live_bundle_store = Store(
-            self.hass,
-            _LIVE_BUNDLE_STORAGE_VERSION,
-            f"roomba_plus_prime_live_bundle_{self._config_entry.entry_id}",
-        )
-        stored = await self._live_bundle_store.async_load()
-        if isinstance(stored, dict):
-            self._stored_live_bundle = stored
+        if self._show_live_overlay:
+            self._live_bundle_store = Store(
+                self.hass,
+                _LIVE_BUNDLE_STORAGE_VERSION,
+                f"roomba_plus_prime_live_bundle_{self._config_entry.entry_id}",
+            )
+            stored = await self._live_bundle_store.async_load()
+            if isinstance(stored, dict):
+                self._stored_live_bundle = stored
         await self._async_refresh_rooms()
 
         # LIVE BUNDLES from the other Prime image entity, which watches
         # the map stream. The two are split by capability: that one has
         # the stream and no renderer, this one has the renderer and no
         # stream.
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                _SIGNAL_PRIME_LIVE_BUNDLE.format(self._config_entry.entry_id),
-                self._on_live_bundle,
+        if self._show_live_overlay:
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    _SIGNAL_PRIME_LIVE_BUNDLE.format(self._config_entry.entry_id),
+                    self._on_live_bundle,
+                )
             )
-        )
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                _SIGNAL_PRIME_LIVE_POSITION.format(self._config_entry.entry_id),
-                self._on_live_position,
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    _SIGNAL_PRIME_LIVE_POSITION.format(self._config_entry.entry_id),
+                    self._on_live_position,
+                )
             )
-        )
 
         # NO SUBSCRIPTION, and no re-render per image request.
         #
@@ -3218,6 +3245,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # construct the image without running async_added_to_hass().
         saved_bundle = getattr(self, "_stored_live_bundle", None)
         if (
+            getattr(self, "_show_live_overlay", True)
+            and
             getattr(self, "_live_bundle", None) is None
             and isinstance(saved_bundle, dict)
             and saved_bundle.get("map_id") == p2map_id
@@ -3257,7 +3286,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
             if version
             else PrimeFloorPlan(
-                room_names={}, room_polygons={}, borders=[], carpet=[], dock=None
+                room_names={}, room_polygons={}, floor_plan=[], borders=[],
+                carpet=[], furniture=[], dock=None,
             )
         )
 
@@ -3295,12 +3325,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 room_id,
                 (floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
             )
-        if not polygons:
+        if not polygons and not floor_plan.floor_plan:
             # A post-mission shadow can announce a new map version before
             # its bundle is available. Do not turn a working map unavailable
             # just because this transient refresh has no geometry.
             _LOGGER.debug(
-                "Prime rooms map: refresh returned no geometry; keeping cached map"
+                "Prime map: refresh returned no geometry; keeping cached map"
             )
             return
 
@@ -3383,8 +3413,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # which is why its map is complete before the first mission.
         rings = [
             *self._polygons.values(),
+            *getattr(self._floor_plan, "floor_plan", ()),
             *self._floor_plan.carpet,
             *self._floor_plan.borders,
+            *getattr(self._floor_plan, "furniture", ()),
         ]
         self._renderer._points = [  # noqa: SLF001
             self._renderer._mm_to_px(x, y)  # noqa: SLF001
@@ -3401,22 +3433,30 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         draw = ImageDraw.Draw(img)
 
         to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
-        live_bundle = self._live_bundle or {}
+        show_live = getattr(self, "_show_live_overlay", True)
+        show_room_fills = getattr(self, "_include_live", True)
+        live_bundle = self._live_bundle or {} if show_live else {}
         live_coverage = rings_mm(live_bundle.get("coverage"))
 
-        # LAYER ORDER MATTERS, bottom to top: rooms, then carpet, then
-        # walls, then the dock, then labels.
+        # LAYER ORDER MATTERS, bottom to top: rooms, coverage, structural
+        # floor plan, then furniture and borders.
         #
         # Carpet over rooms because it is a property OF a room, and a
         # room drawn on top would hide it. Walls over both because they
         # bound everything. The dock over walls because it sits against
         # one. Labels last so nothing covers them.
-        for idx, ring in enumerate(self._polygons.values()):
-            draw.polygon(
-                [to_px(x, y) for x, y in ring],
-                outline=(100, 149, 237),
-                fill=ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)],
+        if show_room_fills:
+            room_outline = (
+                None
+                if getattr(self._floor_plan, "floor_plan", ())
+                else (100, 149, 237)
             )
+            for idx, ring in enumerate(self._polygons.values()):
+                draw.polygon(
+                    [to_px(x, y) for x, y in ring],
+                    outline=room_outline,
+                    fill=ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)],
+                )
 
         for ring in self._floor_plan.carpet:
             # Outline only, no fill: a filled overlay would flatten the
@@ -3428,6 +3468,29 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # share its coordinate frame and must not move the room layout.
         for ring in live_coverage:
             draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
+
+        # Older bundles have room regions but no detailed floor plan.
+        # Keep that static image useful without pretending it has walls.
+        if not show_room_fills and not getattr(self._floor_plan, "floor_plan", ()):
+            for ring in self._polygons.values():
+                draw.polygon(
+                    [to_px(x, y) for x, y in ring], outline=(175, 175, 175), width=2
+                )
+
+        # `rooms` marks where the robot can clean.  `floorPlan` is the
+        # detailed saved-map geometry the iRobot app uses for interior
+        # walls and doorways.  It shares the map coordinate system, so it
+        # must use the same fit transform rather than a second registration.
+        for ring in getattr(self._floor_plan, "floor_plan", ()):
+            points = [to_px(x, y) for x, y in ring]
+            draw.line(points, fill=(175, 175, 175), width=2)
+
+        # Furniture is useful context, but an outline keeps it from hiding
+        # the selectable room colours or live cleaning coverage.
+        for ring in getattr(self._floor_plan, "furniture", ()):
+            draw.polygon(
+                [to_px(x, y) for x, y in ring], outline=(90, 90, 90), width=1
+            )
 
         for ring in self._floor_plan.borders:
             # OUTLINE ONLY, for the reason written two lines above about
@@ -3460,7 +3523,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # a restart mid-run -- the bundle fills in.
         have_own_trail = bool(
             getattr(self._config_entry.runtime_data, "prime_positions", None)
-        )
+        ) if show_live else False
         for feature in (
             [] if have_own_trail
             else (live_bundle.get("trajectories") or {}).get("features") or []
@@ -3488,7 +3551,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # different questions -- where the robot should go, where it must
         # not, and where it must not mop -- and wanting keep-out zones on
         # screen does not imply wanting clean zones too.
-        options = self._config_entry.options
+        options = self._config_entry.options if show_live else {}
         # ZONES COME FROM WHICHEVER BUNDLE HAS THEM.
         #
         # The live bundle arrives on a map-update message -- only while a
@@ -3567,9 +3630,11 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # that path maintains its own bounds and coordinate frame, and
         # this map is already anchored on the room polygons. Two frames
         # for one picture would misplace one of them.
-        positions = getattr(
-            self._config_entry.runtime_data, "prime_positions", None
-        ) or []
+        positions = (
+            getattr(self._config_entry.runtime_data, "prime_positions", None) or []
+            if show_live
+            else []
+        )
         if len(positions) >= 2:
             trail: list[tuple[float, float]] = []
             previous: tuple[float, float] | None = None
@@ -3603,7 +3668,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # because nothing invoked it. Found by listing private helpers
         # whose name appears exactly once in the component.
         dock_xy = self._dock_position()
-        if dock_xy is not None:
+        if show_live and dock_xy is not None:
             # THE SAME WHITE RING AS THE ROBOT, for the same reason.
             #
             # The dock reads clearly against the trail (a difference of
@@ -3680,7 +3745,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # The option exists for everyone not using that card -- a plain
         # picture-entity shows an image and nothing else, so for them the
         # names have to be in the picture or they do not exist.
-        if self._config_entry.options.get(
+        if show_room_fills and self._config_entry.options.get(
             CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
         ):
             from .map_renderer import LABEL_FONT  # noqa: PLC0415
@@ -3708,7 +3773,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         map change is picked up without a subscription.
         """
         await self._async_refresh_if_map_changed()
-        if self._live_dirty and self._polygons:
+        if getattr(self, "_show_live_overlay", True) and self._live_dirty and self._polygons:
             self._png = await self.hass.async_add_executor_job(self._render_png)
             self._live_dirty = False
         return self._png
@@ -3785,12 +3850,12 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Calibration and room outlines for xiaomi-vacuum-map-card.
 
-        Same keys and same coordinate convention as the Classic rooms
-        map, so a card configuration written for one works for the other.
+        The static Rooms Map is the card source.  The Cleaning Map is a
+        rendered status image, so it must not advertise selectable rooms.
         """
         from .prime_room_map import prime_calibration_points
 
-        if not self._polygons or self._renderer is None:
+        if self._include_live or not self._polygons or self._renderer is None:
             return {}
 
         cal = prime_calibration_points(

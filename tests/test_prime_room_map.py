@@ -586,6 +586,42 @@ class TestFloorPlanFromTheMapBundle:
         assert len(plan.carpet) == 1
 
     @pytest.mark.asyncio
+    async def test_floor_plan_holes_and_furniture_are_loaded(self):
+        """The saved-map detail layer retains interior wall outlines."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.prime_room_map import (
+            async_build_prime_floor_plan,
+        )
+
+        outer = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]
+        inner = [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]
+        furniture = [[1.5, 1.5], [2.5, 1.5], [2.5, 2.5], [1.5, 2.5]]
+        parsed = {
+        "floorPlan": {"features": [{"geometry": {
+            "type": "MultiLineString", "coordinates": [outer, inner],
+        }}]},
+            "furniture": {"features": [{"geometry": {
+                "type": "Polygon", "coordinates": [furniture],
+            }}]},
+        }
+        entry = MagicMock()
+        entry.runtime_data.prime_robot.get_map_geojson_link = AsyncMock(
+            return_value={"map_url": "https://x"}
+        )
+        entry.runtime_data.prime_robot.download_map_bundle = AsyncMock(return_value=b"x")
+
+        with patch(
+            "roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed
+        ):
+            plan = await async_build_prime_floor_plan(entry, "MAP-1", "V1")
+
+        assert len(plan.floor_plan) == 2
+        assert plan.floor_plan[0][0] == (0.0, 0.0)
+        assert plan.floor_plan[0][1] == (4000.0, 0.0)
+        assert len(plan.furniture) == 1
+
+    @pytest.mark.asyncio
     async def test_the_dock_carries_an_orientation(self):
         """Confirmed from the capture's key list. Means a rendered dock
         can point the right way rather than being a dot."""
@@ -1055,6 +1091,47 @@ class TestBareGeoJsonFeature:
         assert rings[0][1] == (2000.0, 0.0)
 
 
+class TestStaticPrimeRoomsMap:
+    def test_live_variant_has_a_non_colliding_entity_slug(self):
+        """The existing raw image already owns ``cleaning_map`` on upgrades."""
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._include_live = True
+
+        assert entity.suggested_object_id == "prime_cleaning_map"
+
+    def test_static_map_omits_live_room_and_coverage_fills(self):
+        """The saved floor plan must not look like a completed mission."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._include_live = False
+        entity._renderer = None
+        entity._polygons = {
+            "room": [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)]
+        }
+        entity._floor_plan = SimpleNamespace(
+            floor_plan=[], furniture=[], carpet=[], borders=[], dock=None
+        )
+        entity._live_bundle = {
+            "coverage": {"features": [{"geometry": {"type": "Polygon", "coordinates": [
+                [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
+            ]}}]}
+        }
+        entity._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(prime_positions=[]), options={}
+        )
+
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+
+        assert image.getpixel((300, 300)) == (30, 30, 30)
+
+
 class TestLiveBundleUpdatesTheRoomsMap:
     """The rooms map redraws during a mission, not only when the map
     version changes.
@@ -1157,6 +1234,10 @@ class TestLiveBundleUpdatesTheRoomsMap:
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
+        # The xiaomi card uses the static Rooms Map.  It must retain its
+        # selectable-room attributes while still rendering live layers.
+        entity._include_live = False
+        entity._show_live_overlay = True
         entity._renderer = None
         entity._polygons = {
             "room": [
