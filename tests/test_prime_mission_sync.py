@@ -1073,3 +1073,70 @@ class TestTheHistoryIsParsedBeforeItIsConverted:
         source = inspect.getsource(prime_mission_sync)
 
         assert "past the exception" in source
+
+
+class TestTheMissionErrorComesFromTheTimeline:
+    """@utkjmitch's 49-mission archive on a Y351020: `error_code` was
+    `None` on **all 49 records**, on a robot with 16 missions ending
+    `stuck`.
+
+    The timelines were not empty — 111 error events across them, and
+    **93 of those were error 48**, the blocked-entrance code. One number
+    that describes that household completely.
+
+    So a mission that plainly failed reported no error at mission level,
+    and the record said nothing was wrong.
+    """
+
+    def _entry(self, mission_error, timeline_errors):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            error_code=mission_error,
+            timeline=[
+                SimpleNamespace(error=SimpleNamespace(value=code))
+                for code in timeline_errors
+            ],
+        )
+
+    def _first(self, entry):
+        from custom_components.roomba_plus.prime_mission_sync import (
+            _first_timeline_error,
+        )
+
+        return _first_timeline_error(entry)
+
+    def test_the_timeline_supplies_what_the_mission_did_not(self):
+        assert self._first(self._entry(None, [48, 48])) == 48
+
+    def test_the_first_error_wins(self):
+        """The error that ended a mission is the one worth recording. A
+        robot that recovers from one obstacle and fails on another is
+        rarer than one that stops at the first."""
+        assert self._first(self._entry(None, [48, 15])) == 48
+
+    def test_a_clean_timeline_yields_nothing(self):
+        from types import SimpleNamespace
+
+        assert self._first(SimpleNamespace(timeline=[])) is None
+        assert self._first(SimpleNamespace(timeline=None)) is None
+
+    def test_an_unreadable_timeline_does_not_raise(self):
+        """Leaving the field as it was is what it would have been
+        anyway."""
+        from types import SimpleNamespace
+
+        entry = SimpleNamespace(timeline=[SimpleNamespace(error=None)])
+
+        assert self._first(entry) is None
+
+    def test_a_mission_level_code_is_not_overwritten(self):
+        """The fallback only fires when the mission itself said
+        nothing."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync)
+
+        assert 'if target == "error_code" and value is None:' in source

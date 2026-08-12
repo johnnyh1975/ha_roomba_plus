@@ -416,24 +416,87 @@ class TestAnEditKeepsTheWholeSeriesDays:
         return _days_for_update(existing, weekday, explicit)
 
     def test_the_series_keeps_all_its_days(self):
-        """His case: Mon/Tue/Wed edited from the Monday occurrence."""
-        assert self._days([0, 1, 2], weekday=0) == ["mon", "tue", "wed"]
+        """His case: Mon/Tue/Wed edited from the Monday occurrence.
+
+        **THE ROBOT COUNTS FROM SUNDAY**, so Mon/Tue/Wed is `[1, 2, 3]`.
+        These tests were written with `[0, 1, 2]` and passed, because
+        the table under test carried the same off-by-one — which is how
+        his schedule came back as Tue/Wed/Thu with every test green."""
+        assert self._days([1, 2, 3], weekday=1) == ["mon", "tue", "wed"]
 
     def test_editing_a_wednesday_does_not_move_the_series(self):
-        assert self._days([0, 1, 2], weekday=2) == ["mon", "tue", "wed"]
+        assert self._days([1, 2, 3], weekday=3) == ["mon", "tue", "wed"]
 
     def test_an_explicit_rule_wins(self):
         """A user who actually changed the recurrence gets what they
         asked for."""
-        assert self._days([0, 1, 2], weekday=0, explicit=[4, 5]) == ["fri", "sat"]
+        assert self._days([1, 2, 3], weekday=1, explicit=[5, 6]) == ["fri", "sat"]
 
     def test_a_schedule_with_no_days_falls_back_to_the_occurrence(self):
         """What a brand-new entry looks like."""
-        assert self._days(None, weekday=3) == ["thu"]
-        assert self._days([], weekday=3) == ["thu"]
+        assert self._days(None, weekday=4) == ["thu"]
+        assert self._days([], weekday=4) == ["thu"]
 
     def test_an_unusable_day_does_not_lose_the_edit(self):
         """Losing one day of a series is recoverable; losing the edit is
         not."""
-        assert self._days([0, 99, 2], weekday=0) == ["mon", "wed"]
-        assert self._days([99], weekday=5) == ["sat"]
+        assert self._days([1, 99, 3], weekday=1) == ["mon", "wed"]
+        assert self._days([99], weekday=6) == ["sat"]
+
+
+class TestOneWeekdayNumberingOnly:
+    """This module had **two** weekday tables disagreeing by one.
+    `_WEEKDAYS` counted from Sunday, as the robot does; the write table
+    counted from Monday.
+
+    @DaRealGuGu's Mon/Tue/Wed schedule came back as Tue/Wed/Thu after an
+    edit — every day shifted by exactly one, confirmed in the iRobot app
+    and in his diagnostics (`days: [2, 3, 4]`).
+
+    **The second table was only reached once schedule editing existed**,
+    which is why it survived until an edit was possible. And the tests
+    written for that path carried the same assumption, so they agreed
+    with it.
+    """
+
+    def test_the_two_tables_are_one(self):
+        """Derived rather than written twice, so they cannot drift
+        apart again."""
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAYS,
+            _WEEKDAY_TO_WIRE,
+        )
+
+        assert _WEEKDAY_TO_WIRE == {v: k for k, v in _WEEKDAYS.items()}
+
+    def test_sunday_is_zero(self):
+        """The robot's numbering, not Python's."""
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAY_TO_WIRE,
+        )
+
+        assert _WEEKDAY_TO_WIRE[0] == "sun"
+        assert _WEEKDAY_TO_WIRE[1] == "mon"
+
+    def test_his_series_round_trips(self):
+        """Mon/Tue/Wed in, Mon/Tue/Wed out."""
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAYS,
+            _days_for_update,
+        )
+
+        stored = [_WEEKDAYS[d] for d in ("mon", "tue", "wed")]
+
+        assert _days_for_update(stored, _WEEKDAYS["mon"], None) == [
+            "mon", "tue", "wed"
+        ]
+
+    def test_the_calendar_already_converted_correctly(self):
+        """`(weekday() + 1) % 7` turns Python's Monday-zero into the
+        robot's Sunday-zero. The calendar was right all along; only the
+        write table disagreed with it."""
+        import inspect
+
+        from custom_components.roomba_plus import calendar as cal
+
+        assert "(local.weekday() + 1) % 7" in inspect.getsource(cal)

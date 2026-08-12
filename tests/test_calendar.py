@@ -1319,3 +1319,93 @@ class TestCalendarSummariesUseEveryNameSource:
         names = {f.name for f in dataclasses.fields(RoombaData)}
 
         assert "prime_room_names" in names
+
+
+class TestRoomNamesComeFromEveryMap:
+    """The a31 fix healed exactly half of this.
+
+    `prime_room_names` is filled when a floor plan is **built**, and only
+    the map image builds one — for the map it is showing. On @utkjmitch's
+    four-map account, rooms named on the displayed map came through
+    (`room1`–`room3`) while rooms a schedule referenced on another map
+    stayed `Zone 13`, `Zone 14`.
+
+    So a schedule spanning maps got half its rooms named and half
+    numbered.
+    """
+
+    def _names(self, per_map, backend=True):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        entity = object.__new__(PrimeScheduleCalendar)
+        entity._config_entry = MagicMock()
+        entity.hass = MagicMock()
+
+        fake_backend = MagicMock()
+        fake_backend._all_map_ids = AsyncMock(return_value=list(per_map))
+
+        async def _polys(_entry, map_id):
+            return {}, per_map.get(map_id, {}), {}
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=fake_backend if backend else None,
+        ), patch(
+            "custom_components.roomba_plus.prime_room_map."
+            "async_build_prime_room_polygons",
+            side_effect=_polys,
+        ):
+            return asyncio.run(entity._names_from_all_maps())
+
+    def test_rooms_on_a_second_map_get_their_names(self):
+        names = self._names({
+            "M1": {"11": "Kitchen"},
+            "M2": {"13": "Study", "14": "Loft"},
+        })
+
+        assert names["13"] == "Study"
+        assert names["14"] == "Loft"
+
+    def test_the_first_map_wins_a_shared_id(self):
+        """Room ids are per map, so a collision is possible. Taking the
+        first is arbitrary but stable, and beats alternating."""
+        names = self._names({"M1": {"11": "Kitchen"}, "M2": {"11": "Garage"}})
+
+        assert names["11"] == "Kitchen"
+
+    def test_no_backend_means_zone_numbers(self):
+        """Which is what they already were."""
+        assert self._names({"M1": {"11": "Kitchen"}}, backend=False) == {}
+
+    def test_a_map_that_will_not_load_is_skipped(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
+
+        entity = object.__new__(PrimeScheduleCalendar)
+        entity._config_entry = MagicMock()
+        entity.hass = MagicMock()
+        fake_backend = MagicMock()
+        fake_backend._all_map_ids = AsyncMock(return_value=["M1", "M2"])
+
+        async def _polys(_entry, map_id):
+            if map_id == "M1":
+                raise RuntimeError("boom")
+            return {}, {"14": "Loft"}, {}
+
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=fake_backend,
+        ), patch(
+            "custom_components.roomba_plus.prime_room_map."
+            "async_build_prime_room_polygons",
+            side_effect=_polys,
+        ):
+            assert asyncio.run(entity._names_from_all_maps()) == {"14": "Loft"}

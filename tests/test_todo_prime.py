@@ -566,3 +566,69 @@ class TestPartsTheRobotCannotHaveAreHidden:
         absent = self._absent({"pw": 0})
 
         assert {"202", "212"} <= absent
+
+
+class TestTheListActuallyUsesTheReadableName:
+    """`_readable_part_name()` was written for a30 and **never wired to
+    the line that builds the summary.** @utkjmitch reported raw keys on
+    a30, the helper was added, and he reported the same raw keys on a31
+    — with the unit wording changed, proving the list was being rebuilt
+    and simply not using it.
+
+    The existing tests exercised the helper directly, so they passed
+    while the list ignored it. This one goes through the entity.
+    """
+
+    def _summaries(self, parts, cached=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.todo_prime import PrimeMaintenanceTodo
+
+        entity = object.__new__(PrimeMaintenanceTodo)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_parts_coordinator=SimpleNamespace(data=parts),
+            prime_status_coordinator=SimpleNamespace(data=None),
+        )
+        entity._config_entry = entry
+        entity.hass = MagicMock()
+        entity.hass.config.language = "en"
+        with patch(
+            "homeassistant.helpers.translation.async_get_cached_translations",
+            return_value=cached or {},
+        ):
+            return [item.summary for item in entity.todo_items or []]
+
+    def _part(self, count_type="evacs", remaining=60):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            counter_category="replacement", count_type=count_type,
+            count_remaining=remaining, count_used=0,
+        )
+
+    def test_no_summary_contains_a_translation_key(self):
+        """The bug exactly: "Replace prime_part_dirt_bag" on screen."""
+        summaries = self._summaries({"147": self._part()})
+
+        assert not any("prime_part" in s for s in summaries), summaries
+
+    def test_a_translated_name_reaches_the_summary(self):
+        summaries = self._summaries(
+            {"147": self._part()},
+            cached={
+                "component.roomba_plus.entity.sensor.prime_part_dirt_bag.name":
+                    "Maintenance – Dust Bag",
+            },
+        )
+
+        assert summaries == ["Replace Maintenance – Dust Bag"]
+
+    def test_an_untranslated_key_still_reads_as_words(self):
+        assert self._summaries({"147": self._part()}) == ["Replace Dirt Bag"]
+
+    def test_an_unknown_id_keeps_its_number(self):
+        """His 68, 69 and 149. A number he can quote beats a name we
+        invented."""
+        assert self._summaries({"68": self._part()}) == ["Replace 68"]

@@ -1326,7 +1326,10 @@ class TestAFrozenShadowIsNotReportedAsCleaning:
     robot supplies both numbers.**
     """
 
-    def _sensor(self, levels):
+    def _sensor(self, readings_spec, step_sec=340.0):
+        """Feed (phase, bat_pct) pairs through one entity, advancing a
+        fake clock. A bare int means ("run", level), so the freeze cases
+        read unchanged."""
         from types import SimpleNamespace
         from unittest.mock import MagicMock, PropertyMock, patch
 
@@ -1335,21 +1338,30 @@ class TestAFrozenShadowIsNotReportedAsCleaning:
         entity = object.__new__(PrimePhaseSensor)
         entity._config_entry = MagicMock()
         readings = []
-        for level in levels:
-            state = SimpleNamespace(
-                bat_pct=level,
-                clean_mission_status=SimpleNamespace(phase="run"),
-            )
-            with patch.object(
-                type(entity), "_current_state",
-                new=PropertyMock(return_value=state),
-            ):
-                readings.append(entity.native_value)
+        clock = {"now": 1000.0}
+        with patch(
+            "custom_components.roomba_plus.sensor_prime.time.monotonic",
+            side_effect=lambda: clock["now"],
+        ):
+            for spec in readings_spec:
+                phase, level = spec if isinstance(spec, tuple) else ("run", spec)
+                state = SimpleNamespace(
+                    bat_pct=level,
+                    clean_mission_status=SimpleNamespace(phase=phase),
+                )
+                with patch.object(
+                    type(entity), "_current_state",
+                    new=PropertyMock(return_value=state),
+                ):
+                    readings.append(entity.native_value)
+                clock["now"] += step_sec
         return readings
 
-    def test_a_rising_battery_during_run_reads_stale(self):
-        """His exact case: 75 climbing while the document says run."""
-        assert self._sensor([75, 80])[-1] == "stale"
+    def test_a_rising_battery_during_a_long_run_reads_stale(self):
+        """His exact case: climbing while the document says run -- and
+        the run is old enough that no charge tail can explain it. The
+        real freeze rose for 61 hours; eleven minutes is generous."""
+        assert self._sensor([75, 75, 80])[-1] == "stale"
 
     def test_one_reading_is_never_enough(self):
         """A single sample cannot show a direction, and calling a robot
@@ -1375,3 +1387,110 @@ class TestAFrozenShadowIsNotReportedAsCleaning:
         entity._config_entry = MagicMock()
 
         assert "stale" in PrimePhaseSensor.options.fget(entity)
+
+
+class TestTheGraceWindowFromTheField:
+    """@utkjmitch's Y351020, on the first morning this detector existed:
+    a recharge-and-resume went `charge` → `run` at 37% and the next
+    reports still climbed to 40 — **the charge tail, on a robot that was
+    physically driving.** The sensor read `stale` twice, ~4 s and then
+    ~2 min, before settling.
+
+    The state `stale` names is cured by a power cycle, so a false
+    positive pages somebody for a healthy robot. The real freeze rises
+    for 61 hours; waiting out ten minutes costs detection nothing.
+    """
+
+    def _sensor(self, *args, **kwargs):
+        from tests.test_sensor_prime import TestAFrozenShadowIsNotReportedAsCleaning
+
+        return TestAFrozenShadowIsNotReportedAsCleaning._sensor(
+            TestAFrozenShadowIsNotReportedAsCleaning(), *args, **kwargs
+        )
+
+    def test_the_charge_tail_of_a_resume_is_not_stale(self):
+        readings = self._sensor(
+            [("charge", 37), ("run", 37), ("run", 40)], step_sec=30.0
+        )
+
+        assert readings[-1] == "run"
+
+    def test_every_resume_restarts_the_grace_clock(self):
+        """A long mission with a second recharge stop must not inherit
+        the first run's elapsed grace."""
+        readings = self._sensor(
+            [("run", 75), ("run", 70), ("charge", 80), ("run", 80), ("run", 84)]
+        )
+
+        assert readings[-1] == "run"
+
+    def test_a_restart_into_a_frozen_shadow_still_detects_it(self):
+        """Home Assistant restarting mid-freeze sees `run` from its very
+        first reading, with no transition to anchor on. The clock starts
+        there, so detection is delayed by one window rather than lost."""
+        assert self._sensor([75, 80, 85])[-1] == "stale"
+
+
+class TestTheVendorTextArrivesAsAttributes:
+    """The state stays a raw code — that argument holds — but it predates
+    `vendor_errors.py`, whose catalogue came from the **Prime** app's own
+    locale files. "No text of ours would be sourced" stopped being true
+    the moment iRobot's arrived.
+
+    Error 48 reads "An obstacle blocked the entrance to a room", which
+    on one field robot explained 93 timeline error events and every
+    incomplete mission in its archive — a household that keeps the
+    playroom door shut so the dog cannot steal toys.
+    """
+
+    def _attrs(self, error, language="en", with_hass=True):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import PrimeErrorSensor
+
+        entity = object.__new__(PrimeErrorSensor)
+        entity._config_entry = MagicMock()
+        if with_hass:
+            entity.hass = MagicMock()
+            entity.hass.config.language = language
+        # The sensor reads more of the status than the error alone, so
+        # a two-field namespace is not enough to exercise it.
+        state = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(
+                error=error, cycle="clean", phase="run", not_ready=0,
+                operating_mode=2, initiator="rmtApp", mission_id="M1",
+                n_missions=1, sqft=0, cond_not_ready=[],
+                mission_start_time=None, expire_time=None,
+                recharge_time=None,
+            )
+        )
+        with patch.object(
+            type(entity), "_current_state", new=PropertyMock(return_value=state)
+        ):
+            return entity.extra_state_attributes
+
+    def test_a_documented_code_carries_its_title(self):
+        attrs = self._attrs(48)
+
+        assert "obstacle" in attrs["error_title"].lower()
+
+    def test_the_explanation_comes_with_it(self):
+        assert self._attrs(48).get("error_description")
+
+    def test_an_undocumented_code_invents_nothing(self):
+        """Same rule as the unknown part names: guessing from one
+        household is how wrong mappings get made."""
+        attrs = self._attrs(9999)
+
+        assert "error_title" not in attrs
+
+    def test_no_error_means_no_text(self):
+        assert "error_title" not in self._attrs(0)
+
+    def test_it_works_before_the_entity_has_hass(self):
+        """Attributes are readable before the entity is added, and the
+        tests construct it bare. English rather than a crash."""
+        attrs = self._attrs(48, with_hass=False)
+
+        assert attrs.get("error_title")

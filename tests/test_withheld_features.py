@@ -234,3 +234,52 @@ class TestTheGatesLiveInThreeShadows:
 
     def test_a_robot_reporting_none_of_them_gets_an_empty_block(self):
         assert self._caps({"rw-settings": {"name": "Robot"}}) == {}
+
+
+class TestFavouritesAreReportedInDiagnostics:
+    """@chairstacker's two favourites appear as buttons on v3.5.1 and
+    not on the alpha. Everything between the fetch and the entities is
+    wired correctly, so the answer is either "the option is off" or "the
+    list arrived empty" — **and his report had no way to tell those
+    apart.**
+
+    Neither does a maintainer reading it, which is why this is here.
+    """
+
+    def _diag(self, favourites, option=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import (
+            _vendor_capabilities,  # noqa: F401 — same module
+        )
+        import custom_components.roomba_plus.diagnostics as diag
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_favorites=favourites)
+        entry.options = {} if option is None else {
+            "prime_favorite_buttons": option
+        }
+        return entry, diag
+
+    def test_the_count_distinguishes_empty_from_disabled(self):
+        entry, _diag = self._diag([{"id": "F1"}, {"id": "F2"}])
+
+        assert len(entry.runtime_data.prime_favorites) == 2
+
+    def test_an_empty_list_is_reported_as_zero_not_absent(self):
+        """Zero favourites and no favourites block look the same to a
+        reader; zero is the one that means something."""
+        entry, _ = self._diag([])
+
+        assert entry.runtime_data.prime_favorites == []
+
+    def test_the_block_names_both_halves(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert '"favourites": {' in source
+        assert '"buttons_enabled"' in source

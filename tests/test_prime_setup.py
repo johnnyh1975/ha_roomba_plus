@@ -328,3 +328,93 @@ class TestAsyncUnloadEntryCloudOnly:
 
         assert result is False
         fake_prime_robot.disconnect.assert_not_called()
+
+
+class TestNothingWasFetchingTheTimeEstimates:
+    """`_async_fetch_prime_time_estimates` fills
+    `runtime_data.prime_time_estimates`. The calendar reads it to give
+    schedule occurrences a real duration instead of a flat hour, and
+    `mission_progress` needs it for a denominator.
+
+    **Nothing called it.** Both readers got `None` for the whole life of
+    the feature.
+
+    @utkjmitch traced `mission_progress` reading `unknown` on a robot
+    with 50 imported missions and found the profile-store half of it
+    (`hass_ref`, read twice and written never). This is the other half.
+
+    Found by listing private functions whose name appears exactly once
+    in the source — the same shape as `hass_ref` and as
+    `_readable_part_name`, which was written and never called.
+    """
+
+    def test_setup_calls_it(self):
+        import inspect
+
+        from custom_components.roomba_plus import _async_setup_entry_prime
+
+        source = inspect.getsource(_async_setup_entry_prime)
+
+        assert "await _async_fetch_prime_time_estimates(config_entry)" in source
+
+    def test_no_private_helper_is_defined_and_never_named_again(self):
+        """The check that found it, kept as a guard.
+
+        A private function whose name appears once in the whole
+        component is one nothing can reach — and three of those turned
+        up in a single day, each costing a working feature."""
+        import ast
+        import pathlib
+        import re
+
+        # THE TESTS COUNT AS A CALLER.
+        #
+        # `_get_two_pass` is read by nothing in production -- `select.py`
+        # reads the same preference itself -- but it has its own tests,
+        # and deleting a tested helper to satisfy this check would trade
+        # a harmless duplicate for a lost intent. What this guard is for
+        # is a helper nothing anywhere reaches.
+        base = pathlib.Path("custom_components/roomba_plus")
+        source = "".join(f.read_text() for f in base.glob("*.py"))
+        source += "".join(
+            f.read_text() for f in pathlib.Path("tests").glob("*.py")
+        )
+        orphans = []
+        for path in base.glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                name = node.name
+                if not name.startswith("_") or name.startswith("__"):
+                    continue
+                if len(re.findall(rf"\b{re.escape(name)}\b", source)) <= 1:
+                    orphans.append(f"{path.name}:{name}")
+
+        # FOUR KNOWN, EACH A FEATURE NOTHING REACHES. Listed rather
+        # than fixed in one pass: they are separate features and each
+        # needs its own reasoning about where the call belongs.
+        #
+        #   image.py:_dock_position       the a26 "seen beats
+        #       remembered" dock correction. @utkjmitch's map draws the
+        #       dock where a treadmill now stands; he reported it as
+        #       unreachable in the frozen-shadow state, and it is
+        #       unreachable in every state.
+        #   vacuum.py:_get_two_pass       reads twoPass from live state
+        #   sensor_cloud.py:_classify_dirt_cause
+        #   room_seg_store.py:_boundary_stability
+        #
+        # **Nothing may be added to this list.** It shrinks or the guard
+        # has failed at its job.
+        known = {
+            "image.py:_dock_position",
+            "vacuum.py:_get_two_pass",
+            "sensor_cloud.py:_classify_dirt_cause",
+            "room_seg_store.py:_boundary_stability",
+        }
+        new = sorted(set(orphans) - known)
+
+        assert not new, (
+            "defined and never named again anywhere -- nothing can reach "
+            f"these: {new}"
+        )
+        assert set(orphans) <= known, "the known list is stale"
