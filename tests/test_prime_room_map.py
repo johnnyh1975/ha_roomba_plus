@@ -1101,8 +1101,8 @@ class TestStaticPrimeRoomsMap:
 
         assert entity.suggested_object_id == "prime_cleaning_map"
 
-    def test_static_map_omits_live_room_and_coverage_fills(self):
-        """The saved floor plan must not look like a completed mission."""
+    def test_card_source_includes_live_coverage(self):
+        """The static Rooms Map is also the card's live map source."""
         import io
 
         from PIL import Image
@@ -1111,6 +1111,7 @@ class TestStaticPrimeRoomsMap:
 
         entity = object.__new__(PrimeRoomsImage)
         entity._include_live = False
+        entity._show_live_overlay = True
         entity._renderer = None
         entity._polygons = {
             "room": [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)]
@@ -1129,7 +1130,7 @@ class TestStaticPrimeRoomsMap:
 
         image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
 
-        assert image.getpixel((300, 300)) == (30, 30, 30)
+        assert image.getpixel((300, 300)) == (120, 190, 145)
 
 
 class TestLiveBundleUpdatesTheRoomsMap:
