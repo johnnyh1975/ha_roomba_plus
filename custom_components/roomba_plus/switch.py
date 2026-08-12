@@ -186,6 +186,7 @@ async def async_setup_entry(
     # own CLOUD_ONLY branch -- Prime data comes from PrimeStatusCoordinator's
     # named-shadow data, not roomba_reported_state()'s Classic shape.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
+        cap = dock_cap = None
         if data.prime_status_coordinator is not None:
             from .prime_coordinator import get_prime_capability_flags
 
@@ -787,4 +788,3 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
             self.async_on_remove(
                 coordinator.async_add_listener(self.async_write_ha_state)
             )
-

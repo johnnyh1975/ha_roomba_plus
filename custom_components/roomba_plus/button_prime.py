@@ -412,11 +412,12 @@ async def async_build_prime_buttons(
     # empty-now action. One look, no run.
     if _dock_reports_itself(config_entry):
         for command in PRIME_DOCK_COMMANDS:
-            # None means unknown, only an explicit 0 means absent -- so a
-            # robot that has not reported its dock yet still gets the
-            # buttons rather than silently losing them.
-            if (dock_cap is not None
-                    and getattr(dock_cap, command.dock_cap_attr, None) == 0):
+            # No dock-capability object is unknown; a field missing from an
+            # object the dock has reported is an unsupported feature.
+            if (
+                dock_cap is not None
+                and getattr(dock_cap, command.dock_cap_attr, None) in (None, 0)
+            ):
                 continue
             entities.append(PrimeDockButton(data.blid, config_entry, command))
 

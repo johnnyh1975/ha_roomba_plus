@@ -110,7 +110,9 @@ async def async_setup_entry(
             # Absent field means no entity. A present field means one,
             # whatever its value -- False is a real answer ("the tank is
             # out"), only absence means "this robot has no such thing".
-            if _prime_reports_tank(config_entry):
+            # A reported tankPresent field alone is not enough: vacuum-only
+            # Max 705s report it although cap.scrub explicitly says no mop.
+            if (cap is None or cap.scrub != 0) and _prime_reports_tank(config_entry):
                 entities.append(PrimeTankPresentSensor(data.blid, config_entry))
             async_add_entities(entities)
         return
