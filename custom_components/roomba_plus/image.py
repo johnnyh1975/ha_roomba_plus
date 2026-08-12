@@ -102,6 +102,9 @@ _MAX_PRIME_POSITIONS = 5000
 _SIGNAL_PRIME_LIVE_BUNDLE = "roomba_plus_prime_live_bundle_{}"
 _SIGNAL_PRIME_LIVE_POSITION = "roomba_plus_prime_live_position_{}"
 _LIVE_MAP_STATE_UPDATE_INTERVAL = 2.0
+_LIVE_BUNDLE_STORAGE_VERSION = 1
+_LIVE_BUNDLE_SAVE_DELAY_SECONDS = 5
+_LIVE_BUNDLE_LAYERS = ("coverage", "trajectories", "hazard")
 PARALLEL_UPDATES = 0
 
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
@@ -3108,6 +3111,11 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._png: bytes | None = None
         self._live_dirty = False
         self._last_live_state_write = 0.0
+        self._live_bundle_store: Store | None = None
+        self._stored_live_bundle: dict[str, Any] | None = None
+        self._current_map_id: str | None = None
+        self._rendered_for_map_version: str | None = None
+        self._rendered_map_id: str | None = None
 
     @property
     def suggested_object_id(self) -> str:
@@ -3127,6 +3135,14 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
 
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
+        self._live_bundle_store = Store(
+            self.hass,
+            _LIVE_BUNDLE_STORAGE_VERSION,
+            f"roomba_plus_prime_live_bundle_{self._config_entry.entry_id}",
+        )
+        stored = await self._live_bundle_store.async_load()
+        if isinstance(stored, dict):
+            self._stored_live_bundle = stored
         await self._async_refresh_rooms()
 
         # LIVE BUNDLES from the other Prime image entity, which watches
@@ -3168,11 +3184,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # the thing worth watching -- and it is already being read for
         # room cleaning. Checked when the image is requested, and the
         # cloud is only called when it has actually moved.
-        self._rendered_for_map_version: str | None = None
         #: Which map that version belongs to. Without it, a robot moving
         #: between floors would render a different map while the version
         #: it is compared against stays put.
-        self._rendered_map_id: str | None = None
 
     async def _async_refresh_rooms(self) -> None:
         """Reads the current map's rooms and renders them."""
@@ -3198,6 +3212,16 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         else:
             current = await backend._current_map_id()  # noqa: SLF001
             p2map_id = current if current in map_ids else map_ids[0]
+        self._current_map_id = p2map_id
+
+        saved_bundle = self._stored_live_bundle
+        if (
+            self._live_bundle is None
+            and isinstance(saved_bundle, dict)
+            and saved_bundle.get("map_id") == p2map_id
+            and isinstance(saved_bundle.get("bundle"), dict)
+        ):
+            self._live_bundle = saved_bundle["bundle"]
 
         polygons, names, preferences = await async_build_prime_room_polygons(
             self._config_entry, p2map_id
@@ -3806,7 +3830,24 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         will never display.
         """
         self._live_bundle = bundle
+        if self._live_bundle_store is not None and self._current_map_id is not None:
+            self._live_bundle_store.async_delay_save(
+                self._live_bundle_save_payload,
+                _LIVE_BUNDLE_SAVE_DELAY_SECONDS,
+            )
         self._mark_live_dirty()
+
+    def _live_bundle_save_payload(self) -> dict[str, Any]:
+        """Persist only the rendered live layers for the current map."""
+        bundle = self._live_bundle if isinstance(self._live_bundle, dict) else {}
+        return {
+            "map_id": self._current_map_id,
+            "bundle": {
+                layer: bundle[layer]
+                for layer in _LIVE_BUNDLE_LAYERS
+                if isinstance(bundle.get(layer), (dict, list))
+            },
+        }
 
     @callback
     def _on_live_position(self) -> None:

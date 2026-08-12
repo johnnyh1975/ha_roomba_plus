@@ -2180,3 +2180,23 @@ class TestZonesDoNotNeedARunningMission:
 
         source = inspect.getsource(PrimeRoomsImage)
         assert 'getattr(self._floor_plan, "zone_layers", None)' in source
+    def test_live_bundle_storage_excludes_unrendered_layers(self):
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._current_map_id = "MAP-1"
+        entity._live_bundle = {
+            "coverage": {"features": []},
+            "trajectories": {"features": []},
+            "hazard": {"features": []},
+            "rooms": {"features": []},
+        }
+
+        assert entity._live_bundle_save_payload() == {
+            "map_id": "MAP-1",
+            "bundle": {
+                "coverage": {"features": []},
+                "trajectories": {"features": []},
+                "hazard": {"features": []},
+            },
+        }
