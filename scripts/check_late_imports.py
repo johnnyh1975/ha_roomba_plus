@@ -49,6 +49,13 @@ NON_CYCLE_REASONS: dict[str, str] = {
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
+    "calendar -> prime_room_map": (
+        "room names for schedules that reference other maps; both modules "
+        "import the calendar chain back, so this cannot move up"
+    ),
+    "calendar -> room_cleaning": (
+        "the backend that knows every map id on the account; same cycle"
+    ),
     "presence_manager -> prime_schedule_switch": (
         "a real cycle: prime_schedule_switch imports back into the presence "
         "chain, so this one cannot move to module level"
