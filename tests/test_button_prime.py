@@ -289,7 +289,7 @@ class TestFavoriteButtonsAreOptional:
             async_build_prime_buttons,
         )
 
-        assert len(await async_build_prime_buttons(_entry([_favorite("f1")]))) == 2
+        assert len(_enabled(await async_build_prime_buttons(_entry([_favorite("f1")]))) == 2
 
     @pytest.mark.asyncio
     async def test_the_option_suppresses_only_the_favourites(self):

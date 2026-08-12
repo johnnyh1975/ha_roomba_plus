@@ -779,7 +779,7 @@ class TestDockCapabilityGating:
         source = inspect.getsource(sensor.async_setup_entry)
 
         assert "dock_cap_known" in source
-        assert "not dock_cap_known or" in source
+        assert "disabled=dock_cap_known" in source
 
 
 
