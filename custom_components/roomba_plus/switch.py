@@ -204,9 +204,16 @@ async def async_setup_entry(
         # boost switch uses -- a robot that has not reported its
         # capabilities yet should get the switch, not lose it.
         setting_entities = [
-            PrimeSettingSwitch(data.blid, config_entry, description)
+            PrimeSettingSwitch(
+                data.blid,
+                config_entry,
+                description,
+                disabled=description.dock_cap_attr is not None
+                and dock_cap is not None
+                and getattr(dock_cap, description.dock_cap_attr, None) in (None, 0),
+            )
             for description in PRIME_SETTING_SWITCHES
-            if _capability_permits(description, cap, dock_cap)
+            if _capability_permits(description, cap, None)
         ]
         if setting_entities:
             async_add_entities(setting_entities)
@@ -724,6 +731,8 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
         blid: str,
         config_entry: RoombaConfigEntry,
         description: PrimeSettingSwitchDescription,
+        *,
+        disabled: bool = False,
     ) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -731,6 +740,7 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
+        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def suggested_object_id(self) -> str:

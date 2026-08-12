@@ -280,10 +280,17 @@ async def async_setup_entry(
         # was present and the key absent, here the object never comes.
         dock_known = _dock_reports_itself(config_entry)
         dock_cap_known = dock_cap is not None
-        if dock_known and (not dock_cap_known or dock_cap.pad_wash not in (0, None)):
-            entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
-        if dock_known and (not dock_cap_known or dock_cap.pad_dry not in (0, None)):
-            entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
+        if dock_known:
+            entities.append(PrimePadWashStatusSensor(
+                data.blid,
+                config_entry,
+                disabled=dock_cap_known and dock_cap.pad_wash in (0, None),
+            ))
+            entities.append(PrimePadDryStatusSensor(
+                data.blid,
+                config_entry,
+                disabled=dock_cap_known and dock_cap.pad_dry in (0, None),
+            ))
         # PRESENCE, not capability. See PrimeDockTankLevelSensor's
         # docstring: which docks report tankLvl is not decidable from
         # dock.cap, and a sensor reading "unknown" forever is worse than
@@ -523,6 +530,7 @@ def _add_prime_mission_sensors(
     room list.
     """
     wanted: set[str] = set()
+    disable_pad_maintenance = False
     if getattr(data, "mission_store", None) is not None:
         wanted |= _PRIME_MISSION_SENSOR_KEYS
     if getattr(data, "maintenance_store", None) is not None:
@@ -530,13 +538,15 @@ def _add_prime_mission_sensors(
         from .prime_coordinator import get_prime_capability_flags
 
         cap, _dock_cap = get_prime_capability_flags(config_entry)
-        if cap is not None and cap.scrub == 0:
-            wanted.discard("pad_last_replaced")
-    entities: list[Any] = [
-        RoombaSensor(None, data.blid, description, config_entry)
-        for description in SENSORS
-        if description.key in wanted
-    ]
+        disable_pad_maintenance = cap is not None and cap.scrub == 0
+    entities: list[Any] = []
+    for description in SENSORS:
+        if description.key not in wanted:
+            continue
+        entity = RoombaSensor(None, data.blid, description, config_entry)
+        if description.key == "pad_last_replaced" and disable_pad_maintenance:
+            entity._attr_entity_registry_enabled_default = False
+        entities.append(entity)
 
     # Mission progress: elapsed time, current room, remaining estimate.
     # Not part of SENSORS -- it is its own entity class, and Classic

@@ -110,10 +110,12 @@ async def async_setup_entry(
             # Absent field means no entity. A present field means one,
             # whatever its value -- False is a real answer ("the tank is
             # out"), only absence means "this robot has no such thing".
-            # A reported tankPresent field alone is not enough: vacuum-only
-            # Max 705s report it although cap.scrub explicitly says no mop.
-            if (cap is None or cap.scrub != 0) and _prime_reports_tank(config_entry):
-                entities.append(PrimeTankPresentSensor(data.blid, config_entry))
+            if _prime_reports_tank(config_entry):
+                entities.append(PrimeTankPresentSensor(
+                    data.blid,
+                    config_entry,
+                    disabled=cap is not None and cap.scrub == 0,
+                ))
             async_add_entities(entities)
         return
 
@@ -1425,9 +1427,12 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
+        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def is_on(self) -> bool | None:
