@@ -527,6 +527,11 @@ def _add_prime_mission_sensors(
         wanted |= _PRIME_MISSION_SENSOR_KEYS
     if getattr(data, "maintenance_store", None) is not None:
         wanted |= _PRIME_MAINTENANCE_SENSOR_KEYS
+        from .prime_coordinator import get_prime_capability_flags
+
+        cap, _dock_cap = get_prime_capability_flags(config_entry)
+        if cap is not None and cap.scrub == 0:
+            wanted.discard("pad_last_replaced")
     entities: list[Any] = [
         RoombaSensor(None, data.blid, description, config_entry)
         for description in SENSORS
