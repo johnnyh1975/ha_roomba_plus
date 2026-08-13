@@ -557,6 +557,10 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 `calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Read-only, always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
+Room names in schedule summaries are resolved from **every map on the account**, not just the one
+currently drawn — a schedule that spans maps used to get half its rooms named and half numbered as
+`Zone N`.
+
 **Prime robots can write it, and three services do that directly** — the calendar entity is the
 usual way in, but a script may prefer the service:
 
@@ -751,6 +755,29 @@ before that — configured fully, doing nothing, with no error to say so.
 | Option | Notes |
 |---|---|
 | Floor label | Free text, e.g. "Ground Floor". Groups robots in the fleet view |
+
+## Why the floor is getting dirtier
+
+The cleaning performance sensor carries two attributes that only mean something together:
+
+- **`dirt_trend`** — rising, stable or falling, from the median of the five most recent missions
+  against the previous ten.
+- **`dirt_cause`**, present only when the trend is rising:
+  - **`brush_wear`** — rising dirt with *declining* speed. The sensor re-fires on debris the brush
+    is not picking up, and the robot slows down carrying it.
+  - **`floor_dirty`** — rising dirt with steady speed. The floor is genuinely dirtier.
+
+The first cleans after a gap of more than a week are excluded from both: they run on an abnormally
+dirty floor and would otherwise read as brush wear.
+
+Classic robots only — this comes from the cloud mission history.
+
+## What the mission record says went wrong
+
+`error_code` on a mission record now falls back to the first error in that mission's timeline when
+the record itself reports none. On one tester's robot the mission-level field was empty on **all 49
+records** while the timelines held 111 error events — sixteen missions ended stuck and the records
+said nothing was wrong.
 
 ## Events & device triggers
 

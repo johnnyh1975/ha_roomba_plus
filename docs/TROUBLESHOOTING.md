@@ -185,6 +185,15 @@ The anomaly detection (v2.5+) uses your robot's personal performance history as 
 
 ---
 
+## No favourite buttons
+
+Favourites from the iRobot app appear as one button each on Prime robots. If they are missing,
+**download diagnostics** — the `favourites` block reports how many reached the integration and
+whether the buttons are switched on, which tells apart the two reasons they could be absent.
+
+A count of zero on an account that has favourites is worth reporting. Versions before v4.0.0a32
+returned nothing when the server wrapped the list in an object rather than sending a bare array.
+
 ## A Prime robot that says it is cleaning and is not
 
 **Symptoms.** The vacuum shows `cleaning` for hours or days. Scheduled missions stop running and
@@ -201,7 +210,7 @@ Observed on a Roomba Combo (Y351020) for **61 hours** after an error 48 mission,
 daily schedules were skipped silently and every remote command was swallowed.
 
 **How to recognise it.** Roomba+ reports `phase` as **`stale`** when the robot's battery is rising
-while the document claims it is running — charging and cleaning are mutually exclusive, and the
+while the document claims it is running, and has been running for more than ten minutes — charging and cleaning are mutually exclusive, and the
 robot supplies both numbers. `readiness` will read `NONE` throughout: the sensor whose job is "why
 won't it start" has no answer, because the robot claims nothing is blocking.
 
@@ -224,6 +233,16 @@ in the observed case closing a 61-hour phantom as `ok` at a timestamp matching t
 minute.
 
 Nothing softer reaches it, and no integration can do this for you.
+
+**Why ten minutes.** A robot that recharges mid-mission and resumes enters `run` while its battery
+is still climbing from the charge — genuinely running and genuinely rising, the one case where this
+test would lie. The freeze rises for hours, so the delay costs nothing; without it, an automation
+watching for `stale` would be woken by a healthy robot finishing a recharge.
+
+**The error text is on the error sensor.** `error_title` and `error_description` carry iRobot's own
+wording as attributes, so an automation can say what went wrong rather than quoting a number. Error
+48 reads "An obstacle blocked the entrance to a room" — on one tester's robot that single code
+accounted for 93 of 111 timeline errors and every incomplete mission in the archive.
 
 ## Cloud & history
 
