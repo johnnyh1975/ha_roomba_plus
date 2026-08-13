@@ -3865,7 +3865,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         rooms: dict[str, dict[str, Any]] = {}
         for room_id, ring in self._polygons.items():
             name = self._names.get(room_id) or f"Room {room_id}"
-            rooms[name] = {
+            # xiaomi-vacuum-map-card uses the mapping key as the selection
+            # id when it generates room config. Keep the app's stable ID
+            # there; the display name remains the room's label.
+            rooms[room_id] = {
                 "outline": [[x, y] for x, y in ring],
                 "name": name,
                 "room_id": room_id,
