@@ -1472,6 +1472,11 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
 
+    # Domain actions are shared by Classic and Prime.  The Classic setup
+    # path registers them during its final phase, but Prime returns before
+    # that phase; register them here once runtime_data is available.
+    async_register_services(hass)
+
     # FAVOURITES, read once now that runtime_data exists.
     #
     # Before the platforms load, because the button platform reads the

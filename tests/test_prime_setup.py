@@ -119,7 +119,9 @@ class TestAsyncSetupEntryPrime:
         with patch(
             "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
-        ) as mock_create:
+        ) as mock_create, patch(
+            "custom_components.roomba_plus.async_register_services"
+        ) as register_services:
             result = await _async_setup_entry_prime(hass, config_entry)
 
         assert result is True
@@ -141,6 +143,7 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.prime_household_id == "hh1"
         assert runtime_data.prime_serial_info is fake_serial_info
         fake_prime_robot.connect.assert_awaited_once()
+        register_services.assert_called_once_with(hass)
 
     @pytest.mark.asyncio
     async def test_serial_info_failure_does_not_block_setup(self) -> None:
