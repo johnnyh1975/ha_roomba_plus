@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Aspiration et lavage",
           "vacuum_then_mop": "Aspiration puis lavage"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Durée de séchage de la serpillière",
+        "state": {
+          "2_hours": "2 heures",
+          "3_hours": "3 heures",
+          "4_hours": "4 heures",
+          "5_hours": "5 heures",
+          "6_hours": "6 heures"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Fréquence de lavage de la serpillière",
+        "state": {
+          "after_each_room": "Après chaque pièce",
+          "by_time": "Par intervalle de temps",
+          "by_area": "Par intervalle de surface",
+          "standard": "Standard",
+          "medium": "Moyenne",
+          "high": "Élevée"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Intervalle de lavage par surface",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Intervalle de lavage par temps",
+        "state": {
+          "10": "10 minutes",
+          "15": "15 minutes",
+          "20": "20 minutes",
+          "25": "25 minutes"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Eau chaude pour la serpillière",
+        "state": {
+          "no_heat": "Sans chauffage",
+          "default_heat": "Chauffage standard",
+          "high_heat": "Chauffage élevé"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Fréquence de vidage automatique",
+        "state": {
+          "every_routine": "Après chaque routine",
+          "every_2_routines": "Toutes les 2 routines",
+          "every_3_routines": "Toutes les 3 routines",
+          "on_dock_return": "Au retour à la base",
+          "10": "Toutes les 10 unités de surface",
+          "15": "Toutes les 15 unités de surface",
+          "25": "Toutes les 25 unités de surface",
+          "30": "Toutes les 30 unités de surface",
+          "50": "Toutes les 50 unités de surface"
+        }
       }
     },
     "image": {

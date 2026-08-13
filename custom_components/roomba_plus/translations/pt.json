@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Aspirar e esfregar",
           "vacuum_then_mop": "Aspirar e depois esfregar"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Duração da secagem da mopa",
+        "state": {
+          "2_hours": "2 horas",
+          "3_hours": "3 horas",
+          "4_hours": "4 horas",
+          "5_hours": "5 horas",
+          "6_hours": "6 horas"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Frequência de lavagem da mopa",
+        "state": {
+          "after_each_room": "Após cada divisão",
+          "by_time": "Por intervalo de tempo",
+          "by_area": "Por intervalo de área",
+          "standard": "Padrão",
+          "medium": "Média",
+          "high": "Alta"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Intervalo de lavagem por área",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Intervalo de lavagem por tempo",
+        "state": {
+          "10": "10 minutos",
+          "15": "15 minutos",
+          "20": "20 minutos",
+          "25": "25 minutos"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Água quente para a mopa",
+        "state": {
+          "no_heat": "Sem aquecimento",
+          "default_heat": "Aquecimento padrão",
+          "high_heat": "Aquecimento alto"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frequência de esvaziamento automático",
+        "state": {
+          "every_routine": "Após cada rotina",
+          "every_2_routines": "A cada 2 rotinas",
+          "every_3_routines": "A cada 3 rotinas",
+          "on_dock_return": "Ao regressar à base",
+          "10": "A cada 10 unidades de área",
+          "15": "A cada 15 unidades de área",
+          "25": "A cada 25 unidades de área",
+          "30": "A cada 30 unidades de área",
+          "50": "A cada 50 unidades de área"
+        }
       }
     },
     "image": {

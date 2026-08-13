@@ -229,7 +229,12 @@ class PrimeMaintenanceTodo(IRobotEntity, TodoListEntity):
         for part_id, part in sorted(parts.items()):
             # A DUST BAG ON A ROBOT WITH NO DOCK.
             #
-            # @utkjmitch's dockless Combo 104 was told it had "60
+            # CORRECTED: this robot is not dockless -- it has an
+            # auto-empty dock with a bag, so the dust-bag item is
+            # legitimate and the motivating case for the rule below was
+            # a mislabel. The rule stands on its own reasoning.
+            #
+            # @utkjmitch's Combo 104 was told it had "60
             # evacuations remaining" for a bag it does not have, in a
             # station it does not own. The cloud reports the part
             # regardless of the hardware; the list should not repeat it.

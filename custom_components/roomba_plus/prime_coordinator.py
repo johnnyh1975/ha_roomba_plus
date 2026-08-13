@@ -785,7 +785,30 @@ def get_prime_capability_flags(config_entry: Any) -> tuple[Any | None, Any | Non
     an entity. Failing open on a transient fetch hiccup is the safer
     default -- a missing entity reads as "this integration is broken"
     to a user, while an entity that doesn't quite apply is a much
-    smaller problem."""
+    smaller problem.
+
+    CAPABILITIES CHANGE AT RUNTIME, and every caller here reads them
+    exactly once.
+
+    This function itself is fine -- it reads from the coordinator's
+    current data on every call. The limitation is WHEN it is called:
+    at platform setup, to decide which entities to create. The app does
+    the opposite, rebuilding `cap`, `digiCap` and `dockCap` on EVERY
+    shadow change (`_DevicePatchCaches._initCap`/`_initDigiCap`/
+    `_initDockCap`, app 3.0.0) rather than once at connect.
+
+    WHEN THAT MATTERS: a firmware update that adds a capability, or --
+    more likely in the field -- a robot moved onto a different dock. A
+    plain charge dock swapped for an AutoWash dock changes `dock.cap`
+    while the config entry is loaded, and the pad-drying switch that
+    should now appear will not until the entry is reloaded.
+
+    NOT FIXED HERE, because the fix is not in this function: Home
+    Assistant creates entities at setup, and adding them later means a
+    coordinator listener that calls async_add_entities. That is a real
+    change with its own failure modes, and no field report has asked
+    for it yet. Written down so the next person who sees "my new dock's
+    controls are missing" reaches for reload rather than for a bug."""
     coordinator = config_entry.runtime_data.prime_status_coordinator
     if coordinator is None or coordinator.data is None:
         return None, None

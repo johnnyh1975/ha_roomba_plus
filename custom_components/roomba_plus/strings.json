@@ -1064,6 +1064,68 @@
           "vacuum_and_mop": "Vacuum and mop",
           "vacuum_then_mop": "Vacuum, then mop"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Mop dry duration",
+        "state": {
+          "2_hours": "2 hours",
+          "3_hours": "3 hours",
+          "4_hours": "4 hours",
+          "5_hours": "5 hours",
+          "6_hours": "6 hours"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Mop wash frequency",
+        "state": {
+          "after_each_room": "After each room",
+          "by_time": "By time interval",
+          "by_area": "By area interval",
+          "standard": "Standard",
+          "medium": "Medium",
+          "high": "High"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Mop wash area interval",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Mop wash time interval",
+        "state": {
+          "10": "10 minutes",
+          "15": "15 minutes",
+          "20": "20 minutes",
+          "25": "25 minutes"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Heated mop water",
+        "state": {
+          "no_heat": "No heat",
+          "default_heat": "Default heat",
+          "high_heat": "High heat"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Auto-empty frequency",
+        "state": {
+          "every_routine": "After every routine",
+          "every_2_routines": "After every 2 routines",
+          "every_3_routines": "After every 3 routines",
+          "on_dock_return": "On dock return",
+          "10": "Every 10 units of area",
+          "15": "Every 15 units of area",
+          "25": "Every 25 units of area",
+          "30": "Every 30 units of area",
+          "50": "Every 50 units of area"
+        }
       }
     },
     "image": {

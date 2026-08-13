@@ -168,9 +168,14 @@ def _schedule_region_ids(options: Any) -> list[str]:
     inside a test rather than in the code under test.
 
     Regions carry `region_id` plus a `type` of "rid" (room), "zid"
-    (zone) or "furniture". Everything is read defensively beyond that:
-    these are raw dicts, and this runs inside a coordinator listener
-    where an exception would take the whole switch platform with it.
+    (zone) or "tid" (temporary/ad-hoc). An earlier version of this note
+    said "furniture" — that came from `RegionType.TID` in the library,
+    which carried the wrong value for months. It is "tid"
+    (`IrobotRegionType`, app 3.0.0). Nothing here read the type, so the
+    error stayed in prose; it would have misled the next person to.
+    Everything is read defensively beyond that: these are raw dicts, and
+    this runs inside a coordinator listener where an exception would
+    take the whole switch platform with it.
     """
     ids: list[str] = []
     for entry in getattr(options, "commands", None) or []:

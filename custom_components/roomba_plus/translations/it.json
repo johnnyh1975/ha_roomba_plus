@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Aspirazione e lavaggio",
           "vacuum_then_mop": "Aspirazione, poi lavaggio"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Durata asciugatura panno",
+        "state": {
+          "2_hours": "2 ore",
+          "3_hours": "3 ore",
+          "4_hours": "4 ore",
+          "5_hours": "5 ore",
+          "6_hours": "6 ore"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Frequenza lavaggio panno",
+        "state": {
+          "after_each_room": "Dopo ogni stanza",
+          "by_time": "Per intervallo di tempo",
+          "by_area": "Per intervallo di superficie",
+          "standard": "Standard",
+          "medium": "Media",
+          "high": "Alta"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Intervallo di lavaggio per superficie",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Intervallo di lavaggio per tempo",
+        "state": {
+          "10": "10 minuti",
+          "15": "15 minuti",
+          "20": "20 minuti",
+          "25": "25 minuti"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Acqua calda per il panno",
+        "state": {
+          "no_heat": "Senza riscaldamento",
+          "default_heat": "Riscaldamento standard",
+          "high_heat": "Riscaldamento alto"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frequenza svuotamento automatico",
+        "state": {
+          "every_routine": "Dopo ogni routine",
+          "every_2_routines": "Ogni 2 routine",
+          "every_3_routines": "Ogni 3 routine",
+          "on_dock_return": "Al ritorno alla base",
+          "10": "Ogni 10 unità di superficie",
+          "15": "Ogni 15 unità di superficie",
+          "25": "Ogni 25 unità di superficie",
+          "30": "Ogni 30 unità di superficie",
+          "50": "Ogni 50 unità di superficie"
+        }
       }
     },
     "image": {

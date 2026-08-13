@@ -1108,6 +1108,10 @@ PHASE_LABELS: Final[dict[str, str]] = {
     "cancelled": "Cancelled",
     "pause": "Paused",
     "chargingerror": "Base unplugged",
+    #: SECOND SPELLING, SAME CONDITION. `PhaseData` declares both
+    #: `chargingerror` (one word, as reported) and `chgerr`. Which a
+    #: robot sends is not established, so both are labelled.
+    "chgerr": "Base unplugged",
     "charge": "Charging",
     "run": "Running",
     "evac": "Emptying bin",
@@ -1116,16 +1120,46 @@ PHASE_LABELS: Final[dict[str, str]] = {
     "hmUsrDock": "Sent home",
     "hmMidMsn": "Docking mid-mission",
     "hmPostMsn": "Docking — end of mission",
+    #: SIX PHASES `MissionPhase` DECLARES AND THIS TABLE DID NOT LABEL.
+    #:
+    #: `_phase_value()` falls back to the raw wire string, so a robot in
+    #: any of these showed "padWash" or "hmUsrChrg" in the sensor rather
+    #: than words. Not a crash, and not visible in any test — the
+    #: fallback made it look deliberate.
+    #:
+    #: The three dock phases matter most: a combo robot washing or
+    #: drying its pad, or refilling, spends real time in them at the end
+    #: of every mop mission.
+    "hmUsrChrg": "Sent home to charge",
+    "padWash": "Washing pad",
+    "padDry": "Drying pad",
+    "refill": "Refilling tank",
+    "mapupd": "Updating map",
     "idle": "Idle",
 }
 
+#: DEFINED HERE AND READ BY NOTHING, for as long as it has existed.
+#:
+#: The orphan guard in tests/test_prime_setup.py catches private
+#: FUNCTIONS whose name appears once. This is a public CONSTANT, so it
+#: fell through the same shape one level over — see that guard's own
+#: constants half, added alongside this note.
+#:
+#: Kept rather than deleted: `cycle` is displayed nowhere today, but it
+#: is read in several places as a raw value, and a caller wanting to
+#: show it should not have to rebuild the table. Four values from
+#: `MissionCycle` were missing here too.
 CYCLE_LABELS: Final[dict[str, str]] = {
     "clean": "Clean",
     "quick": "Clean (quick)",
     "spot": "Spot",
     "evac": "Emptying",
     "dock": "Docking",
+    "dockupg": "Docking for update",
     "train": "Training",
+    "tidy": "Tidying",
+    "manual": "Manual",
+    "monitor": "Monitoring",
     "none": "Ready",
 }
 
@@ -1623,6 +1657,35 @@ def room_slug(value: str) -> str:
 #: prettier attribute is how this project has been wrong before. The
 #: number is exposed as-is; whether it is zero is the part that means
 #: something today.
+#:
+#: A THIRD ARGUMENT, from app 3.0.0 and independent of the two above.
+#: The vendor's own texts pin down what 287 and 290 mean:
+#:
+#:   287  "Unable to vacuum: remove Pad Plate"   -> plate ON,  mop only
+#:   290  "Unable to start mopping: attach Pad Plate" -> plate OFF, vacuum only
+#:
+#: If `allowed_modes` were the `OperatingMode` bitmask (vacuuming=2,
+#: mopOnly=4, combo=6), then 287 — the code that says vacuuming is
+#: impossible — would have to be 4, and it reads 2. The two are exactly
+#: swapped against that reading.
+#:
+#: So the field is not the operating-mode bitmask. Three separate codes
+#: now say so, from three unrelated directions.
+#:
+#: FOUR CODES BLOCK A START, not three. `blockFault` (app 3.0.0) checks
+#: 234, 286, 287 and 290, and 234 is a DIFFERENT state from 290:
+#:
+#:   234  "Unable to start: no mop attached"     -> the CLOTH is missing
+#:   290  "Unable to start mopping: attach Pad Plate" -> the PLATE is missing
+#:
+#: A robot can have the plate fitted and no cloth on it, which is
+#: exactly what `detectedPad: "padPlate"` reports. The two codes are not
+#: interchangeable and a mop-readiness check needs both.
+#:
+#: THESE FOUR ARE ALSO THE ONLY FAULT CODES THE APP TREATS SPECIALLY.
+#: Of 115 `DeviceFault` values, seven are referenced directly in code
+#: and the rest are looked up in a table -- so 234/286/287/290 are where
+#: the app deviates from just displaying the message.
 PRIME_ERROR_SEVERITY: Final[dict[int, tuple[str, int]]] = {
     1: ('p3', 0),
     2: ('p3', 0),

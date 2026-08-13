@@ -150,6 +150,30 @@ async def _async_add_prime_schedule_switches(
     config_entry.async_on_unload(coordinator.async_add_listener(_sync_entities))
 
 
+def _capability_permits(description: Any, cap: Any, dock_cap: Any) -> bool:
+    """Whether a setting switch should exist on this device.
+
+    THE CONTRACT IS UNCHANGED: None means unknown, and unknown means
+    offer. Only an explicit 0 withholds an entity -- a robot that has
+    not reported its capabilities yet gets the switch rather than
+    losing it.
+
+    What is new is the second object. Some settings are gated on the
+    ROBOT's capabilities and some on the DOCK's, and until now every
+    description could only name the first. `dock_cap` was already being
+    fetched at the call site and thrown away.
+    """
+    for attr, source in (
+        (description.cap_attr, cap),
+        (getattr(description, "dock_cap_attr", None), dock_cap),
+    ):
+        if attr is None or source is None:
+            continue
+        if getattr(source, attr, None) == 0:
+            return False
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
@@ -165,7 +189,7 @@ async def async_setup_entry(
         if data.prime_status_coordinator is not None:
             from .prime_coordinator import get_prime_capability_flags
 
-            cap, _dock_cap = get_prime_capability_flags(config_entry)
+            cap, dock_cap = get_prime_capability_flags(config_entry)
             # NEW (this session): capability-gated -- see
             # get_prime_capability_flags()'s own docstring for the
             # "None means unknown, only explicit 0 means absent" contract.
@@ -181,9 +205,7 @@ async def async_setup_entry(
         setting_entities = [
             PrimeSettingSwitch(data.blid, config_entry, description)
             for description in PRIME_SETTING_SWITCHES
-            if description.cap_attr is None
-            or cap is None
-            or getattr(cap, description.cap_attr, None) != 0
+            if _capability_permits(description, cap, dock_cap)
         ]
         if setting_entities:
             async_add_entities(setting_entities)
@@ -555,6 +577,7 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
         if coordinator is not None:
             self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
 
+
 @dataclass(frozen=True, kw_only=True)
 class PrimeSettingSwitchDescription(SwitchEntityDescription):
     """One rw-settings boolean, exposed as a switch."""
@@ -570,6 +593,18 @@ class PrimeSettingSwitchDescription(SwitchEntityDescription):
     #: offer" -- see get_prime_capability_flags()'s own contract:
     #: unknown is not absent, only an explicit 0 is.
     cap_attr: str | None = None
+    #: DOCK cap flag, same contract, different object.
+    #:
+    #: `cap_attr` reads the ROBOT's capability object; some settings are
+    #: gated on the DOCK's instead. The vendor's own gate table
+    #: (`RobotServiceHandler.capabilityFromKey`, app 3.0.0) puts pad
+    #: drying under `dock.cap.pd` -- a dock property, not a robot one --
+    #: and no robot-level flag covers it.
+    #:
+    #: Both fields exist because a description needs to say WHICH object
+    #: to ask. Folding them into one would mean guessing from the
+    #: attribute name, which is how this project has been wrong before.
+    dock_cap_attr: str | None = None
 
 
 #: Settings confirmed writable AND read-back on real hardware.
@@ -638,6 +673,18 @@ PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
         translation_key="prime_pad_dry_allowed",
         wire_key="padDryAllowed",
         model_attr="pad_dry_allowed",
+        # GATED ON THE DOCK, ADDED after the vendor's gate table showed
+        # `dockPadDrying -> dock.cap.pd`. This switch had NO gate at all,
+        # so a robot reporting `dock: {"known": false}` --
+        # @utkjmitch's Y351020 -- was offered a pad-drying setting for a
+        # dock that cannot dry. (That robot has an auto-empty dock, not
+        # the plain charge dock once assumed; it still has no pad
+        # drying, so this gate is unaffected.)
+        #
+        # The dock capability was already being fetched here and
+        # discarded into `_dock_cap`. Same shape as the orphans this
+        # project keeps finding: the answer was in the function, unused.
+        dock_cap_attr="pad_dry",
         entity_category=EntityCategory.CONFIG,
     ),
     PrimeSettingSwitchDescription(

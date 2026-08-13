@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Odkurzanie i mopowanie",
           "vacuum_then_mop": "Odkurzanie, potem mopowanie"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Czas suszenia mopa",
+        "state": {
+          "2_hours": "2 godziny",
+          "3_hours": "3 godziny",
+          "4_hours": "4 godziny",
+          "5_hours": "5 godzin",
+          "6_hours": "6 godzin"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Częstotliwość prania mopa",
+        "state": {
+          "after_each_room": "Po każdym pokoju",
+          "by_time": "Co określony czas",
+          "by_area": "Co określoną powierzchnię",
+          "standard": "Standardowa",
+          "medium": "Średnia",
+          "high": "Wysoka"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Interwał prania wg powierzchni",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Interwał prania wg czasu",
+        "state": {
+          "10": "10 minut",
+          "15": "15 minut",
+          "20": "20 minut",
+          "25": "25 minut"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Podgrzewana woda do mopa",
+        "state": {
+          "no_heat": "Bez podgrzewania",
+          "default_heat": "Standardowe podgrzewanie",
+          "high_heat": "Wysokie podgrzewanie"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Częstotliwość automatycznego opróżniania",
+        "state": {
+          "every_routine": "Po każdej rutynie",
+          "every_2_routines": "Co 2 rutyny",
+          "every_3_routines": "Co 3 rutyny",
+          "on_dock_return": "Przy powrocie do stacji",
+          "10": "Co 10 jednostek powierzchni",
+          "15": "Co 15 jednostek powierzchni",
+          "25": "Co 25 jednostek powierzchni",
+          "30": "Co 30 jednostek powierzchni",
+          "50": "Co 50 jednostek powierzchni"
+        }
       }
     },
     "image": {

@@ -99,17 +99,57 @@ async def async_setup_entry(
             PrimeSettingSelect,
         )
 
-        cap, _dock_cap = get_prime_capability_flags(config_entry)
-        async_add_entities([
-            PrimeSettingSelect(data.blid, config_entry, description)
-            for description in PRIME_SELECTS
+        from .select_prime import (  # noqa: PLC0415
+            _autoevac_options,
+            _pad_wash_heat_options,
+            _settings_keys,
+        )
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+        # WHICH SETTINGS THIS ROBOT ACTUALLY HAS, read from its own
+        # rw-settings key list rather than inferred from a table.
+        #
+        # @utkjmitch's Y351020 has auto-evac hardware and NO
+        # `autoevacFreq` key, and the iRobot app offers him no
+        # frequency control either. His reading is the one that fits:
+        # the key set tracks what is USER-CONFIGURABLE on the SKU, not
+        # what is installed. A capability flag cannot answer this.
+        #
+        # None means the shadow has not arrived -- offer everything, the
+        # same fail-open contract used for capabilities. An empty set
+        # would hide every control on a slow first connection.
+        present = _settings_keys(config_entry)
+
+        selects = []
+        for description in PRIME_SELECTS:
             # Same "None means unknown, only an explicit 0 means absent"
             # contract the switches use: a robot that has not reported
             # its capabilities yet should get the entity, not lose it.
-            if description.cap_attr is None
-            or cap is None
-            or getattr(cap, description.cap_attr, None) != 0
-        ])
+            if not (
+                description.cap_attr is None
+                or cap is None
+                or getattr(cap, description.cap_attr, None) != 0
+            ):
+                continue
+            if present is not None and description.wire_key not in present:
+                continue
+            # TWO CONTROLS HAVE DOCK- OR ROBOT-DEPENDENT OPTION SETS.
+            # Everything else offers its full map.
+            if description.wire_key == "autoevacFreq":
+                values = _autoevac_options(cap)
+            elif description.wire_key == "pwHeat":
+                values = _pad_wash_heat_options(dock_cap)
+            else:
+                values = None
+            # A capability level can narrow the set to nothing --
+            # `taskEndOnly` offers no choice at all. A select with no
+            # options is worse than no select.
+            if values is not None and not values:
+                continue
+            selects.append(
+                PrimeSettingSelect(data.blid, config_entry, description, values)
+            )
+        async_add_entities(selects)
         # Always, even on a single-map account: an entity that appears
         # and disappears as maps come and go is worse than a select with
         # one option, because an automation pointing at a vanished entity

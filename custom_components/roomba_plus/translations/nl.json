@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Stofzuigen en dweilen",
           "vacuum_then_mop": "Stofzuigen, dan dweilen"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Droogduur dweil",
+        "state": {
+          "2_hours": "2 uur",
+          "3_hours": "3 uur",
+          "4_hours": "4 uur",
+          "5_hours": "5 uur",
+          "6_hours": "6 uur"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Wasfrequentie dweil",
+        "state": {
+          "after_each_room": "Na elke kamer",
+          "by_time": "Per tijdsinterval",
+          "by_area": "Per oppervlakte-interval",
+          "standard": "Standaard",
+          "medium": "Gemiddeld",
+          "high": "Hoog"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Wasinterval op oppervlakte",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Wasinterval op tijd",
+        "state": {
+          "10": "10 minuten",
+          "15": "15 minuten",
+          "20": "20 minuten",
+          "25": "25 minuten"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Verwarmd dweilwater",
+        "state": {
+          "no_heat": "Geen verwarming",
+          "default_heat": "Standaardverwarming",
+          "high_heat": "Hoge verwarming"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frequentie automatisch legen",
+        "state": {
+          "every_routine": "Na elke routine",
+          "every_2_routines": "Elke 2 routines",
+          "every_3_routines": "Elke 3 routines",
+          "on_dock_return": "Bij terugkeer naar het station",
+          "10": "Elke 10 oppervlakte-eenheden",
+          "15": "Elke 15 oppervlakte-eenheden",
+          "25": "Elke 25 oppervlakte-eenheden",
+          "30": "Elke 30 oppervlakte-eenheden",
+          "50": "Elke 50 oppervlakte-eenheden"
+        }
       }
     },
     "image": {

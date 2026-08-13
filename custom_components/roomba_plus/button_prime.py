@@ -168,6 +168,29 @@ PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
         # state that means drying is actually running. Stopping something
         # that is not running is the one control where the app's rule is
         # the opposite of the start button's.
+        #
+        # DO NOT IMPLEMENT THE APP'S LOCK HERE. This divergence is
+        # deliberate, it is the behaviour a tester specifically asked us
+        # to keep, and it is the kind of thing a later "align with the
+        # app" pass would quietly delete.
+        #
+        # App 3.0.0's Dock Controls sheet applies a blanket lock on top
+        # of the per-state rules: once any dock task starts, all three
+        # controls grey out and tapping one answers "Dock task in
+        # progress. Try again later" (@chairstacker, screenshots). So a
+        # drying cycle cannot be stopped from the app once begun. He
+        # calls that the big drawback of the new UI, and being able to
+        # stop it from Home Assistant the reason to keep ours as it is.
+        #
+        # The robot disagrees with its own app: `stoppaddry` sent from
+        # here during a running dry cycle works, field-confirmed on the
+        # same account and the same dock. The block is client-side, not
+        # a refusal from the hardware -- the same shape as the nine
+        # rejection reasons in `device_view_model_clean_plan`.
+        #
+        # So this button stays gated on 702 alone. Copying the blanket
+        # lock would remove a capability that demonstrably works, to
+        # match a UI decision iRobot made for its own reasons.
         ready_states=(702,), state_attr="pd_state",
     ),
     PrimeDockCommand(
@@ -360,12 +383,33 @@ async def async_build_prime_buttons(
     _cap, dock_cap = get_prime_capability_flags(config_entry)
     # A ROBOT THAT SAYS IT HAS NO DOCK GETS NO DOCK BUTTONS.
     #
-    # @utkjmitch's Y351020 on a plain charge dock reports
-    # `dock: {"known": false}` with no `cap` object, and the rule below
-    # reads a missing cap as "unknown, offer anyway". That gave him wash
-    # and dry buttons for a dock that has neither. `known: false` is a
-    # statement, not a gap. Same helper and same reasoning as the dock
-    # sensors in sensor.py.
+    # @utkjmitch's Y351020 reports `dock: {"known": false}` with no
+    # `cap` object, and the rule below reads a missing cap as "unknown,
+    # offer anyway". That gave him wash and dry buttons for a dock that
+    # has neither. `known: false` is a statement, not a gap.
+    #
+    # CORRECTED: this robot is NOT on a plain charge dock. It sits on an
+    # auto-empty dock with a bag in it, and `cap.autoevac = 1` says so.
+    # The tester's own earlier "dockless" label came from inferring
+    # hardware out of an 18-key rw-settings list, and he has since
+    # retracted it.
+    #
+    # SO `known: false` DOES NOT MEAN "NO DOCK". A robot with real
+    # docking hardware reports it. Whatever `known` describes, it is
+    # narrower than presence -- the dock's identity or details, most
+    # likely.
+    #
+    # THE GATE STAYS, and this is the uncomfortable part: it is right
+    # about pad wash and pad dry, which this dock genuinely lacks, and
+    # it also withholds `prime_empty_bin` from a robot whose dock
+    # demonstrably empties. Nobody has established whether that dock
+    # accepts an `evac` command or empties on its own schedule with the
+    # robot uninvolved -- the app offers him no auto-empty control at
+    # all, which points at the second. Changing the gate on that
+    # uncertainty would trade a wrong button for a wrong absence.
+    #
+    # WHAT WOULD SETTLE IT: whether the iRobot app offers him an
+    # empty-now action. One look, no run.
     if _dock_reports_itself(config_entry):
         for command in PRIME_DOCK_COMMANDS:
             # None means unknown, only an explicit 0 means absent -- so a
@@ -437,7 +481,7 @@ async def async_favorites_attribute(
         _LOGGER.debug("roomba_plus: could not read favorites", exc_info=True)
         return []
 
-    return [
+    kept = [
         {
             "id": str(getattr(f, "favorite_id", "")),
             "name": getattr(f, "name", "") or "",
@@ -447,6 +491,30 @@ async def async_favorites_attribute(
         and not getattr(f, "is_deleted", False)
         and not getattr(f, "is_hidden", False)
     ]
+
+    # SAY WHAT WAS DROPPED, because silence here is what made this bug
+    # unfindable for weeks.
+    #
+    # A favourite with no parseable id fails the first condition and
+    # vanishes. Deleted and hidden ones are meant to vanish. All three
+    # produced the same visible result -- no buttons -- and the only
+    # difference between "your account has none" and "seven arrived and
+    # none had an id" was invisible.
+    #
+    # @chairstacker has seven favourites and saw no buttons across
+    # several releases. Each fix along the way was plausible and none of
+    # them could be confirmed or ruled out, because the log said nothing
+    # either way.
+    dropped = len(favorites or []) - len(kept)
+    if dropped:
+        _LOGGER.warning(
+            "Roomba+ Prime: %d of %d favourite(s) were not offered as buttons "
+            "-- deleted, hidden, or carrying no usable id. Enable debug "
+            "logging for roombapy_prime to see which",
+            dropped,
+            len(favorites or []),
+        )
+    return kept
 
 
 async def async_run_favorite(

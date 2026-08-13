@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Aspirar y fregar",
           "vacuum_then_mop": "Aspirar y luego fregar"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Duración del secado de la mopa",
+        "state": {
+          "2_hours": "2 horas",
+          "3_hours": "3 horas",
+          "4_hours": "4 horas",
+          "5_hours": "5 horas",
+          "6_hours": "6 horas"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Frecuencia de lavado de la mopa",
+        "state": {
+          "after_each_room": "Después de cada habitación",
+          "by_time": "Por intervalo de tiempo",
+          "by_area": "Por intervalo de superficie",
+          "standard": "Estándar",
+          "medium": "Media",
+          "high": "Alta"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Intervalo de lavado por superficie",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Intervalo de lavado por tiempo",
+        "state": {
+          "10": "10 minutos",
+          "15": "15 minutos",
+          "20": "20 minutos",
+          "25": "25 minutos"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Agua caliente para la mopa",
+        "state": {
+          "no_heat": "Sin calor",
+          "default_heat": "Calor estándar",
+          "high_heat": "Calor alto"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frecuencia de vaciado automático",
+        "state": {
+          "every_routine": "Después de cada rutina",
+          "every_2_routines": "Cada 2 rutinas",
+          "every_3_routines": "Cada 3 rutinas",
+          "on_dock_return": "Al volver a la base",
+          "10": "Cada 10 unidades de superficie",
+          "15": "Cada 15 unidades de superficie",
+          "25": "Cada 25 unidades de superficie",
+          "30": "Cada 30 unidades de superficie",
+          "50": "Cada 50 unidades de superficie"
+        }
       }
     },
     "image": {

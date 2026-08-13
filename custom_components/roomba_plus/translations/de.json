@@ -1057,6 +1057,68 @@
           "vacuum_and_mop": "Saugen und Wischen",
           "vacuum_then_mop": "Saugen, dann Wischen"
         }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Trockendauer Wischtuch",
+        "state": {
+          "2_hours": "2 Stunden",
+          "3_hours": "3 Stunden",
+          "4_hours": "4 Stunden",
+          "5_hours": "5 Stunden",
+          "6_hours": "6 Stunden"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Waschintervall Wischtuch",
+        "state": {
+          "after_each_room": "Nach jedem Raum",
+          "by_time": "Nach Zeitintervall",
+          "by_area": "Nach Flächenintervall",
+          "standard": "Standard",
+          "medium": "Mittel",
+          "high": "Hoch"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Waschintervall nach Fläche",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Waschintervall nach Zeit",
+        "state": {
+          "10": "10 Minuten",
+          "15": "15 Minuten",
+          "20": "20 Minuten",
+          "25": "25 Minuten"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Beheiztes Wischwasser",
+        "state": {
+          "no_heat": "Ohne Heizung",
+          "default_heat": "Standardheizung",
+          "high_heat": "Hohe Heizstufe"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Absaugintervall",
+        "state": {
+          "every_routine": "Nach jeder Routine",
+          "every_2_routines": "Nach jeder 2. Routine",
+          "every_3_routines": "Nach jeder 3. Routine",
+          "on_dock_return": "Bei Rückkehr zur Station",
+          "10": "Alle 10 Flächeneinheiten",
+          "15": "Alle 15 Flächeneinheiten",
+          "25": "Alle 25 Flächeneinheiten",
+          "30": "Alle 30 Flächeneinheiten",
+          "50": "Alle 50 Flächeneinheiten"
+        }
       }
     },
     "image": {

@@ -1451,6 +1451,50 @@ _KNOWN_PARTS: dict[str, str] = {
     # them and neither could find either in the app, so they stay
     # numeric -- a made-up label gets believed, a bare number invites a
     # question.
+    #
+    # APP 3.0.0 NAMES PARTS INSTEAD OF NUMBERING THEM.
+    #
+    # Where 2.2.4 used the numeric ids above, 3.0.0 uses speaking
+    # `part_id` values: main_brush, side_brush, filter, bag, battery,
+    # pad, sensor, dock_washing_system, mop_washing_system.
+    #
+    # A server that starts sending those would fall straight through
+    # this lookup to `return part_id`, and the list would read "Replace
+    # main_brush" -- exactly the bug `_readable_part_name`'s own
+    # docstring says it exists to avoid. Mapped here so both vocabularies
+    # resolve to the same translation.
+    #
+    # THE PAIRINGS ARE BY MEANING, and each is unambiguous:
+    # side_brush is the edge sweeping brush (67), main_brush the
+    # multi-surface brush (71), bag the dirt disposal bag (147), pad the
+    # mop pads (148), sensor the cliff sensors (213).
+    "main_brush": "prime_part_multi_surface_brush",
+    "side_brush": "prime_part_edge_brush",
+    "filter": "prime_part_filter",
+    "bag": "prime_part_dirt_bag",
+    "pad": "prime_part_mop_pads",
+    "sensor": "prime_part_cliff_sensors",
+    # NOT MAPPED TO 202/212, THOUGH THE TEMPTATION IS OBVIOUS.
+    #
+    # 3.0.0 has exactly two washing-system parts, and this integration
+    # has exactly two unnamed pad-wash counters. That is suggestive and
+    # it is not evidence: nothing says which of 202/212 is the dock's
+    # system and which is the mop's, and the pairing would be a coin
+    # flip printed as a fact.
+    #
+    # They get their own keys instead, so a robot reporting the named
+    # form is readable without deciding the numeric question.
+    #
+    # THESE THREE HAVE NO TRANSLATION ENTRY and do not need one:
+    # `_readable_part_name` falls back to the key with its prefix
+    # stripped and title-cased, giving "Dock Washing System" and "Mop
+    # Washing System" -- already the words iRobot uses. Adding eight
+    # locale entries to restate that would be churn.
+    "dock_washing_system": "prime_part_dock_washing_system",
+    "mop_washing_system": "prime_part_mop_washing_system",
+    # `battery` has no numeric counterpart here at all -- no capture has
+    # shown a battery part in the maintenance list.
+    "battery": "prime_part_battery",
 }
 
 
@@ -1484,6 +1528,16 @@ _PART_COUNT_UNITS: dict[str, str | None] = {
     # so this table now covers every type the app knows.
     "battery": "charge cycles",
     "sqft": "ft²",
+    # BOTH SPELLINGS OF ONE VALUE, and it is the vendor's inconsistency
+    # again. `asset_health_enum` in app 3.0.0 lists `padWashesUsed` AND
+    # `pad_washes_used` side by side -- only the snake_case form was
+    # here, so a robot reporting the camelCase one showed a bare number.
+    #
+    # Exactly the shape of the `reusablewet`/`reusableWet` bug in
+    # ZONE_TYPE_ICONS' neighbour table, found the same way: by reading
+    # the vendor's own list rather than the one capture we happened to
+    # have.
+    "padWashesUsed": "pad washes",
 }
 
 

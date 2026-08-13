@@ -263,9 +263,13 @@ async def async_setup_entry(
         # open)".
         # A DOCK THE ROBOT SAYS IT DOES NOT KNOW IS NOT AN UNKNOWN DOCK.
         #
-        # @utkjmitch's Y351020 sits on a plain charge dock and reports
+        # @utkjmitch's Y351020 reports
         # `dock: {"known": false, "error": 0, "fwVer": ""}` -- no `cap`
-        # object at all. The rule below reads a missing cap as "shadow
+        # object at all. NOT a plain charge dock, corrected by the
+        # tester: it is an auto-empty dock with a bag, and
+        # `cap.autoevac = 1`. `known: false` is narrower than "no dock".
+        # See button_prime.py's gate for what that does and does not
+        # justify. The rule below reads a missing cap as "shadow
         # has not arrived, fail open", which is right when the shadow
         # really is incomplete and wrong here: `known: false` is the
         # robot stating there is no such dock.

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
@@ -65,6 +65,172 @@ _LOGGER = logging.getLogger(__name__)
 SUCTION_LEVELS: dict[int, str] = {2: "light", 3: "normal", 4: "deep"}
 
 
+#: THE SIX CONTROLS FROM ISSUE #46, and the value sets are the vendor's
+#: rather than this project's.
+#:
+#: Every set below comes from an enum in app 3.0.0, not from the
+#: per-SKU picker lists. That distinction cost real work to find and it
+#: matters: `getListBySKU` returns what one product mode's picker shows,
+#: and a robot can sit outside it. @chairstacker's reports
+#: `autoevacFreq = 1` and `pwReturn = 2` -- neither value appears in the
+#: SKU list for his model, and both are correct.
+#:
+#: A picker built from the narrow list could not have represented his
+#: robot's own settings, and his first tap would have changed a setting
+#: he never chose to change.
+
+#: `padDryDur` -- how long the dock runs the dryer, in hours.
+#:
+#: `DryDurType` (app 3.0.0): two=2, three=3, four=4, five=5, six=6.
+#:
+#: AN EARLIER VERSION OF THIS NOTE SAID NO VENDOR ENUM EXISTED, and
+#: that the range was inferred from two field captures. It was written
+#: while the Dart snapshot was still considered unreadable. It is
+#: readable, `DryDurType` is in it, and the inferred range happened to
+#: be exactly right -- which is luck, not method, and would not have
+#: been worth relying on.
+PAD_DRY_DURATIONS: dict[int, str] = {
+    2: "2_hours", 3: "3_hours", 4: "4_hours", 5: "5_hours", 6: "6_hours",
+}
+
+#: `pwHeat` -- heated water for pad washing.
+#:
+#: `HeatType` (app 3.0.0): noHeat=0, defaultHeat=1, highHeat=2.
+#:
+#: THE MIDDLE ONE IS "DEFAULT", NOT "LOW". An earlier version of this
+#: table labelled them off/low/high, which reads as three intensities
+#: with the middle one below normal. The vendor's own name says the
+#: opposite: 1 is the standard heated setting and 2 is the elevated one.
+PAD_WASH_HEAT_LEVELS: dict[int, str] = {
+    0: "no_heat", 1: "default_heat", 2: "high_heat",
+}
+
+#: `dock.cap.pw` level -> which `HeatType` values that dock offers.
+#:
+#: `DockPadWashingType` (app 3.0.0) turns what this project treated as
+#: an opaque graduated flag into four named states:
+#:
+#:     0  notSupported        no pad washing at all
+#:     1  supported           washing, no heat        <- @chairstacker
+#:     2  heatedSupported     adds the default heat
+#:     3  highHeatSupported   adds high heat
+#:
+#: SO THE OPTION SET DEPENDS ON THE DOCK, exactly as it does for
+#: auto-evacuation. A static 0/1/2 would offer high heat to a level-2
+#: dock that cannot produce it -- accepted by the shadow, wrong on the
+#: hardware, and invisible.
+#:
+#: chairstacker's dock reads `pw: 1`, which is why he has no `pwHeat`
+#: key at all and why this control will not appear for him. Key presence
+#: catches that case; this table catches the one key presence cannot --
+#: a dock that HAS the key but not every level.
+_PAD_WASH_HEAT_LEVELS_BY_CAP: dict[int, tuple[int, ...]] = {
+    0: (),
+    1: (),
+    2: (0, 1),
+    3: (0, 1, 2),
+}
+
+
+def _pad_wash_heat_options(dock_cap: Any) -> dict[int, str]:
+    """The heat levels this dock offers.
+
+    UNKNOWN MEANS OFFER EVERYTHING, the same fail-open contract used
+    throughout this file: a dock that has not reported `pw` gets the
+    full set rather than an empty control."""
+    level = getattr(dock_cap, "pad_wash", None) if dock_cap is not None else None
+    allowed = _PAD_WASH_HEAT_LEVELS_BY_CAP.get(level) if isinstance(level, int) else None
+    if allowed is None:
+        return dict(PAD_WASH_HEAT_LEVELS)
+    return {v: label for v, label in PAD_WASH_HEAT_LEVELS.items() if v in allowed}
+
+#: `pwAreaInterval` -- wash the pad every N units of area.
+#:
+#: `ReturnByArea` (app 3.0.0). Only meaningful while `pwReturn` is 2.
+PAD_WASH_AREA_INTERVALS: dict[int, str] = {
+    6: "6", 8: "8", 10: "10", 15: "15", 20: "20",
+}
+
+#: `pwTimeInterval` -- wash the pad every N minutes.
+#:
+#: `ReturnByTime` (app 3.0.0). Only meaningful while `pwReturn` is 1.
+PAD_WASH_TIME_INTERVALS: dict[int, str] = {
+    10: "10", 15: "15", 20: "20", 25: "25",
+}
+
+#: `pwReturn` -- TWO RANGES IN ONE FIELD, and that is the vendor's
+#: design, not a modelling choice here.
+#:
+#: `ReturnByMode` (app 3.0.0) declares six values:
+#:
+#:     0/1/2       WHEN to return: after each room, after a time
+#:                 interval, after an area interval
+#:     100/101/102 HOW THOROUGHLY: Standard, Medium, High
+#:
+#: ONE ENTITY, NOT TWO. `_updateWashFreqByType` branches on the value's
+#: type and writes this single field; splitting the ranges into two
+#: entities would mean two controls fighting over one wire key.
+#:
+#: THE APP ITSELF CANNOT SHOW BOTH. Its Mop Wash Frequency screen offers
+#: only Standard/Medium/High -- @chairstacker's robot reads 2 and his
+#: screen shows nothing selected at all (screenshots, issue #60). This
+#: control can represent a state the vendor's own app cannot.
+PAD_WASH_RETURN_MODES: dict[int, str] = {
+    0: "after_each_room",
+    1: "by_time",
+    2: "by_area",
+    100: "standard",
+    101: "medium",
+    102: "high",
+}
+
+#: `autoevacFreq` -- how often the dock empties itself.
+#:
+#: `ClearFreqType` (app 3.0.0). WHICH SUBSET APPLIES DEPENDS ON
+#: `cap.autoevac`, so this full map is filtered per robot at setup --
+#: see _autoevac_options().
+AUTOEVAC_FREQUENCIES: dict[int, str] = {
+    0: "every_routine",
+    1: "every_2_routines",
+    2: "every_3_routines",
+    4: "on_dock_return",
+    10: "10", 15: "15", 25: "25", 30: "30", 50: "50",
+}
+
+#: `CapAutoEvac` level -> which `ClearFreqType` values that level offers.
+#:
+#: CONFIRMED AGAINST HARDWARE AND A SCREENSHOT. @chairstacker reports
+#: `cap.autoevac = 1` and `autoevacFreq = 1`; his Auto-Empty Frequency
+#: screen shows exactly three options. Level 1 is `freqModes`, and
+#: `freqModes` is 0/1/2. The two numbers and the picture agree.
+#:
+#: @utkjmitch reports `cap.autoevac = 1` with NO `autoevacFreq` key and
+#: no picker anywhere in the app. So the capability says which values
+#: apply IF there is a control; key presence says whether there is one.
+#: Both rules are needed and neither replaces the other.
+_AUTOEVAC_LEVELS: dict[int, tuple[int, ...]] = {
+    0: (),                                    # taskEndOnly: no choice
+    1: (0, 1, 2),                             # freqModes
+    2: (0, 1, 2, 10, 15, 25, 30, 50),         # freqWithArea
+    3: (0, 1, 2, 4, 10, 15, 25, 30, 50),      # taskEndOrDockReturn
+}
+
+
+def _autoevac_options(cap: Any) -> dict[int, str]:
+    """The auto-evacuation values this robot's capability level offers.
+
+    UNKNOWN MEANS OFFER EVERYTHING, the same contract the rest of this
+    file uses: a robot that has not reported `cap.autoevac` gets the
+    full set rather than an empty control. Only a level the vendor
+    defines narrows it, and only `taskEndOnly` empties it entirely.
+    """
+    level = getattr(cap, "autoevac", None) if cap is not None else None
+    allowed = _AUTOEVAC_LEVELS.get(level) if isinstance(level, int) else None
+    if allowed is None:
+        return dict(AUTOEVAC_FREQUENCIES)
+    return {v: label for v, label in AUTOEVAC_FREQUENCIES.items() if v in allowed}
+
+
 @dataclass(frozen=True, kw_only=True)
 class PrimeSelectDescription(SelectEntityDescription):
     """One graduated rw-settings value."""
@@ -82,6 +248,36 @@ class PrimeSelectDescription(SelectEntityDescription):
     cap_attr: str | None = None
 
 
+#: WHICH VENDOR ENUM EACH VALUE SET COMES FROM, declared so a guard can
+#: check it rather than a reader having to remember.
+#:
+#: Two of these were built from recall while the extract sat unread:
+#: `padDryDur` shipped claiming no enum existed, and `pwHeat` shipped
+#: with wrong labels and no dock gate. Both were caught by somebody
+#: asking. This table is what replaces asking.
+#:
+#: DECLARED, NOT DISCOVERED. Matching value sets against the extract by
+#: shape produces false hits -- `{0, 1, 2}` matches four different
+#: vendor enums. A match only means something when the name came first.
+#:
+#: A set with no vendor enum belongs here with None and a reason, not
+#: absent from the table.
+VENDOR_ENUM_SOURCES: dict[str, str | None] = {
+    "SUCTION_LEVELS": None,  # from operating_mode_defaults captures, not an enum
+    "PAD_DRY_DURATIONS": "DryDurType",
+    "PAD_WASH_HEAT_LEVELS": "HeatType",
+    "PAD_WASH_AREA_INTERVALS": "ReturnByArea",
+    "PAD_WASH_TIME_INTERVALS": "ReturnByTime",
+    "PAD_WASH_RETURN_MODES": "ReturnByMode",
+    "AUTOEVAC_FREQUENCIES": "ClearFreqType",
+    # Capability LEVELS rather than setting values: the keys are
+    # cap values and the payload is which setting values that level
+    # permits. Checked against the cap enum's own value set.
+    "_AUTOEVAC_LEVELS": "CapAutoEvac",
+    "_PAD_WASH_HEAT_LEVELS_BY_CAP": "DockPadWashingType",
+}
+
+
 PRIME_SELECTS: tuple[PrimeSelectDescription, ...] = (
     PrimeSelectDescription(
         key="prime_suction_level",
@@ -90,6 +286,57 @@ PRIME_SELECTS: tuple[PrimeSelectDescription, ...] = (
         model_attr="suction_level",
         values=SUCTION_LEVELS,
         cap_attr="suction_lvl",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_dry_duration",
+        translation_key="prime_pad_dry_duration",
+        wire_key="padDryDur",
+        model_attr="pad_dry_duration",
+        values=PAD_DRY_DURATIONS,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_wash_return",
+        translation_key="prime_pad_wash_return",
+        wire_key="pwReturn",
+        model_attr="pad_wash_return",
+        values=PAD_WASH_RETURN_MODES,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_wash_area_interval",
+        translation_key="prime_pad_wash_area_interval",
+        wire_key="pwAreaInterval",
+        model_attr="pad_wash_area_interval",
+        values=PAD_WASH_AREA_INTERVALS,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_wash_time_interval",
+        translation_key="prime_pad_wash_time_interval",
+        wire_key="pwTimeInterval",
+        model_attr="pad_wash_time_interval",
+        values=PAD_WASH_TIME_INTERVALS,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_wash_heat",
+        translation_key="prime_pad_wash_heat",
+        wire_key="pwHeat",
+        model_attr="pad_wash_heat",
+        values=PAD_WASH_HEAT_LEVELS,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    #: LAST, because its options are not fixed. `values` here is the
+    #: full ClearFreqType map; the setup narrows it per robot through
+    #: _autoevac_options() before constructing the entity.
+    PrimeSelectDescription(
+        key="prime_autoevac_frequency",
+        translation_key="prime_autoevac_frequency",
+        wire_key="autoevacFreq",
+        model_attr="autoevac_freq",
+        values=AUTOEVAC_FREQUENCIES,
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -110,6 +357,7 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         blid: str,
         config_entry: RoombaConfigEntry,
         description: PrimeSelectDescription,
+        values: dict[int, str] | None = None,
     ) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -117,7 +365,14 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
-        self._attr_options = list(description.values.values())
+        #: PER-ROBOT OPTIONS, not per-description.
+        #:
+        #: `autoevacFreq` offers a different set depending on
+        #: `cap.autoevac` -- three values on a freqModes dock, nine on a
+        #: taskEndOrDockReturn one. Everything else passes its full map
+        #: through unchanged.
+        self._values = values or description.values
+        self._attr_options = list(self._values.values())
 
     @property
     def suggested_object_id(self) -> str:
@@ -146,7 +401,7 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         # guessed at. The robot may support levels nobody has observed,
         # and showing "normal" for an unknown number would be a lie the
         # user cannot detect.
-        return self.entity_description.values.get(int(value))
+        return self._values.get(int(value))
 
     @property
     def available(self) -> bool:
@@ -163,7 +418,7 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         if robot is None:
             return
         wire_value = next(
-            (v for v, name in self.entity_description.values.items() if name == option),
+            (v for v, name in self._values.items() if name == option),
             None,
         )
         if wire_value is None:
@@ -444,3 +699,36 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         """The value to send with a start, or None to leave it alone."""
         option = self.current_option
         return self.MODES.get(option) if option else None
+
+
+def _settings_keys(config_entry: RoombaConfigEntry) -> set[str] | None:
+    """The rw-settings keys this robot actually reports, or None.
+
+    THE KEY SET IS THE AUTHORITY ON WHICH CONTROLS EXIST, and no
+    capability flag substitutes for it.
+
+    @utkjmitch's Y351020 has an auto-empty dock with a bag in it and
+    reports `cap.autoevac = 1`. It has no `autoevacFreq` key, and the
+    iRobot app offers him no auto-empty frequency control anywhere. So
+    the hardware is present and the setting is not.
+
+    His own reading is the one that fits: the key set tracks what is
+    USER-CONFIGURABLE on the SKU, not what is installed. Building a
+    control from a capability flag alone would have given him a picker
+    for a setting his robot does not have.
+
+    None means the shadow has not arrived yet -- the caller offers
+    everything in that case, matching the fail-open rule used for
+    capabilities. An empty set on a slow first connection would hide
+    every control and read as a broken integration.
+    """
+    coordinator = config_entry.runtime_data.prime_status_coordinator
+    if coordinator is None or coordinator.data is None:
+        return None
+    raw = coordinator.data.get("rw-settings")
+    if not isinstance(raw, dict):
+        return None
+    reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+    if not isinstance(reported, dict):
+        return None
+    return set(reported)
