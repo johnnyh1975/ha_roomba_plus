@@ -686,9 +686,29 @@ class TestConsumablePartNaming:
     }
 
     def test_the_named_parts_match_the_field_reports(self):
+        """SCOPED TO THE NUMERIC IDS, which is what this table records.
+
+        It used to assert equality against the whole of `_KNOWN_PARTS`,
+        which was right while that dict held nothing else. App 3.0.0
+        added a second vocabulary of speaking `part_id` values
+        (`main_brush`, `bag`, `sensor` …), and mapping those broke this
+        assertion.
+
+        Narrowed rather than updated: the field reports behind these
+        seven are what the test is for, and folding the aliases in would
+        mean re-asserting a mapping that has its own test."""
         from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
 
-        assert _KNOWN_PARTS == self._PARTS
+        numeric = {k: v for k, v in _KNOWN_PARTS.items() if k.isdigit()}
+
+        assert numeric == self._PARTS
+
+    def test_no_numeric_id_was_lost_when_the_names_arrived(self):
+        """The failure mode a narrowed assertion could hide: an alias
+        overwriting a numeric entry, or one quietly disappearing."""
+        from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
+
+        assert set(self._PARTS) <= set(_KNOWN_PARTS)
 
     def test_unidentified_parts_stay_numeric(self):
         """202 and 212 both report count_type "pad_washes_used" and
@@ -769,6 +789,18 @@ class TestConsumablePartNaming:
 
         for count_type in ("minutes", "evacs", "combo_missions", "pad_washes_used"):
             assert _PART_COUNT_UNITS.get(count_type), count_type
+
+    def test_both_spellings_of_pad_washes_resolve(self):
+        """`asset_health_enum` in app 3.0.0 lists `padWashesUsed` AND
+        `pad_washes_used` side by side. Only the snake_case form was
+        here, so a robot reporting the other showed a bare number.
+
+        Same shape as the `reusablewet`/`reusableWet` bug: one vendor,
+        two spellings, and the capture we happened to have carried only
+        one of them."""
+        from custom_components.roomba_plus.sensor_prime import _PART_COUNT_UNITS
+
+        assert _PART_COUNT_UNITS["padWashesUsed"] == _PART_COUNT_UNITS["pad_washes_used"]
 
 
 class TestClassicRoomDataDetection:

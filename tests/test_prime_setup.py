@@ -418,3 +418,303 @@ class TestNothingWasFetchingTheTimeEstimates:
             f"these: {new}"
         )
         assert set(orphans) <= known, "the known list is stale"
+
+    def test_no_module_constant_is_defined_and_never_named_again(self):
+        """The same shape one level over, and the guard above missed it.
+
+        `CYCLE_LABELS` sat in const.py read by nothing, for as long as it
+        had existed. The check above only walks private FUNCTIONS, so a
+        public module CONSTANT went straight through it — the same
+        failure the guard exists to prevent, in the one place the guard
+        did not look.
+
+        Constants are a weaker signal than functions: an unused label
+        table costs a feature nobody built, not a feature that silently
+        does nothing. The list below is therefore allowed to hold
+        entries with a stated reason, unlike the function list.
+        """
+        import ast
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        source = "".join(f.read_text() for f in base.glob("*.py"))
+        source += "".join(f.read_text() for f in pathlib.Path("tests").glob("*.py"))
+
+        orphans = []
+        for path in base.glob("*.py"):
+            for node in ast.parse(path.read_text()).body:
+                names: list[str] = []
+                if isinstance(node, ast.Assign):
+                    names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names = [node.target.id]
+                for name in names:
+                    if not name.isupper() or len(name) < 4:
+                        continue
+                    if len(re.findall(rf"\b{re.escape(name)}\b", source)) <= 1:
+                        orphans.append(f"{path.name}:{name}")
+
+        # KNOWN, EACH WITH ITS REASON.
+        #
+        #   CONF_CERT / DEFAULT_CERT        config keys kept for
+        #       migration compatibility; removing them would break
+        #       reading an old entry.
+        #   ROOMBA_CLEAN_WIDTH_MM           a physical constant, used by
+        #       coverage maths that is currently disabled.
+        #   MAP_UPDATING_NOT_READY_BIT      documents a notReady bit.
+        #   BIN_LABELS / YES_NO_LABELS      display tables, same shape as
+        #       CYCLE_LABELS: available for a caller, read by none yet.
+        #   ZONE_TYPE_ICONS                 its one non-default entry was
+        #       "furniture", which is not a zone_type any confirmed
+        #       source produces -- unreachable AND wrong.
+        #   ATTR_STATUS / ATTR_PAD_WETNESS  attribute names.
+        #   SUPPORT_ROOMBA_CARPET_BOOST / SUPPORT_BRAAVA   legacy
+        #       feature-flag combinations from before VacuumEntityFeature.
+        #   _AUTO_CONFIRM_CONFIDENCE        threshold for a path not
+        #       currently taken.
+        #
+        # CYCLE_LABELS IS DELIBERATELY NOT LISTED. It is the one this
+        # guard was written for, and it stays visible until something
+        # reads it.
+        known = {
+            "const.py:CONF_CERT",
+            "const.py:DEFAULT_CERT",
+            "const.py:ROOMBA_CLEAN_WIDTH_MM",
+            "const.py:MAP_UPDATING_NOT_READY_BIT",
+            "const.py:BIN_LABELS",
+            "const.py:YES_NO_LABELS",
+            "const.py:ATTR_STATUS",
+            "const.py:ATTR_PAD_WETNESS",
+            "const.py:ZONE_TYPE_ICONS",
+            "const.py:CYCLE_LABELS",
+            "umf_aligner.py:_AUTO_CONFIRM_CONFIDENCE",
+            "vacuum.py:SUPPORT_ROOMBA_CARPET_BOOST",
+            "vacuum.py:SUPPORT_BRAAVA",
+        }
+        new = sorted(set(orphans) - known)
+
+        assert not new, f"module constants nothing reaches: {new}"
+
+
+class TestPartIdsFromAppThreeZero:
+    """App 3.0.0 replaced numeric `part_id` values with speaking names.
+    A server sending those would fall straight through the numeric
+    lookup and the maintenance list would read "Replace main_brush" —
+    the exact bug `_readable_part_name`'s docstring says it exists to
+    avoid.
+    """
+
+    def test_both_vocabularies_resolve_to_the_same_translation(self):
+        from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
+
+        pairs = [
+            ("67", "side_brush"),
+            ("71", "main_brush"),
+            ("72", "filter"),
+            ("147", "bag"),
+            ("148", "pad"),
+            ("213", "sensor"),
+        ]
+        for numeric, named in pairs:
+            assert _KNOWN_PARTS[numeric] == _KNOWN_PARTS[named], named
+
+    def test_the_two_washing_systems_are_not_pinned_to_202_or_212(self):
+        """3.0.0 has two washing-system parts and this integration has
+        two unnamed pad-wash counters. Suggestive, not evidence — which
+        maps to which is unknown, and pairing them would print a coin
+        flip as a fact."""
+        from custom_components.roomba_plus.sensor_prime import _KNOWN_PARTS
+
+        assert _KNOWN_PARTS["dock_washing_system"] != _KNOWN_PARTS["202"]
+        assert _KNOWN_PARTS["dock_washing_system"] != _KNOWN_PARTS["212"]
+        assert _KNOWN_PARTS["mop_washing_system"] != _KNOWN_PARTS["202"]
+        assert _KNOWN_PARTS["mop_washing_system"] != _KNOWN_PARTS["212"]
+
+    def test_the_untranslated_keys_still_read_as_words(self):
+        """Three new keys have no locale entry on purpose: the fallback
+        strips the prefix and title-cases, which already gives iRobot's
+        own wording."""
+        for key, expected in [
+            ("prime_part_dock_washing_system", "Dock Washing System"),
+            ("prime_part_mop_washing_system", "Mop Washing System"),
+            ("prime_part_battery", "Battery"),
+        ]:
+            assert key.replace("prime_part_", "").replace("_", " ").title() == expected
+
+
+class TestPhaseAndCycleLabelsCoverTheVendorsEnums:
+    """`_phase_value()` falls back to the raw wire string, so a missing
+    label showed "padWash" in the sensor instead of words — no crash, no
+    failing test, and it looked deliberate.
+    """
+
+    def test_every_mission_phase_has_a_label(self):
+        from custom_components.roomba_plus.const import PHASE_LABELS
+
+        # MissionPhase, app 3.0.0. "unknown" serialises as "toPhase" and
+        # is not a state a robot reports.
+        vendor = {
+            "charge", "chargingerror", "chgerr", "evac", "hmMidMsn",
+            "hmPostMsn", "hmUsrChrg", "hmUsrDock", "mapupd", "padDry",
+            "padWash", "refill", "run", "stop", "stuck",
+        }
+
+        assert not vendor - set(PHASE_LABELS)
+
+    def test_every_mission_cycle_has_a_label(self):
+        from custom_components.roomba_plus.const import CYCLE_LABELS
+
+        vendor = {
+            "clean", "dock", "dockupg", "evac", "manual", "monitor",
+            "none", "quick", "spot", "tidy", "train",
+        }
+
+        assert not vendor - set(CYCLE_LABELS)
+
+    def test_the_dock_phases_are_the_ones_that_mattered(self):
+        """A combo robot spends real time washing and drying its pad at
+        the end of every mop mission. Those three were the missing
+        labels a user would actually have seen."""
+        from custom_components.roomba_plus.const import PHASE_LABELS
+
+        assert PHASE_LABELS["padWash"] == "Washing pad"
+        assert PHASE_LABELS["padDry"] == "Drying pad"
+        assert PHASE_LABELS["refill"] == "Refilling tank"
+
+
+class TestDroppedFavouritesAreReported:
+    """Seven favourites arriving and none becoming buttons looked
+    exactly like an account with no favourites. That silence is why the
+    bug survived several plausible fixes — none could be confirmed or
+    ruled out.
+    """
+
+    def test_the_filter_still_drops_what_it_should(self):
+        from custom_components.roomba_plus import button_prime
+
+        assert "is_deleted" in inspect_source(button_prime)
+        assert "is_hidden" in inspect_source(button_prime)
+
+    def test_the_drop_is_logged_with_both_counts(self):
+        """"7 of 7 not offered" is a next step; "no buttons" is a
+        shrug."""
+        from custom_components.roomba_plus import button_prime
+
+        source = inspect_source(button_prime)
+
+        assert "were not offered as buttons" in source
+        assert "dropped," in source and "len(favorites or [])," in source
+
+
+def inspect_source(module):
+    import inspect
+
+    return inspect.getsource(module)
+
+
+class TestStopPadDrySurvivesTheAppsBlanketLock:
+    """App 3.0.0's Dock Controls sheet greys out all three controls once
+    any dock task starts — "Dock task in progress. Try again later". So
+    a drying cycle cannot be stopped from the app once it has begun.
+
+    `stoppaddry` sent from here during a running cycle works, confirmed
+    on the same account and dock. The app's block is client-side, not a
+    refusal from the robot.
+
+    This test exists because the obvious "fix" would be to match the
+    app, and matching it would remove a working capability.
+    """
+
+    def test_stop_is_available_exactly_while_drying_runs(self):
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        by_key = {c.key: c for c in PRIME_DOCK_COMMANDS}
+        stop = by_key["prime_stop_pad_dry"]
+
+        assert stop.ready_states == (702,)
+        assert stop.state_attr == "pd_state"
+
+    def test_start_and_stop_gate_on_opposite_states(self):
+        """The one control whose rule inverts its counterpart's: you can
+        start when it is not running and stop when it is."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        by_key = {c.key: c for c in PRIME_DOCK_COMMANDS}
+        start = by_key["prime_start_pad_dry"]
+        stop = by_key["prime_stop_pad_dry"]
+
+        assert not set(start.ready_states) & set(stop.ready_states)
+
+    def test_no_blanket_dock_task_lock_exists(self):
+        """Nothing here disables a dock button because another dock task
+        is running. If that ever appears, it should be because a robot
+        refused the command — not because the app does."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        for command in PRIME_DOCK_COMMANDS:
+            assert command.state_attr in ("state", "pw_state", "pd_state")
+            assert command.ready_states
+
+
+class TestStopPadDryStaysAvailableWhileDrying:
+    """The one control where this integration deliberately does MORE
+    than the iRobot app, at a tester's explicit request.
+
+    App 3.0.0 greys out every Dock Control once a dock task starts —
+    tapping any of them answers "Dock task in progress. Try again
+    later". So a drying cycle cannot be stopped from the app once begun.
+    @chairstacker calls that the big drawback of the new UI, and being
+    able to stop it from Home Assistant the reason to keep ours as it
+    is.
+
+    The block is client-side: `stoppaddry` sent during a running dry
+    cycle works, confirmed on the same account and the same dock.
+
+    This test exists because "align with the app" is a plausible-sounding
+    future change that would silently remove a working capability.
+    """
+
+    @staticmethod
+    def _command(key):
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        return next(c for c in PRIME_DOCK_COMMANDS if c.key == key)
+
+    def test_it_is_ready_exactly_while_drying_runs(self):
+        """702 is the state that means the dry cycle is running — the
+        one moment the app refuses to act."""
+        stop = self._command("prime_stop_pad_dry")
+
+        assert stop.ready_states == (702,)
+        assert stop.state_attr == "pd_state"
+
+    def test_it_is_the_inverse_of_the_start_button(self):
+        """Start is offered at 701/703 (idle, finished) and stop at 702.
+        No state offers both, and no state offers neither."""
+        start = self._command("prime_start_pad_dry")
+        stop = self._command("prime_stop_pad_dry")
+
+        assert not set(start.ready_states) & set(stop.ready_states)
+        assert 702 not in start.ready_states
+
+    def test_no_blanket_dock_task_lock_exists(self):
+        """The app's lock is cross-control: any running dock task
+        disables all three. Ours is per-control and per-state, which is
+        what makes stopping possible."""
+        from custom_components.roomba_plus.button_prime import PRIME_DOCK_COMMANDS
+
+        state_attrs = {c.state_attr for c in PRIME_DOCK_COMMANDS}
+
+        # Each control reads its OWN status field. A blanket lock would
+        # need one shared "a task is running" gate; there is none.
+        assert state_attrs == {"state", "pw_state", "pd_state"}
+
+    def test_the_divergence_is_written_down_as_deliberate(self):
+        import inspect
+
+        from custom_components.roomba_plus import button_prime
+
+        source = inspect.getsource(button_prime)
+
+        assert "DO NOT IMPLEMENT THE APP'S LOCK HERE" in source

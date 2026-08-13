@@ -606,3 +606,75 @@ class TestNoPadWetnessControlIsOffered:
             assert not re.search(
                 r'set_setting\(\s*["\']padWetness', source
             ), source_file.name
+
+
+class TestSettingSwitchesGateOnTheDockToo:
+    """`padDryAllowed` had no capability gate at all, so a robot on a
+    plain charge dock was offered a pad-drying setting for a dock that
+    cannot dry.
+
+    The vendor's own gate table puts pad drying under `dock.cap.pd` — a
+    DOCK property. Every description could only name a ROBOT capability
+    until now, and `dock_cap` was already being fetched at the call site
+    and thrown away into `_dock_cap`.
+    """
+
+    @staticmethod
+    def _description(**kwargs):
+        from custom_components.roomba_plus.switch import PrimeSettingSwitchDescription
+
+        base = {
+            "key": "x",
+            "wire_key": "x",
+            "model_attr": "x",
+        }
+        return PrimeSettingSwitchDescription(**{**base, **kwargs})
+
+    def test_an_explicit_zero_on_the_dock_withholds_the_switch(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+        dock_cap = SimpleNamespace(pad_dry=0)
+
+        assert not _capability_permits(description, None, dock_cap)
+
+    def test_unknown_still_means_offer(self):
+        """The contract this project already had: None is not absent.
+        A robot that has not reported its dock yet keeps the switch."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+
+        assert _capability_permits(description, None, None)
+        assert _capability_permits(description, None, SimpleNamespace())
+
+    def test_a_capable_dock_gets_the_switch(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+
+        assert _capability_permits(description, None, SimpleNamespace(pad_dry=1))
+
+    def test_the_robot_gate_still_applies(self):
+        """Both objects are consulted; neither replaces the other."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(cap_attr="multi_pass")
+
+        assert not _capability_permits(description, SimpleNamespace(multi_pass=0), None)
+        assert _capability_permits(description, SimpleNamespace(multi_pass=2), None)
+
+    def test_pad_dry_allowed_is_the_one_that_gained_a_gate(self):
+        from custom_components.roomba_plus.switch import PRIME_SETTING_SWITCHES
+
+        by_key = {d.key: d for d in PRIME_SETTING_SWITCHES}
+
+        assert by_key["prime_pad_dry_allowed"].dock_cap_attr == "pad_dry"
