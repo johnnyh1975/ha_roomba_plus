@@ -627,6 +627,58 @@ After each mission, dirt density is compared against the weekday-aware baseline 
 
 ---
 
+#### Do Not Disturb (V4/Prime, a34)
+
+Quiet hours are two mechanisms plus a display, and the robot's protocol keeps
+them separate:
+
+| | |
+|---|---|
+| `roomba_plus.set_quiet_hours` | writes the daily window, or a one-off "quiet until" moment |
+| `switch.{name}_do_not_disturb` | turns DND on and off right now |
+| `binary_sensor.{name}_in_quiet_hours` | whether a scheduled window covers this moment |
+
+The action takes **either** a daily window (`start` and `end`) **or** a single
+`ends_at` — the robot's own format is a sealed type with exactly those two
+cases, and sending both returns an error. It is household-wide: every robot on
+the account is affected, and the entity you target is only how the household is
+found.
+
+The switch and the sensor answer different questions and can legitimately
+disagree — DND switched on while no scheduled window covers right now. The
+switch has no shadow field to read back from, so its state is what it last
+sent and restores across a restart; a change made in the iRobot app will not
+show up there.
+
+**Its effect is unproven.** A Prime robot has been observed cleaning inside its
+own quiet-hours window. The setting is accepted and reads back; whether the
+robot honours it is a separate question no field report has answered yes. Keep
+automations that depend on quiet hours in Home Assistant rather than relying on
+the robot.
+
+#### Start blocked (V4/Prime, a34)
+
+`binary_sensor.{name}_start_blocked` turns on when one of four faults would
+stop a mission from starting, and says what still works:
+
+```
+blocked_modes    ["vacuum"]
+available_modes  ["mop"]
+blocking_faults  [287]
+blocked_reason   "Unable to vacuum: remove Pad Plate"
+```
+
+Three of the four do not mean the robot is broken — they mean one half of what
+you would ask is impossible right now. `287` is the pad plate fitted (mop
+works), `290` the plate missing (vacuum works), `234` the plate fitted with no
+cloth on it (vacuum works), `286` the robot off the floor (neither).
+
+**Nothing is refused.** A vacuum command against `287` still goes out; what
+changes is that the robot's refusal is explainable in advance. A device
+trigger, *Start blocked by a fault*, fires when a block appears.
+
+---
+
 ## Connectivity, mop & configuration reference
 
 #### Braava / mop sensors

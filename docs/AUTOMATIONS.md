@@ -195,6 +195,59 @@ Two attributes are worth knowing about, both on the mission event sensor:
 Prime robot refuses a start silently**, and this is the only place that says why. An unmapped reason
 shows as its code rather than a blank, so it can be quoted in a report.
 
+### Asking before you send (a34)
+
+Four faults stop a mission before it starts, and three of them leave one half
+of the robot working. `binary_sensor.{name}_start_blocked` says which:
+
+```yaml
+# Mop when the pad plate is fitted, vacuum when it is not, and say why
+# when neither is possible.
+- choose:
+    - conditions: >
+        {{ 'mop' in state_attr('binary_sensor.robot_start_blocked',
+                               'available_modes') | default([], true) }}
+      sequence:
+        - action: roomba_plus.clean_room
+          target: {entity_id: vacuum.robot}
+          data: {room_name: Kitchen}
+    - conditions: "{{ is_state('binary_sensor.robot_start_blocked', 'on') }}"
+      sequence:
+        - action: notify.mobile_app
+          data:
+            message: >
+              {{ state_attr('binary_sensor.robot_start_blocked',
+                            'blocked_reason') }}
+```
+
+`available_modes` is empty when nothing works — a robot off the floor — so the
+first branch falls through to the notification rather than sending a command
+that will be refused.
+
+There is a device trigger for it too, *Start blocked by a fault*, which fires
+when a block appears rather than being polled.
+
+**Nothing is prevented.** The command still goes out if you send it; this only
+lets you ask first.
+
+### Quiet hours (a34)
+
+```yaml
+# Do not start a clean during a scheduled quiet-hours window.
+condition:
+  - condition: state
+    entity_id: binary_sensor.robot_in_quiet_hours
+    state: "off"
+```
+
+`switch.{name}_do_not_disturb` turns DND on and off directly, and
+`roomba_plus.set_quiet_hours` writes the window itself.
+
+**Do the enforcing here rather than trusting the robot.** A Prime robot has
+been observed cleaning inside its own quiet-hours window — the setting is
+accepted and reads back, and whether it is honoured is a separate question no
+field report has answered yes. The condition above is the reliable half.
+
 ## Dashboard example
 
 A minimal dashboard combining the map, vacuum card, key sensors, and the
