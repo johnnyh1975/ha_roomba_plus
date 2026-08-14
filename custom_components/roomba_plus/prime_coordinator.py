@@ -132,6 +132,78 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             self._async_watch_mission_timeline(),
             name=f"roomba_plus_prime_watch_{self.blid}",
         )
+        self.config_entry.async_create_background_task(
+            self.hass,
+            self._async_watch_rejected_commands(),
+            name=f"roomba_plus_prime_rejected_{self.blid}",
+        )
+
+    async def _async_watch_rejected_commands(self) -> None:
+        """Logs commands the robot refuses.
+
+        THE LIBRARY HAS OFFERED THIS FOR MONTHS AND NOTHING CALLED IT.
+        `watch_rejected_commands()` subscribes to
+        `{irbt_prefix}/things/{blid}/rejected/report`, and it answers a
+        question this project has asked repeatedly in the field: a
+        command call returns without an exception and the robot does
+        nothing -- was it refused, or did it go nowhere?
+
+        Every occurrence so far has been diagnosed by elimination.
+        `schedHold` is accepted and ignored. A vacuum command against a
+        fitted pad plate is refused. Two very different failures that
+        look identical from here.
+
+        AT MOST ONE LOG LINE PER MINUTE, and that ceiling is the point.
+        A rejection stream nobody asked for must not fill a journal;
+        this is instrumentation, not a feature, and it should cost
+        nothing when everything works.
+
+        NO ENTITY, DELIBERATELY. Nothing is known about what the robot
+        puts in this payload -- whether it names the command, carries a
+        reason code, or arrives at all. Building a sensor on an
+        unobserved shape would be inventing a contract; a log line
+        reports what came without claiming to understand it.
+
+        EXPECTED TO YIELD NOTHING, WHICH IS ALSO A RESULT. This rides
+        the irbt namespace, and @utkjmitch has just shown that timeline
+        reports do NOT arrive on the shadow topic this integration
+        subscribes to. The same namespace once went silent for three
+        alpha releases while shadow traffic continued. If this watcher
+        never fires, that is evidence about the namespace rather than
+        about the robot.
+        """
+        backoff = 5.0
+        last_logged = 0.0
+        while True:
+            try:
+                async for message in self.prime_robot.watch_rejected_commands():
+                    now = _time.time()
+                    if now - last_logged >= 60.0:
+                        last_logged = now
+                        _LOGGER.warning(
+                            "Roomba+ (V4/Prime): the robot REFUSED a command "
+                            "(%s). Payload: %s",
+                            self.blid,
+                            getattr(message, "payload", message),
+                        )
+                    backoff = 5.0
+            except ValueError:
+                # No irbt topic prefix on this account -- the topic
+                # cannot be built. Not an error and not worth retrying:
+                # the prefix arrives with the login or not at all.
+                _LOGGER.debug(
+                    "roomba_plus: no irbt topic prefix, not watching rejections"
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "roomba_plus: rejection watch failed, retrying",
+                    exc_info=True,
+                )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)
 
     async def _async_watch_mission_timeline(self) -> None:
         """Runs for the lifetime of the config entry -- cancelled
@@ -1122,3 +1194,94 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             # switch its schedule vanished.
             raise UpdateFailed("could not read schedules")
         return containers
+
+
+def prime_current_state(data: Any) -> Any | None:
+    """The parsed `ro-currentstate` shadow, or None if there is none.
+
+    THE SHARED HALF OF A BUG THAT APPEARED IN FOUR PLACES.
+
+    `roomba_reported_state()` returns `{}` on a CLOUD_ONLY entry BY
+    DESIGN -- there is no master_state-shaped translation for Prime. So
+    every caller reading the Classic shape gets an empty dict for the
+    life of the entry, and any gate built on it is decided forever
+    before the robot says anything.
+
+    @utkjmitch found the first one: `mission_progress` stayed `unknown`
+    through a whole mission while its own attributes rendered the
+    elapsed time, the estimate and the rolling mean. The gate read a
+    phase that was `""`; the attributes read the same dead phase and
+    simply did not gate on it.
+
+    THE OTHERS FAIL IN BOTH DIRECTIONS, which is why one helper is worth
+    more than three fixes:
+
+      - `advance_room`'s "don't advance while cleaning" guard compares
+        against `"run"` and never matches -- it fails OPEN, on exactly
+        the tier it was written for.
+      - `dirt_threshold`'s "robot must be docked" gate compares `cycle`
+        against `"none"` and always passes -- also open.
+      - the room time estimates read `lastCommand.regions` for per-room
+        pass counts and find nothing, so a two-pass mission is estimated
+        as one-pass. That is the same bug a comment two lines above it
+        records as already fixed once, from the other direction.
+
+    Returning the parsed model rather than the raw dict is deliberate:
+    the library owns the field names, and every caller reading them by
+    hand is a place they can drift apart.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    if coordinator is None or coordinator.data is None:
+        return None
+    raw = coordinator.data.get("ro-currentstate")
+    if raw is None:
+        return None
+    from roombapy_prime.models import CurrentStateShadow  # noqa: PLC0415
+
+    return CurrentStateShadow.from_json(raw)
+
+
+def prime_mission_cycle(data: Any) -> str:
+    """The mission cycle, from whichever tier reports one.
+
+    Classic first and returned when non-empty, so a LOCAL entry never
+    reaches the fallback. Same contract as `_mission_phase()` in
+    sensor_rooms.py, which reads the phase from the same document.
+    """
+    state = data.roomba_reported_state()
+    cycle = (state.get("cleanMissionStatus") or {}).get("cycle", "")
+    if cycle:
+        return str(cycle)
+    status = getattr(prime_current_state(data), "clean_mission_status", None)
+    return str(getattr(status, "cycle", None) or "")
+
+
+def prime_last_command(data: Any) -> dict[str, Any]:
+    """The robot's last command, from whichever tier reports one.
+
+    Prime carries it on `rw-software`, not `ro-currentstate` -- confirmed
+    from a real dump (chairstacker): `{"command": "stoppaddry",
+    "initiator": "rmtApp", "time": ...}`.
+
+    WHAT THIS DOES NOT RECOVER: the Classic `lastCommand` carries
+    `regions` with per-room `params`, and the Prime one carries three
+    scalar fields. So a caller wanting per-room pass counts gets an
+    empty answer here rather than a wrong one -- which is the honest
+    outcome, and better than the current silent fallback to a global
+    default.
+    """
+    state = data.roomba_reported_state()
+    last = state.get("lastCommand")
+    if isinstance(last, dict) and last:
+        return last
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    if coordinator is None or coordinator.data is None:
+        return {}
+    raw = coordinator.data.get("rw-software")
+    if not isinstance(raw, dict):
+        return {}
+    reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+    if not isinstance(reported, dict):
+        return {}
+    last = reported.get("lastCommand")
+    return last if isinstance(last, dict) else {}

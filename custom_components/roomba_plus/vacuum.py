@@ -531,19 +531,14 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         (self.vacuum is None) -- and unlike async_added_to_hass() (called
         once at setup), this property is evaluated on every state write,
         so this would have crashed immediately and repeatedly, not just
-        once.  Error attrs remain absent for CLOUD_ONLY.  ``status`` is
-        derived from the same confirmed ``activity`` mapping that supplies
-        the vacuum entity state, so cards that explicitly read this legacy
-        attribute (including xiaomi-vacuum-map-card) see the live state.
+        once. "status"/error attrs are None for CLOUD_ONLY -- honest "no
+        data available" (no master_state-shaped translation exists yet,
+        see RobotStatusV2 blocker), not a fabricated guess.
         """
         state = self.vacuum_state
         attrs: dict[str, Any] = {
             ATTR_SOFTWARE_VERSION: state.get("softwareVer"),
-            "status": (
-                self.vacuum.current_state
-                if self.vacuum is not None
-                else self.activity.value
-            ),
+            "status": self.vacuum.current_state if self.vacuum is not None else None,
         }
 
         # Cleaning progress (only while actively cleaning)

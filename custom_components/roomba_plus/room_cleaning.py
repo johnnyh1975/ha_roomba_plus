@@ -86,28 +86,12 @@ def match_room_names(
     """
     by_name = {name.casefold(): rid for name, rid in available.items()}
     by_slug = {room_slug(name): rid for name, rid in available.items()}
-    # Map cards select stable region ids, whereas the service is normally
-    # called with room names.  Accept a bare id only when it is unique across
-    # the known maps; a duplicate needs its map-qualified value instead.
-    raw_ids: dict[str, list[str]] = {}
-    for room_id in available.values():
-        value = str(room_id)
-        raw_ids.setdefault(value.rsplit("/", 1)[-1], []).append(value)
-    by_id = {
-        room_id: values[0]
-        for room_id, values in raw_ids.items()
-        if len(values) == 1
-    }
 
     matched: list[str] = []
     unmatched: list[str] = []
     for raw in requested:
         wanted = raw.strip()
-        rid = (
-            by_name.get(wanted.casefold())
-            or by_slug.get(room_slug(wanted))
-            or by_id.get(wanted)
-        )
+        rid = by_name.get(wanted.casefold()) or by_slug.get(room_slug(wanted))
         if rid is None:
             unmatched.append(raw)
         elif rid not in matched:
@@ -433,31 +417,8 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         current_map = await self._current_map_id()
         rooms: dict[str, str] = {}
         from_current: set[str] = set()
-        bundle_names = getattr(self._data, "prime_room_names", None)
-        if not isinstance(bundle_names, dict):
-            bundle_names = {}
-        map_ids = await self._all_map_ids()
 
-        def add_room(name: str, p2map_id: str, room_id: str) -> None:
-            """Keep the current map's room when names collide."""
-            is_current = bool(current_map) and p2map_id == current_map
-            if name in rooms:
-                if is_current and name not in from_current:
-                    _LOGGER.warning(
-                        "roomba_plus: room name %r exists on more than one map "
-                        "for %s -- using the one on the map the robot is "
-                        "currently on. Rename one of them in the iRobot app to "
-                        "target them separately.",
-                        name, self._data.blid,
-                    )
-                    rooms[name] = f"{p2map_id}/{room_id}"
-                    from_current.add(name)
-                return
-            rooms[name] = f"{p2map_id}/{room_id}"
-            if is_current:
-                from_current.add(name)
-
-        for p2map_id in map_ids:
+        for p2map_id in await self._all_map_ids():
             try:
                 map_data = await self._robot.get_map_metadata(p2map_id)
             except Exception:  # noqa: BLE001
@@ -467,40 +428,35 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 )
                 continue
 
+            is_current = bool(current_map) and p2map_id == current_map
+
             for room in map_data.rooms_metadata or []:
-                room_id = getattr(room, "room_id", None)
-                room_name = getattr(room, "name", None) or bundle_names.get(
-                    str(room_id)
-                )
-                if not (room_name and room_id):
+                if not (room.name and room.room_id):
                     continue
 
-                add_room(room_name, p2map_id, str(room_id))
-
-        # The metadata endpoint is incomplete on some Prime accounts. The
-        # rooms bundle is the app's source of truth for names and includes
-        # regions metadata omits (such as this robot's hallway).
-        try:
-            from .prime_room_map import async_build_prime_floor_plan
-
-            versions = await self._robot.get_active_map_versions() or []
-            version_by_map = {
-                str(entry["p2map_id"]): entry.get("active_p2mapv_id")
-                for entry in versions
-                if entry.get("p2map_id") and entry.get("active_p2mapv_id")
-            }
-            for p2map_id in map_ids:
-                version = version_by_map.get(p2map_id)
-                if not version:
+                if room.name in rooms:
+                    if is_current and room.name not in from_current:
+                        _LOGGER.warning(
+                            "roomba_plus: room name %r exists on more than one map "
+                            "for %s -- using the one on the map the robot is "
+                            "currently on. Rename one of them in the iRobot app to "
+                            "target them separately.",
+                            room.name, self._data.blid,
+                        )
+                        rooms[room.name] = f"{p2map_id}/{room.room_id}"
+                        from_current.add(room.name)
+                    else:
+                        _LOGGER.warning(
+                            "roomba_plus: room name %r exists on more than one map "
+                            "for %s -- keeping the first match. Rename one of them "
+                            "in the iRobot app to target them separately.",
+                            room.name, self._data.blid,
+                        )
                     continue
-                floor_plan = await async_build_prime_floor_plan(
-                    self._config_entry, p2map_id, version
-                )
-                if isinstance(floor_plan.room_names, dict):
-                    for room_id, room_name in floor_plan.room_names.items():
-                        add_room(room_name, p2map_id, room_id)
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("roomba_plus: could not read bundle room names", exc_info=True)
+
+                rooms[room.name] = f"{p2map_id}/{room.room_id}"
+                if is_current:
+                    from_current.add(room.name)
         return rooms
 
     _SEGMENT_PREFIX = "rid_"

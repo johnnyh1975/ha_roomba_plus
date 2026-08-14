@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Cambio di layout rilevato"
+      },
+      "prime_start_blocked": {
+        "name": "Avvio bloccato"
+      },
+      "prime_quiet_hours": {
+        "name": "In ore di silenzio"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Potenza di aspirazione extra"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Non disturbare"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Mappa di pulizia"
       },
-      "raw_map": {
-        "name": "Mappa dal vivo grezza"
-      },
-      "cleaning_map": {
-        "name": "Mappa di pulizia"
-      },
       "coverage_map": {
         "name": "Mappa di copertura"
       },
       "rooms_map": {
         "name": "Mappa delle stanze"
+      },
+      "cleaning_map": {
+        "name": "Mappa di pulizia"
+      },
+      "raw_map": {
+        "name": "Mappa dal vivo grezza"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Punteggio di salute peggiorato",
       "map_retrain_started": "Ri-addestramento mappa avviato",
       "map_retrain_completed": "Ri-addestramento mappa completato",
-      "firmware_updated": "Firmware aggiornato"
+      "firmware_updated": "Firmware aggiornato",
+      "start_blocked": "Avvio bloccato da un errore"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Ripristina backup",
       "description": "Ripristina tutti i dati da uno ZIP di backup. Effetto immediato, nessun riavvio necessario."
+    },
+    "set_quiet_hours": {
+      "name": "Imposta ore di silenzio",
+      "description": "Scrive la finestra Non disturbare della casa.",
+      "fields": {
+        "start": {
+          "name": "Inizio",
+          "description": "Quando iniziano ogni giorno."
+        },
+        "end": {
+          "name": "Fine",
+          "description": "Quando finiscono ogni giorno."
+        },
+        "ends_at": {
+          "name": "Silenzio fino a",
+          "description": "Un singolo momento invece di una finestra giornaliera."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "La base è occupata ({operation}). Il robot non accetterà comandi fino al termine."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Le ore di silenzio richiedono inizio e fine, o nessuno dei due."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Indica una finestra giornaliera (inizio e fine) oppure un singolo momento — il robot accetta esattamente uno dei due."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} non è un robot V4/Prime con una casa."
+    },
+    "prime_not_connected": {
+      "message": "Questo robot non ha una connessione cloud."
     }
   },
   "selector": {

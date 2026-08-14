@@ -16,10 +16,28 @@ that it shows the part id rather than inventing a name.
 
 WHAT "DONE" MEANS HERE, and it is worth being explicit. A maintenance
 item is not a task somebody completes in Home Assistant -- the robot
-decides when a part is fresh again, and it only learns that from a reset
-performed on the robot or in the iRobot app. So items are read-only:
-ticking one off in Home Assistant would record a claim the robot does
-not share, and the next refresh would silently undo it.
+decides when a part is fresh again. So items are read-only: ticking one
+off would record a claim the robot does not share, and the next refresh
+would silently undo it.
+
+THE REASON GIVEN FOR THAT WAS WRONG IN ONE HALF. This used to say the
+robot "only learns that from a reset performed on the robot or in the
+iRobot app". It also learns it from `POST /v1/robots/{blid}/parts`,
+which roombapy-prime has exposed as `reset_robot_parts()` for a dozen
+sessions. The capability exists; this file told the next reader it does
+not.
+
+THE CONCLUSION STANDS ANYWAY, for a different and better reason.
+`reset_robot_parts()` has never been sent to a robot by anyone, and its
+body was wrong until recently -- `parts` went out as bare id strings
+where the vendor declares objects carrying `part_id` and `counter`.
+Wiring a checkbox to an untested write that rewrites somebody's
+maintenance history is not a small step, and a wrong reset cannot be
+undone from here.
+
+So: read-only because the write is unproven, not because it is absent.
+If a tester ever exercises `reset_robot_parts` successfully, this
+paragraph is the thing to revisit.
 """
 
 from __future__ import annotations

@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Indelingswijziging gedetecteerd"
+      },
+      "prime_start_blocked": {
+        "name": "Start geblokkeerd"
+      },
+      "prime_quiet_hours": {
+        "name": "In stille uren"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Extra zuigkracht"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Niet storen"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Schoonmaakkaart"
       },
-      "raw_map": {
-        "name": "Ruwe livekaart"
-      },
-      "cleaning_map": {
-        "name": "Reinigingskaart"
-      },
       "coverage_map": {
         "name": "Dekkingskaart"
       },
       "rooms_map": {
         "name": "Kamerkaart"
+      },
+      "cleaning_map": {
+        "name": "Reinigingskaart"
+      },
+      "raw_map": {
+        "name": "Ruwe livekaart"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Gezondheidsscore gedaald",
       "map_retrain_started": "Kaart-herleren gestart",
       "map_retrain_completed": "Kaart-herleren voltooid",
-      "firmware_updated": "Firmware bijgewerkt"
+      "firmware_updated": "Firmware bijgewerkt",
+      "start_blocked": "Start geblokkeerd door een storing"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Back-up herstellen",
       "description": "Herstelt alle gegevens uit een back-up ZIP. Werkt direct, geen herstart nodig."
+    },
+    "set_quiet_hours": {
+      "name": "Stille uren instellen",
+      "description": "Schrijft het Niet storen-venster van het huishouden.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "Wanneer de stille uren dagelijks beginnen."
+        },
+        "end": {
+          "name": "Einde",
+          "description": "Wanneer ze dagelijks eindigen."
+        },
+        "ends_at": {
+          "name": "Stil tot",
+          "description": "Eén moment in plaats van een dagelijks venster."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "Het station is bezig ({operation}). De robot accepteert pas opdrachten als het klaar is."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Stille uren hebben een start en een einde nodig, of geen van beide."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Geef een dagelijks venster (start en einde) of één moment — de robot accepteert precies één van beide."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} is geen V4/Prime-robot met een huishouden."
+    },
+    "prime_not_connected": {
+      "message": "Deze robot heeft geen cloudverbinding."
     }
   },
   "selector": {

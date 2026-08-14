@@ -252,6 +252,21 @@ class PrimeFloorPlan:
     #: unparsed. The renderer knows their shape; this only has to keep
     #: them so they are available when no mission is running.
     zone_layers: dict[str, Any] = dataclasses.field(default_factory=dict)
+    #: Which map this plan describes.
+    #:
+    #: NEEDED FOR THE MULTI-MAP CASE. The renderer prefers the LIVE
+    #: bundle's zone layers over the saved ones, and the live bundle
+    #: belongs to whichever map the robot is currently DRIVING -- not
+    #: necessarily the one the dropdown selected.
+    #:
+    #: @chairstacker selected Master_Bathroom while a Whole_House
+    #: mission ran and saw Whole_House's clean and keep-out boundaries
+    #: drawn over the bathroom. Two sets of maps switching correctly,
+    #: one set of zones that was simply on or off.
+    #:
+    #: Without an id on both sides there is nothing to compare, so the
+    #: renderer had no way to notice.
+    p2map_id: str | None = None
 
 
 def _room_names_from_bundle(features: Any) -> dict[str, str]:
@@ -454,7 +469,7 @@ async def async_build_prime_floor_plan(
     robot = getattr(data, "prime_robot", None)
     empty = PrimeFloorPlan(
         room_names={}, room_polygons={}, floor_plan=[], borders=[], carpet=[],
-        furniture=[], dock=None,
+        furniture=[], dock=None, p2map_id=p2map_id,
     )
     if robot is None:
         return empty
@@ -505,6 +520,7 @@ async def async_build_prime_floor_plan(
         runtime.prime_room_names = existing
 
     plan = PrimeFloorPlan(
+        p2map_id=p2map_id,
         # THE ZONE LAYERS, KEPT RATHER THAN DROPPED.
         #
         # The renderer read them from the LIVE bundle, which arrives on

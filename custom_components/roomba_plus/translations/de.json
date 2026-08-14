@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Raumlayout-Änderung erkannt"
+      },
+      "prime_start_blocked": {
+        "name": "Start blockiert"
+      },
+      "prime_quiet_hours": {
+        "name": "In Ruhezeit"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Erhöhte Saugkraft"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Nicht stören"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Reinigungskarte"
       },
-      "raw_map": {
-        "name": "Rohe Live-Karte"
-      },
-      "cleaning_map": {
-        "name": "Reinigungskarte"
-      },
       "coverage_map": {
         "name": "Bedeckungskarte"
       },
       "rooms_map": {
         "name": "Raumkarte"
+      },
+      "cleaning_map": {
+        "name": "Reinigungskarte"
+      },
+      "raw_map": {
+        "name": "Rohe Live-Karte"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Gesundheitswert gesunken",
       "map_retrain_started": "Karten-Neutraining gestartet",
       "map_retrain_completed": "Karten-Neutraining abgeschlossen",
-      "firmware_updated": "Firmware aktualisiert"
+      "firmware_updated": "Firmware aktualisiert",
+      "start_blocked": "Start durch einen Fehler blockiert"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Backup wiederherstellen",
       "description": "Stellt alle Daten aus einer Backup-ZIP wieder her. Wirkt sofort, kein Neustart nötig."
+    },
+    "set_quiet_hours": {
+      "name": "Ruhezeiten setzen",
+      "description": "Schreibt das Ruhefenster des Haushalts.",
+      "fields": {
+        "start": {
+          "name": "Beginn",
+          "description": "Wann die Ruhezeit täglich beginnt."
+        },
+        "end": {
+          "name": "Ende",
+          "description": "Wann die Ruhezeit täglich endet."
+        },
+        "ends_at": {
+          "name": "Ruhe bis",
+          "description": "Ein einzelner Zeitpunkt statt eines täglichen Fensters."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "Die Station ist gerade beschäftigt ({operation}). Der Roboter nimmt bis zum Abschluss keine Befehle an."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Ruhezeiten brauchen Beginn und Ende, oder keines von beidem."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Gib entweder ein tägliches Fenster (Beginn und Ende) oder einen einmaligen Zeitpunkt an — der Roboter akzeptiert genau eines von beidem."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} ist kein V4/Prime-Roboter mit Haushalt."
+    },
+    "prime_not_connected": {
+      "message": "Dieser Roboter hat keine Cloud-Verbindung."
     }
   },
   "selector": {

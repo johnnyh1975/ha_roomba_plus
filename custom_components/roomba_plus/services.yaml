@@ -572,3 +572,38 @@ delete_schedule:
         entity:
           integration: roomba_plus
           domain: switch
+
+set_quiet_hours:
+  name: Set quiet hours
+  description: >
+    Write the household's Do Not Disturb window. Give EITHER a daily window
+    (start and end) OR a one-off ends_at moment — the robot's own format
+    accepts exactly one of the two, and sending both returns an error.
+    This is household-wide: every robot on the account is affected, and the
+    entity you target is only how the household is found. Note that one Prime
+    robot has been observed cleaning inside its own quiet-hours window, so
+    keep any automation that depends on quiet hours in Home Assistant rather
+    than relying on the robot to honour this.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    start:
+      name: Start
+      description: When quiet hours begin each day.
+      example: "22:00:00"
+      selector:
+        time:
+    end:
+      name: End
+      description: When quiet hours end each day. May be before start for a window crossing midnight.
+      example: "07:00:00"
+      selector:
+        time:
+    ends_at:
+      name: Quiet until
+      description: A single moment to stay quiet until, instead of a daily window.
+      example: "2026-08-15 07:00:00"
+      selector:
+        datetime:

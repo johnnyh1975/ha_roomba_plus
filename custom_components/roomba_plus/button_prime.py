@@ -128,17 +128,27 @@ class PrimeDockCommand:
 #:
 #: `drypad` IS INCLUDED, and that reverses an earlier decision.
 #:
-#: It was left out because the app does not offer it -- drying starts on
+#: It was left out because the app did not offer it -- drying started on
 #: its own after a wash. @DaRealGuGu pointed out what that costs: stop
 #: the drying and the only way to restart it is another full wash,
 #: wasting a tank of water for nothing.
 #:
 #: The original reasoning conflated two things. Guessing at a COMMAND is
 #: what this project refuses to do; offering a WORKFLOW the app does not
-#: is a different question, and here it is plainly better. `drypad` is a
+#: is a different question, and here it was plainly better. `drypad` is a
 #: confirmed @SerialName wire string from the same enum as `evac`,
 #: `washpad` and `stoppaddry` -- all three of which a tester has now
 #: pressed with the dock responding within a second.
+#:
+#: AND THE APP HAS SINCE CAUGHT UP. App 3.0.0's Dock Controls sheet
+#: shows "Dry Mop" as one of three buttons, with a "Start mop drying?"
+#: confirmation (@chairstacker, screenshots). So this is no longer a
+#: workflow the app lacks -- it is the same one, reached the same way.
+#:
+#: WHAT STAYS DIFFERENT is the other direction: the app greys out every
+#: dock control once a task begins, so a drying cycle cannot be STOPPED
+#: there once started. That divergence is deliberate and tested; see
+#: prime_stop_pad_dry below.
 #:
 #: Worst case the robot ignores it, which is visible immediately in the
 #: pad-dry sensor.
@@ -218,12 +228,7 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
     _attr_has_entity_name = True
 
     def __init__(
-        self,
-        blid: str,
-        config_entry: RoombaConfigEntry,
-        command: PrimeDockCommand,
-        *,
-        disabled: bool = False,
+        self, blid: str, config_entry: RoombaConfigEntry, command: PrimeDockCommand
     ) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -232,7 +237,6 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
         self._command = command
         self._attr_translation_key = command.key
         self._attr_unique_id = f"{self.robot_unique_id}_{command.key}"
-        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def suggested_object_id(self) -> str:
@@ -418,13 +422,13 @@ async def async_build_prime_buttons(
     # empty-now action. One look, no run.
     if _dock_reports_itself(config_entry):
         for command in PRIME_DOCK_COMMANDS:
-            entities.append(PrimeDockButton(
-                data.blid,
-                config_entry,
-                command,
-                disabled=dock_cap is not None
-                and getattr(dock_cap, command.dock_cap_attr, None) in (None, 0),
-            ))
+            # None means unknown, only an explicit 0 means absent -- so a
+            # robot that has not reported its dock yet still gets the
+            # buttons rather than silently losing them.
+            if (dock_cap is not None
+                    and getattr(dock_cap, command.dock_cap_attr, None) == 0):
+                continue
+            entities.append(PrimeDockButton(data.blid, config_entry, command))
 
     # Locate is always offered; favourite buttons are optional.
     #

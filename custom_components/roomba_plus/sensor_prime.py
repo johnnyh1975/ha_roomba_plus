@@ -42,15 +42,19 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
+from roombapy_prime.models.mission_history import FaultScene
+
 from .prime_dirt import unfinished_missions
 from .const import (
     ERROR_CODE_LABELS,
+    PRIME_BLOCKING_FAULTS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
     get_localized_error_entry,
 )
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
+from .prime_coordinator import prime_last_command
 
 
 class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
@@ -275,8 +279,11 @@ class PrimeBatterySensor(_PrimeCurrentStateSensorBase):
     )
     _attr_entity_category = None
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
         super().__init__(blid, config_entry)
+        self._attr_entity_registry_enabled_default = not disabled
         self._attr_unique_id = f"{self.robot_unique_id}_battery"
 
     @property
@@ -329,8 +336,11 @@ class PrimeCleaningModeSensor(_PrimeCurrentStateSensorBase):
         options=["vacuuming", "mopping", "vacuuming_and_mopping"],
     )
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
         super().__init__(blid, config_entry)
+        self._attr_entity_registry_enabled_default = not disabled
         self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_mode"
 
     @property
@@ -624,12 +634,9 @@ class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(
-        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
-    ) -> None:
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_pad_wash_status"
-        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def native_value(self) -> str | None:
@@ -692,12 +699,9 @@ class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(
-        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
-    ) -> None:
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_pad_dry_status"
-        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def native_value(self) -> str | None:
@@ -1148,6 +1152,32 @@ class PrimeSerialNumberSensor(IRobotEntity, SensorEntity):
             self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
 
 
+def _blocking_faults(status: Any) -> dict[int, frozenset[str]]:
+    """The start-blocking faults currently reported, with what each still allows.
+
+    READS BOTH FIELDS. `error` carries a fault the robot hit; a readiness
+    REFUSAL leaves `error` at 0 and puts its reasons in `cond_not_ready`
+    instead. The four blocking codes can arrive either way, so checking
+    one of the two would miss the case the check exists for.
+
+    Returns an empty mapping when nothing blocks -- callers should treat
+    that as "no opinion", not as "everything is possible", because this
+    only knows about four codes out of a hundred and twelve.
+    """
+    if status is None:
+        return {}
+    codes: set[int] = set()
+    error = getattr(status, "error", None)
+    if isinstance(error, int) and error:
+        codes.add(error)
+    for reason in getattr(status, "cond_not_ready", None) or []:
+        if isinstance(reason, int):
+            codes.add(reason)
+        elif isinstance(reason, str) and reason.isdigit():
+            codes.add(int(reason))
+    return {c: PRIME_BLOCKING_FAULTS[c] for c in codes if c in PRIME_BLOCKING_FAULTS}
+
+
 class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime error label, read from
     CurrentStateShadow.clean_mission_status.error (CONFIRMED LIVE for
@@ -1303,19 +1333,104 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
         #
         # Attributes rather than state, so nothing built on the code
         # breaks and the ENUM question never arises.
+        # Attributes are readable before the entity is added to hass --
+        # the tests construct it bare -- so fall back to English rather
+        # than crash. Resolved unconditionally because the blocking
+        # block below needs it too, and that one fires on a readiness
+        # refusal where `error` is 0.
+        language = (
+            getattr(getattr(self, "hass", None), "config", None)
+            and self.hass.config.language
+        ) or "en"
         if status.error:
-            # Attributes are readable before the entity is added to
-            # hass -- the tests construct it bare -- so fall back to
-            # English rather than crash.
-            language = (
-                getattr(getattr(self, "hass", None), "config", None)
-                and self.hass.config.language
-            ) or "en"
             entry = get_localized_error_entry(int(status.error), language)
             if entry.get("label"):
                 attrs["error_title"] = entry["label"]
             if entry.get("description"):
                 attrs["error_description"] = entry["description"]
+
+        # WHAT THE ROBOT WOULD STILL ACCEPT.
+        #
+        # Four codes stop a mission before it starts, and the app checks
+        # exactly those four (`blockFault`, app 3.0.0). Three of them do
+        # not mean "broken" -- they mean "one half of what you asked is
+        # impossible right now":
+        #
+        #   287  pad plate fitted    -> mop works, vacuum does not
+        #   290  pad plate missing   -> vacuum works, mop does not
+        #   234  no cloth on the plate -> vacuum works, mop does not
+        #   286  robot off the floor -> neither
+        #
+        # Until now the integration held all four texts and drew no
+        # conclusion from any of them. A user sending a vacuum command
+        # against 287 got a command that left, was refused, and produced
+        # no explanation an automation could read.
+        #
+        # BOTH SOURCES ARE CONSULTED, because a readiness refusal does
+        # not set `error`. `cond_not_ready` carries the reasons in that
+        # case -- documented in this class's own docstring and never
+        # used for anything.
+        # NOTHING HERE BLOCKS ANYTHING, and that is deliberate.
+        #
+        # This reports; it does not gate. The app takes the other route
+        # and greys out every dock control once a task begins -- so a
+        # drying cycle it started cannot be stopped there, which
+        # @chairstacker calls the big drawback of the new UI. Copying
+        # that would remove capabilities that demonstrably work.
+        #
+        # So a vacuum command against 287 still goes out. What changes
+        # is that the robot's refusal is now explainable in advance,
+        # in words and in a form an automation can branch on.
+        blocking = _blocking_faults(status)
+        if blocking:
+            available = set().union(*blocking.values())
+            attrs["blocked_modes"] = sorted({"vacuum", "mop"} - available)
+            attrs["available_modes"] = sorted(available)
+            attrs["blocking_faults"] = sorted(blocking)
+
+            # THE MESSAGE, and it needs its own lookup.
+            #
+            # `error_title` above only fills when `status.error` is set.
+            # A readiness REFUSAL leaves error at 0 and puts its codes in
+            # `cond_not_ready` -- which is exactly the case this block
+            # exists for, and it would have produced mode lists with no
+            # words beside them.
+            texts = [
+                t
+                for t in (
+                    get_localized_error_entry(code, language).get("label")
+                    for code in sorted(blocking)
+                )
+                if t
+            ]
+            if texts:
+                attrs["blocked_reason"] = " · ".join(texts)
+
+        # WHICH TASK THE FAULT HAPPENED DURING.
+        #
+        # The same code means different things per running task, which
+        # is why the app resolves a fault against a SCENE rather than
+        # showing one text per code. A stall during `padWash` is a dock
+        # problem; the same stall during `cleanTask` is a robot problem.
+        #
+        # The robot never sends a scene -- `getFaultScene({cmStatus,
+        # command})` computes it, and roombapy-prime carries the five
+        # rules that are fully specified. The other seven scenes have no
+        # stated condition, so `scene_for()` returns None rather than
+        # falling back to the documented default: a plausible wrong task
+        # name on a real error message is worse than none.
+        if status.error:
+            scene = FaultScene.scene_for(
+                command=str(
+                    prime_last_command(self._config_entry.runtime_data).get("command")
+                    or ""
+                )
+                or None,
+                cycle=getattr(status, "cycle", None),
+                phase=getattr(status, "phase", None),
+            )
+            if scene is not None:
+                attrs["fault_scene"] = scene.name.lower()
         return attrs
 
 

@@ -19,10 +19,14 @@ from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import roomba_reported_state
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
+from .const import DOMAIN
+from .prime_commands import _send_confirmed
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -169,7 +173,10 @@ def _capability_permits(description: Any, cap: Any, dock_cap: Any) -> bool:
     ):
         if attr is None or source is None:
             continue
-        if getattr(source, attr, None) == 0:
+        value = getattr(source, attr, None)
+        if value == 0:
+            return False
+        if value in getattr(description, "cap_excluded", ()):
             return False
     return True
 
@@ -186,7 +193,6 @@ async def async_setup_entry(
     # own CLOUD_ONLY branch -- Prime data comes from PrimeStatusCoordinator's
     # named-shadow data, not roomba_reported_state()'s Classic shape.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
-        cap = dock_cap = None
         if data.prime_status_coordinator is not None:
             from .prime_coordinator import get_prime_capability_flags
 
@@ -204,17 +210,15 @@ async def async_setup_entry(
         # boost switch uses -- a robot that has not reported its
         # capabilities yet should get the switch, not lose it.
         setting_entities = [
-            PrimeSettingSwitch(
-                data.blid,
-                config_entry,
-                description,
-                disabled=description.dock_cap_attr is not None
-                and dock_cap is not None
-                and getattr(dock_cap, description.dock_cap_attr, None) in (None, 0),
-            )
+            PrimeSettingSwitch(data.blid, config_entry, description)
             for description in PRIME_SETTING_SWITCHES
-            if _capability_permits(description, cap, None)
+            if _capability_permits(description, cap, dock_cap)
         ]
+        # NOT CAPABILITY-GATED. Quiet hours are a household setting, not
+        # hardware -- `cap` says nothing about them, and a robot that
+        # ignores the command still accepts it. Withholding the switch
+        # would hide the one place a user can turn quiet hours off.
+        setting_entities.append(PrimeQuietHoursSwitch(data.blid, config_entry))
         if setting_entities:
             async_add_entities(setting_entities)
 
@@ -601,6 +605,13 @@ class PrimeSettingSwitchDescription(SwitchEntityDescription):
     #: offer" -- see get_prime_capability_flags()'s own contract:
     #: unknown is not absent, only an explicit 0 is.
     cap_attr: str | None = None
+    #: Capability VALUES that withhold the entity, beyond the explicit
+    #: 0 the contract already excludes.
+    #:
+    #: Needed because some capabilities are graduated and a high value
+    #: does not always mean "more" -- `MultiPassType` level 3 means one
+    #: pass only, which is less capable than level 1.
+    cap_excluded: tuple[int, ...] = ()
     #: DOCK cap flag, same contract, different object.
     #:
     #: `cap_attr` reads the ROBOT's capability object; some settings are
@@ -701,6 +712,23 @@ PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
         wire_key="noAutoPasses",
         model_attr="no_auto_passes",
         cap_attr="multi_pass",
+        # LEVEL 3 CANNOT DO TWO PASSES, and the "not 0" rule let it
+        # through.
+        #
+        # `MultiPassType` (app 3.0.0) names what this project treated as
+        # a graduated flag with unknown meaning:
+        #
+        #     0  unsupported
+        #     1  twoPassBoolean                    <- both testers
+        #     2  twoPassBooleanWithNoAutoPasses
+        #     3  onePassOrAutoPassOnly
+        #
+        # A robot at level 3 does one pass or decides for itself; a
+        # two-pass toggle there writes a setting the robot will not act
+        # on. Nobody has reported it because both testers read 1 -- the
+        # kind of bug that waits for the first person with different
+        # hardware.
+        cap_excluded=(3,),
         entity_category=EntityCategory.CONFIG,
     ),
     PrimeSettingSwitchDescription(
@@ -731,8 +759,6 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
         blid: str,
         config_entry: RoombaConfigEntry,
         description: PrimeSettingSwitchDescription,
-        *,
-        disabled: bool = False,
     ) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -740,7 +766,6 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
-        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def suggested_object_id(self) -> str:
@@ -798,3 +823,97 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
             self.async_on_remove(
                 coordinator.async_add_listener(self.async_write_ha_state)
             )
+
+
+
+class PrimeQuietHoursSwitch(IRobotEntity, SwitchEntity, RestoreEntity):
+    """Do Not Disturb, on and off right now.
+
+    TWO MECHANISMS, AND THIS IS THE OTHER ONE. Quiet hours have a
+    WINDOW, written with `PUT /v1/households/{id}/settings/dnd`, and an
+    AD-HOC state, switched with the `start_dnd` and `stop_dnd` commands.
+    The report is explicit that these two commands only turn quiet hours
+    on and off; the period is set separately.
+
+    This project had neither, and conflated them for a while -- the
+    window is `roomba_plus.set_quiet_hours`, this is the switch.
+
+    A SWITCH FITS HERE AND DOES NOT FIT THE WINDOW. "Quiet hours are on
+    now" is a state with two values and a way to change each. A daily
+    window is neither, which is why that one is an action.
+
+    THE WIRE VALUES WERE WRONG UNTIL RECENTLY. `MissionCommandType` said
+    `startDoNotDisturb`/`stopDoNotDisturb` -- the Kotlin constant names,
+    mirrored so closely that nobody questioned them. The wire carries
+    `start_dnd` and `stop_dnd`, confirmed from the payload builder. A
+    switch built a week ago would have sent a command no robot answers.
+
+    STATE IS OPTIMISTIC, and that is a real limitation rather than
+    laziness. No shadow field reports whether quiet hours are currently
+    active: `rw-settings` carries the schedule container, not a live
+    flag. So this reflects what was last sent from here and restores
+    across a restart -- and a change made in the iRobot app will not
+    show up.
+
+    AND ITS EFFECT IS UNPROVEN. A Prime robot has been observed cleaning
+    inside its own quiet-hours window. The command is accepted; whether
+    the robot obeys is a separate question no field report has answered
+    yes. Keep automations that depend on quiet hours in Home Assistant.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "prime_quiet_hours_active"
+    _attr_icon = "mdi:sleep"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_quiet_hours_active"
+        self._is_on: bool | None = None
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._is_on
+
+    async def _send(self, command: str, new_state: bool) -> None:
+        robot = getattr(self._config_entry.runtime_data, "prime_robot", None)
+        if robot is None:
+            raise ServiceValidationError(
+                "This robot has no cloud connection.",
+                translation_domain=DOMAIN,
+                translation_key="prime_not_connected",
+            )
+        # CONFIRMED, NOT FIRED AND FORGOTTEN. `send_simple_command()`
+        # returns whether the broker acknowledged the publish, and
+        # throwing that away made a command that never left look exactly
+        # like one the robot chose to ignore -- a field report described
+        # it as "no reaction from the logo" and cost four days.
+        #
+        # It also matters more here than for a button: this switch has
+        # no shadow field to read back from, so its state is whatever it
+        # last claimed. Flipping it on an unsent command would leave a
+        # lasting lie rather than a momentary one.
+        await _send_confirmed(robot, command)
+        self._is_on = new_state
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._send("start_dnd", True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._send("stop_dnd", False)
+
+    async def async_added_to_hass(self) -> None:
+        """Restores the last state this switch sent.
+
+        RESTORED RATHER THAN READ, because there is nothing to read.
+        Without this the switch would come back `unknown` after every
+        restart, which reads as "quiet hours are off" to an automation
+        and is not the same thing."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in ("on", "off"):
+            self._is_on = last.state == "on"

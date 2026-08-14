@@ -345,9 +345,6 @@
       }
     },
     "image": {
-      "cleaning_map": {
-        "default": "mdi:robot-vacuum"
-      },
       "coverage_map": {
         "default": "mdi:map-legend"
       },

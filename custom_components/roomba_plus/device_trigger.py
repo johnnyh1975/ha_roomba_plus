@@ -72,6 +72,15 @@ TRIGGER_CLEANING_STARTED  = "cleaning_started"
 TRIGGER_CLEANING_FINISHED = "cleaning_finished"
 TRIGGER_STUCK             = "stuck"
 TRIGGER_BIN_FULL          = "bin_full"
+#: A fault that stops a mission from STARTING, as opposed to one that
+#: interrupts a running one. `TRIGGER_ERROR` covers the second; this
+#: covers the case where nothing has gone wrong yet and nothing will
+#: begin either -- a pad plate fitted when the user wanted a vacuum.
+#:
+#: Worth its own trigger because the useful automation is different:
+#: an error while cleaning wants a notification, a blocked start wants
+#: "tell me before I press the button".
+TRIGGER_START_BLOCKED     = "start_blocked"
 TRIGGER_DOCKED            = "docked"
 TRIGGER_ERROR             = "error"
 # v2.9.0 TRIGGER+
@@ -87,6 +96,7 @@ TRIGGER_TYPES = {
     TRIGGER_CLEANING_FINISHED,
     TRIGGER_STUCK,
     TRIGGER_BIN_FULL,
+    TRIGGER_START_BLOCKED,
     TRIGGER_DOCKED,
     TRIGGER_ERROR,
     TRIGGER_ROOM_COMPLETED,
@@ -177,6 +187,7 @@ async def async_get_triggers(
         {**base, CONF_TYPE: TRIGGER_CLEANING_FINISHED},
         {**base, CONF_TYPE: TRIGGER_STUCK},
         {**base, CONF_TYPE: TRIGGER_BIN_FULL},
+        {**base, CONF_TYPE: TRIGGER_START_BLOCKED},
         {**base, CONF_TYPE: TRIGGER_DOCKED},
         {**base, CONF_TYPE: TRIGGER_ERROR},
         {**base, CONF_TYPE: TRIGGER_ROOM_COMPLETED},
@@ -240,6 +251,25 @@ async def async_attach_trigger(
                 CONF_PLATFORM: "state",
                 CONF_ENTITY_ID: entity_id,
                 "to": _STUCK_PHASE,
+            }
+        )
+        return await state_trigger.async_attach_trigger(
+            hass, state_config, action, trigger_info, platform_type="device"
+        )
+
+    if trigger_type == TRIGGER_START_BLOCKED:
+        # Fires when a blocking fault APPEARS. The binary sensor carries
+        # `blocked_reason` and `available_modes` as attributes, so an
+        # automation can say what to do instead rather than only that
+        # something is wrong.
+        entity_id = _find_entity(hass, device_id, "prime_start_blocked")
+        if not entity_id:
+            return lambda: None
+        state_config = state_trigger.TRIGGER_STATE_SCHEMA(
+            {
+                CONF_PLATFORM: "state",
+                CONF_ENTITY_ID: entity_id,
+                "to": "on",
             }
         )
         return await state_trigger.async_attach_trigger(

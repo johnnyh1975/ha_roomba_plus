@@ -51,6 +51,7 @@ from .const import (
     SERVICE_RESET_BRUSH,
     SERVICE_RESET_FILTER,
     SERVICE_RESET_PAD,
+    SERVICE_SET_QUIET_HOURS,
     SERVICE_SMART_START,
     SERVICE_CREATE_BACKUP,
     SERVICE_RESTORE_BACKUP,
@@ -62,6 +63,7 @@ from .const import (
 # in case".
 from .room_cleaning import async_get_room_cleaning_backend
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
+from .prime_coordinator import prime_current_state
 
 if TYPE_CHECKING:
     pass
@@ -1021,6 +1023,108 @@ async def async_handle_clean_sequence(
 
 # ── Registration ──────────────────────────────────────────────────────────────
 
+async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
+    """Writes the household's Do Not Disturb window.
+
+    TWO MUTUALLY EXCLUSIVE FORMS, and the vendor's own type system says
+    so. `DNDSchedule` is a sealed class with exactly two cases:
+
+        {"dailyStart": int, "dailyEnd": int}   quiet hours every day
+        {"endsAt": long}                       quiet until one moment
+
+    Sending both is what the one live attempt did before it came back
+    HTTP 400. The schema below refuses that combination rather than
+    letting the server refuse it.
+
+    HOUSEHOLD-WIDE, NOT PER ROBOT. The endpoint takes a household id,
+    so every robot on the account is affected. The entity target is how
+    Home Assistant addresses things and how this finds the household --
+    it is not a scope.
+
+    THE EFFECT IS UNPROVEN, and a caller deserves to know. A Prime robot
+    has been observed CLEANING inside its own quiet-hours window. The
+    write succeeds and reads back; whether the robot honours it is a
+    separate question that no field report has yet answered yes. The
+    warning below says so once per call rather than burying it in
+    documentation nobody opens mid-automation.
+    """
+    hass = call.hass
+    entity_ids = call.data["entity_id"]
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+    start, end = call.data.get("start"), call.data.get("end")
+    ends_at = call.data.get("ends_at")
+
+    if (start is None) != (end is None):
+        raise ServiceValidationError(
+            "Quiet hours need both a start and an end, or neither.",
+            translation_domain=DOMAIN,
+            translation_key="quiet_hours_incomplete",
+        )
+    if (start is None) == (ends_at is None):
+        raise ServiceValidationError(
+            "Give either a daily window (start and end) or a one-off "
+            "ends_at -- the robot accepts exactly one of the two.",
+            translation_domain=DOMAIN,
+            translation_key="quiet_hours_ambiguous",
+        )
+
+    ent_reg = er.async_get(hass)
+    for entity_id in entity_ids:
+        entry_reg = ent_reg.async_get(entity_id)
+        entry = (
+            hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+            if entry_reg is not None else None
+        )
+        if entry is None:
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+            )
+        data = entry.runtime_data
+        robot = getattr(data, "prime_robot", None)
+        household = getattr(data, "prime_household_id", None)
+        if robot is None or household is None:
+            raise ServiceValidationError(
+                f"{entity_id} is not a V4/Prime robot with a household.",
+                translation_domain=DOMAIN,
+                translation_key="quiet_hours_not_prime",
+            )
+
+        if ends_at is not None:
+            from roombapy_prime.models.schedules_dnd import DNDEndsAt
+
+            # NAIVE DATETIMES ARE THE NORM HERE, and `timestamp()` on
+            # one silently assumes the SERVER's zone. A user in a
+            # different zone from their Home Assistant host would get a
+            # quiet-hours end hours away from what they typed, with
+            # nothing to indicate it.
+            #
+            # `dt_util.as_utc()` attaches Home Assistant's configured
+            # zone first, which is the one the user picked the time in.
+            when = ends_at if ends_at.tzinfo else dt_util.as_local(ends_at)
+            body = DNDEndsAt(
+                ends_at=int(dt_util.as_utc(when).timestamp() * 1000)
+            ).to_json()
+        else:
+            from roombapy_prime.models.schedules_dnd import DNDDailySchedule
+
+            body = DNDDailySchedule(
+                daily_start=start.hour * 60 + start.minute,
+                daily_end=end.hour * 60 + end.minute,
+            ).to_json()
+
+        await robot.set_dnd_settings(household, body)
+        _LOGGER.warning(
+            "Roomba+: wrote quiet hours %s for household %s. The robot "
+            "accepting this setting is not the same as honouring it -- one "
+            "Prime robot has been seen cleaning inside its own window. Keep "
+            "any automation that depends on quiet hours in Home Assistant.",
+            body, household,
+        )
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register all Roomba+ domain services. Safe to call multiple times.
 
@@ -1082,6 +1186,25 @@ def async_register_services(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_QUIET_HOURS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_QUIET_HOURS,
+            async_handle_set_quiet_hours,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                # THE TWO FORMS ARE CHECKED IN THE HANDLER, not here.
+                # voluptuous can express "exactly one of", but the error
+                # it produces names the schema rather than the problem;
+                # a caller who sent both deserves to be told which two
+                # things conflict.
+                vol.Optional("start"): cv.time,
+                vol.Optional("end"): cv.time,
+                vol.Optional("ends_at"): cv.datetime,
+            }),
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_SET_QUIET_HOURS)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SMART_START):
         hass.services.async_register(
@@ -1341,8 +1464,18 @@ async def async_handle_advance_room(call: ServiceCall) -> None:
             continue
 
         # Guard 3: non-run phase (don't advance while actively cleaning)
+        #
+        # READ THROUGH THE PRIME FALLBACK, because this guard failed OPEN
+        # on exactly the tier it was written for. `roomba_reported_state()`
+        # returns {} on a CLOUD_ONLY entry, so `phase` was "" forever and
+        # never equalled "run" -- advance_room was permitted mid-mission.
+        # Same root as @utkjmitch's mission_progress report; see
+        # prime_coordinator.prime_current_state().
         state = data.roomba_reported_state()
         phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+        if not phase:
+            status = getattr(prime_current_state(data), "clean_mission_status", None)
+            phase = str(getattr(status, "phase", None) or "")
         if phase == "run":
             _LOGGER.debug(
                 "advance_room: robot in phase=run for %s — ignored (advance "
@@ -1612,6 +1745,7 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "update_schedule",
         "delete_schedule",
         SERVICE_CLEAN_ROOM,
+        SERVICE_SET_QUIET_HOURS,
         SERVICE_SMART_START,
         SERVICE_CLEAN_OVERDUE_ROOMS,
         SERVICE_AUTO_CLEAN_DIRTY_ROOMS,

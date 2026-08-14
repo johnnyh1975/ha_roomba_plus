@@ -3562,10 +3562,54 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         #
         # The floor plan's bundle is fetched whenever the room map is
         # built and carries the same three files.
+        def _live_bundle_matches_plan() -> bool:
+            """Whether the live bundle describes the map being drawn.
+
+            UNKNOWN COUNTS AS MATCHING, deliberately. A robot with one
+            map is the common case and its live bundle is always the
+            right one; refusing it because a manifest lacks an id would
+            take working zones away from every single-map household to
+            fix a multi-map one.
+
+            THE PERSISTED BUNDLE CARRIES NO MANIFEST -- the store keeps
+            coverage, trajectories and hazard only. It carries no zone
+            layers either, so after a reload `_zone_layer` falls through
+            to the saved floor plan and this check never decides
+            anything. It matters during a live mission, which is exactly
+            when the wrong map's zones could be drawn.
+            """
+            plan_id = getattr(self._floor_plan, "p2map_id", None)
+            if not plan_id:
+                return True
+            manifest = live_bundle.get("manifest")
+            if not isinstance(manifest, dict):
+                return True
+            live_id = manifest.get("pmap_id") or manifest.get("p2map_id")
+            if not live_id:
+                return True
+            return str(live_id) == str(plan_id)
+
         def _zone_layer(name: str) -> Any:
-            layer = live_bundle.get(name)
-            if layer:
-                return layer
+            # THE LIVE BUNDLE ONLY WINS FOR THE MAP IT BELONGS TO.
+            #
+            # It arrives on a map-update message during a mission, so it
+            # describes whichever map the robot is DRIVING -- which is
+            # not necessarily the one the dropdown selected.
+            #
+            # @chairstacker selected Master_Bathroom while a Whole_House
+            # mission ran and saw Whole_House's clean and keep-out
+            # boundaries drawn over the bathroom floor plan. His summary
+            # was exact: two sets of maps switching properly, one set of
+            # zones that is either on or off.
+            #
+            # Preferring live unconditionally was right while a robot had
+            # one map. With several it draws the wrong zones on the right
+            # floor plan, which is worse than drawing none -- a boundary
+            # in the wrong place invites trusting it.
+            if _live_bundle_matches_plan():
+                layer = live_bundle.get(name)
+                if layer:
+                    return layer
             return (getattr(self._floor_plan, "zone_layers", None) or {}).get(name)
 
         if options.get(CONF_MAP_CLEAN_ZONES, DEFAULT_MAP_ZONES):

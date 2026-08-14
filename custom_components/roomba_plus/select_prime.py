@@ -115,10 +115,22 @@ PAD_WASH_HEAT_LEVELS: dict[int, str] = {
 #:     2  heatedSupported     adds the default heat
 #:     3  highHeatSupported   adds high heat
 #:
-#: SO THE OPTION SET DEPENDS ON THE DOCK, exactly as it does for
-#: auto-evacuation. A static 0/1/2 would offer high heat to a level-2
-#: dock that cannot produce it -- accepted by the shadow, wrong on the
-#: hardware, and invisible.
+#: SO THE OPTION SET PLAUSIBLY DEPENDS ON THE DOCK -- and "plausibly"
+#: is the honest word, because this is an inference from the enum's own
+#: member names and not a gate anyone has read in the app.
+#:
+#: THE RESEARCH WARNS ABOUT EXACTLY THIS GUESS. Its correction table
+#: records "Vermutung: Gate über dock.cap.pw" as **wrong** for the
+#: neighbouring wash-frequency screen: `setWashFreq` calls
+#: `ProductMode::getModeBySku()` first, so the SKU decides which UI
+#: appears, not a capability field. Nobody has read what gates `pwHeat`.
+#:
+#: KEPT ANYWAY, and the reason is the direction of the risk. A dock at
+#: level 2 offered high heat would accept the write and not produce it
+#: -- silent. The fallback is fail-open, so an unreported `pw` still
+#: offers everything, and key presence catches the common case on its
+#: own. If this turns out to be the wrong gate, the symptom is a
+#: missing option on a capable dock, which someone reports.
 #:
 #: chairstacker's dock reads `pw: 1`, which is why he has no `pwHeat`
 #: key at all and why this control will not appear for him. Key presence
@@ -216,6 +228,54 @@ _AUTOEVAC_LEVELS: dict[int, tuple[int, ...]] = {
 }
 
 
+#: SKU-narrowed option lists (`getListBySKU`, app 3.0.0).
+#:
+#: FIVE PRODUCT MODES SEE FEWER OPTIONS than the enums declare, and the
+#: vendor narrows per ProductMode index rather than per capability:
+#:
+#:     G2 robot_415_combo   N2 robot_515_combo   R2 robot_575_combo
+#:     V1 robot_615_combo   Z1 robot_875
+#:
+#: NONE OF THE CURRENT TESTERS IS ONE OF THESE -- G1, N1, W1, Y3 and Y4
+#: all take the standard lists. But V1 and Z1 were added to
+#: `PRIME_SKU_PREFIXES` in the same session as these controls, so a
+#: robot that only just became recognisable would have been offered
+#: intervals its own app does not show.
+#:
+#: THE BRANCH ASSIGNMENT IS PARTLY INFERRED, and the source says so: the
+#: assembler does not separate the branches cleanly, and the mapping
+#: rests on agreement with `product_profile.json` from 2.2.4. Where the
+#: two agree it is solid; N2 and V1 have no list of their own and share
+#: a branch with a neighbour.
+#:
+#: SO NARROWING IS APPLIED ONLY WHERE BOTH SOURCES AGREE. A wrong
+#: narrowing hides an option a robot supports, which is worse than
+#: offering one it does not -- the second gets rejected, the first is
+#: invisible.
+_SKU_VALUE_LISTS: dict[str, dict[str, tuple[int, ...]]] = {
+    "G2": {"pwAreaInterval": (6, 8, 10), "padDryDur": (2, 3, 4)},
+    "N2": {"pwAreaInterval": (10, 15, 20), "padDryDur": (2, 3, 4)},
+    "R2": {"pwAreaInterval": (10, 15, 20), "padDryDur": (2, 3, 4)},
+    "V1": {"pwTimeInterval": (10, 15, 20), "padDryDur": (4, 5, 6)},
+    "Z1": {"pwTimeInterval": (10, 15, 20), "padDryDur": (4, 5, 6)},
+}
+
+
+def _sku_narrowed(wire_key: str, sku: str | None, values: dict[int, str]) -> dict[int, str]:
+    """The options this robot's product mode offers.
+
+    Unknown SKU means offer everything, the same fail-open contract used
+    for capabilities: a robot whose SKU has not arrived should get the
+    full list rather than an arbitrary subset.
+    """
+    if not sku:
+        return values
+    allowed = _SKU_VALUE_LISTS.get(sku[:2].upper(), {}).get(wire_key)
+    if not allowed:
+        return values
+    return {v: label for v, label in values.items() if v in allowed}
+
+
 def _autoevac_options(cap: Any) -> dict[int, str]:
     """The auto-evacuation values this robot's capability level offers.
 
@@ -223,6 +283,18 @@ def _autoevac_options(cap: Any) -> dict[int, str]:
     file uses: a robot that has not reported `cap.autoevac` gets the
     full set rather than an empty control. Only a level the vendor
     defines narrows it, and only `taskEndOnly` empties it entirely.
+
+    NOT NARROWED BY SKU, AND A SCREENSHOT SAYS WHY. `getListBySKU`
+    reports a standard `autoevacFreq` list of [0, 10, 15, 25, 30] --
+    area-based values only. @chairstacker's robot is a G1, which takes
+    that standard list, and his Auto-Empty Frequency screen shows
+    exactly three options: every routine, every 2, every 3. That is
+    0/1/2, and none of them is in the SKU list.
+
+    His `cap.autoevac` reads 1 (`freqModes`), which predicts 0/1/2
+    exactly. So the capability decides this control and the SKU list
+    does not -- and the SKU extraction says of itself that its branch
+    assignment is partly inferred. A photograph outranks it.
     """
     level = getattr(cap, "autoevac", None) if cap is not None else None
     allowed = _AUTOEVAC_LEVELS.get(level) if isinstance(level, int) else None
@@ -699,6 +771,26 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         """The value to send with a start, or None to leave it alone."""
         option = self.current_option
         return self.MODES.get(option) if option else None
+
+
+def _robot_sku(config_entry: RoombaConfigEntry) -> str | None:
+    """This robot's SKU, for the per-product-mode option lists.
+
+    Read from the unnamed THING shadow, which is where `sku` arrives --
+    the same place `_set_robot_profile_on_sku` reads it in __init__.py.
+    None when the shadow has not landed, and the caller offers the full
+    list in that case."""
+    coordinator = config_entry.runtime_data.prime_status_coordinator
+    if coordinator is None or coordinator.data is None:
+        return None
+    for key in ("", "thing"):
+        raw = coordinator.data.get(key) if key else coordinator.data.get("state")
+        if isinstance(raw, dict):
+            reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+            if isinstance(reported, dict) and reported.get("sku"):
+                return str(reported["sku"])
+    profile = getattr(config_entry.runtime_data, "robot_profile", None)
+    return str(getattr(profile, "sku", "") or "") or None
 
 
 def _settings_keys(config_entry: RoombaConfigEntry) -> set[str] | None:

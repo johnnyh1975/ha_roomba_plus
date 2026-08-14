@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Wykryto zmianę układu"
+      },
+      "prime_start_blocked": {
+        "name": "Start zablokowany"
+      },
+      "prime_quiet_hours": {
+        "name": "W godzinach ciszy"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Zwiększona siła ssania"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Nie przeszkadzać"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Mapa sprzątania"
       },
-      "raw_map": {
-        "name": "Surowa mapa na żywo"
-      },
-      "cleaning_map": {
-        "name": "Mapa sprzątania"
-      },
       "coverage_map": {
         "name": "Mapa pokrycia"
       },
       "rooms_map": {
         "name": "Mapa pomieszczeń"
+      },
+      "cleaning_map": {
+        "name": "Mapa sprzątania"
+      },
+      "raw_map": {
+        "name": "Surowa mapa na żywo"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Ocena kondycji spadła",
       "map_retrain_started": "Trening mapy rozpoczęty",
       "map_retrain_completed": "Trening mapy zakończony",
-      "firmware_updated": "Oprogramowanie zaktualizowane"
+      "firmware_updated": "Oprogramowanie zaktualizowane",
+      "start_blocked": "Start zablokowany przez usterkę"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Przywróć kopię zapasową",
       "description": "Przywraca wszystkie dane z kopii zapasowej ZIP. Działa natychmiast, bez restartu."
+    },
+    "set_quiet_hours": {
+      "name": "Ustaw godziny ciszy",
+      "description": "Zapisuje okno Nie przeszkadzać dla gospodarstwa.",
+      "fields": {
+        "start": {
+          "name": "Początek",
+          "description": "Kiedy godziny ciszy zaczynają się każdego dnia."
+        },
+        "end": {
+          "name": "Koniec",
+          "description": "Kiedy kończą się każdego dnia."
+        },
+        "ends_at": {
+          "name": "Cisza do",
+          "description": "Pojedynczy moment zamiast okna dziennego."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "Stacja jest zajęta ({operation}). Robot nie przyjmie poleceń, dopóki nie skończy."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Godziny ciszy wymagają początku i końca, albo żadnego z nich."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Podaj okno dzienne (początek i koniec) albo pojedynczy moment — robot akceptuje dokładnie jedno z dwóch."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} nie jest robotem V4/Prime z gospodarstwem."
+    },
+    "prime_not_connected": {
+      "message": "Ten robot nie ma połączenia z chmurą."
     }
   },
   "selector": {

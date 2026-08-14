@@ -1472,11 +1472,6 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         config_entry.add_update_listener(_async_reload_on_options_change)
     )
 
-    # Domain actions are shared by Classic and Prime.  The Classic setup
-    # path registers them during its final phase, but Prime returns before
-    # that phase; register them here once runtime_data is available.
-    async_register_services(hass)
-
     # FAVOURITES, read once now that runtime_data exists.
     #
     # Before the platforms load, because the button platform reads the
@@ -1574,6 +1569,20 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     hass.async_create_task(
         _first_mission_sync(), name="roomba_plus_prime_first_mission_sync"
     )
+
+    # DOMAIN ACTIONS ARE SHARED BY BOTH GENERATIONS, and Prime never
+    # reached the line that registers them (PR #76, @jouwdan).
+    #
+    # The Classic path calls this in its final phase; the Prime path
+    # returns 500 lines earlier and skipped it entirely. Every
+    # `roomba_plus.*` service was therefore missing on a Prime-only
+    # installation -- the services existed, the entities existed, and
+    # nothing connected them.
+    #
+    # Safe to call twice: each service is guarded by `has_service()`, so
+    # a household with one Classic and one Prime robot registers them
+    # once.
+    async_register_services(hass)
 
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid

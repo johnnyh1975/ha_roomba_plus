@@ -43,6 +43,7 @@ from .const import SQFT_TO_M2
 from .prime_dirt import dirty_rooms
 from .room_cleaning import async_get_room_cleaning_backend
 from .structural_failures import record_failure, record_success
+from .prime_coordinator import prime_mission_cycle
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -332,8 +333,13 @@ class DirtThresholdManager:
             return True, "blocking_sensor_queued"
 
         # Gate 4: robot must be docked/idle
-        state = data.roomba_reported_state()
-        cycle = (state.get("cleanMissionStatus") or {}).get("cycle", "none")
+        #
+        # THROUGH THE PRIME FALLBACK. This gate is reused untouched by
+        # async_evaluate_prime(), and `roomba_reported_state()` returns {}
+        # there -- so `cycle` defaulted to "none" and the gate passed on
+        # every Prime robot, cleaning or not. Failing open on a "must be
+        # docked" check is the wrong direction.
+        cycle = prime_mission_cycle(data) or "none"
         if cycle != "none":
             return True, f"robot_busy_{cycle}"
 

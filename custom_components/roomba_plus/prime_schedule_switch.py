@@ -657,3 +657,73 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
             self._attr_is_on = enabled
             self.async_write_ha_state()
             return
+
+
+def quiet_hours_windows(
+    containers: list[tuple[str, list[Any]]],
+) -> list[dict[str, Any]]:
+    """The Do Not Disturb windows the household schedule carries.
+
+    THE DATA WAS ALREADY PARSED AND THROWN AWAY. Quiet hours arrive in
+    the same container as cleaning schedules and were skipped so they
+    would not become switches -- correctly, because toggling one writes
+    the whole container back and a user "turning off a schedule" would
+    have been rewriting their quiet hours from whatever we managed to
+    parse. @DaRealGuGu saw two such switches appear for his Prime robot,
+    matching times shown nowhere in the Roomba app.
+
+    Skipping them made the switches right and left the information
+    invisible. This returns it.
+
+    READ ONLY, AND THAT IS A DECISION RATHER THAN AN OMISSION. The
+    library has `set_dnd_settings()`, so writing is available. It is not
+    used, because a Prime robot has been observed CLEANING inside its
+    own quiet-hours window: the setting reads back and its effect is
+    unproven. A control that appears to work and does nothing is worse
+    than none, and the honest form is to publish the window so an
+    automation can enforce what the robot does not.
+
+    THE DISCRIMINATOR IS `end`, the same one the switch builder uses: a
+    cleaning schedule says when to start, quiet hours are an interval
+    and carry both ends. If a cleaning schedule with an end time ever
+    turns up, both places are wrong together -- which is the reason to
+    keep one rule rather than two.
+    """
+    windows: list[dict[str, Any]] = []
+    for _container_id, schedules in containers:
+        for schedule in schedules:
+            options = getattr(schedule, "options", None)
+            if options is None or getattr(options, "deleted", False):
+                continue
+            end = getattr(options, "end", None)
+            if end is None and not getattr(options, "end_commands", None):
+                continue
+            start = getattr(options, "start", None)
+            windows.append({
+                "start": _clock(start),
+                "end": _clock(end),
+                "enabled": getattr(options, "enabled", None),
+                "frequency": getattr(options, "frequency", None),
+                "schedule_id": str(getattr(schedule, "schedule_id", "") or ""),
+            })
+    return windows
+
+
+def _clock(value: Any) -> str | None:
+    """A schedule time as HH:MM, from whichever shape it arrives in.
+
+    `ScheduleTimeDto` carries day, hour and min as separate fields; some
+    responses carry a plain string. Neither is normalised here beyond
+    what a dashboard needs, because nothing in this project has yet had
+    to compare two of them."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    hour = getattr(value, "hour", None)
+    minute = getattr(value, "min", None)
+    if minute is None:
+        minute = getattr(value, "minute", None)
+    if hour is None:
+        return None
+    return f"{int(hour):02d}:{int(minute or 0):02d}"

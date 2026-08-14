@@ -900,6 +900,12 @@
       },
       "layout_change_detected": {
         "name": "Layout change detected"
+      },
+      "prime_start_blocked": {
+        "name": "Start blocked"
+      },
+      "prime_quiet_hours": {
+        "name": "In quiet hours"
       }
     },
     "button": {
@@ -1003,6 +1009,9 @@
       },
       "prime_vac_high": {
         "name": "Extra suction power"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Do not disturb"
       }
     },
     "select": {
@@ -1132,17 +1141,17 @@
       "map": {
         "name": "Cleaning map"
       },
-      "raw_map": {
-        "name": "Raw live map"
-      },
-      "cleaning_map": {
-        "name": "Cleaning map"
-      },
       "coverage_map": {
         "name": "Coverage map"
       },
       "rooms_map": {
         "name": "Rooms Map"
+      },
+      "cleaning_map": {
+        "name": "Cleaning map"
+      },
+      "raw_map": {
+        "name": "Raw live map"
       }
     },
     "calendar": {
@@ -1255,7 +1264,8 @@
       "health_score_drop": "Health score dropped",
       "map_retrain_started": "Map retrain started",
       "map_retrain_completed": "Map retrain completed",
-      "firmware_updated": "Firmware updated"
+      "firmware_updated": "Firmware updated",
+      "start_blocked": "Start blocked by a fault"
     }
   },
   "services": {
@@ -1322,6 +1332,24 @@
     "restore_backup": {
       "name": "Restore backup",
       "description": "Restore every store in a backup ZIP. Takes effect immediately, no restart required."
+    },
+    "set_quiet_hours": {
+      "name": "Set quiet hours",
+      "description": "Write the household's Do Not Disturb window.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "When quiet hours begin each day."
+        },
+        "end": {
+          "name": "End",
+          "description": "When quiet hours end each day."
+        },
+        "ends_at": {
+          "name": "Quiet until",
+          "description": "A single moment to stay quiet until, instead of a daily window."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1384,6 +1412,18 @@
     },
     "dock_operation_in_progress": {
       "message": "The dock is busy {operation}. The robot will not act on commands until it finishes."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Quiet hours need both a start and an end, or neither."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Give either a daily window (start and end) or a one-off quiet-until moment — the robot accepts exactly one of the two."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} is not a V4/Prime robot with a household."
+    },
+    "prime_not_connected": {
+      "message": "This robot has no cloud connection."
     }
   },
   "selector": {

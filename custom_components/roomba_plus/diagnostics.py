@@ -23,6 +23,7 @@ from .const import (
 from .withheld_features import withheld_features
 from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
 from .models import ConnectionType, RoombaConfigEntry
+from .binary_sensor import _prime_reports_tank
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
 
@@ -223,6 +224,21 @@ def _redact_values(value: Any, blid: str | None) -> Any:
     if isinstance(value, list):
         return [_redact_values(v, blid) for v in value]
     return value
+
+
+async def _prime_favorites_raw(data: Any) -> Any:
+    """The unparsed favourites response, for a diagnostics download.
+
+    Never raises: a diagnostics download that fails because one of its
+    sections failed is worse than a section that reports why. The error
+    text is the finding when the call cannot be made at all."""
+    robot = getattr(data, "prime_robot", None)
+    if robot is None:
+        return {"note": "no prime robot on this entry"}
+    try:
+        return await robot.get_favorites_raw()
+    except Exception as err:  # noqa: BLE001
+        return {"error": f"{type(err).__name__}: {err}"}
 
 
 async def _prime_schedule_summary(data: Any) -> Any:
@@ -655,8 +671,25 @@ def _prime_capability_report(config_entry: RoombaConfigEntry) -> dict[str, Any]:
         "cap_flags": dataclasses.asdict(cap) if cap is not None else None,
         "dock_cap_flags": dataclasses.asdict(dock_cap) if dock_cap is not None else None,
         "entity_decisions": {
+            # CORRECTED: these two no longer share a rule, and this
+            # report said they did.
+            #
+            # @chairstacker read his own diagnostics and asked whether
+            # both should refer to `cap.scrub`. They should not.
+            # `mop_tank_present` was moved to field presence
+            # (`tankPresent`) after he reported a tank sensor for a tank
+            # he does not have -- his water is in the Clean Base. This
+            # line kept describing the rule that was removed.
+            #
+            # A stale explanation is worse than none: it sends the next
+            # reader to the wrong gate, and the whole point of this block
+            # is to answer "why does this entity exist".
             "detected_pad": _decision(getattr(cap, "scrub", None), "cap.scrub"),
-            "mop_tank_present": _decision(getattr(cap, "scrub", None), "cap.scrub"),
+            "mop_tank_present": (
+                "created (tankPresent reported)"
+                if _prime_reports_tank(config_entry)
+                else "skipped (tankPresent absent)"
+            ),
             "suction_level": _decision(getattr(cap, "suction_lvl", None), "cap.suctionLvl"),
             "carpet_boost_switch": _decision(getattr(cap, "carpet_boost", None), "cap.carpetBoost"),
             "pad_wash_status": _decision(getattr(dock_cap, "pad_wash", None), "dock.cap.pw"),
@@ -922,6 +955,71 @@ async def _build_diagnostics(
             # room ids and schedule names are not needed to answer this
             # and would widen what a public paste contains.
             "prime_schedules": await _prime_schedule_summary(data),
+
+            # THREE BLOCKS THAT WERE ONLY EVER IN THE CLASSIC PATH, and
+            # none of them is Classic-specific.
+            #
+            # The early return exists because this function used to reach
+            # `data.roomba`'s attributes unconditionally and would raise
+            # on every Prime entry. Returning a separate dict fixed the
+            # crash and, quietly, decided that everything below was
+            # Classic -- which was never checked block by block.
+            #
+            # `vendor_capabilities` is the sharpest case: its own
+            # docstring says "Empty for a Classic robot and for a Prime
+            # one that has not reported them yet". It reads `digiCap`
+            # from the unnamed shadow. Written for Prime, placed where
+            # Prime cannot reach it.
+            #
+            # `never_succeeded` takes no arguments at all -- a global
+            # record of sites that have failed and never once worked,
+            # built precisely because "there is nothing here" is how
+            # these faults look. A Prime user reporting an empty list
+            # could not see whether the fetch behind it had ever
+            # succeeded.
+            #
+            # `warnings` asks whether HA's core roomba integration is
+            # also loaded. That conflict has nothing to do with which
+            # generation the robot is.
+            "vendor_capabilities": _vendor_capabilities(config_entry),
+            "never_succeeded": _structural_diagnostics(),
+            "warnings": {
+                "core_roomba_integration_also_active": any(
+                    entry.domain == "roomba"
+                    for entry in hass.config_entries.async_entries()
+                    if entry.state.value == "loaded"
+                ),
+            },
+
+            # THE THIRD INSTRUMENT THAT COULD NOT REACH THE QUESTION.
+            #
+            # A `favourites` block has existed since the favourites bug
+            # was first reported -- built specifically so a download
+            # could tell "the option is off" from "the list arrived
+            # empty". It sits in the Classic path below, which a Prime
+            # entry returns before ever reaching.
+            #
+            # So every diagnostics download taken to investigate missing
+            # favourites on a Prime robot omitted the favourites block
+            # entirely. @chairstacker sent one on a33 and it is not in
+            # there.
+            #
+            # That is the same shape twice over: `get_favorites_raw()`
+            # carried the unwrapping bug it was built to reveal, and this
+            # block was placed where the tier it describes cannot see it.
+            "favourites": {
+                "count": len(getattr(data, "prime_favorites", None) or []),
+                "buttons_enabled": config_entry.options.get(
+                    CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
+                ),
+                # THE COUNT ALONE CANNOT DISTINGUISH the three causes
+                # that produce an empty list, so the raw response goes in
+                # beside it. `get_favorites_raw()` now unwraps a wrapped
+                # payload and hands back the whole object when there is
+                # no `favorites` key -- the outer keys being exactly what
+                # is worth seeing.
+                "raw": await _prime_favorites_raw(data),
+            },
             "mission_coordinator": {
                 "started": mission_coordinator is not None,
                 "last_update_success": getattr(mission_coordinator, "last_update_success", None),

@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Changement de disposition détecté"
+      },
+      "prime_start_blocked": {
+        "name": "Démarrage bloqué"
+      },
+      "prime_quiet_hours": {
+        "name": "En heures calmes"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Puissance d'aspiration accrue"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Ne pas déranger"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Carte de nettoyage"
       },
-      "raw_map": {
-        "name": "Carte en direct brute"
-      },
-      "cleaning_map": {
-        "name": "Carte de nettoyage"
-      },
       "coverage_map": {
         "name": "Carte de couverture"
       },
       "rooms_map": {
         "name": "Carte des pièces"
+      },
+      "cleaning_map": {
+        "name": "Carte de nettoyage"
+      },
+      "raw_map": {
+        "name": "Carte en direct brute"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Score de santé en baisse",
       "map_retrain_started": "Réapprentissage de la carte démarré",
       "map_retrain_completed": "Réapprentissage de la carte terminé",
-      "firmware_updated": "Firmware mis à jour"
+      "firmware_updated": "Firmware mis à jour",
+      "start_blocked": "Démarrage bloqué par une erreur"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Restaurer une sauvegarde",
       "description": "Restaure toutes les données d'une sauvegarde ZIP. Effet immédiat, aucun redémarrage requis."
+    },
+    "set_quiet_hours": {
+      "name": "Définir les heures calmes",
+      "description": "Écrit la plage Ne pas déranger du foyer.",
+      "fields": {
+        "start": {
+          "name": "Début",
+          "description": "Quand les heures calmes commencent chaque jour."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Quand elles se terminent chaque jour."
+        },
+        "ends_at": {
+          "name": "Calme jusqu'à",
+          "description": "Un moment unique au lieu d'une plage quotidienne."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "La station est occupée ({operation}). Le robot n'acceptera pas de commandes avant la fin."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Les heures calmes exigent un début et une fin, ou aucun des deux."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Indiquez soit une plage quotidienne (début et fin), soit un moment unique — le robot accepte exactement l'un des deux."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} n'est pas un robot V4/Prime avec un foyer."
+    },
+    "prime_not_connected": {
+      "message": "Ce robot n'a pas de connexion au cloud."
     }
   },
   "selector": {

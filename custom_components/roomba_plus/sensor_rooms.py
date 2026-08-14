@@ -28,6 +28,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_ROOM_SCHEDULE
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
+from .prime_coordinator import prime_current_state, prime_last_command
 
 _LOGGER = logging.getLogger("custom_components.roomba_plus.sensor")
 
@@ -249,8 +250,21 @@ def _compute_room_time_estimates(
     # setting even when a room-clean mission is started with explicit per-
     # region twoPass/noAutoPasses params. Reading from the wrong source
     # caused two-pass missions to be estimated at one-pass durations.
+    # THROUGH THE PRIME FALLBACK -- and it recovers less than it looks.
+    #
+    # The comment above records a fix from the Classic side: per-room
+    # params must win over the global default, or a two-pass mission is
+    # estimated at one-pass durations. On a Prime entry
+    # `roomba_reported_state()` returns {}, so `last_regions` was empty
+    # and that fix was inert -- the same wrong estimate, reached a
+    # different way.
+    #
+    # Prime carries `lastCommand` on rw-software with three scalar
+    # fields and NO `regions`. So this yields an honest empty answer
+    # rather than a wrong one; per-room pass counts stay unavailable on
+    # Prime until something carries them.
     reported = config_entry.runtime_data.roomba_reported_state()
-    last_cmd = reported.get("lastCommand") or {}
+    last_cmd = prime_last_command(config_entry.runtime_data)
     last_regions = [
         r for r in (last_cmd.get("regions") or [])
         if isinstance(r, dict) and r.get("params")
@@ -265,8 +279,16 @@ def _compute_room_time_estimates(
         else:
             pass_key = "one_pass_sec"
     else:
-        # Fallback: read from cleanMissionStatus global fields
-        _cms = reported.get("cleanMissionStatus") or {}
+        # Fallback: read from cleanMissionStatus global fields.
+        #
+        # ALSO THROUGH THE PRIME SHADOW. This is the branch a Prime robot
+        # always lands in, since its lastCommand carries no regions -- so
+        # reading the global defaults from a dict that is empty by design
+        # meant every Prime estimate used the hardcoded fallbacks below,
+        # not the robot's own settings.
+        _cms = (reported.get("cleanMissionStatus") or {}) or _prime_pass_settings(
+            config_entry.runtime_data
+        )
         noap = _cms.get("noAutoPasses", True)
         two_pass = _cms.get("twoPass", False)
         if not noap:
@@ -300,6 +322,76 @@ def _compute_room_time_estimates(
 
 # ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
 
+def _prime_pass_settings(data: Any) -> dict[str, Any]:
+    """The global two-pass settings, in the wire shape the caller reads.
+
+    NOT FROM `cleanMissionStatus`. The first draft of this helper read
+    them there, mirroring the Classic shape -- and the library's
+    `CleanMissionStatus` has no such fields, so it returned two Nones
+    and would have looked like "the robot reports nothing".
+
+    On Prime they live in `rw-settings` as `noAutoPasses` and `twoPass`,
+    which is also where the six settings controls read them. Confirmed
+    from a real dump.
+
+    Returned as wire keys rather than model attributes because the
+    caller reads wire keys, and translating twice is one more place for
+    the two to drift apart."""
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    if coordinator is None or coordinator.data is None:
+        return {}
+    raw = coordinator.data.get("rw-settings")
+    if not isinstance(raw, dict):
+        return {}
+    reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+    if not isinstance(reported, dict):
+        return {}
+    return {
+        key: reported[key]
+        for key in ("noAutoPasses", "twoPass")
+        if key in reported
+    }
+
+
+def _mission_phase(data: Any) -> str:
+    """The mission phase, from whichever tier is actually reporting one.
+
+    Classic robots report it in master_state. CLOUD_ONLY/Prime entries
+    return ``{}`` from ``roomba_reported_state()`` BY DESIGN (see its
+    docstring: no master_state-shaped translation exists for V4) -- so a
+    phase read through the Classic shape is ``""`` for the life of the
+    entry, and every caller that GATES on it is closed on Prime forever.
+
+    THAT WAS `mission_progress` ON A ROBOT WHERE EVERYTHING ELSE WORKED.
+    @utkjmitch's Y351020 mid-mission: timer store with `mission_id`,
+    `elapsed_run_min` 10.7, `estimated_remaining_min` 42 against a
+    persisted 52.2-minute mean -- all three rendering as attributes, and
+    the state `unknown` for fifty minutes. Zero `mission_progress:`
+    debug lines in the log, because `native_value` returned at the phase
+    gate before its first debug call. The attributes read the same dead
+    phase and simply did not gate on it.
+
+    Three fixes were needed and this was the third: storage (a32),
+    the estimates fetch (a32), and the gate.
+
+    The fallback reads ``ro-currentstate`` -- the same shadow document
+    the prime coordinator feeds the mission timer store from, so the gate
+    and the data it guards move together. Classic is read FIRST and
+    returned when non-empty: a LOCAL entry never reaches the fallback and
+    behaves exactly as before.
+
+    SEVEN OTHER SITES READ THE PHASE THIS WAY. Two are fixed here; see
+    services.py's advance_room guard for the one that fails OPEN rather
+    than closed.
+    """
+    state = data.roomba_reported_state()
+    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+    if phase:
+        return str(phase)
+    status = getattr(prime_current_state(data), "clean_mission_status", None)
+    return str(getattr(status, "phase", None) or "")
+
+
 def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     """Resolve current_room/next_room/elapsed/estimated_remaining_min for a
     SMART-tier robot's active mission.
@@ -320,8 +412,7 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     it used to be).
     """
     data = config_entry.runtime_data
-    state = data.roomba_reported_state()
-    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+    phase = _mission_phase(data)
     mts = data.mission_timer_store
     if mts is None or mts.mission_id is None:
         return {}
@@ -483,8 +574,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return completion % (0–100) or None when inactive."""
         data = self._config_entry.runtime_data
-        state = data.roomba_reported_state()
-        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+        phase = _mission_phase(data)
         mts = data.mission_timer_store
 
         # Not in a cleaning phase → not active

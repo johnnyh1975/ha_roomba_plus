@@ -102,7 +102,9 @@ async def async_setup_entry(
         from .select_prime import (  # noqa: PLC0415
             _autoevac_options,
             _pad_wash_heat_options,
+            _robot_sku,
             _settings_keys,
+            _sku_narrowed,
         )
 
         cap, dock_cap = get_prime_capability_flags(config_entry)
@@ -119,6 +121,7 @@ async def async_setup_entry(
         # same fail-open contract used for capabilities. An empty set
         # would hide every control on a slow first connection.
         present = _settings_keys(config_entry)
+        sku = _robot_sku(config_entry)
 
         selects = []
         for description in PRIME_SELECTS:
@@ -140,7 +143,15 @@ async def async_setup_entry(
             elif description.wire_key == "pwHeat":
                 values = _pad_wash_heat_options(dock_cap)
             else:
-                values = None
+                # THREE CONTROLS ARE NARROWED BY PRODUCT MODE. Five SKUs
+                # see shorter interval and duration lists than the enums
+                # declare, and two of those five -- V1 and Z1 -- only
+                # became recognisable as Prime in the same session these
+                # controls were built.
+                narrowed = _sku_narrowed(
+                    description.wire_key, sku, description.values
+                )
+                values = narrowed if narrowed != description.values else None
             # A capability level can narrow the set to nothing --
             # `taskEndOnly` offers no choice at all. A select with no
             # options is worse than no select.

@@ -323,6 +323,17 @@ SERVICE_RESET_BRUSH: Final = "reset_brush"
 SERVICE_RESET_BATTERY: Final = "reset_battery"
 SERVICE_RESET_PAD: Final = "reset_pad"
 SERVICE_SMART_START: Final = "smart_start"
+#: Writes the household's Do Not Disturb window.
+#:
+#: A SERVICE RATHER THAN AN ENTITY, and that is the honest shape for
+#: what this can promise. The setting is household-wide, not per robot;
+#: it takes either a daily window or a one-off end moment, never both;
+#: and its EFFECT is unproven -- a Prime robot has been observed
+#: cleaning inside its own quiet hours.
+#:
+#: A switch would imply "quiet hours are on now". A service says "write
+#: this window", which is exactly what the endpoint does and no more.
+SERVICE_SET_QUIET_HOURS: Final = "set_quiet_hours"
 ATTR_ROOMS: Final = "rooms"
 ATTR_OVERRIDE_BLOCKING: Final = "override_blocking"
 
@@ -1288,6 +1299,39 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     # therefore indistinguishable from "no initiator info at all" on this
     # sensor — same value, "None", for two different real situations.
     "none": "None",
+    # NINETEEN MORE FROM THE VENDOR'S OWN ENUM, and the comment above
+    # says exactly what their absence cost: an unmapped value falls
+    # through to "None", which is the same answer as "no initiator
+    # information at all". `demand` was found that way, one value at a
+    # time, by someone building a blueprint.
+    #
+    # `Initiator` (app 3.0.0) lists 25. This dict had six.
+    #
+    # THE VOICE ASSISTANTS ARE THE POINT. "Why did the robot start?" is
+    # a question people ask, and a household with a schedule AND an
+    # Alexa routine could not tell the two apart. `dockBtn` and `manual`
+    # are the other pair worth separating -- one is the button on the
+    # dock, the other the button on the robot.
+    "dockBtn": "Dock button",
+    "alexa": "Alexa",
+    "siri": "Siri",
+    "ifttt": "IFTTT",
+    "iftttc": "IFTTT",
+    "homey": "Homey",
+    "openHAB": "openHAB",
+    "yonomi": "Yonomi",
+    "bosch": "Bosch",
+    "swisscom": "Swisscom",
+    "alismart": "AliSmart",
+    "team": "Teamed robot",
+    "cloud": "iRobot cloud",
+    "rmtAuto": "iRobot automation",
+    "loclAuto": "Local automation",
+    "simAuto": "Simulated automation",
+    "wifi": "Wi-Fi",
+    "shell": "Shell",
+    "internal": "Robot (internal)",
+    "unknown": "Unknown",
 }
 
 MOP_RANK_LABELS: Final[dict[int, str]] = {
@@ -1672,6 +1716,56 @@ def room_slug(value: str) -> str:
 #: So the field is not the operating-mode bitmask. Three separate codes
 #: now say so, from three unrelated directions.
 #:
+#: THE SEVERITY VALUES ARE TWO VOCABULARIES MIXED, and the vendor names
+#: only one of them.
+#:
+#: `FaultLevel` (app 3.0.0) declares p0, p1, p2, p3 and a `none`
+#: sentinel. This table uses p2 and p3 -- 155 of its 171 entries -- and
+#: four values that are not levels at all: `standard`, `internal`,
+#: `contextual` and `maintanance` (the vendor's own spelling).
+#:
+#: So the p-values are a real severity scale with p0 and p1 unused here,
+#: and the other four are a different axis riding in the same field.
+#: Nothing sorts or compares these, which is the only reason the mix has
+#: been harmless.
+#:
+#: p0 AND p1 ARE MISSING RATHER THAN ABSENT. A scale whose top two
+#: levels never appear in 171 entries is more likely incompletely
+#: transcribed than genuinely unused; a code carrying p0 would be the
+#: most severe thing the robot can report and would currently fall
+#: through to no special handling.
+#:
+#: WHICH MODES EACH BLOCKING CODE STILL ALLOWS.
+#:
+#: `blockFault` (app 3.0.0) checks exactly four codes before letting a
+#: mission start, and the vendor's own texts say what each one means:
+#:
+#:   234  "Unable to start: no mop attached"           the CLOTH is missing
+#:   286  "Ready to clean? Make sure @val is on the floor"   robot lifted
+#:   287  "Unable to vacuum: remove Pad Plate"         plate ON  -> mop only
+#:   290  "Unable to start mopping: attach Pad Plate"  plate OFF -> vacuum only
+#:
+#: 234 AND 290 ARE DIFFERENT STATES, and that is the distinction worth
+#: keeping: the plate can be fitted with no cloth on it, which is
+#: exactly what `detectedPad: "padPlate"` reports on a real robot. A
+#: check that folded them together would tell a user to attach the plate
+#: they already have on.
+#:
+#: THE VALUE IS THE MODE SET, NOT THE MESSAGE. The catalogue already
+#: carries the text; what it cannot say is what the robot would still
+#: accept. 287 does not mean "broken", it means "mop and it will work".
+#:
+#: 286 BLOCKS EVERYTHING -- a robot off the floor cannot do either --
+#: and 234 blocks only mopping, since a plate with no cloth still
+#: vacuums.
+PRIME_BLOCKING_FAULTS: Final[dict[int, frozenset[str]]] = {
+    234: frozenset({"vacuum"}),
+    286: frozenset(),
+    287: frozenset({"mop"}),
+    290: frozenset({"vacuum"}),
+}
+
+
 #: FOUR CODES BLOCK A START, not three. `blockFault` (app 3.0.0) checks
 #: 234, 286, 287 and 290, and 234 is a DIFFERENT state from 290:
 #:

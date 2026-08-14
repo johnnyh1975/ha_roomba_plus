@@ -893,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Alteração de disposição detetada"
+      },
+      "prime_start_blocked": {
+        "name": "Início bloqueado"
+      },
+      "prime_quiet_hours": {
+        "name": "Em horas de silêncio"
       }
     },
     "button": {
@@ -996,6 +1002,9 @@
       },
       "prime_vac_high": {
         "name": "Potência de sucção extra"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Não incomodar"
       }
     },
     "select": {
@@ -1125,17 +1134,17 @@
       "map": {
         "name": "Mapa de limpeza"
       },
-      "raw_map": {
-        "name": "Mapa em direto em bruto"
-      },
-      "cleaning_map": {
-        "name": "Mapa de limpeza"
-      },
       "coverage_map": {
         "name": "Mapa de cobertura"
       },
       "rooms_map": {
         "name": "Mapa de divisões"
+      },
+      "cleaning_map": {
+        "name": "Mapa de limpeza"
+      },
+      "raw_map": {
+        "name": "Mapa em direto em bruto"
       }
     },
     "device_tracker": {
@@ -1253,7 +1262,8 @@
       "health_score_drop": "Pontuação de saúde caiu",
       "map_retrain_started": "Reaprendizagem do mapa iniciada",
       "map_retrain_completed": "Reaprendizagem do mapa concluída",
-      "firmware_updated": "Firmware atualizado"
+      "firmware_updated": "Firmware atualizado",
+      "start_blocked": "Início bloqueado por uma falha"
     }
   },
   "services": {
@@ -1320,6 +1330,24 @@
     "restore_backup": {
       "name": "Restaurar cópia de segurança",
       "description": "Restaura todos os dados de um ZIP de cópia de segurança. Efeito imediato, sem reiniciar."
+    },
+    "set_quiet_hours": {
+      "name": "Definir horas de silêncio",
+      "description": "Escreve a janela Não incomodar do agregado.",
+      "fields": {
+        "start": {
+          "name": "Início",
+          "description": "Quando as horas de silêncio começam todos os dias."
+        },
+        "end": {
+          "name": "Fim",
+          "description": "Quando terminam todos os dias."
+        },
+        "ends_at": {
+          "name": "Silêncio até",
+          "description": "Um único momento em vez de uma janela diária."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1382,6 +1410,18 @@
     },
     "dock_operation_in_progress": {
       "message": "A base está ocupada ({operation}). O robô não aceitará comandos até terminar."
+    },
+    "quiet_hours_incomplete": {
+      "message": "As horas de silêncio precisam de início e fim, ou de nenhum."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Indique uma janela diária (início e fim) ou um único momento — o robô aceita exatamente um dos dois."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} não é um robô V4/Prime com agregado."
+    },
+    "prime_not_connected": {
+      "message": "Este robô não tem ligação à nuvem."
     }
   },
   "selector": {
