@@ -1348,7 +1348,9 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
         from custom_components.roomba_plus.binary_sensor import (
             PrimeBinPresentSensor,
             PrimeDockErrorSensor,
+            PrimeQuietHoursSensor,
             PrimeRobotConnectivitySensor,
+            PrimeStartBlockedSensor,
             PrimeTankPresentSensor,
         )
         from custom_components.roomba_plus.models import ConnectionType
@@ -1369,7 +1371,14 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
 
         await binary_sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
 
-        assert len(created) == 4
+        # Five since the start-blocked sensor: it is created
+        # unconditionally, unlike the tank sensor beside it.
+        # Six since quiet hours: like the start-blocked sensor it is
+        # created unconditionally -- any household can carry quiet
+        # hours, and one that has none reports an empty list.
+        assert len(created) == 6
+        assert any(isinstance(e, PrimeQuietHoursSensor) for e in created)
+        assert any(isinstance(e, PrimeStartBlockedSensor) for e in created)
         assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
         assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
         assert any(isinstance(e, PrimeRobotConnectivitySensor) for e in created)
@@ -1494,16 +1503,86 @@ class TestTankSensorGatedOnTheField:
         mop but keeps its water in the dock reports no tankPresent."""
         assert self._tank_created({"cap": {"scrub": 3}}) is False
 
-    def test_the_old_capability_gate_is_gone_from_the_source(self):
-        """Guards against it coming back -- the two conditions look
-        interchangeable and are not."""
-        import inspect
+    def test_scrub_capability_does_not_decide_this_sensor(self):
+        """Guards against the old gate coming back, and it has already
+        failed once at that job.
+
+        The first version asserted the ABSENCE OF A STRING --
+        `"cap is None or cap.scrub != 0" not in source`. PR #76
+        reintroduced the same rule written the other way round
+        (`cap is not None and cap.scrub == 0`), and this test passed.
+        A literal check only catches the exact spelling it was written
+        against, which is the one spelling nobody will use twice.
+
+        So this asks the question behaviourally instead: does
+        `cap.scrub` change the outcome? It must not, in either
+        direction -- neither creating a sensor for a robot with no
+        `tankPresent`, nor withholding one from a robot that reports
+        it."""
+        # A mop-capable robot with no tankPresent: still no sensor.
+        assert self._tank_created({"cap": {"scrub": 3}}) is False
+        # A robot that cannot scrub but reports a tank: still a sensor.
+        assert self._tank_created(
+            {"cap": {"scrub": 0}, "tankPresent": True}
+        ) is True
+        # And scrub must not flip a robot that reports the field.
+        assert self._tank_created(
+            {"cap": {"scrub": 3}, "tankPresent": False}
+        ) is True
+
+    def test_the_sensor_is_not_registered_disabled_by_scrub(self):
+        """A gate can also come back as a DISABLE rather than a skip --
+        which is the form PR #76 used. An entity registered disabled is
+        as invisible to an owner as one that was never created.
+
+        MUST PATCH THE CAPABILITY SOURCE, not the shadow. The first
+        version of this test put `{"cap": {"scrub": 0}}` in the raw
+        ro-currentstate and passed against the very code it was written
+        to reject -- `cap` in that function comes from
+        `get_prime_capability_flags()`, which reads a different place
+        entirely. A behavioural test aimed at the wrong input is no
+        better than the string check it replaced.
+        """
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
 
         from custom_components.roomba_plus import binary_sensor
+        from custom_components.roomba_plus.models import ConnectionType
 
-        source = inspect.getsource(binary_sensor)
+        data = self._entities_for({"tankPresent": True})
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        entry.runtime_data = data
+        created: list = []
 
-        assert "cap is None or cap.scrub != 0" not in source
+        # PATCH THE MODULE THAT OWNS IT. `binary_sensor` imports
+        # `get_prime_capability_flags` INSIDE the setup function, so
+        # patching the name on `binary_sensor` creates an attribute
+        # nothing reads -- the second version of this test did exactly
+        # that, with `create=True` silently making it look deliberate.
+        from custom_components.roomba_plus import prime_coordinator
+
+        with patch.object(
+            prime_coordinator,
+            "get_prime_capability_flags",
+            return_value=(SimpleNamespace(scrub=0), None),
+        ):
+            asyncio.run(
+                binary_sensor.async_setup_entry(
+                    MagicMock(), entry, lambda e: created.extend(e)
+                )
+            )
+
+        tank = [
+            e for e in created
+            if isinstance(e, binary_sensor.PrimeTankPresentSensor)
+        ]
+        assert tank, "a robot reporting tankPresent got no tank sensor"
+        assert tank[0]._attr_entity_registry_enabled_default is not False, (
+            "the tank sensor was registered disabled because cap.scrub is 0 -- "
+            "scrub is about scrubbing, tankPresent is about having a tank"
+        )
 
 
 class TestTankSensorNamesTheRobotNotTheDock:
@@ -1628,3 +1707,212 @@ class TestDockErrorNamesTheReason:
 
         assert attrs["raw_error_code"] == 99999
         assert "error_name" not in attrs
+
+
+class TestStartBlockedIsVisibleAndActionable:
+    """The blocking information existed as attributes on
+    `sensor.*_prime_error` — an entity with EntityCategory.DIAGNOSTIC,
+    which Home Assistant hides from the dashboard by default.
+
+    So the answer was there and nobody would see it. The whole value is
+    being told BEFORE sending a command that will be refused.
+    """
+
+    def test_it_is_not_a_diagnostic_entity(self):
+        """Deliberately unlike almost everything else on this platform.
+        A hidden entity cannot warn anyone."""
+        from homeassistant.helpers.entity import EntityCategory
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeStartBlockedSensor,
+        )
+
+        assert (
+            getattr(PrimeStartBlockedSensor, "_attr_entity_category", None)
+            is not EntityCategory.DIAGNOSTIC
+        )
+
+    def test_it_carries_the_modes_and_the_reason(self):
+        """An automation branching on this sensor must not have to read
+        a second, hidden entity to find out which mode still works."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor.PrimeStartBlockedSensor)
+
+        for key in ("blocked_modes", "available_modes", "blocking_faults", "blocked_reason"):
+            assert key in source
+
+    def test_it_has_no_capability_gate(self):
+        """286 (robot off the floor) applies to every robot, and a
+        vacuum-only model can still report the pad-plate pair. Gating
+        would withhold the answer from exactly the owner who cannot work
+        out why a command was refused."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor)
+
+        # The creation line must be unconditional -- not inside a
+        # capability check the way the tank sensor is.
+        assert "NO CAPABILITY GATE" in source
+        creation = next(
+            line for line in source.splitlines()
+            if "entities.append(PrimeStartBlockedSensor" in line
+        )
+        assert creation.startswith("            entities.append"), (
+            "the sensor is created inside a conditional -- a gate would "
+            "withhold the answer from the owner who most needs it"
+        )
+
+
+class TestTheStartBlockedTrigger:
+    """`TRIGGER_ERROR` fires when something goes wrong during a mission.
+    This fires when nothing has gone wrong and nothing will begin either
+    — a pad plate fitted when the user wanted a vacuum.
+
+    Different automations: an error while cleaning wants a notification,
+    a blocked start wants "tell me before I press the button".
+    """
+
+    def test_the_trigger_type_exists(self):
+        from custom_components.roomba_plus.device_trigger import (
+            TRIGGER_START_BLOCKED,
+            TRIGGER_TYPES,
+        )
+
+        assert TRIGGER_START_BLOCKED in TRIGGER_TYPES
+
+    def test_it_binds_to_the_binary_sensor(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+
+        assert '_find_entity(hass, device_id, "prime_start_blocked")' in source
+
+    def test_it_is_translated_everywhere(self):
+        """An untranslated trigger shows the raw key in the automation
+        editor."""
+        import json
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        files = [base / "strings.json"] + sorted(
+            (base / "translations").glob("*.json")
+        )
+        for path in files:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            triggers = data["device_automation"]["trigger_type"]
+            assert "start_blocked" in triggers, path.name
+
+    def test_the_logbook_needs_no_bespoke_event(self):
+        """Home Assistant logs a binary sensor's state changes on its
+        own. logbook.py describes BUS events, and its own docstring
+        warns that inventing a parallel event would be redundancy —
+        so the third piece comes for free."""
+        import inspect
+
+        from custom_components.roomba_plus import logbook
+
+        source = inspect.getsource(logbook)
+
+        assert "start_blocked" not in source
+
+
+class TestQuietHoursAreReadOnly:
+    """The library has `set_dnd_settings()`, and this sensor does not
+    use it.
+
+    A Prime robot has been observed CLEANING inside its own quiet-hours
+    window: the setting reads back and its effect is unproven. A control
+    that appears to work and does nothing is worse than no control, so
+    the window is published and an automation enforces what the robot
+    does not.
+    """
+
+    @staticmethod
+    def _sensor(windows):
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.binary_sensor import PrimeQuietHoursSensor
+
+        sensor = PrimeQuietHoursSensor.__new__(PrimeQuietHoursSensor)
+        patcher = patch.object(
+            PrimeQuietHoursSensor, "_windows", new_callable=PropertyMock,
+            return_value=windows,
+        )
+        sensor._config_entry = MagicMock()
+        return sensor, patcher
+
+    def _is_on_at(self, windows, clock):
+        from unittest.mock import patch
+
+        sensor, patcher = self._sensor(windows)
+        with patcher, patch(
+            "custom_components.roomba_plus.binary_sensor.dt_util"
+        ) as dt:
+            dt.now.return_value.strftime.return_value = clock
+            return sensor.is_on
+
+    def test_inside_an_ordinary_window(self):
+        w = [{"start": "22:00", "end": "23:30", "enabled": True}]
+        assert self._is_on_at(w, "22:30") is True
+        assert self._is_on_at(w, "21:59") is False
+
+    def test_a_window_crossing_midnight(self):
+        """The normal shape for quiet hours, and the one a naive
+        start < end comparison gets wrong."""
+        w = [{"start": "22:00", "end": "07:00", "enabled": True}]
+        assert self._is_on_at(w, "23:59") is True
+        assert self._is_on_at(w, "03:00") is True
+        assert self._is_on_at(w, "08:00") is False
+
+    def test_a_disabled_window_is_not_a_window(self):
+        """The user switched it off in the app. Reporting quiet hours
+        for it would report a setting rather than a state."""
+        w = [{"start": "22:00", "end": "23:30", "enabled": False}]
+        assert self._is_on_at(w, "22:30") is False
+
+    def test_no_windows_is_off_not_unknown(self):
+        assert self._is_on_at([], "22:30") is False
+
+    def test_the_sensor_itself_never_writes_dnd(self):
+        """The SENSOR stays read-only. Writing lives in the
+        `roomba_plus.set_quiet_hours` action, where a caller has asked
+        for it explicitly and gets told what it does not guarantee.
+
+        The distinction matters: a binary sensor that writes would make
+        a state display into a control, and quiet hours are the one
+        setting where the robot has been seen ignoring what it accepted.
+        """
+        import ast
+        import pathlib
+
+        # A CALL, NOT A MENTION. The first version matched the string
+        # and failed on its own explanatory comments -- two files that
+        # say why DND is not written were counted as writing it.
+        base = pathlib.Path("custom_components/roomba_plus")
+        writers = []
+        for path in base.glob("*.py"):
+            # services.py owns the write path on purpose.
+            if path.name == "services.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "set_dnd_settings"
+                ):
+                    writers.append(path.name)
+                    break
+
+        assert writers == [], (
+            f"{writers} write DND settings outside services.py. Quiet "
+            "hours are written from one explicit action, not as a side "
+            "effect of an entity -- a Prime robot has been seen cleaning "
+            "inside a window it accepted."
+        )

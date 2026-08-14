@@ -62,7 +62,16 @@ class TestAsyncStart:
         await coordinator.async_start()
 
         prime_robot.connect.assert_awaited_once()
-        config_entry.async_create_background_task.assert_called_once()
+        # TWO WATCHERS NOW: the mission timeline and the rejected-command
+        # stream. The second exists because a command call returning
+        # without an exception, on a robot that then does nothing, has
+        # been diagnosed by elimination every time it happened.
+        assert config_entry.async_create_background_task.call_count == 2
+        names = [
+            c.kwargs.get("name", "")
+            for c in config_entry.async_create_background_task.call_args_list
+        ]
+        assert any("rejected" in n for n in names)
         call = config_entry.async_create_background_task.call_args
         assert call.args[0] is coordinator.hass
         assert "BLID123" in call.kwargs.get("name", "")

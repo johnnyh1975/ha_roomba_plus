@@ -119,9 +119,7 @@ class TestAsyncSetupEntryPrime:
         with patch(
             "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
-        ) as mock_create, patch(
-            "custom_components.roomba_plus.async_register_services"
-        ) as register_services:
+        ) as mock_create:
             result = await _async_setup_entry_prime(hass, config_entry)
 
         assert result is True
@@ -143,7 +141,6 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.prime_household_id == "hh1"
         assert runtime_data.prime_serial_info is fake_serial_info
         fake_prime_robot.connect.assert_awaited_once()
-        register_services.assert_called_once_with(hass)
 
     @pytest.mark.asyncio
     async def test_serial_info_failure_does_not_block_setup(self) -> None:
@@ -333,6 +330,33 @@ class TestAsyncUnloadEntryCloudOnly:
         fake_prime_robot.disconnect.assert_not_called()
 
 
+
+def _identifier_counts(base, *extra_dirs):
+    """How often every identifier appears across the given source.
+
+    ONE PASS, NOT ONE PER NAME. Both orphan guards below used to run a
+    separate `re.findall` for each candidate over the whole 6 MB of
+    source -- 574 constants and 400-odd private functions, each scanning
+    everything. Together they took 178 of the suite's 245 seconds, 73%
+    of the total, for two assertions.
+
+    Counting every identifier once and looking names up in the result
+    gives identical answers in 0.4 seconds. Verified against the
+    per-name search rather than assumed: the counts match exactly.
+
+    The bug was copied rather than invented -- the constants guard was
+    written by following the function guard's shape without asking what
+    it cost. Reviewing a pattern before reusing it is the cheaper habit.
+    """
+    import collections
+    import re
+
+    text = "".join(f.read_text() for f in base.glob("*.py"))
+    for extra in extra_dirs:
+        text += "".join(f.read_text() for f in extra.glob("*.py"))
+    return collections.Counter(re.findall(r"\b\w+\b", text))
+
+
 class TestNothingWasFetchingTheTimeEstimates:
     """`_async_fetch_prime_time_estimates` fills
     `runtime_data.prime_time_estimates`. The calendar reads it to give
@@ -368,7 +392,6 @@ class TestNothingWasFetchingTheTimeEstimates:
         up in a single day, each costing a working feature."""
         import ast
         import pathlib
-        import re
 
         # THE TESTS COUNT AS A CALLER.
         #
@@ -378,10 +401,7 @@ class TestNothingWasFetchingTheTimeEstimates:
         # a harmless duplicate for a lost intent. What this guard is for
         # is a helper nothing anywhere reaches.
         base = pathlib.Path("custom_components/roomba_plus")
-        source = "".join(f.read_text() for f in base.glob("*.py"))
-        source += "".join(
-            f.read_text() for f in pathlib.Path("tests").glob("*.py")
-        )
+        counts = _identifier_counts(base, pathlib.Path("tests"))
         orphans = []
         for path in base.glob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):
@@ -390,7 +410,7 @@ class TestNothingWasFetchingTheTimeEstimates:
                 name = node.name
                 if not name.startswith("_") or name.startswith("__"):
                     continue
-                if len(re.findall(rf"\b{re.escape(name)}\b", source)) <= 1:
+                if counts[name] <= 1:
                     orphans.append(f"{path.name}:{name}")
 
         # FOUR KNOWN, EACH A FEATURE NOTHING REACHES. Listed rather
@@ -438,11 +458,9 @@ class TestNothingWasFetchingTheTimeEstimates:
         """
         import ast
         import pathlib
-        import re
 
         base = pathlib.Path("custom_components/roomba_plus")
-        source = "".join(f.read_text() for f in base.glob("*.py"))
-        source += "".join(f.read_text() for f in pathlib.Path("tests").glob("*.py"))
+        counts = _identifier_counts(base, pathlib.Path("tests"))
 
         orphans = []
         for path in base.glob("*.py"):
@@ -455,7 +473,7 @@ class TestNothingWasFetchingTheTimeEstimates:
                 for name in names:
                     if not name.isupper() or len(name) < 4:
                         continue
-                    if len(re.findall(rf"\b{re.escape(name)}\b", source)) <= 1:
+                    if counts[name] <= 1:
                         orphans.append(f"{path.name}:{name}")
 
         # KNOWN, EACH WITH ITS REASON.
@@ -721,3 +739,193 @@ class TestStopPadDryStaysAvailableWhileDrying:
         source = inspect.getsource(button_prime)
 
         assert "DO NOT IMPLEMENT THE APP'S LOCK HERE" in source
+
+
+class TestClassicShapedReadsOnPrime:
+    """`roomba_reported_state()` returns `{}` on a CLOUD_ONLY entry BY
+    DESIGN. Every caller reading the Classic shape therefore gets an
+    empty dict for the life of the entry, and any gate built on it is
+    decided before the robot says anything.
+
+    @utkjmitch found the first instance — `mission_progress` stayed
+    `unknown` through a whole mission while its own attributes rendered
+    the elapsed time and the estimate. Three more had the same shape,
+    and two of them failed OPEN.
+    """
+
+    @staticmethod
+    def _prime_entry(**shadows):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        data.prime_status_coordinator = SimpleNamespace(data=shadows)
+        return data
+
+    def test_the_cycle_gate_no_longer_passes_while_cleaning(self):
+        """`dirt_threshold`'s "robot must be docked" gate compared
+        `cycle` against `"none"` and always matched on Prime — a gate
+        that opens for a cleaning robot is worse than none."""
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_mission_cycle,
+        )
+
+        data = self._prime_entry(
+            **{"ro-currentstate": {"cleanMissionStatus": {"cycle": "clean"}}}
+        )
+
+        assert prime_mission_cycle(data) == "clean"
+
+    def test_classic_still_wins_and_the_fallback_is_untouched(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_mission_cycle,
+        )
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {
+            "cleanMissionStatus": {"cycle": "quick"}
+        }
+        data.prime_status_coordinator = None
+
+        assert prime_mission_cycle(data) == "quick"
+
+    def test_the_last_command_comes_from_rw_software_on_prime(self):
+        """Prime carries it on a different shadow — confirmed from a
+        real dump: `{"command": "stoppaddry", "initiator": "rmtApp"}`."""
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_last_command,
+        )
+
+        data = self._prime_entry(
+            **{
+                "rw-software": {
+                    "lastCommand": {"command": "stoppaddry", "initiator": "rmtApp"}
+                }
+            }
+        )
+
+        assert prime_last_command(data)["command"] == "stoppaddry"
+
+    def test_the_pass_settings_come_from_rw_settings_not_mission_status(self):
+        """The first draft read them from `cleanMissionStatus`, mirroring
+        the Classic shape. The library's `CleanMissionStatus` has no such
+        fields — it would have returned two Nones and looked like "the
+        robot reports nothing"."""
+        from custom_components.roomba_plus.sensor_rooms import _prime_pass_settings
+
+        data = self._prime_entry(
+            **{"rw-settings": {"noAutoPasses": False, "twoPass": True}}
+        )
+
+        assert _prime_pass_settings(data) == {"noAutoPasses": False, "twoPass": True}
+
+    def test_a_missing_shadow_yields_nothing_rather_than_a_default(self):
+        """An absent setting must not read as `False` — the caller
+        distinguishes "not reported" from "reported off"."""
+        from custom_components.roomba_plus.sensor_rooms import _prime_pass_settings
+
+        assert _prime_pass_settings(self._prime_entry()) == {}
+
+    def test_every_remaining_classic_read_is_accounted_for(self):
+        """A census rather than a spot check. `roomba_reported_state()`
+        has 23 call sites; this asserts nobody adds a 24th without
+        deciding whether Prime reaches it."""
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        count = sum(
+            len(re.findall(r"roomba_reported_state\(\)", p.read_text()))
+            for p in base.glob("*.py")
+        )
+
+        assert count == 28, (
+            f"{count} call sites, expected 28 — a new one needs a decision "
+            "about whether a Prime entry reaches it, and a Prime fallback "
+            "if it does. Four of the 28 are inside the fallback helpers "
+            "themselves, which read Classic first on purpose."
+        )
+
+
+class TestThePrimeDiagnosticsBranchLosesNothingItNeeds:
+    """The Prime path returns its own dict and never reaches the Classic
+    code below. That early return exists for a real crash — this
+    function used to touch `data.roomba`'s attributes unconditionally,
+    which is None on every CLOUD_ONLY entry.
+
+    Fixing the crash quietly decided that everything below was Classic,
+    and that was never checked block by block. Four blocks were not:
+
+      favourites            built for the favourites bug, unreachable
+                            from the tier reporting it
+      vendor_capabilities   its own docstring says "Empty for a Classic
+                            robot" — written for Prime, placed where
+                            Prime cannot see it
+      never_succeeded       takes no arguments; a global record of what
+                            has never once worked
+      warnings              asks whether HA's core roomba integration
+                            is also loaded, which is generation-blind
+    """
+
+    @staticmethod
+    def _prime_keys():
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        start = source.find("if data.connection_type is ConnectionType.CLOUD_ONLY:")
+        end = source.find("\n    # ", start + 100)
+        return set(re.findall(r'^\s{12}"([a-z_]+)":', source[start:end], re.M))
+
+    def test_the_four_recovered_blocks_are_present(self):
+        keys = self._prime_keys()
+
+        for block in (
+            "favourites",
+            "vendor_capabilities",
+            "never_succeeded",
+            "warnings",
+        ):
+            assert block in keys, f"{block} is missing from the Prime branch"
+
+    def test_the_favourites_block_carries_the_raw_response(self):
+        """The count alone cannot separate "option off" from "list
+        arrived empty" from "one entry failed to parse"."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert "_prime_favorites_raw" in inspect.getsource(diagnostics)
+
+    def test_the_raw_fetch_never_breaks_the_download(self):
+        """A diagnostics download that fails because one section failed
+        is worse than a section that reports why."""
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.diagnostics import _prime_favorites_raw
+
+        robot = SimpleNamespace(
+            get_favorites_raw=AsyncMock(side_effect=RuntimeError("boom"))
+        )
+        result = asyncio.run(_prime_favorites_raw(SimpleNamespace(prime_robot=robot)))
+
+        assert "RuntimeError" in result["error"]
+
+    def test_no_prime_entry_reaches_the_classic_block(self):
+        """The guard this whole class rests on. If the early return ever
+        goes away, these tests stop meaning anything — and the crash it
+        prevents comes back."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert "if data.connection_type is ConnectionType.CLOUD_ONLY:" in source

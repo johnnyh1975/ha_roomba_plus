@@ -676,3 +676,43 @@ class TestThePlaceholdersAreRepairedOnTheWayOut:
         from custom_components.roomba_plus.vendor_errors import vendor_error
 
         assert vendor_error(46, "de")["title"] == "Akkustand zu niedrig für die Reinigung"
+
+
+class TestEveryInitiatorHasALabel:
+    """An unmapped initiator falls through to "None" — the same answer
+    as "no initiator information at all". Two different real situations,
+    one indistinguishable display.
+
+    That is how `demand` was found: one value at a time, by someone
+    building a blueprint and noticing his demand-triggered mission
+    looked like it had no initiator.
+
+    The vendor's `Initiator` enum lists 25. This table had six.
+    """
+
+    def test_the_table_covers_the_vendor_enum(self):
+        from roombapy_prime.models.mission_history import Initiator
+
+        from custom_components.roomba_plus.const import JOB_INITIATOR_LABELS
+
+        missing = {
+            m.value for m in Initiator
+        } - set(JOB_INITIATOR_LABELS)
+
+        assert not missing, f"initiators with no label: {sorted(missing)}"
+
+    def test_the_two_button_sources_are_distinguishable(self):
+        """`dockBtn` is the button on the dock, `manual` the one on the
+        robot. Both are "somebody pressed something" and they are not
+        the same somebody."""
+        from custom_components.roomba_plus.const import JOB_INITIATOR_LABELS
+
+        assert JOB_INITIATOR_LABELS["dockBtn"] != JOB_INITIATOR_LABELS["manual"]
+
+    def test_the_project_specific_value_survived(self):
+        """`demand` is written by this integration's own dirt-threshold
+        path and appears in no vendor enum. A refresh from the enum must
+        not drop it."""
+        from custom_components.roomba_plus.const import JOB_INITIATOR_LABELS
+
+        assert JOB_INITIATOR_LABELS["demand"] == "Demand clean"

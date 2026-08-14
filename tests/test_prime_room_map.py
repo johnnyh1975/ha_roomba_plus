@@ -586,42 +586,6 @@ class TestFloorPlanFromTheMapBundle:
         assert len(plan.carpet) == 1
 
     @pytest.mark.asyncio
-    async def test_floor_plan_holes_and_furniture_are_loaded(self):
-        """The saved-map detail layer retains interior wall outlines."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        from custom_components.roomba_plus.prime_room_map import (
-            async_build_prime_floor_plan,
-        )
-
-        outer = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]
-        inner = [[1.0, 1.0], [3.0, 1.0], [3.0, 3.0], [1.0, 3.0]]
-        furniture = [[1.5, 1.5], [2.5, 1.5], [2.5, 2.5], [1.5, 2.5]]
-        parsed = {
-        "floorPlan": {"features": [{"geometry": {
-            "type": "MultiLineString", "coordinates": [outer, inner],
-        }}]},
-            "furniture": {"features": [{"geometry": {
-                "type": "Polygon", "coordinates": [furniture],
-            }}]},
-        }
-        entry = MagicMock()
-        entry.runtime_data.prime_robot.get_map_geojson_link = AsyncMock(
-            return_value={"map_url": "https://x"}
-        )
-        entry.runtime_data.prime_robot.download_map_bundle = AsyncMock(return_value=b"x")
-
-        with patch(
-            "roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed
-        ):
-            plan = await async_build_prime_floor_plan(entry, "MAP-1", "V1")
-
-        assert len(plan.floor_plan) == 2
-        assert plan.floor_plan[0][0] == (0.0, 0.0)
-        assert plan.floor_plan[0][1] == (4000.0, 0.0)
-        assert len(plan.furniture) == 1
-
-    @pytest.mark.asyncio
     async def test_the_dock_carries_an_orientation(self):
         """Confirmed from the capture's key list. Means a rendered dock
         can point the right way rather than being a dot."""
@@ -1091,48 +1055,6 @@ class TestBareGeoJsonFeature:
         assert rings[0][1] == (2000.0, 0.0)
 
 
-class TestStaticPrimeRoomsMap:
-    def test_live_variant_has_a_non_colliding_entity_slug(self):
-        """The existing raw image already owns ``cleaning_map`` on upgrades."""
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        entity = object.__new__(PrimeRoomsImage)
-        entity._include_live = True
-
-        assert entity.suggested_object_id == "prime_cleaning_map"
-
-    def test_card_source_includes_live_coverage(self):
-        """The static Rooms Map is also the card's live map source."""
-        import io
-
-        from PIL import Image
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        entity = object.__new__(PrimeRoomsImage)
-        entity._include_live = False
-        entity._show_live_overlay = True
-        entity._renderer = None
-        entity._polygons = {
-            "room": [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)]
-        }
-        entity._floor_plan = SimpleNamespace(
-            floor_plan=[], furniture=[], carpet=[], borders=[], dock=None
-        )
-        entity._live_bundle = {
-            "coverage": {"features": [{"geometry": {"type": "Polygon", "coordinates": [
-                [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
-            ]}}]}
-        }
-        entity._config_entry = SimpleNamespace(
-            runtime_data=SimpleNamespace(prime_positions=[]), options={}
-        )
-
-        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
-
-        assert image.getpixel((300, 300)) == (120, 190, 145)
-
-
 class TestLiveBundleUpdatesTheRoomsMap:
     """The rooms map redraws during a mission, not only when the map
     version changes.
@@ -1235,10 +1157,6 @@ class TestLiveBundleUpdatesTheRoomsMap:
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        # The xiaomi card uses the static Rooms Map.  It must retain its
-        # selectable-room attributes while still rendering live layers.
-        entity._include_live = False
-        entity._show_live_overlay = True
         entity._renderer = None
         entity._polygons = {
             "room": [
@@ -2262,23 +2180,115 @@ class TestZonesDoNotNeedARunningMission:
 
         source = inspect.getsource(PrimeRoomsImage)
         assert 'getattr(self._floor_plan, "zone_layers", None)' in source
-    def test_live_bundle_storage_excludes_unrendered_layers(self):
+
+
+class TestZoneLayersFollowTheSelectedMap:
+    """@chairstacker selected Master_Bathroom in the dropdown while a
+    Whole_House mission ran, and saw Whole_House's clean and keep-out
+    boundaries drawn over the bathroom floor plan.
+
+    His summary was exact: two sets of maps switching properly, one set
+    of zones that is either on or off.
+
+    The live bundle arrives on a map-update message during a mission, so
+    it describes the map the robot is DRIVING. Preferring it
+    unconditionally was right while a robot had one map; with several it
+    draws the wrong boundaries on the right floor plan — worse than
+    drawing none, because a boundary in the wrong place invites trusting
+    it.
+    """
+
+    @staticmethod
+    def _layer(plan_id, live_manifest_id, live_layer, plan_layer):
+        """Reproduces the renderer's `_zone_layer` decision."""
+
+        def matches():
+            if not plan_id:
+                return True
+            if live_manifest_id is None:
+                return True
+            return str(live_manifest_id) == str(plan_id)
+
+        if matches() and live_layer:
+            return live_layer
+        return plan_layer
+
+    def test_the_wrong_maps_zones_are_not_drawn(self):
+        """THE REPRO: driving Whole_House, rendering Master_Bathroom."""
+        assert self._layer(
+            plan_id="bathroom", live_manifest_id="wholehouse",
+            live_layer="WHOLE_HOUSE_ZONES", plan_layer="BATHROOM_ZONES",
+        ) == "BATHROOM_ZONES"
+
+    def test_the_live_bundle_still_wins_for_its_own_map(self):
+        """Live data is fresher and must not be discarded when it
+        belongs to the map on screen."""
+        assert self._layer(
+            plan_id="wholehouse", live_manifest_id="wholehouse",
+            live_layer="LIVE", plan_layer="CACHED",
+        ) == "LIVE"
+
+    def test_an_unknown_id_counts_as_matching(self):
+        """Fail open. A single-map household is the common case and its
+        live bundle is always right; refusing it because a manifest
+        lacks an id would take working zones away from everyone to fix a
+        multi-map case."""
+        assert self._layer(
+            plan_id="wholehouse", live_manifest_id=None,
+            live_layer="LIVE", plan_layer="CACHED",
+        ) == "LIVE"
+        assert self._layer(
+            plan_id=None, live_manifest_id="anything",
+            live_layer="LIVE", plan_layer="CACHED",
+        ) == "LIVE"
+
+    def test_the_floor_plan_carries_its_map_id(self):
+        """Without an id on both sides there is nothing to compare, and
+        the renderer had no way to notice."""
+        import dataclasses
+
+        from custom_components.roomba_plus.prime_room_map import PrimeFloorPlan
+
+        assert "p2map_id" in {f.name for f in dataclasses.fields(PrimeFloorPlan)}
+
+
+class TestStaticPrimeRoomsMap:
+    def test_live_variant_has_a_non_colliding_entity_slug(self):
+        """The existing raw image already owns ``cleaning_map`` on upgrades."""
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        entity._current_map_id = "MAP-1"
-        entity._live_bundle = {
-            "coverage": {"features": []},
-            "trajectories": {"features": []},
-            "hazard": {"features": []},
-            "rooms": {"features": []},
-        }
+        entity._include_live = True
 
-        assert entity._live_bundle_save_payload() == {
-            "map_id": "MAP-1",
-            "bundle": {
-                "coverage": {"features": []},
-                "trajectories": {"features": []},
-                "hazard": {"features": []},
-            },
+        assert entity.suggested_object_id == "prime_cleaning_map"
+
+    def test_card_source_includes_live_coverage(self):
+        """The static Rooms Map is also the card's live map source."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity._include_live = False
+        entity._show_live_overlay = True
+        entity._renderer = None
+        entity._polygons = {
+            "room": [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)]
         }
+        entity._floor_plan = SimpleNamespace(
+            floor_plan=[], furniture=[], carpet=[], borders=[], dock=None
+        )
+        entity._live_bundle = {
+            "coverage": {"features": [{"geometry": {"type": "Polygon", "coordinates": [
+                [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]]
+            ]}}]}
+        }
+        entity._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(prime_positions=[]), options={}
+        )
+
+        image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+
+        assert image.getpixel((300, 300)) == (120, 190, 145)

@@ -330,3 +330,92 @@ class TestValueSetsAgreeWithTheVendorReference:
 
         with pytest.raises(VendorReferenceError):
             wire_values("DryDurTyp")
+
+
+class TestOptionListsNarrowByProductMode:
+    """`getListBySKU` narrows five product modes to shorter interval and
+    duration lists than the enums declare.
+
+    None of the current testers is one of them — G1, N1, W1, Y3 and Y4
+    all take the standard lists. But **V1 and Z1 were added to
+    PRIME_SKU_PREFIXES in the same session these controls were built**,
+    so a robot that had only just become recognisable would have been
+    offered intervals its own app does not show.
+    """
+
+    @staticmethod
+    def _narrow(wire_key, sku):
+        from custom_components.roomba_plus.select_prime import (
+            PRIME_SELECTS,
+            _sku_narrowed,
+        )
+
+        values = next(d for d in PRIME_SELECTS if d.wire_key == wire_key).values
+        return set(_sku_narrowed(wire_key, sku, values))
+
+    def test_the_testers_all_get_the_full_lists(self):
+        for sku in ("G185020", "N185240", "Y351020", "W155042", "Y414040"):
+            assert self._narrow("padDryDur", sku) == {2, 3, 4, 5, 6}, sku
+            assert self._narrow("pwAreaInterval", sku) == {6, 8, 10, 15, 20}, sku
+
+    def test_the_two_newly_recognised_prefixes_are_narrowed(self):
+        """V1 and Z1 became Prime this session. Their lists differ."""
+        assert self._narrow("padDryDur", "V105020") == {4, 5, 6}
+        assert self._narrow("padDryDur", "Z105020") == {4, 5, 6}
+        assert self._narrow("pwTimeInterval", "V105020") == {10, 15, 20}
+
+    def test_g2_sees_the_short_area_list(self):
+        assert self._narrow("pwAreaInterval", "G285020") == {6, 8, 10}
+
+    def test_an_unknown_sku_gets_everything(self):
+        """Fail open: a robot whose SKU has not arrived should get the
+        full list rather than an arbitrary subset."""
+        assert self._narrow("padDryDur", None) == {2, 3, 4, 5, 6}
+        assert self._narrow("padDryDur", "QQ00000") == {2, 3, 4, 5, 6}
+
+    def test_autoevac_is_not_narrowed_by_sku(self):
+        """A screenshot outranks the extraction here. The SKU list gives
+        [0, 10, 15, 25, 30] for a standard robot; @chairstacker's G1
+        shows three options — every routine, every 2, every 3 — which is
+        0/1/2 and matches his `cap.autoevac = 1` exactly.
+
+        The SKU extraction says of itself that its branch assignment is
+        partly inferred. The photograph is not."""
+        assert self._narrow("autoevacFreq", "G185020") == {
+            0, 1, 2, 4, 10, 15, 25, 30, 50
+        }
+
+
+class TestTheHeatGateIsMarkedAsAnInference:
+    """`_pad_wash_heat_options` narrows the heat levels by
+    `dock.cap.pw`, reading `DockPadWashingType`'s member names as the
+    rule. Nobody has read what actually gates `pwHeat`.
+
+    The research's own correction table records "gate über dock.cap.pw"
+    as WRONG for the neighbouring wash-frequency screen — `setWashFreq`
+    calls `ProductMode::getModeBySku()` first, so the SKU decides which
+    UI appears, not a capability field.
+
+    Kept because the risk points the safe way: a level-2 dock offered
+    high heat would accept the write and not produce it, silently. A
+    wrong gate instead hides an option on a capable dock, and someone
+    reports that.
+    """
+
+    def test_the_inference_is_labelled_as_one(self):
+        import inspect
+
+        from custom_components.roomba_plus import select_prime
+
+        source = inspect.getsource(select_prime)
+
+        assert "not a gate anyone has read" in source
+        assert "getModeBySku" in source
+
+    def test_it_still_fails_open(self):
+        from custom_components.roomba_plus.select_prime import (
+            PAD_WASH_HEAT_LEVELS,
+            _pad_wash_heat_options,
+        )
+
+        assert _pad_wash_heat_options(None) == PAD_WASH_HEAT_LEVELS

@@ -60,15 +60,6 @@ def _entry(favorites=None, raises=False, dock=False):
     return entry
 
 
-def _enabled(entities):
-    """Entities a default Home Assistant install exposes."""
-    return [
-        entity
-        for entity in entities
-        if getattr(entity, "_attr_entity_registry_enabled_default", True)
-    ]
-
-
 class TestFavouriteButtons:
     """A favourite is a stored routine -- "clean the kitchen and hall on
     deep, twice" -- and pressing it runs that.
@@ -86,7 +77,7 @@ class TestFavouriteButtons:
             _entry([_favorite("f1"), _favorite("f2")])
         )
 
-        assert len(_enabled(entities)) == 3  # two favourites + locate
+        assert len(entities) == 3  # two favourites + locate
 
     @pytest.mark.asyncio
     async def test_pressing_sends_every_command_in_order(self):
@@ -122,7 +113,7 @@ class TestFavouriteButtons:
             _favorite("f2", hidden=True),
         ]))
 
-        assert len(_enabled(entities)) == 1  # locate only
+        assert len(entities) == 1  # locate only
 
     @pytest.mark.asyncio
     async def test_a_favourite_with_no_commands_warns_rather_than_silently_failing(self):
@@ -166,7 +157,7 @@ class TestFavouriteButtons:
 
         entities = await async_build_prime_buttons(_entry([]))
 
-        assert len(_enabled(entities)) == 1
+        assert len(entities) == 1
 
     @pytest.mark.asyncio
     async def test_buttons_do_not_re_read_the_favourites(self):
@@ -289,8 +280,7 @@ class TestFavoriteButtonsAreOptional:
             async_build_prime_buttons,
         )
 
-        buttons = await async_build_prime_buttons(_entry([_favorite("f1")]))
-        assert len(_enabled(buttons)) == 2
+        assert len(await async_build_prime_buttons(_entry([_favorite("f1")]))) == 2
 
     @pytest.mark.asyncio
     async def test_the_option_suppresses_only_the_favourites(self):
@@ -305,8 +295,8 @@ class TestFavoriteButtonsAreOptional:
 
         entities = await async_build_prime_buttons(entry)
 
-        assert len(_enabled(entities)) == 1
-        assert not any(hasattr(e, "_favorite_id") for e in _enabled(entities))
+        assert len(entities) == 1
+        assert not any(hasattr(e, "_favorite_id") for e in entities)
 
     def test_the_default_is_on(self):
         from custom_components.roomba_plus.const import (
@@ -381,7 +371,7 @@ class TestDockButtons:
         assert sum(isinstance(e, PrimeDockButton) for e in entities) == 4
 
     @pytest.mark.asyncio
-    async def test_unsupported_dock_buttons_are_disabled(self):
+    async def test_a_dock_that_cannot_do_something_gets_no_button(self):
         """A robot without a self-emptying base still reports its own
         capabilities happily -- the DOCK flags are what say whether a
         base is there."""
@@ -392,9 +382,7 @@ class TestDockButtons:
 
         entities = await async_build_prime_buttons(_entry(dock=False))
 
-        dock_buttons = [e for e in entities if isinstance(e, PrimeDockButton)]
-        assert len(dock_buttons) == 4
-        assert not _enabled(dock_buttons)
+        assert not any(isinstance(e, PrimeDockButton) for e in entities)
 
     @pytest.mark.asyncio
     async def test_unknown_capabilities_still_get_buttons(self):
@@ -448,3 +436,12 @@ class TestDockButtons:
             buttons = json.loads(locale_file.read_text(encoding="utf-8"))["entity"]["button"]
             for command in PRIME_DOCK_COMMANDS:
                 assert command.key in buttons, f"{locale_file.name}: {command.key}"
+
+
+def _enabled(entities):
+    """Entities a default Home Assistant install exposes."""
+    return [
+        entity
+        for entity in entities
+        if getattr(entity, "_attr_entity_registry_enabled_default", True)
+    ]

@@ -33,12 +33,34 @@ _TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt", "pl"]
 #
 # Still hand-maintained, and that is a real weakness. The alternative
 # tried here was worse.
-_SOURCE_FILES = [
-    _ROOT / "services.py",
-    _ROOT / "vacuum.py",
-    _ROOT / "cloud_coordinator.py",
-    _ROOT / "room_cleaning.py",
-]
+# EVERY MODULE, NOT FOUR NAMED ONES.
+#
+# This was a hardcoded list, and a hardcoded list of source files is a
+# list that goes stale silently: a `ServiceValidationError` raised in
+# any other module made its key look unused, so the orphan check
+# reported a live key as dead. That happened the first time an
+# exception was raised from switch.py.
+#
+# The failure mode is the wrong way round, which is what makes it
+# worth fixing rather than extending: the check fires on correct code
+# and stays quiet about a genuinely orphaned key in an unlisted file.
+_SOURCE_FILES = sorted(_ROOT.glob("*.py"))
+# EVERY MODULE, BUT ONLY EXCEPTION RAISES.
+#
+# This list used to name four files by hand, which made any
+# ServiceValidationError raised elsewhere invisible in BOTH directions:
+# its key counted as undefined when missing from strings.json, and as
+# ORPHANED when present. A correctly translated `prime_not_connected` in
+# switch.py came back as an unused key.
+#
+# Globbing alone is worse, not better: `translation_key=` is what every
+# ENTITY uses too, so a plain regex over all files finds 243 keys and
+# demands they all live in the `exceptions` block. The four-file list
+# was a crude way of restricting the scan to files that raise.
+#
+# So the restriction moves from WHICH FILES to WHICH CALLS: parse each
+# module and take `translation_key` only from arguments to an exception
+# constructor. 19 ms across 78 files, once at collection.
 TRANS_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus" / "translations"
 ASCII_KEY_RE = re.compile(r'^[a-z0-9_]+$')
 # Words that are genuinely identical across languages. "Filter" is the
@@ -52,14 +74,41 @@ TRANSLATIONS_DIR = (
 )
 
 
+#: Which constructors count as "an exception the user will read".
+#:
+#: Kept explicit rather than "anything ending in Error": a list that
+#: matched by suffix would pull in library exceptions this project only
+#: catches, and the point of the check is our own translated messages.
+#:
+#: Two were missing on the first pass and showed up as orphaned keys
+#: that were in fact live -- `ConfigEntryAuthFailed` and `UpdateFailed`
+#: both carry translated messages in cloud_coordinator.py.
+_EXCEPTION_CALLS = {
+    "ServiceValidationError",
+    "HomeAssistantError",
+    "ConfigEntryNotReady",
+    "ConfigEntryAuthFailed",
+    "UpdateFailed",
+}
+
+
 def _collect_used_keys() -> set[str]:
-    """Extract all translation_key= values from ServiceValidationError raises."""
+    """`translation_key` values passed to an exception constructor."""
+    import ast
+
     keys: set[str] = set()
-    pattern = re.compile(r'translation_key\s*=\s*["\']([^"\']+)["\']')
     for src in _SOURCE_FILES:
-        if src.exists():
-            text = src.read_text()
-            keys.update(pattern.findall(text))
+        if not src.exists():
+            continue
+        for node in ast.walk(ast.parse(src.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name not in _EXCEPTION_CALLS:
+                continue
+            for kw in node.keywords:
+                if kw.arg == "translation_key" and isinstance(kw.value, ast.Constant):
+                    keys.add(kw.value.value)
     return keys
 
 

@@ -354,7 +354,7 @@ class TestAsyncSetupEntryCapabilityGating:
         assert "prime_detected_pad" in keys
         assert "prime_suction_level" in keys or "suction_level" in keys
     @pytest.mark.asyncio
-    async def test_dock_cap_zero_disables_pad_wash_and_dry(self):
+    async def test_dock_cap_zero_excludes_pad_wash_and_dry(self):
         from custom_components.roomba_plus import sensor as sensor_mod
         from custom_components.roomba_plus.sensor_prime import (
             PrimePadDryStatusSensor, PrimePadWashStatusSensor,
@@ -364,12 +364,8 @@ class TestAsyncSetupEntryCapabilityGating:
         created = []
         await sensor_mod.async_setup_entry(MagicMock(), entry, lambda e, **kw: created.extend(e))
 
-        pad_sensors = [
-            e for e in created
-            if isinstance(e, (PrimePadWashStatusSensor, PrimePadDryStatusSensor))
-        ]
-        assert len(pad_sensors) == 2
-        assert all(not e._attr_entity_registry_enabled_default for e in pad_sensors)
+        assert not any(isinstance(e, PrimePadWashStatusSensor) for e in created)
+        assert not any(isinstance(e, PrimePadDryStatusSensor) for e in created)
 
 
 class TestDockStateLabel:
@@ -758,15 +754,16 @@ class TestDockCapabilityGating:
     Applying the same rule to a nested object that IS present was the
     mistake."""
 
-    def test_an_evac_only_dock_disables_pad_sensors(self):
+    def test_an_evac_only_dock_gets_no_pad_sensors(self):
         import inspect
 
         from custom_components.roomba_plus import sensor
 
         source = inspect.getsource(sensor.async_setup_entry)
 
-        assert "disabled=dock_cap_known and dock_cap.pad_wash in (0, None)" in source
-        assert "disabled=dock_cap_known and dock_cap.pad_dry in (0, None)" in source
+        # None and 0 both suppress; only a real capability creates.
+        assert "pad_wash not in (0, None)" in source
+        assert "pad_dry not in (0, None)" in source
 
     def test_a_missing_dock_cap_still_fails_open(self):
         """A robot whose shadow has not arrived must not silently lose
@@ -779,7 +776,7 @@ class TestDockCapabilityGating:
         source = inspect.getsource(sensor.async_setup_entry)
 
         assert "dock_cap_known" in source
-        assert "disabled=dock_cap_known" in source
+        assert "not dock_cap_known or" in source
 
 
 
@@ -827,7 +824,7 @@ class TestCapabilityGatesHandleNone:
                     f"{path.name}: gating on cap.{field}, which is always None"
                 )
 
-    def test_dock_gates_disable_none_and_zero(self):
+    def test_dock_gates_treat_none_as_absent(self):
         import inspect
 
         from custom_components.roomba_plus import sensor
@@ -835,7 +832,7 @@ class TestCapabilityGatesHandleNone:
         source = inspect.getsource(sensor.async_setup_entry)
 
         for field in ("pad_wash", "pad_dry"):
-            assert f"{field} in (0, None)" in source, field
+            assert f"{field} not in (0, None)" in source, field
 
     def test_robot_gates_treat_none_as_unknown(self):
         """Deliberately the other way round, and it must stay that way:
@@ -1497,3 +1494,183 @@ class TestTheVendorTextArrivesAsAttributes:
         attrs = self._attrs(48, with_hass=False)
 
         assert attrs.get("error_title")
+
+
+class TestBlockingFaultsSayWhatStillWorks:
+    """`blockFault` (app 3.0.0) checks exactly four codes before letting
+    a mission start. All four have been in the error catalogue for
+    weeks, and the integration drew no conclusion from any of them.
+
+    Three do not mean "broken" — they mean one half of what you asked is
+    impossible right now. A user sending a vacuum command against 287
+    got a command that left, was refused, and produced no explanation an
+    automation could read.
+    """
+
+    @staticmethod
+    def _blocking(**kwargs):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.sensor_prime import _blocking_faults
+
+        base = {"error": 0, "cond_not_ready": []}
+        return _blocking_faults(SimpleNamespace(**{**base, **kwargs}))
+
+    def test_the_pad_plate_pair_are_opposite_states(self):
+        """287 = plate fitted, mop only. 290 = plate missing, vacuum
+        only. Folding them together would tell a user to attach the
+        plate they already have on."""
+        assert self._blocking(error=287) == {287: frozenset({"mop"})}
+        assert self._blocking(error=290) == {290: frozenset({"vacuum"})}
+
+    def test_no_cloth_is_not_the_same_as_no_plate(self):
+        """234 is the plate WITH no cloth on it — which is exactly what
+        `detectedPad: "padPlate"` reports on a real robot. It still
+        vacuums."""
+        assert self._blocking(error=234) == {234: frozenset({"vacuum"})}
+
+    def test_a_lifted_robot_can_do_neither(self):
+        assert self._blocking(error=286) == {286: frozenset()}
+
+    def test_a_readiness_refusal_is_found_too(self):
+        """A refusal leaves `error` at 0 and puts its reasons in
+        `cond_not_ready` — documented in the sensor's own docstring and
+        never used for anything until now. Checking one field would miss
+        the case the check exists for."""
+        assert self._blocking(error=0, cond_not_ready=[287]) == {
+            287: frozenset({"mop"})
+        }
+        assert self._blocking(error=0, cond_not_ready=["290"]) == {
+            290: frozenset({"vacuum"})
+        }
+
+    def test_an_ordinary_fault_blocks_nothing(self):
+        """Error 48 is an obstacle, not a start gate. An empty result
+        means "no opinion" — this knows four codes out of 112."""
+        assert self._blocking(error=48) == {}
+        assert self._blocking() == {}
+
+    def test_the_catalogue_and_the_gate_agree(self):
+        """Every blocking code must have a text. A gate that names a
+        code the catalogue cannot explain would produce an attribute
+        nobody can read."""
+        from custom_components.roomba_plus.const import (
+            PRIME_BLOCKING_FAULTS,
+            PRIME_ERROR_SEVERITY,
+        )
+
+        for code in PRIME_BLOCKING_FAULTS:
+            assert code in PRIME_ERROR_SEVERITY, code
+
+
+class TestTheFaultSceneReachesTheEntity:
+    """`FaultScene.scene_for()` shipped in roombapy-prime b5 with five
+    fully specified rules and was called by nothing.
+
+    The same code means different things per running task — a stall
+    during `padWash` is a dock problem, the same stall during
+    `cleanTask` is a robot problem. The robot never sends a scene;
+    `getFaultScene({cmStatus, command})` computes it.
+    """
+
+    def test_a_dock_task_is_recognised_from_the_phase(self):
+        from roombapy_prime.models.mission_history import FaultScene
+
+        assert FaultScene.scene_for(phase="padWash") is FaultScene.WASH_TASK
+
+    def test_the_command_alone_is_enough(self):
+        """The dock rules match on command OR phase: a fault during a
+        wash is a wash fault whether the user asked for it or the robot
+        started it."""
+        from roombapy_prime.models.mission_history import FaultScene
+
+        assert FaultScene.scene_for(command="drypad") is FaultScene.DRY_TASK
+
+    def test_an_ordinary_clean_yields_no_scene(self):
+        """Seven of twelve scenes have no stated condition. Falling back
+        to the documented default would put a plausible wrong task name
+        on a real error message."""
+        from roombapy_prime.models.mission_history import FaultScene
+
+        assert FaultScene.scene_for(phase="run", cycle="clean") is None
+
+    def test_the_sensor_asks_for_it_at_all(self):
+        """The point of this change: the rules existed and nothing
+        called them."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor_prime
+
+        source = inspect.getsource(sensor_prime)
+
+        assert "FaultScene.scene_for(" in source
+        assert "fault_scene" in source
+
+
+class TestTheBlockingReportDoesNotBlock:
+    """This reports; it does not gate — and that distinction is the same
+    one made for the dock controls.
+
+    App 3.0.0 greys out every Dock Control once a task begins, so a
+    drying cycle it started cannot be stopped there. @chairstacker calls
+    that the big drawback of the new UI, and being able to stop it from
+    Home Assistant the reason to keep ours as it is.
+
+    So a vacuum command against 287 still goes out. What changed is that
+    the robot's refusal is explainable in advance.
+    """
+
+    def test_no_command_path_consults_the_table(self):
+        """The guard. If a future change gates a command on this, the
+        integration starts refusing things the robot would accept —
+        which is the app's mistake, not one worth copying."""
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        readers = sorted(
+            p.name
+            for p in base.glob("*.py")
+            if "PRIME_BLOCKING_FAULTS" in p.read_text()
+            or "_blocking_faults" in p.read_text()
+        )
+
+        # binary_sensor.py joined the list when the visible sensor was
+        # added -- it REPORTS the same answer on a non-diagnostic
+        # entity. What must never appear here is a command path:
+        # room_cleaning, services, vacuum, button_prime.
+        assert readers == [
+            "binary_sensor.py",
+            "const.py",
+            "sensor_prime.py",
+        ], (
+            f"{readers} read the blocking table. It is advisory: a command "
+            "path reading it would refuse what the robot accepts, which is "
+            "the app's mistake and not one worth copying."
+        )
+
+    def test_a_message_comes_with_the_mode_lists(self):
+        """Mode lists without words are half an answer. The vendor's own
+        text says why."""
+        from custom_components.roomba_plus.sensor_prime import (
+            get_localized_error_entry,
+        )
+
+        assert get_localized_error_entry(287, "en").get("label")
+        assert get_localized_error_entry(290, "de").get("label")
+
+    def test_the_message_works_for_a_readiness_refusal_too(self):
+        """`error_title` only fills when `status.error` is set. A
+        refusal leaves it at 0 and puts the code in `cond_not_ready` —
+        exactly the case this block exists for, which would have
+        produced mode lists with nothing beside them."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor_prime
+
+        source = inspect.getsource(sensor_prime.PrimeErrorSensor)
+
+        assert "blocked_reason" in source
+        # The language lookup must sit OUTSIDE the `if status.error`
+        # branch, or the refusal case has no locale to render with.
+        before_error = source.split("if status.error:")[0]
+        assert "language = (" in before_error

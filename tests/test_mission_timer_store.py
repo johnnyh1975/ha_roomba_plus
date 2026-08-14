@@ -3328,3 +3328,114 @@ class TestUnloadFlush:
         store.async_save.assert_awaited_once()
         payload = store.async_save.call_args[0][0]
         assert "run_sec" in payload
+
+
+class TestMissionPhaseSourcePrime:
+    """`_mission_phase` reads the tier that is actually reporting one.
+
+    THE FIELD CAPTURE THIS GUARDS (@utkjmitch, Y351020, CLOUD_ONLY):
+    mid-mission with `mission_id` set, elapsed 10.7 min ticking, and a
+    52.2-minute rolling mean persisted — all three rendering as
+    attributes, and the state `unknown` for the whole fifty minutes.
+
+    Zero `mission_progress:` debug lines in the log, which is what made
+    the diagnosis short: `native_value` returned at the phase gate
+    before its first debug call. `roomba_reported_state()` returns `{}`
+    for CLOUD_ONLY BY DESIGN, so the Classic-shaped read was `""`
+    forever. The attributes read the same dead phase without gating on
+    it, which is why they worked and the percentage did not.
+    """
+
+    def test_classic_phase_wins_without_touching_prime(self):
+        """A LOCAL robot's reported phase is returned as-is and the
+        fallback never engages — `prime_status_coordinator` is
+        explicitly None, as it is on a Classic entry."""
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {
+            "cleanMissionStatus": {"phase": "run"}
+        }
+        data.prime_status_coordinator = None
+
+        assert _mission_phase(data) == "run"
+
+    def test_prime_fallback_reads_the_current_state_shadow(self):
+        """Parsed by the real library model rather than a MagicMock,
+        which would invent `.phase` on demand and prove nothing."""
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {"cleanMissionStatus": {"phase": "run"}}}
+        data.prime_status_coordinator = coordinator
+
+        assert _mission_phase(data) == "run"
+
+    def test_no_source_reports_no_phase(self):
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        data.prime_status_coordinator = None
+        assert _mission_phase(data) == ""
+
+        coordinator = MagicMock()
+        coordinator.data = None
+        data.prime_status_coordinator = coordinator
+        assert _mission_phase(data) == ""
+
+    def test_native_value_returns_a_percentage_on_prime(self):
+        """THE REPRO. Everything the percentage needs is present on a
+        CLOUD_ONLY entry: 10.7 minutes against a 52.2-minute mean is
+        20%. Before the fix this exact setup returned None."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "218"
+        mts.effective_elapsed_min = 10.7
+
+        rps = MagicMock()
+        rps.mission_duration_mean = 52.2
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {"cleanMissionStatus": {"phase": "run"}}}
+        data.prime_status_coordinator = coordinator
+        data.mission_timer_store = mts
+        data.robot_profile_store = rps
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
+            return_value=[],
+        ):
+            value = RoombaMissionProgress.native_value.fget(sensor)
+
+        assert value == 20
+
+    def test_native_value_still_none_when_prime_is_idle(self):
+        """A charging Prime robot must not report a percentage. The gate
+        opens for run/hmMidMsn/evac only — the fix changes where the
+        phase comes from, not which phases count."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": {"phase": "charge"}}
+        }
+        data.prime_status_coordinator = coordinator
+        sensor._config_entry.runtime_data = data
+
+        assert RoombaMissionProgress.native_value.fget(sensor) is None

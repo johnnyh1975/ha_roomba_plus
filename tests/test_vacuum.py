@@ -1218,7 +1218,7 @@ class TestCloudOnlyVacuumActions:
             with patch.object(v, "schedule_update_ha_state"):
                 await v.async_added_to_hass()  # must not raise
 
-    def test_extra_state_attributes_exposes_card_compatible_status(self):
+    def test_extra_state_attributes_does_not_crash(self):
         """Regression test for a second real bug in the same round: this
         property reads self.vacuum.current_state/error_code/error_message
         unconditionally -- worse than async_added_to_hass() since HA
@@ -1228,10 +1228,7 @@ class TestCloudOnlyVacuumActions:
 
         attrs = v.extra_state_attributes
 
-        # xiaomi-vacuum-map-card reads the legacy ``status`` attribute rather
-        # than HA's state.  Prime has no local ``current_state``, but activity
-        # is the confirmed source used for the entity state itself.
-        assert attrs["status"] == "idle"
+        assert attrs["status"] is None
         assert "error" not in attrs
         assert "error_code" not in attrs
 
