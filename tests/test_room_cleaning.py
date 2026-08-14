@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -346,6 +346,23 @@ class TestPrimeRoomCleaning:
         assert await backend.available_rooms()
 
     @pytest.mark.asyncio
+    async def test_bundle_name_fills_a_room_missing_from_metadata(self):
+        """Prime metadata can omit a named region that exists in the map bundle."""
+        backend, _robot = self._backend(
+            maps=[{"p2map_id": "MAP-1", "active_p2mapv_id": "VERSION-1"}]
+        )
+        backend._config_entry = MagicMock()
+        floor_plan = MagicMock(room_names={"11": "Hallway"})
+
+        with patch(
+            "custom_components.roomba_plus.prime_room_map.async_build_prime_floor_plan",
+            new=AsyncMock(return_value=floor_plan),
+        ):
+            rooms = await backend.available_rooms()
+
+        assert rooms["Hallway"] == "MAP-1/11"
+
+    @pytest.mark.asyncio
     async def test_no_map_yields_no_rooms_rather_than_an_error(self):
         """A robot that has not finished mapping yet is a normal state,
         not a fault."""
@@ -404,6 +421,10 @@ class TestRoomNameMatching:
 
     def test_an_exact_name_matches(self):
         assert self._match(["Salon"]) == (["13"], [])
+
+    def test_a_unique_room_id_matches(self):
+        """Map cards select the API id while displaying the room name."""
+        assert self._match(["13"]) == (["13"], [])
 
     def test_case_does_not_matter(self):
         """Automations and voice assistants are inconsistent about it."""

@@ -624,9 +624,12 @@ class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_pad_wash_status"
+        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def native_value(self) -> str | None:
@@ -689,9 +692,12 @@ class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
         super().__init__(blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_prime_pad_dry_status"
+        self._attr_entity_registry_enabled_default = not disabled
 
     @property
     def native_value(self) -> str | None:

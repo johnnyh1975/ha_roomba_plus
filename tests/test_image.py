@@ -194,6 +194,34 @@ class TestCoverageImageAttributes:
         datetime.datetime.fromisoformat(attrs["last_mission_end"])
 
 
+def test_prime_cleaning_map_does_not_advertise_card_rooms():
+    """Only the static Rooms Map is a xiaomi-vacuum-map-card source."""
+    from custom_components.roomba_plus.image import PrimeRoomsImage
+
+    entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+    entity._include_live = True
+
+    assert entity.extra_state_attributes == {}
+
+
+def test_prime_rooms_map_uses_stable_ids_for_generated_room_config():
+    """The card generator uses the rooms mapping key as its selection ID."""
+    from custom_components.roomba_plus.image import PrimeRoomsImage
+
+    entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+    entity._include_live = False
+    entity._polygons = {"10": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]}
+    entity._names = {"10": "Kitchen"}
+    entity._preferences = {}
+    entity._renderer = MagicMock()
+    entity._renderer._mm_to_px_fit.side_effect = lambda x, y: (x, y)
+
+    rooms = entity.extra_state_attributes["rooms"]
+    assert list(rooms) == ["10"]
+    assert rooms["10"]["name"] == "Kitchen"
+    assert rooms["10"]["room_id"] == "10"
+
+
 class TestCoverageImageIdentity:
     def test_unique_id_suffix(self):
         entity = _make_entity()

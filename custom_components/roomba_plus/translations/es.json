@@ -1125,6 +1125,12 @@
       "map": {
         "name": "Mapa de limpieza"
       },
+      "raw_map": {
+        "name": "Mapa en directo sin procesar"
+      },
+      "cleaning_map": {
+        "name": "Mapa de limpieza"
+      },
       "coverage_map": {
         "name": "Mapa de cobertura"
       },

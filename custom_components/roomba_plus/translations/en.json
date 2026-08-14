@@ -1125,6 +1125,12 @@
       "map": {
         "name": "Cleaning map"
       },
+      "raw_map": {
+        "name": "Raw live map"
+      },
+      "cleaning_map": {
+        "name": "Cleaning map"
+      },
       "coverage_map": {
         "name": "Coverage map"
       },

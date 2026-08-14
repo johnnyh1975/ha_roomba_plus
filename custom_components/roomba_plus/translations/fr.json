@@ -1125,6 +1125,12 @@
       "map": {
         "name": "Carte de nettoyage"
       },
+      "raw_map": {
+        "name": "Carte en direct brute"
+      },
+      "cleaning_map": {
+        "name": "Carte de nettoyage"
+      },
       "coverage_map": {
         "name": "Carte de couverture"
       },

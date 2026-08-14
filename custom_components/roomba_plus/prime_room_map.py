@@ -235,12 +235,17 @@ class PrimeFloorPlan:
     #: the ONLY place outlines exist -- get_map_metadata() returns names
     #: and cleaning defaults but no geometry.
     room_polygons: dict[str, list[tuple[float, float]]]
+    #: Fine-grained floor-plan outlines, including interior walls and
+    #: doorway cut-outs.  These are separate from cleanable room polygons.
+    floor_plan: list[list[tuple[float, float]]]
     borders: list[list[tuple[float, float]]]
     #: Carpeted areas. The only observed floor_type value is "carpet",
     #: which suggests the file lists carpet rather than classifying every
     #: surface -- anything uncovered is hard floor by omission. Not
     #: confirmed: a robot with no carpet would settle it.
     carpet: list[list[tuple[float, float]]]
+    #: Detected furniture outlines from the saved map.
+    furniture: list[list[tuple[float, float]]]
     #: Dock position and which way it faces, or None.
     dock: tuple[float, float, float] | None
     #: The raw `cleanZones`, `adHocCleanZones` and `policyZones` files,
@@ -318,12 +323,14 @@ def _room_polygons_from_bundle(
     return polygons
 
 
-def rings_mm(features: Any) -> list[list[tuple[float, float]]]:
-    """Every outer ring in a GeoJSON FeatureCollection, in millimetres.
+def rings_mm(
+    features: Any, *, include_holes: bool = False
+) -> list[list[tuple[float, float]]]:
+    """GeoJSON polygon rings in millimetres.
 
-    Handles Polygon and MultiPolygon in one pass, because borders use the
-    latter and floor types the former, and the difference is not worth
-    two functions.
+    Floor-plan holes are structural outlines too, so callers can retain
+    them with ``include_holes``.  Other layers intentionally use only an
+    outer ring.
     """
     rings: list[list[tuple[float, float]]] = []
 
@@ -345,18 +352,52 @@ def rings_mm(features: Any) -> list[list[tuple[float, float]]]:
         # MultiPolygon nests one level deeper than Polygon.
         polygons = coords if kind == "MultiPolygon" else [coords]
         for polygon in polygons:
-            if not polygon:
-                continue
+            for coordinates in (polygon if include_holes else polygon[:1]):
+                try:
+                    ring = [
+                        (float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
+                        for x, y in coordinates
+                    ]
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if len(ring) >= 3:
+                    rings.append(ring)
+    return rings
+
+
+def lines_mm(features: Any) -> list[list[tuple[float, float]]]:
+    """GeoJSON line paths in millimetres, retaining wall openings."""
+    lines: list[list[tuple[float, float]]] = []
+    if isinstance(features, dict) and features.get("type") == "Feature":
+        features = {"features": [features]}
+
+    for feature in (features or {}).get("features") or []:
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates") or []
+        kind = geometry.get("type")
+        if kind == "MultiLineString":
+            paths = coords
+        elif kind == "LineString":
+            paths = [coords]
+        elif kind == "Polygon":
+            paths = coords
+        elif kind == "MultiPolygon":
+            paths = [ring for polygon in coords for ring in polygon]
+        else:
+            paths = []
+        for path in paths:
             try:
-                ring = [
+                line = [
                     (float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
-                    for x, y in polygon[0]
+                    for x, y in path
                 ]
             except (TypeError, ValueError, IndexError):
                 continue
-            if len(ring) >= 3:
-                rings.append(ring)
-    return rings
+            if len(line) >= 2:
+                if kind in {"Polygon", "MultiPolygon"} and line[0] != line[-1]:
+                    line.append(line[0])
+                lines.append(line)
+    return lines
 
 
 def _carpet_rings_mm(features: Any) -> list[list[tuple[float, float]]]:
@@ -412,7 +453,8 @@ async def async_build_prime_floor_plan(
     data = config_entry.runtime_data
     robot = getattr(data, "prime_robot", None)
     empty = PrimeFloorPlan(
-        room_names={}, room_polygons={}, borders=[], carpet=[], dock=None
+        room_names={}, room_polygons={}, floor_plan=[], borders=[], carpet=[],
+        furniture=[], dock=None,
     )
     if robot is None:
         return empty
@@ -482,8 +524,10 @@ async def async_build_prime_floor_plan(
         },
         room_names=_room_names_from_bundle(parsed.get("rooms")),
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),
+        floor_plan=lines_mm(parsed.get("floorPlan")),
         borders=rings_mm(parsed.get("borders")),
         carpet=_carpet_rings_mm(parsed.get("floorTypes")),
+        furniture=rings_mm(parsed.get("furniture")),
         dock=_dock_from(parsed.get("dockPose")),
     )
     _LOGGER.debug(
