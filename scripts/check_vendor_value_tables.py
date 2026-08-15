@@ -112,6 +112,17 @@ NO_VENDOR_ENUM: dict[str, str] = {
         "DEEP_CLEAN-style constants over a different space, and its "
         "wireValues map is empty."
     ),
+    "select_prime.PAD_WETNESS_LEVELS": (
+        "NO SOURCE ANYWHERE, and this is the only value set in that file "
+        "without one. The key `padWetness.padPlate`, its dot notation and "
+        "its gate `cap.ppWetLvl` are all confirmed; the RANGE appears in "
+        "no vendor enum, no settings-key type, no locale string and no "
+        "capability table. Four is the highest value anyone has seen "
+        "(@chairstacker), and `_wetness_options()` widens the set to "
+        "include whatever the robot reports so a guessed ceiling cannot "
+        "hide a real value. Replace this entry the moment a source turns "
+        "up."
+    ),
     "const.PRIME_BLOCKING_FAULTS": (
         "The four codes `blockFault` checks before a mission starts, "
         "mapped to what each one still allows. The CODES are the "
@@ -125,6 +136,71 @@ NO_VENDOR_ENUM: dict[str, str] = {
     "const.BIN_LABELS": "Two display strings over a boolean.",
     "const.YES_NO_LABELS": "Two display strings over a boolean.",
 }
+
+
+#: Labels that differ from the vendor's member name ON PURPOSE.
+#:
+#: Each needs a reason, and "it reads better" is not one. The bar is
+#: that the label says the same thing the vendor's name says -- usually
+#: because it matches what the APP shows a user, which is a better
+#: source than a Kotlin identifier.
+DELIBERATE_LABELS: dict[str, str] = {
+    "select_prime.AUTOEVAC_FREQUENCIES[0]": (
+        "`evClean` is one clean; @chairstacker's app renders this as "
+        "'After Every Routine' and the label follows the app."
+    ),
+    "select_prime.AUTOEVAC_FREQUENCIES[4]": (
+        "`evBackHome` in plain words. Same event, no claim added."
+    ),
+}
+
+
+def _member_for(vendor_name: str, value: object) -> str | None:
+    """The vendor's member name for a wire value."""
+    from roombapy_prime.vendor_reference import enum_values  # noqa: PLC0415
+
+    for member, wire in (enum_values(vendor_name) or {}).items():
+        if str(wire) == str(value):
+            return member
+    return None
+
+
+def _label_matches(option: str, member: str) -> bool:
+    """Whether our option string is recognisably the vendor's name.
+
+    Deliberately loose. `refillAndRoom` -> `refill_and_room` must pass,
+    and so must a label that reorders or expands the words -- the point
+    is to catch an INVENTED word, not to enforce a spelling.
+    """
+    def words(text: str) -> set[str]:
+        out, current = set(), ""
+        for char in text:
+            if char in "_-. ":
+                if current:
+                    out.add(current.lower())
+                current = ""
+            elif char.isupper() and current:
+                out.add(current.lower())
+                current = char
+            else:
+                current += char
+        if current:
+            out.add(current.lower())
+        return {w for w in out if len(w) > 2}
+
+    # A NUMERIC LABEL IS THE VALUE ITSELF and always honest: `10` for
+    # `ev10`, `6_hours` for `six`. Nobody is misled by a number.
+    if any(char.isdigit() for char in option):
+        return True
+
+    ours, theirs = words(option), words(member)
+    if ours & theirs:
+        return True
+    # Substring either way, for `evRoom` -> `after_each_room` style
+    # expansions where the vendor's word is embedded rather than equal.
+    flat_ours = option.replace("_", "").lower()
+    flat_theirs = member.replace("_", "").lower()
+    return flat_theirs in flat_ours or flat_ours in flat_theirs or not theirs
 
 
 def _tables() -> dict[str, dict]:
@@ -175,6 +251,37 @@ def main() -> int:
                 f"      only ours:   {sorted(ours - theirs)}\n"
                 f"      only vendor: {sorted(theirs - ours)}"
             )
+            continue
+
+        # THE VALUES WERE NEVER THE PROBLEM. `PAD_WASH_RETURN_MODES` had
+        # all six of `ReturnByMode`'s values, exactly right, and labelled
+        # 100/101/102 "standard | medium | high" while the vendor calls
+        # them `mission`, `refill` and `refillAndRoom`. This check passed
+        # it every time.
+        #
+        # A wrong LABEL is worse than a wrong value, because a wrong
+        # value gets rejected by the robot and a wrong label gets
+        # believed. @ratpic83 read those three beside a dock reporting
+        # `pw: 3`, reported that the heat levels were confirmed, then
+        # retracted his own correct observation as "noise" after finding
+        # no heat control in the app.
+        #
+        # So: our option string must be derivable from the vendor's
+        # member name. Not identical -- `refillAndRoom` becomes
+        # `refill_and_room` and that is right -- but recognisably the
+        # same word, which "standard" for `mission` is not.
+        for value, option in tables[name].items():
+            member = _member_for(vendor_name, value)
+            if member is None:
+                continue
+            if f"{name}[{value}]" in DELIBERATE_LABELS:
+                continue
+            if not _label_matches(str(option), member):
+                problems.append(
+                    f"{name}[{value}] is labelled {option!r} but "
+                    f"{vendor_name} calls it {member!r} -- a label the "
+                    f"vendor does not use is one a tester will believe"
+                )
 
     for name, vendor_name in CHECKED_LEVELS.items():
         if name not in tables:

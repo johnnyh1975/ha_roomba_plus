@@ -34,6 +34,17 @@ Go to Settings → Roomba+ → Configure → iRobot cloud credentials, re-save y
 
 ## Zones & rooms
 
+**Before you send a diagnostics download**
+
+Credentials and your BLID are removed automatically. Room names, zone names,
+schedules, map geometry and mission history are **not** — the download is
+useless without them. [What is in it, in full →](DATA_PRIVACY.md)
+
+A partial download is more useful than none: send the block that matters if
+the rest gives you pause.
+
+---
+
 **Smart Map zones not appearing (i/s/j-series)**
 
 Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.

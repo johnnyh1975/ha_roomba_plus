@@ -627,6 +627,65 @@ After each mission, dirt density is compared against the weekday-aware baseline 
 
 ---
 
+#### Mission progress is an estimate, not coverage
+
+`sensor.{name}_mission_progress` has two modes, and neither measures how much
+floor has been cleaned:
+
+- **With a planned room order** — rooms completed against rooms planned
+- **Without one** — elapsed time against this robot's rolling mean duration
+
+The second is the common case on Prime, and it is convincing: it climbs at a
+steady rate and reads exactly like measured progress. It is arithmetic on the
+clock.
+
+**It never reaches 100.** "Finished" is a phase transition, not a percentage,
+so the sensor caps at 99 and the mission ending is what clears it. If the phase
+gets stuck — which can happen cloud-side, see below — it parks at 99
+indefinitely.
+
+`sensor.{name}_area_cleaned_today` is the coverage figure, and on some robots
+it stays at 0.0 m² while progress climbs. The two are not measuring the same
+thing.
+
+#### Pad wetness (V4/Prime, a35)
+
+`select.{name}_pad_wetness` writes `padWetness.padPlate`, gated on
+`cap.ppWetLvl`. A robot reporting `0` there has no wetness control and gets no
+entity — which is a real difference between two robots of the same model with
+different docks.
+
+**The level range is the one value set in this integration with no documented
+source.** The key, its addressing and its gate are all confirmed; the range is
+in no vendor enum, no settings-key type and no locale string. Four is the
+highest anyone has seen, and the picker widens itself to include whatever your
+robot reports, so a guessed ceiling cannot hide a real setting.
+
+#### Started by, on Prime (a35)
+
+`sensor.{name}_job_initiator` says who started the current or most recent
+mission — schedule, iRobot app, dock button, Alexa, Siri, IFTTT, a teamed
+robot, or Home Assistant.
+
+The **last command** is carried as attributes rather than as a second entity:
+`last_command`, `last_command_by`, `last_command_time`. It is a different
+question, and the two can legitimately disagree — a mission started by a
+schedule while the last command came from the app.
+
+#### The third phase category (a35)
+
+The phase sensor carries two attributes:
+
+```
+cleaning    true during run, hmMidMsn, evac
+dock_task   true during padWash, padDry, refill
+```
+
+They are never both true. A combo robot with `pwReturn: 2` washes its pad
+**during** cleaning, and the vendor's own rule says that is not a mission
+phase — it is a dock task. An automation gating on "is it cleaning" will go
+false while the robot is plainly working, and `dock_task` says why.
+
 #### Do Not Disturb (V4/Prime, a34)
 
 Quiet hours are two mechanisms plus a display, and the robot's protocol keeps
