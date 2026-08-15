@@ -445,3 +445,221 @@ def _enabled(entities):
         for entity in entities
         if getattr(entity, "_attr_entity_registry_enabled_default", True)
     ]
+
+
+class TestFavouriteButtonsFollowTheList:
+    """Buttons were built exactly once, at setup. A favourite created in
+    the iRobot app never got one, and a deleted favourite left its
+    button behind pointing at an id the server no longer knows.
+
+    This is @DaRealGuGu's schedule-switch problem with a different
+    entity type, and it reuses that fix's two lessons: match on the id
+    rather than the content, and read the registry rather than a set of
+    what this session added.
+    """
+
+    @staticmethod
+    def _entry(favourites):
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "BLID123"
+        entry.runtime_data.prime_favorites = favourites
+        return entry
+
+    def test_a_button_per_favourite(self):
+        from custom_components.roomba_plus.button_prime import (
+            build_prime_favorite_buttons,
+        )
+
+        buttons = build_prime_favorite_buttons(
+            self._entry([{"id": "a1", "name": "Kitchen"}, {"id": "b2"}])
+        )
+
+        assert len(buttons) == 2
+
+    def test_an_entry_without_an_id_is_skipped(self):
+        """It cannot be run and cannot be identified — a button for it
+        would be dead, and its unique_id would collide with the next
+        such entry."""
+        from custom_components.roomba_plus.button_prime import (
+            build_prime_favorite_buttons,
+        )
+
+        buttons = build_prime_favorite_buttons(
+            self._entry([{"name": "no id"}, {"id": "", "name": "empty"}])
+        )
+
+        assert buttons == []
+
+    def test_the_list_is_re_read_on_each_call(self):
+        """The whole point: the builder reads `prime_favorites` rather
+        than capturing it, so the coordinator refreshing that list
+        changes what this produces."""
+        from custom_components.roomba_plus.button_prime import (
+            build_prime_favorite_buttons,
+        )
+
+        favourites = [{"id": "a1"}]
+        entry = self._entry(favourites)
+        assert len(build_prime_favorite_buttons(entry)) == 1
+
+        favourites.append({"id": "b2"})
+        assert len(build_prime_favorite_buttons(entry)) == 2
+
+        favourites.clear()
+        assert build_prime_favorite_buttons(entry) == []
+
+    def test_the_refresh_mutates_the_list_in_place(self):
+        """Entities were handed this exact list object at setup.
+        Rebinding the attribute would leave every button reading the old
+        one — which is invisible in tests that only check the
+        coordinator."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_coordinator
+
+        source = inspect.getsource(
+            prime_coordinator.PrimeScheduleCoordinator._async_refresh_favourites
+        )
+
+        assert "current.clear()" in source
+        assert "current.extend(" in source
+        assert "prime_favorites =" not in source
+
+    def test_favourites_have_no_push_channel(self):
+        """Recorded because it is the reason for the design. All nine
+        named shadows were checked and none carries favourites — they
+        are a cloud REST resource, and the robot never learns that one
+        changed."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_coordinator
+
+        source = inspect.getsource(
+            prime_coordinator.PrimeScheduleCoordinator._async_refresh_favourites
+        )
+
+        assert "no push channel" in source.lower()
+
+
+class TestEveryFavouriteButtonIsRegisterable:
+    """Home Assistant will not register an entity without a unique id.
+    It lives in the state machine and not the registry: it cannot be
+    renamed, hidden, assigned to an area, or referred to reliably. The
+    UI calls that "Unmanageable".
+
+    `PrimeFavoriteButton` never set one, and no test noticed across
+    5445 of them.
+
+    @chairstacker chased it for three rounds as a leftover registry
+    entry. His last report ruled that out: the entity tracks his
+    favourites exactly — appears when he creates one, updates when he
+    adds another, disappears when he deletes it. A stale entry does none
+    of those. It was never stale; it was never registered.
+
+    @ratpic83's log carried the other half from a different robot:
+    "attempts to attach a device to an entity without a unique ID".
+    """
+
+    def test_the_button_has_a_unique_id(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeFavoriteButton,
+        )
+
+        entry = MagicMock()
+        button = PrimeFavoriteButton(
+            "BLID123", entry, "8a106edbf128112254cd182814b426bd", "Test_03 UR"
+        )
+
+        assert button.unique_id
+        assert "8a106edbf128112254cd182814b426bd" in button.unique_id
+
+    def test_two_favourites_do_not_collide(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeFavoriteButton,
+        )
+
+        entry = MagicMock()
+        first = PrimeFavoriteButton("BLID123", entry, "5ae5e78c", "Kitchen")
+        second = PrimeFavoriteButton("BLID123", entry, "8a106edb", "UR")
+
+        assert first.unique_id != second.unique_id
+
+    def test_renaming_in_the_app_does_not_move_the_entity(self):
+        """The id is the favourite's own, not its position or name — a
+        favourite renamed in the iRobot app must not break an
+        automation."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeFavoriteButton,
+        )
+
+        entry = MagicMock()
+        before = PrimeFavoriteButton("BLID123", entry, "5ae5e78c", "Kitchen")
+        after = PrimeFavoriteButton("BLID123", entry, "5ae5e78c", "Küche")
+
+        assert before.unique_id == after.unique_id
+
+
+class TestNoPrimeEntityShipsWithoutAUniqueId:
+    """The census that would have caught the favourite button.
+
+    A missing unique id produces no error, no warning at the entity, and
+    no failing test — only an "Unmanageable" row a user has to notice
+    and report, which took three rounds.
+    """
+
+    def test_every_prime_entity_class_sets_one(self):
+        import ast
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        offenders: list[str] = []
+
+        for path in base.glob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                if not node.name.startswith("Prime"):
+                    continue
+                # An EntityDescription describes an entity and is not
+                # one. It carries a `key`, and the entity built from it
+                # is what needs the unique id.
+                if node.name.endswith("Description"):
+                    continue
+                # ENTITIES ONLY. The first version matched on the name
+                # and flagged nine coordinators, dataclasses and entity
+                # DESCRIPTIONS -- none of which HA registers, and none
+                # of which should carry a unique id. A test that fires
+                # on nine false positives is one somebody switches off.
+                bases = {
+                    getattr(b, "id", None) or getattr(b, "attr", None)
+                    for b in node.bases
+                }
+                if not any(
+                    base and ("Entity" in base or base.startswith("Prime"))
+                    for base in bases
+                ):
+                    continue
+                source = ast.get_source_segment(path.read_text(), node) or ""
+                if "_attr_unique_id" in source or "unique_id" in source:
+                    continue
+                # A base class that concrete subclasses complete is
+                # fine; those are named with a leading underscore.
+                if node.name.startswith("_"):
+                    continue
+                offenders.append(f"{path.name}::{node.name}")
+
+        assert not offenders, (
+            f"Prime entity classes with no unique_id: {offenders}. "
+            "Home Assistant will not register these, so they arrive as "
+            "'Unmanageable' and cannot be renamed, hidden or assigned "
+            "to an area."
+        )

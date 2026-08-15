@@ -2292,3 +2292,78 @@ class TestStaticPrimeRoomsMap:
         image = Image.open(io.BytesIO(entity._render_png())).convert("RGB")
 
         assert image.getpixel((300, 300)) == (120, 190, 145)
+
+
+class TestZonesHaveNamesToo:
+    """Two testers reported this independently and neither was answered.
+
+    @connormxy: "the zones seem to lack a name but have a number".
+    @chairstacker: "zone names are missing, though — just as they are in
+    the Whole_House map", i.e. on both his maps, so not a multi-map
+    problem.
+
+    `CleanZoneFeatureProperties` carries `name` — it is the one field
+    distinguishing a saved clean zone from an ad-hoc one. Nothing read
+    it: `_room_names_from_bundle` reads the `rooms` layer only, so every
+    zone fell through to the `Zone {id}` fallback.
+    """
+
+    @staticmethod
+    def _layer(features):
+        return {"cleanZones": {"features": features}}
+
+    def test_a_named_zone_is_found(self):
+        from custom_components.roomba_plus.prime_room_map import (
+            _zone_names_from_bundle,
+        )
+
+        names = _zone_names_from_bundle(self._layer([
+            {"properties": {"id": "13", "name": "Under the sofa"}},
+        ]))
+
+        assert names == {"13": "Under the sofa"}
+
+    def test_an_unnamed_zone_is_left_alone(self):
+        """An ad-hoc zone is a rectangle drawn for one run and has no
+        name to find. Falling back to `Zone {id}` is right for it."""
+        from custom_components.roomba_plus.prime_room_map import (
+            _zone_names_from_bundle,
+        )
+
+        assert _zone_names_from_bundle(self._layer([
+            {"properties": {"id": "14"}},
+            {"properties": {"id": "15", "name": ""}},
+        ])) == {}
+
+    def test_the_id_can_sit_on_the_feature(self):
+        from custom_components.roomba_plus.prime_room_map import (
+            _zone_names_from_bundle,
+        )
+
+        names = _zone_names_from_bundle(self._layer([
+            {"id": "16", "properties": {"name": "Hallway corner"}},
+        ]))
+
+        assert names == {"16": "Hallway corner"}
+
+    def test_a_missing_layer_is_not_an_error(self):
+        """The bundle's file list varies by robot — three testers, three
+        different sets. Absent means empty."""
+        from custom_components.roomba_plus.prime_room_map import (
+            _zone_names_from_bundle,
+        )
+
+        assert _zone_names_from_bundle({}) == {}
+        assert _zone_names_from_bundle(None) == {}
+        assert _zone_names_from_bundle({"cleanZones": None}) == {}
+
+    def test_rooms_win_a_collision(self):
+        """A region id in both layers is a room the user also drew a
+        zone over. The room name is the one they set deliberately."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+
+        source = inspect.getsource(prime_room_map)
+
+        assert "{**zone_names, **names_for_others}" in source

@@ -2606,3 +2606,46 @@ def test_prime_rooms_map_uses_stable_ids_for_generated_room_config():
     assert list(rooms) == ["10"]
     assert rooms["10"]["name"] == "Kitchen"
     assert rooms["10"]["room_id"] == "10"
+
+
+class TestRoomLabelsAreNotGatedOnTheMapSplit:
+    """Splitting the two Prime maps gave the rooms map plain outlines,
+    on the reasoning that xiaomi-vacuum-map-card draws its own overlay.
+    Defensible for the FILLS.
+
+    Carrying it to the labels disabled an explicit user option on
+    exactly the entity the code's own comment says the option exists
+    for: "a plain picture-entity shows an image and nothing else, so for
+    them the names have to be in the picture or they do not exist".
+
+    @chairstacker: "no room shading colors and no names at all (even
+    room names are gone)". The shading is deliberate; the names were
+    not.
+    """
+
+    def test_the_label_branch_does_not_consult_show_room_fills(self):
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+        idx = source.find("CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS")
+        assert idx > 0
+        guard = source[max(0, idx - 200):idx]
+
+        assert "show_room_fills and" not in guard, (
+            "room labels are gated on the map split again -- the option "
+            "belongs to the user, not to which of the two maps this is"
+        )
+
+    def test_fills_are_still_split(self):
+        """The other half stays: the card draws its own room overlay,
+        and both at once doubles them up."""
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+
+        assert 'show_room_fills = getattr(self, "_include_live", True)' in source
+        assert "if show_room_fills:" in source

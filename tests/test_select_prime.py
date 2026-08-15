@@ -358,14 +358,28 @@ class TestOptionListsNarrowByProductMode:
             assert self._narrow("padDryDur", sku) == {2, 3, 4, 5, 6}, sku
             assert self._narrow("pwAreaInterval", sku) == {6, 8, 10, 15, 20}, sku
 
-    def test_the_two_newly_recognised_prefixes_are_narrowed(self):
-        """V1 and Z1 became Prime this session. Their lists differ."""
-        assert self._narrow("padDryDur", "V105020") == {4, 5, 6}
+    def test_only_z1_of_the_new_prefixes_is_narrowed(self):
+        """V1 and Z1 both became Prime this session, and only one of
+        them is narrowed.
+
+        The first version of this test asserted overrides for V1 that do
+        not exist -- it was written against a table built from the
+        report's prose rather than from `v3_sku_value_lists.json`, where
+        V1 has its own branch and no overrides in it. Seven of ten
+        entries were invented, and the tests agreed with them."""
         assert self._narrow("padDryDur", "Z105020") == {4, 5, 6}
-        assert self._narrow("pwTimeInterval", "V105020") == {10, 15, 20}
+        assert self._narrow("autoevacFreq", "Z105020") == {0, 15, 30}
+
+        assert self._narrow("padDryDur", "V105020") == {2, 3, 4, 5, 6}
+        assert self._narrow("pwTimeInterval", "V105020") == {10, 15, 20, 25}
 
     def test_g2_sees_the_short_area_list(self):
         assert self._narrow("pwAreaInterval", "G285020") == {6, 8, 10}
+
+    def test_g2_keeps_the_standard_dry_durations(self):
+        """The invented entry gave G2 `padDryDur` (2,3,4). The data file
+        gives it one override and it is not that one."""
+        assert self._narrow("padDryDur", "G285020") == {2, 3, 4, 5, 6}
 
     def test_an_unknown_sku_gets_everything(self):
         """Fail open: a robot whose SKU has not arrived should get the
@@ -419,3 +433,187 @@ class TestTheHeatGateIsMarkedAsAnInference:
         )
 
         assert _pad_wash_heat_options(None) == PAD_WASH_HEAT_LEVELS
+
+
+class TestPadWetnessIsTheOneGuessedValueSet:
+    """The key `padWetness.padPlate`, its dot notation and its gate
+    `cap.ppWetLvl` are all confirmed. The RANGE is in no vendor enum, no
+    settings-key type, no locale string and no capability table — it is
+    the only value set in this file without a source.
+
+    Four is the highest anyone has seen (@chairstacker, alongside
+    `ppWetLvl: 3`). @ratpic83's 405 Combo reports `ppWetLvl: 0` — same
+    robot model, different dock, and the first robot that should not get
+    this control at all.
+    """
+
+    def test_a_guessed_ceiling_cannot_hide_a_real_value(self):
+        """If a robot reports level 6, offering four would render the
+        owner's own setting as invalid. The guess is ours; the robot is
+        the authority."""
+        from custom_components.roomba_plus.select_prime import _wetness_options
+
+        assert set(_wetness_options(6)) == {1, 2, 3, 4, 5, 6}
+
+    def test_it_never_narrows(self):
+        """A robot reporting 2 still gets the full set: nothing says
+        which levels are unavailable, only which one is selected."""
+        from custom_components.roomba_plus.select_prime import _wetness_options
+
+        assert set(_wetness_options(2)) == {1, 2, 3, 4}
+        assert set(_wetness_options(None)) == {1, 2, 3, 4}
+
+    def test_an_absurd_value_does_not_generate_an_absurd_list(self):
+        """A shadow carrying 9999 would otherwise produce a picker with
+        nine thousand entries."""
+        from custom_components.roomba_plus.select_prime import _wetness_options
+
+        assert set(_wetness_options(9999)) == {1, 2, 3, 4}
+
+    def test_ppwetlvl_zero_withholds_the_control(self):
+        """The gate is `cap.ppWetLvl`, and an explicit 0 is the robot
+        saying it has no wetness control. @ratpic83's reports exactly
+        that."""
+        from custom_components.roomba_plus.select_prime import PRIME_SELECTS
+
+        description = next(
+            d for d in PRIME_SELECTS if d.wire_key == "padWetness.padPlate"
+        )
+
+        assert description.cap_attr == "pp_wet_lvl"
+
+    def test_the_missing_source_is_declared_rather_than_hidden(self):
+        """Two controls once shipped built from recall. This table says
+        `None` deliberately, and the guard requires the entry."""
+        from custom_components.roomba_plus.select_prime import VENDOR_ENUM_SOURCES
+
+        assert "PAD_WETNESS_LEVELS" in VENDOR_ENUM_SOURCES
+        assert VENDOR_ENUM_SOURCES["PAD_WETNESS_LEVELS"] is None
+
+
+class TestLabelsMustBeTheVendorsWordsNotOurs:
+    """`PAD_WASH_RETURN_MODES` carried all six of `ReturnByMode`'s values
+    — exactly right — and labelled 100/101/102 "standard | medium |
+    high". The vendor calls them `mission`, `refill` and
+    `refillAndRoom`. Nothing grades them; the labels came from assuming
+    a three-value range must be a scale.
+
+    The value check passed it every time, because the values were never
+    wrong.
+
+    WHAT A WRONG LABEL COSTS: @ratpic83 read those three beside a dock
+    reporting `pw: 3`, reported the heat levels as present and
+    confirmed, then went into the app, found no heat control anywhere,
+    and retracted his own correct observation as "noise". A wrong value
+    gets rejected by the robot. A wrong label gets believed.
+    """
+
+    def test_the_upper_range_uses_the_vendor_names(self):
+        from custom_components.roomba_plus.select_prime import (
+            PAD_WASH_RETURN_MODES,
+        )
+
+        assert PAD_WASH_RETURN_MODES[100] == "mission"
+        assert PAD_WASH_RETURN_MODES[101] == "refill"
+        assert PAD_WASH_RETURN_MODES[102] == "refill_and_room"
+
+    def test_no_label_claims_a_scale_the_vendor_does_not_have(self):
+        from custom_components.roomba_plus.select_prime import (
+            PAD_WASH_RETURN_MODES,
+        )
+
+        assert not {"standard", "medium", "high"} & set(
+            PAD_WASH_RETURN_MODES.values()
+        )
+
+    def test_the_guard_now_checks_names_and_not_only_values(self):
+        """The check compared value sets only. Both tables agreed on all
+        six values while three of them said something the vendor never
+        said."""
+        import pathlib
+
+        source = pathlib.Path(
+            "scripts/check_vendor_value_tables.py"
+        ).read_text()
+
+        assert "_label_matches" in source
+        assert "DELIBERATE_LABELS" in source
+
+    def test_a_deliberate_difference_needs_a_reason(self):
+        """`every_routine` for `evClean` is right — it is what the app
+        shows. It is exempted with that reason rather than by loosening
+        the rule until everything passes."""
+        import pathlib
+
+        source = pathlib.Path(
+            "scripts/check_vendor_value_tables.py"
+        ).read_text()
+
+        assert "After Every Routine" in source
+
+
+class TestTheSkuTableAgreesWithTheVendorFile:
+    """The first version of `_SKU_VALUE_LISTS` was written from the
+    research report's prose and had seven of its ten entries wrong.
+
+    The data file was in the same package the whole time. This test
+    reads it, so the table can never drift from it again — and so the
+    next person does not have to trust that somebody transcribed it.
+    """
+
+    VENDOR_FILE = "/home/claude/apk/v3_paket/v3_sku_value_lists.json"
+
+    def _vendor(self):
+        import json
+        import pathlib
+
+        import pytest
+
+        path = pathlib.Path(self.VENDOR_FILE)
+        if not path.exists():
+            pytest.skip("vendor extract not present in this checkout")
+        return json.loads(path.read_text())
+
+    def test_every_narrowed_sku_matches_the_file(self):
+        from custom_components.roomba_plus.select_prime import _SKU_VALUE_LISTS
+
+        special = self._vendor()["sonderfaelle"]
+        expected = {
+            sku: {
+                key: tuple(values)
+                for key, values in entry.items()
+                if key not in ("index", "modell")
+            }
+            for sku, entry in special.items()
+        }
+        expected = {sku: over for sku, over in expected.items() if over}
+
+        assert _SKU_VALUE_LISTS == expected
+
+    def test_the_standard_lists_match_the_pickers(self):
+        """The five standard lists are what every other robot gets, and
+        three of them are also this project's full option sets."""
+        from custom_components.roomba_plus.select_prime import (
+            PAD_DRY_DURATIONS,
+            PAD_WASH_AREA_INTERVALS,
+            PAD_WASH_TIME_INTERVALS,
+        )
+
+        standard = self._vendor()["standard"]
+
+        assert set(PAD_DRY_DURATIONS) == set(standard["padDryDur"])
+        assert set(PAD_WASH_AREA_INTERVALS) == set(standard["pwAreaInterval"])
+        assert set(PAD_WASH_TIME_INTERVALS) == set(standard["pwTimeInterval"])
+
+    def test_autoevac_is_wider_than_the_sku_list_on_purpose(self):
+        """`getListBySKU` gives [0, 10, 15, 25, 30] as standard, and
+        @chairstacker's G1 shows three options that are 0/1/2 — matching
+        his `cap.autoevac: 1`, not the SKU list. The capability decides
+        this one, and a screenshot outranks the extraction."""
+        from custom_components.roomba_plus.select_prime import (
+            AUTOEVAC_FREQUENCIES,
+        )
+
+        standard = set(self._vendor()["standard"]["autoevacFreq"])
+
+        assert standard < set(AUTOEVAC_FREQUENCIES)

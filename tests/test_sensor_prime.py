@@ -253,7 +253,11 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # the moment the mission sensors were wired in, which is the
         # point at which you confirm the addition was deliberate rather
         # than an accident of a shared code path.
-        assert len(created) == 34, (
+        # 35 since the initiator sensor. Prime reports
+        # `cleanMissionStatus.initiator` exactly as Classic does and had
+        # no sensor for it, so the 19 labels added to the shared table
+        # were readable on one generation only.
+        assert len(created) == 35, (
             "phase and readiness were added: the most basic state sensor "
             "there is plus the only place a Prime robot says why it will "
             "not start"
@@ -1674,3 +1678,126 @@ class TestTheBlockingReportDoesNotBlock:
         # branch, or the refusal case has no locale to render with.
         before_error = source.split("if status.error:")[0]
         assert "language = (" in before_error
+
+
+class TestTheInitiatorSensorSeparatesTwoQuestions:
+    """`cleanMissionStatus.initiator` and `lastCommand.initiator` are
+    different fields, and @chairstacker's dump shows them disagreeing at
+    the same moment:
+
+        cleanMissionStatus.initiator   "cloud"    started the mission
+        lastCommand.initiator          "rmtApp"   sent `stoppaddry`
+
+    The sensor reads the first, matching Classic's "Started by" exactly.
+    Reading the other under the same name would give two generations two
+    meanings for one sensor.
+    """
+
+    @staticmethod
+    def _sensor(mission_initiator, last_command=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeJobInitiatorSensor,
+        )
+
+        sensor = PrimeJobInitiatorSensor.__new__(PrimeJobInitiatorSensor)
+        sensor._config_entry = MagicMock()
+        state = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(initiator=mission_initiator)
+        )
+        return sensor, patch.object(
+            PrimeJobInitiatorSensor, "_current_state",
+            new_callable=PropertyMock, return_value=state,
+        ), patch(
+            "custom_components.roomba_plus.sensor_prime.prime_last_command",
+            return_value=last_command or {},
+        )
+
+    def test_it_reports_the_mission_initiator(self):
+        sensor, state, _ = self._sensor("schedule")
+        with state:
+            assert sensor.native_value == "iRobot schedule"
+
+    def test_the_last_command_is_an_attribute_not_the_state(self):
+        """Both are real. A second entity called "Last command by" beside
+        "Started by" would be two names one letter apart in meaning."""
+        sensor, state, last = self._sensor(
+            "cloud",
+            {"command": "stoppaddry", "initiator": "rmtApp", "time": 1784831254},
+        )
+        with state, last:
+            assert sensor.native_value == "iRobot cloud"
+            attrs = sensor.extra_state_attributes
+
+        assert attrs["last_command"] == "stoppaddry"
+        assert attrs["last_command_by"] == "iRobot app"
+        assert attrs["initiator"] == "cloud"
+
+    def test_the_raw_value_is_kept_beside_the_label(self):
+        """An automation branching on this should not have to reverse a
+        translation."""
+        sensor, state, last = self._sensor("dockBtn", {"initiator": "alexa"})
+        with state, last:
+            attrs = sensor.extra_state_attributes
+
+        assert attrs["initiator"] == "dockBtn"
+        assert attrs["last_command_initiator"] == "alexa"
+
+    def test_an_unmapped_value_shows_itself(self):
+        """Rather than "None", which is the same answer as "no
+        information at all" — the failure this table already had once."""
+        sensor, state, _ = self._sensor("somethingNew")
+        with state:
+            assert sensor.native_value == "somethingNew"
+
+
+class TestTheThirdPhaseCategory:
+    """`CLEANING_PHASES` and `MISSION_END_PHASES` leave `padWash`,
+    `padDry` and `refill` in neither set — a gap this project has been
+    asking testers to resolve since a mid-mission wash was found.
+
+    The answer was in the research package. `isMissionPhaseStillRunning`
+    puts all three in "not running", and `isCleanDockTask` puts the same
+    three in a category of their own: a DOCK task. Not a missing
+    decision — a third state nothing modelled.
+    """
+
+    def test_the_three_dock_phases_are_named(self):
+        from custom_components.roomba_plus.const import DOCK_TASK_PHASES
+
+        assert DOCK_TASK_PHASES == frozenset({"padWash", "padDry", "refill"})
+
+    def test_they_are_in_neither_of_the_other_two_sets(self):
+        from custom_components.roomba_plus.const import (
+            CLEANING_PHASES,
+            DOCK_TASK_PHASES,
+            MISSION_END_PHASES,
+        )
+
+        assert not DOCK_TASK_PHASES & CLEANING_PHASES
+        assert not DOCK_TASK_PHASES & MISSION_END_PHASES
+
+    def test_evac_stays_a_cleaning_phase_against_the_vendor_rule(self):
+        """The vendor calls `evac` "not running". We call it cleaning,
+        deliberately since v2.6.3: an i7+ goes through evac MID-mission
+        and treating it as an ending reset the map renderer early.
+
+        A field observation beats a rule table."""
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        assert "evac" in CLEANING_PHASES
+
+    def test_the_disagreement_is_written_down(self):
+        """Three differences from the vendor's own rule, and one of them
+        we are right about. A reader who finds the rule table later must
+        not "fix" evac back."""
+        import inspect
+
+        from custom_components.roomba_plus import const
+
+        source = inspect.getsource(const)
+
+        assert "isMissionPhaseStillRunning" in source
+        assert "A field observation beats a rule table" in source

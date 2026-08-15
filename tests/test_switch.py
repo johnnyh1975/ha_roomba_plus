@@ -678,3 +678,84 @@ class TestSettingSwitchesGateOnTheDockToo:
         by_key = {d.key: d for d in PRIME_SETTING_SWITCHES}
 
         assert by_key["prime_pad_dry_allowed"].dock_cap_attr == "pad_dry"
+
+
+class TestSettingSwitchesFollowKeyPresenceToo:
+    """`available` on a setting switch is `is_on is not None`, so a
+    switch whose key the robot does not report is created and then
+    permanently unavailable.
+
+    @ratpic83's `prime_vac_high` has been in that state since setup:
+    `cap.suctionLvl` is 4 so the capability gate passes, and `vacHigh`
+    is simply not among his rw-settings keys.
+
+    The selects have used key presence since the six #46 controls.
+    @utkjmitch's robot is why: `cap.autoevac` 1 with no `autoevacFreq`
+    key. A capability says what the hardware can do; the key set says
+    what this robot lets you configure.
+    """
+
+    @staticmethod
+    def _created(keys):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import switch
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        made: list = []
+
+        with patch.object(
+            switch, "_settings_keys", return_value=keys
+        ), patch.object(
+            switch, "get_prime_capability_flags",
+            return_value=(SimpleNamespace(suction_lvl=4, carpet_boost=3,
+                                          multi_pass=1), None),
+            create=True,
+        ):
+            try:
+                asyncio.run(
+                    switch.async_setup_entry(
+                        MagicMock(), entry, lambda e: made.extend(e)
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return {type(e).__name__ for e in made}
+
+    def test_an_unreported_key_produces_no_switch(self):
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+
+        assert "description.wire_key in present" in source
+
+    def test_an_unknown_key_set_still_offers_everything(self):
+        """`None` means the shadow has not arrived. Fail open — the same
+        contract the capability gate uses."""
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+
+        assert "present is None or description.wire_key in present" in source
+
+    def test_quiet_hours_is_exempt(self):
+        """It is a household setting with no rw-settings key at all, so
+        a key-presence rule would withhold the one place a user can turn
+        DND off."""
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+        idx = source.find("PrimeQuietHoursSwitch(data.blid")
+        assert idx > 0
+        assert "NOT CAPABILITY-GATED" in source[max(0, idx - 400):idx]

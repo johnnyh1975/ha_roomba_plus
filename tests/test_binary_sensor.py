@@ -1916,3 +1916,61 @@ class TestQuietHoursAreReadOnly:
             "effect of an entity -- a Prime robot has been seen cleaning "
             "inside a window it accepted."
         )
+
+
+class TestQuietHoursPrefersTheEndpointItWritesTo:
+    """`set_quiet_hours` writes to `/settings/dnd`. The sensor first read
+    the schedule container instead — chosen because the container was
+    already parsed, which is convenience rather than an argument.
+
+    The problem that creates is concrete: a user writes a window and the
+    sensor never moves, because it is looking somewhere else.
+    @jouwdan's validation run confirmed the endpoint answers on a real
+    account, which removed the reason to keep guessing.
+    """
+
+    @staticmethod
+    def _windows(dnd=None, containers=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeQuietHoursSensor,
+        )
+
+        sensor = PrimeQuietHoursSensor.__new__(PrimeQuietHoursSensor)
+        sensor._config_entry = MagicMock()
+        sensor._config_entry.runtime_data.prime_schedule_coordinator = (
+            SimpleNamespace(quiet_hours=dnd, data=containers)
+        )
+        return sensor._windows
+
+    def test_minutes_since_midnight_become_a_clock(self):
+        """The endpoint counts minutes; the container carries hour and
+        minute separately. Two shapes for one clock time."""
+        from types import SimpleNamespace
+
+        windows = self._windows(
+            dnd=SimpleNamespace(daily_start=1320, daily_end=420)
+        )
+
+        assert windows == [{
+            "start": "22:00", "end": "07:00",
+            "enabled": None, "source": "dnd endpoint",
+        }]
+
+    def test_the_container_is_the_fallback_not_the_source(self):
+        """Used only when the endpoint gave nothing — a robot whose
+        household read failed still gets whatever the schedule
+        container carries."""
+        assert self._windows(dnd=None, containers=[]) == []
+
+    def test_a_malformed_value_yields_no_window(self):
+        """Rather than a nonsense clock. `daily_start` outside 0-1439 is
+        not a time, and inventing one would put a window on screen that
+        the robot never reported."""
+        from types import SimpleNamespace
+
+        assert self._windows(
+            dnd=SimpleNamespace(daily_start=99999, daily_end=420)
+        ) == []

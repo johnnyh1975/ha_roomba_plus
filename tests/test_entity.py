@@ -156,3 +156,76 @@ class TestPrimeDeviceInfo:
         entity = IRobotEntity(None, "BLID123", config_entry)
 
         assert entity._attr_device_info["manufacturer"] == "iRobot"
+
+
+class TestPrimeNeverRenamesItsOwnDevice:
+    """`_async_update_device_name` resolves from `vacuum_state`, which is
+    `{}` on a CLOUD_ONLY entry by design — so it fell through to
+    `Roomba {blid[-4:]}` and overwrote the name
+    `_build_prime_device_info` had just set from `config_entry.title`.
+
+    Two sources for one name, and this one runs from EVERY entity's
+    `async_added_to_hass`.
+
+    @ratpic83 caught it from the far end: `friendly_name` flipping
+    between "MalleHausMaus" and "Roomba 6099" across 72 entities at
+    once, four times in an hour. Each flip is a 72-entity state burst,
+    and every connected websocket client was dropped with "4096 pending
+    messages" — a wall-mounted tablet and two browser sessions
+    together, which is what ruled out a slow client.
+    """
+
+    def test_the_rename_is_skipped_without_a_classic_robot(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        entity = IRobotEntity.__new__(IRobotEntity)
+        entity.vacuum = None
+        entity.vacuum_state = {}
+        entity._blid = "31B8091056099"
+        entity.hass = MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.entity.dr.async_get"
+        ) as registry:
+            asyncio.run(entity._async_update_device_name())
+
+        assert not registry.called, (
+            "the device registry was touched on a Prime entry -- the name "
+            "is decided once at config entry level and re-asserting a "
+            "fallback over it is strictly destructive"
+        )
+
+    def test_classic_still_renames(self):
+        """The method exists for a real reason: without it a Classic
+        device keeps whatever HA stored at first setup, which may be the
+        MAC address."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        entity = IRobotEntity.__new__(IRobotEntity)
+        entity.vacuum = MagicMock()
+        entity.vacuum_state = {"name": "Kitchen bot"}
+        entity._blid = "31B8091056099"
+        entity.hass = MagicMock()
+        entity._attr_device_info = {"identifiers": {("roomba_plus", "x")}}
+
+        with patch(
+            "custom_components.roomba_plus.entity.dr.async_get"
+        ) as registry:
+            registry.return_value.async_get_device.return_value = None
+            asyncio.run(entity._async_update_device_name())
+
+        assert registry.called
+
+    def test_the_fallback_name_is_what_was_overwriting(self):
+        """`_resolve_name({}, blid)` is where "Roomba 6099" came from —
+        the last four characters of the BLID, which is exactly what
+        appeared in his registry."""
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        assert IRobotEntity._resolve_name({}, "31B8091056099") == "Roomba 6099"
