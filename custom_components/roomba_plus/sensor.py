@@ -79,6 +79,7 @@ from .sensor_prime import (
     PrimeNavigationResetsSensor,
     PrimeDockTankLevelSensor,
     PrimePadDryStatusSensor,
+    PrimeJobInitiatorSensor,
     PrimePadWashStatusSensor,
     PrimeRuntimeHoursSensor,
     PrimeSerialNumberSensor,
@@ -293,6 +294,11 @@ async def async_setup_entry(
         # understand and dismiss, which is what the original fix
         # removed. The disabled pattern fits a capability a robot HAS
         # and reports off; it does not fit hardware that is absent.
+        # NOT GATED. Every robot reports `cleanMissionStatus.initiator`,
+        # and a household that only ever starts from the app still gets
+        # a useful answer -- the sensor exists to distinguish `schedule`
+        # from `alexa` from `dockBtn`, not to detect a capability.
+        entities.append(PrimeJobInitiatorSensor(data.blid, config_entry))
         if dock_known and (not dock_cap_known or dock_cap.pad_wash not in (0, None)):
             entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
         if dock_known and (not dock_cap_known or dock_cap.pad_dry not in (0, None)):

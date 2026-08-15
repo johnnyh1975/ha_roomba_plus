@@ -1090,9 +1090,9 @@
           "after_each_room": "After each room",
           "by_time": "By time interval",
           "by_area": "By area interval",
-          "standard": "Standard",
-          "medium": "Medium",
-          "high": "High"
+          "mission": "At mission end",
+          "refill": "On refill",
+          "refill_and_room": "On refill or new room"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1134,6 +1134,31 @@
           "25": "Every 25 units of area",
           "30": "Every 30 units of area",
           "50": "Every 50 units of area"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Pad wetness",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

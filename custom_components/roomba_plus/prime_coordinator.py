@@ -1028,6 +1028,11 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]]):
     """V4/Prime cleaning schedules, shared by the calendar and the switches.
 
+    ALSO CARRIES QUIET HOURS, on `self.quiet_hours`, refreshed on the
+    same cycle. They are a household setting read from a REST endpoint
+    on the same cadence and with the same staleness problem, so a second
+    coordinator would be two of everything for one question.
+
     WHY THIS EXISTS (chairstacker, v4.0.0a18 field test). The schedule
     switches read their state exactly twice: when the entity is created,
     and after this integration writes it. Nothing else. Schedules come
@@ -1165,6 +1170,74 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         if names:
             self.room_names = names
 
+    async def _async_refresh_favourites(self) -> None:
+        """Re-reads the favourite list onto `runtime_data`.
+
+        FAVOURITES HAVE NO PUSH CHANNEL. All nine named shadows were
+        checked and none carries them: they are a cloud REST resource,
+        and the robot never learns that one changed -- executing a
+        favourite sends it the regions, not the favourite.
+
+        So this rides the schedule cycle rather than getting a timer of
+        its own. Favourites and household schedules are the same kind of
+        resource with the same staleness problem, and a second
+        coordinator would be two of everything for one question.
+
+        SIX HOURS IS TOO LONG FOR A FAVOURITE SOMEONE JUST CREATED, and
+        pretending otherwise would repeat the mistake this fixes.
+        Reloading the entry re-reads immediately; that is documented
+        rather than left for a tester to work out.
+
+        WHY IT MATTERED. The list was read exactly once, at setup, and
+        nothing refreshed it. @chairstacker's test -- check, delete both
+        in the app, create one, check again -- could not have found
+        anything either way, because nothing re-read. Two instruments in
+        a row on the same question that could not reach it.
+
+        Failure is deliberately quiet: the schedule containers are what
+        this coordinator exists for, and a favourite read that fails
+        should leave the previous list standing rather than take the
+        schedules down with it.
+        """
+        data = self.config_entry.runtime_data
+        if getattr(data, "prime_robot", None) is None:
+            return
+        try:
+            from .button_prime import async_favorites_attribute  # noqa: PLC0415
+
+            favourites = await async_favorites_attribute(self.config_entry)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("roomba_plus: could not refresh favourites", exc_info=True)
+            return
+        current = getattr(data, "prime_favorites", None)
+        if current is None:
+            return
+        # IN PLACE, not reassigned. Entities were handed this exact list
+        # object at setup; rebinding the attribute would leave every
+        # button reading the old one.
+        current.clear()
+        current.extend(favourites)
+
+    async def _async_read_quiet_hours(self) -> Any:
+        """The DND settings, or None when they cannot be read.
+
+        Returns the parsed response rather than a window list, because
+        it carries `status` -- a field the schedule container has no
+        equivalent for and whose structure nobody has examined. Handing
+        it through unopened is honest; inventing an interpretation of it
+        here would not be.
+        """
+        data = self.config_entry.runtime_data
+        robot = getattr(data, "prime_robot", None)
+        household = getattr(data, "prime_household_id", None)
+        if robot is None or household is None:
+            return None
+        try:
+            return await robot.get_dnd_settings(household)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("roomba_plus: could not read quiet hours", exc_info=True)
+            return None
+
     async def _async_update_data(self) -> list[tuple[str, list[Any]]]:
         """Containers as (household_schedule_id, [HouseholdSchedule]).
 
@@ -1184,6 +1257,25 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
 
         await self._async_load_weekday_names()
         await self._async_refresh_room_names()
+
+        # QUIET HOURS COME FROM THEIR OWN ENDPOINT, alongside the
+        # containers rather than out of them.
+        #
+        # They appear in the schedule container too, and reading them
+        # there was the first implementation -- chosen because the
+        # container was already parsed, which is convenience rather than
+        # an argument. The problem it creates is real: `set_quiet_hours`
+        # WRITES to `/settings/dnd`, and a sensor reading a different
+        # source can show a window that a successful write never
+        # changed.
+        #
+        # @jouwdan's validation run confirms the endpoint answers on a
+        # real account, which removed the only reason to keep guessing.
+        # Failure is not fatal here: the containers are what the
+        # schedule switches need, and quiet hours degrade to whatever
+        # the container carries.
+        self.quiet_hours = await self._async_read_quiet_hours()
+        await self._async_refresh_favourites()
 
         containers = await async_read_schedule_containers(self.config_entry)
         if containers is None:

@@ -3789,7 +3789,18 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # The option exists for everyone not using that card -- a plain
         # picture-entity shows an image and nothing else, so for them the
         # names have to be in the picture or they do not exist.
-        if show_room_fills and self._config_entry.options.get(
+        #
+        # WHICH IS WHY `show_room_fills` MUST NOT GATE THIS. Splitting
+        # the two Prime maps gave the rooms map plain outlines, on the
+        # reasoning that the card draws its own overlay -- defensible for
+        # the FILLS. Carrying that to the labels disabled an explicit
+        # user option on exactly the entity the paragraph above says the
+        # option exists for.
+        #
+        # @chairstacker: "no room shading colors and no names at all
+        # (even room names are gone)". The shading is the deliberate
+        # half; the names are this.
+        if self._config_entry.options.get(
             CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
         ):
             from .map_renderer import LABEL_FONT  # noqa: PLC0415

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
@@ -115,6 +115,23 @@ PAD_WASH_HEAT_LEVELS: dict[int, str] = {
 #:     2  heatedSupported     adds the default heat
 #:     3  highHeatSupported   adds high heat
 #:
+#: TWO HEAT SETTINGS EXIST AND THIS IS THE GLOBAL ONE.
+#:
+#: @ratpic83 found `heated_water` per room and per operating mode, under
+#: `rooms_metadata[].operating_mode_defaults`, and reasonably asked
+#: whether an account-wide select can represent it at all.
+#:
+#: It can, because they are different fields. `pwHeat` is one of the 24
+#: writable rw-settings; `heatedWater` is a field of `CommandParamsDTO`,
+#: sent WITH a cleaning command. What he saw are the per-room DEFAULTS
+#: for that command parameter -- all `None` on his robot, meaning
+#: nothing has been set away from the default.
+#:
+#: SAME SHAPE AS `swScrub`: a household setting and a per-region
+#: parameter for the same idea, and this project exposes the household
+#: one. The per-region parameter is not offered anywhere, which is a
+#: gap rather than an error.
+#:
 #: SO THE OPTION SET PLAUSIBLY DEPENDS ON THE DOCK -- and "plausibly"
 #: is the honest word, because this is an inference from the enum's own
 #: member names and not a gate anyone has read in the app.
@@ -175,25 +192,43 @@ PAD_WASH_TIME_INTERVALS: dict[int, str] = {
 #:
 #: `ReturnByMode` (app 3.0.0) declares six values:
 #:
-#:     0/1/2       WHEN to return: after each room, after a time
-#:                 interval, after an area interval
-#:     100/101/102 HOW THOROUGHLY: Standard, Medium, High
+#:     0/1/2       evRoom, byTime, byArea -- WHEN to return
+#:     100/101/102 mission, refill, refillAndRoom -- WHAT ELSE the
+#:                 return is for
+#:
+#: THE UPPER THREE WERE LABELLED Standard/Medium/High AND THAT WAS
+#: INVENTED. `ReturnByMode` names them `mission`, `refill` and
+#: `refillAndRoom`; nothing in the extract calls them levels, and
+#: nothing grades them. The labels came from an assumption that a
+#: three-value range must be a scale.
+#:
+#: WHAT IT COST, and this is why it is worth the paragraph.
+#: @ratpic83 opened the select, read "standard | medium | high" beside
+#: a dock reporting `pw: 3`, and reported that the three heat levels
+#: were present and confirmed -- a completely reasonable reading of
+#: what we showed him. He then went into the app, found no heat control
+#: anywhere, and retracted his own correct observation to apologise for
+#: "noise". The noise was ours.
+#:
+#: A WRONG LABEL DOES NOT STAY INSIDE THE CODE. It becomes a field
+#: report, and then a retraction of a field report.
 #:
 #: ONE ENTITY, NOT TWO. `_updateWashFreqByType` branches on the value's
 #: type and writes this single field; splitting the ranges into two
 #: entities would mean two controls fighting over one wire key.
 #:
-#: THE APP ITSELF CANNOT SHOW BOTH. Its Mop Wash Frequency screen offers
-#: only Standard/Medium/High -- @chairstacker's robot reads 2 and his
-#: screen shows nothing selected at all (screenshots, issue #60). This
-#: control can represent a state the vendor's own app cannot.
+#: THE APP SHOWS A THIRD THING AGAIN. @ratpic83's AutoWash screen has
+#: exactly two entries -- wash frequency and dry duration -- and the
+#: frequency picker offers three AREA presets (5/10/15 m²), not modes.
+#: So the vendor's own UI collapses `byArea` plus an interval into one
+#: three-way choice, which is neither of this field's ranges.
 PAD_WASH_RETURN_MODES: dict[int, str] = {
     0: "after_each_room",
     1: "by_time",
     2: "by_area",
-    100: "standard",
-    101: "medium",
-    102: "high",
+    100: "mission",
+    101: "refill",
+    102: "refill_and_room",
 }
 
 #: `autoevacFreq` -- how often the dock empties itself.
@@ -233,8 +268,13 @@ _AUTOEVAC_LEVELS: dict[int, tuple[int, ...]] = {
 #: FIVE PRODUCT MODES SEE FEWER OPTIONS than the enums declare, and the
 #: vendor narrows per ProductMode index rather than per capability:
 #:
-#:     G2 robot_415_combo   N2 robot_515_combo   R2 robot_575_combo
-#:     V1 robot_615_combo   Z1 robot_875
+#:     G2 robot_415_combo   R2 robot_575_combo   Z1 robot_875
+#:
+#: N2 (robot_515_combo) and V1 (robot_615_combo) appear in the vendor's
+#: branch table with NO overrides of their own -- they take the standard
+#: lists. An earlier version of this comment listed all five as narrowed
+#: because the report's prose names five special cases; two of them are
+#: special only in having their own branch.
 #:
 #: NONE OF THE CURRENT TESTERS IS ONE OF THESE -- G1, N1, W1, Y3 and Y4
 #: all take the standard lists. But V1 and Z1 were added to
@@ -252,12 +292,22 @@ _AUTOEVAC_LEVELS: dict[int, tuple[int, ...]] = {
 #: narrowing hides an option a robot supports, which is worse than
 #: offering one it does not -- the second gets rejected, the first is
 #: invisible.
+#: CORRECTED AGAINST `v3_sku_value_lists.json`. The first version of
+#: this table was written from the research report's PROSE and had
+#: seven of its ten entries wrong -- padDryDur overrides invented for
+#: G2, N2 and R2, a pwTimeInterval override invented for V1 and Z1, a
+#: pwAreaInterval override invented for N2, and Z1's real
+#: `autoevacFreq` narrowing missed entirely.
+#:
+#: The data file was in the same package the whole time. Reading the
+#: summary of a table instead of the table is the same failure this
+#: project keeps finding, one level up: the summary said five SKUs are
+#: narrowed, which is true, and said nothing reliable about which
+#: fields.
 _SKU_VALUE_LISTS: dict[str, dict[str, tuple[int, ...]]] = {
-    "G2": {"pwAreaInterval": (6, 8, 10), "padDryDur": (2, 3, 4)},
-    "N2": {"pwAreaInterval": (10, 15, 20), "padDryDur": (2, 3, 4)},
-    "R2": {"pwAreaInterval": (10, 15, 20), "padDryDur": (2, 3, 4)},
-    "V1": {"pwTimeInterval": (10, 15, 20), "padDryDur": (4, 5, 6)},
-    "Z1": {"pwTimeInterval": (10, 15, 20), "padDryDur": (4, 5, 6)},
+    "G2": {"pwAreaInterval": (6, 8, 10)},
+    "R2": {"pwAreaInterval": (10, 15, 20)},
+    "Z1": {"padDryDur": (4, 5, 6), "autoevacFreq": (0, 15, 30)},
 }
 
 
@@ -320,6 +370,79 @@ class PrimeSelectDescription(SelectEntityDescription):
     cap_attr: str | None = None
 
 
+#: `padWetness.padPlate` — how wet the mopping pad is kept.
+#:
+#: THE ONLY VALUE SET IN THIS FILE WITH NO DOCUMENTED SOURCE. The key,
+#: its dot notation and its capability gate are all confirmed; the
+#: RANGE is not. It appears in no vendor enum, no settings-key type, no
+#: locale string and no capability table.
+#:
+#: WHAT IS ACTUALLY KNOWN:
+#:   - `cap.ppWetLvl` gates it (`padPlateWetnessLevel`, THING shadow)
+#:   - app 3.0.0 addresses `padWetness.padPlate` as a single field,
+#:     not the whole map -- so a read-modify-write is not required
+#:   - @chairstacker's robot reports `padPlate: 4` with `ppWetLvl: 3`
+#:   - the app labels it "Liquid Amount" and its values "Level N",
+#:     which says a number rather than named settings
+#:
+#: SO ppWetLvl IS A TIER, NOT A COUNT. Every other `cap.*` field in this
+#: vendor's model is a tier (evac, pd, pw, scrub, mc, dSpot), and a
+#: count would make `padPlate: 4` illegal on a robot reporting 3.
+#:
+#: FOUR IS THE HIGHEST VALUE ANYONE HAS SEEN, and that is the guess.
+#: A robot offering five would show four options here and its fifth
+#: would be unreachable -- which is why `_wetness_options()` widens the
+#: set to include whatever the robot actually reports, rather than
+#: telling the owner their own setting does not exist.
+PAD_WETNESS_LEVELS: Final[dict[int, str]] = {
+    1: "1", 2: "2", 3: "3", 4: "4",
+}
+
+
+def _reported_wetness(config_entry: Any) -> int | None:
+    """This robot's current `padWetness.padPlate`, or None.
+
+    Read from the shadow rather than from the model, because the model
+    exposes the map and the interesting value is a sub-key -- and the
+    caller only needs it to widen a guessed ceiling.
+    """
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_status_coordinator", None
+    )
+    if coordinator is None or coordinator.data is None:
+        return None
+    raw = coordinator.data.get("rw-settings")
+    if not isinstance(raw, dict):
+        return None
+    reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+    if not isinstance(reported, dict):
+        return None
+    wetness = reported.get("padWetness")
+    if not isinstance(wetness, dict):
+        return None
+    value = wetness.get("padPlate")
+    return value if isinstance(value, int) else None
+
+
+def _wetness_options(current: Any) -> dict[int, str]:
+    """The wetness levels to offer, widened to include the robot's own.
+
+    A GUESSED CEILING MUST NOT HIDE A REAL VALUE. If a robot reports a
+    level above the highest anyone has seen, the honest response is to
+    offer it rather than to render the owner's current setting as
+    invalid -- the guess is ours, and the robot is the authority.
+
+    Narrowing never happens here: a robot reporting 2 still gets 1-4,
+    because nothing says which levels are unavailable, only which one is
+    selected.
+    """
+    values = dict(PAD_WETNESS_LEVELS)
+    if isinstance(current, int) and 1 <= current <= 20:
+        for level in range(1, current + 1):
+            values.setdefault(level, str(level))
+    return dict(sorted(values.items()))
+
+
 #: WHICH VENDOR ENUM EACH VALUE SET COMES FROM, declared so a guard can
 #: check it rather than a reader having to remember.
 #:
@@ -336,6 +459,13 @@ class PrimeSelectDescription(SelectEntityDescription):
 #: absent from the table.
 VENDOR_ENUM_SOURCES: dict[str, str | None] = {
     "SUCTION_LEVELS": None,  # from operating_mode_defaults captures, not an enum
+    # NO SOURCE ANYWHERE, unlike SUCTION_LEVELS which at least came from
+    # field captures. The key, its dot notation and its gate are all
+    # confirmed; the range is in no enum, no settings-key type, no locale
+    # string and no capability table. Four is the highest value seen, and
+    # `_wetness_options()` widens the set to whatever the robot reports
+    # so the guess cannot hide a real value.
+    "PAD_WETNESS_LEVELS": None,
     "PAD_DRY_DURATIONS": "DryDurType",
     "PAD_WASH_HEAT_LEVELS": "HeatType",
     "PAD_WASH_AREA_INTERVALS": "ReturnByArea",
@@ -358,6 +488,19 @@ PRIME_SELECTS: tuple[PrimeSelectDescription, ...] = (
         model_attr="suction_level",
         values=SUCTION_LEVELS,
         cap_attr="suction_lvl",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSelectDescription(
+        key="prime_pad_wetness",
+        translation_key="prime_pad_wetness",
+        wire_key="padWetness.padPlate",
+        model_attr="pad_wetness",
+        values=PAD_WETNESS_LEVELS,
+        # EXPLICIT 0 MEANS NO WETNESS CONTROL. @ratpic83's 405 Combo
+        # reports `ppWetLvl: 0` while @chairstacker's reports 3 -- same
+        # robot model, different dock, and the first robot this project
+        # has seen that should not get this control.
+        cap_attr="pp_wet_lvl",
         entity_category=EntityCategory.CONFIG,
     ),
     PrimeSelectDescription(

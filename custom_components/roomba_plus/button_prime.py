@@ -65,6 +65,29 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
         self._favorite_id = favorite_id
         self._attr_translation_key = "prime_favorite"
         self._attr_translation_placeholders = {"favorite": name or favorite_id}
+        # WITHOUT THIS THE ENTITY IS "UNMANAGEABLE" AND ALWAYS WAS.
+        #
+        # Home Assistant will not register an entity that has no unique
+        # id, so it lives in the state machine and not in the registry:
+        # it cannot be renamed, hidden, assigned to an area, or referred
+        # to reliably. The UI labels that "Unmanageable".
+        #
+        # @chairstacker chased it for three rounds as a leftover
+        # registry entry, and his last report is what ruled that out:
+        # the entity tracks his favourites exactly -- it appears when he
+        # creates one, updates when he adds another, and disappears when
+        # he deletes it. A stale entry does none of those things. It was
+        # never stale; it was never registered.
+        #
+        # @ratpic83's log carried the other half from a different robot:
+        # "attempts to attach a device to an entity without a unique
+        # ID". Two testers, two symptoms, one missing line.
+        #
+        # The id is the favourite's own, matching `suggested_object_id`
+        # below -- a favourite renamed in the iRobot app must not break
+        # an automation, and one deleted must not shift every button
+        # after it onto a different routine.
+        self._attr_unique_id = f"{self.robot_unique_id}_favorite_{favorite_id}"
 
     @property
     def suggested_object_id(self) -> str:
@@ -452,17 +475,67 @@ async def async_build_prime_buttons(
     # The commands are re-read per press instead, which is the right
     # place for a fresh look: a favourite edited in the app between
     # setup and the press should run as edited.
-    for favorite in getattr(data, "prime_favorites", None) or []:
-        entities.append(PrimeFavoriteButton(
-            data.blid,
-            config_entry,
-            str(favorite["id"]),
-            favorite.get("name") or "",
-        ))
+    entities.extend(build_prime_favorite_buttons(config_entry))
 
     return entities
 
 
+def build_prime_favorite_buttons(
+    config_entry: RoombaConfigEntry,
+) -> list[PrimeFavoriteButton]:
+    """One button per favourite currently on `runtime_data`.
+
+    SPLIT OUT SO IT CAN BE CALLED AGAIN. The full builder above runs
+    once at setup; this half runs on every schedule-coordinator refresh,
+    so a favourite created in the iRobot app gets a button and a deleted
+    one loses it.
+
+    Reads the list rather than fetching: the coordinator refreshes it,
+    and a builder that fetched would turn every entity sync into a
+    network call.
+    """
+    data = config_entry.runtime_data
+    buttons: list[PrimeFavoriteButton] = []
+    for favorite in getattr(data, "prime_favorites", None) or []:
+        favorite_id = favorite.get("id")
+        if not favorite_id:
+            # An entry without an id cannot be run and cannot be
+            # identified -- a button for it would be a dead one whose
+            # unique_id collides with the next such entry.
+            continue
+        buttons.append(PrimeFavoriteButton(
+            data.blid,
+            config_entry,
+            str(favorite_id),
+            favorite.get("name") or "",
+        ))
+    return buttons
+
+
+#: READ ONCE, AT SETUP, AND NEVER AGAIN.
+#:
+#: `__init__.py` calls this during entry setup and nothing refreshes it.
+#: A favourite created in the iRobot app after Home Assistant started
+#: therefore does not appear until the entry is reloaded -- which is not
+#: obvious to anyone testing, and has already produced a report that
+#: read as "favourites are broken".
+#:
+#: @chairstacker's sequence on a33: check (absent), delete both in the
+#: app, create a new one, check again (absent). The second check could
+#: not have found anything regardless of whether this path works,
+#: because nothing re-read the list.
+#:
+#: AND THE READ PATH DOES WORK ON AT LEAST ONE ROBOT. @jouwdan's Max 705
+#: returns its favourites through this same code. So "favourites are
+#: broken on Prime" is too broad a claim: something about one account's
+#: data differs, and a reload-then-look is the test that separates the
+#: two.
+#:
+#: NOT FIXED BY POLLING. Schedules are refreshed by a coordinator
+#: because they drive entities that appear and disappear; favourites
+#: drive buttons that would do the same, so the honest fix is a
+#: coordinator here too rather than a timer bolted on. That is a change
+#: worth making deliberately, not as a side effect of a bug report.
 async def async_favorites_attribute(
     config_entry: RoombaConfigEntry,
 ) -> list[dict[str, Any]]:

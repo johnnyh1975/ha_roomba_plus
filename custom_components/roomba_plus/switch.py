@@ -27,6 +27,7 @@ from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 from .const import DOMAIN
 from .prime_commands import _send_confirmed
+from .select_prime import _settings_keys
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -209,10 +210,26 @@ async def async_setup_entry(
         # unknown, only explicit 0 means absent" contract the carpet
         # boost switch uses -- a robot that has not reported its
         # capabilities yet should get the switch, not lose it.
+        # AND ON KEY PRESENCE, which the selects have used since the six
+        # #46 controls and the switches never did.
+        #
+        # `available` here is `is_on is not None`, so a switch whose key
+        # the robot does not report is created and then permanently
+        # unavailable. @ratpic83's `prime_vac_high` has been in exactly
+        # that state since setup -- his `cap.suctionLvl` is 4, so the
+        # capability gate passes, and `vacHigh` is simply not among his
+        # rw-settings keys.
+        #
+        # A capability says what the hardware can do. The key set says
+        # what THIS robot lets you configure, and @utkjmitch's robot
+        # already showed the two disagreeing: `cap.autoevac` 1 with no
+        # `autoevacFreq` key.
+        present = _settings_keys(config_entry)
         setting_entities = [
             PrimeSettingSwitch(data.blid, config_entry, description)
             for description in PRIME_SETTING_SWITCHES
             if _capability_permits(description, cap, dock_cap)
+            and (present is None or description.wire_key in present)
         ]
         # NOT CAPABILITY-GATED. Quiet hours are a household setting, not
         # hardware -- `cap` says nothing about them, and a robot that

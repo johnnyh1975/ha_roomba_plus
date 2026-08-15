@@ -1692,6 +1692,22 @@ class PrimeStartBlockedSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         return attrs
 
 
+def _minutes_to_clock(value: Any) -> str | None:
+    """Minutes since midnight as HH:MM.
+
+    The DND endpoint counts minutes; the schedule container carries hour
+    and minute as separate fields. Two shapes for one clock time, and
+    the sensor compares against a string, so both are normalised before
+    anything looks at them."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= minutes < 1440:
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 class PrimeQuietHoursSensor(IRobotEntity, BinarySensorEntity):
     """Whether the robot is inside a Do Not Disturb window right now.
 
@@ -1717,6 +1733,24 @@ class PrimeQuietHoursSensor(IRobotEntity, BinarySensorEntity):
     hours; a household that has none simply reports an empty list, and
     the sensor sits `off` rather than being withheld.
 
+    THERE ARE TWO SOURCES AND THIS READS THE OTHER ONE.
+    `get_dnd_settings()` is a dedicated endpoint returning `daily_start`,
+    `daily_end`, `ends_at` and `status` -- exactly the shape the
+    `set_quiet_hours` action WRITES. This sensor instead reads the
+    household schedule container, where quiet hours also appear.
+    
+    THAT CHOICE WAS MADE FOR THE WRONG REASON: the container was already
+    being parsed and filtered, so the data was to hand. Convenience is
+    not a source-selection argument, and the write path and the read
+    path now disagree about where the truth lives.
+
+    @jouwdan's validation run confirms the dedicated endpoint answers on
+    a real Prime account, which removes the one excuse for not using it.
+    Left as it is for now because switching sources is a behaviour
+    change and this shipped an hour ago -- but the endpoint is the
+    better source, and `status` in particular is a field this has no
+    equivalent for.
+
     NAMED "In quiet hours", NOT "Quiet hours", BECAUSE THE SWITCH
     EXISTS. `switch.*_prime_quiet_hours_active` is Do Not Disturb as an
     ad-hoc control; this is whether a SCHEDULED window covers right now.
@@ -1741,10 +1775,45 @@ class PrimeQuietHoursSensor(IRobotEntity, BinarySensorEntity):
 
     @property
     def _windows(self) -> list[dict[str, Any]]:
+        """Windows from the DND endpoint, falling back to the container.
+
+        THE ENDPOINT IS THE SAME PLACE `set_quiet_hours` WRITES, which
+        is the reason to prefer it. Reading the schedule container was
+        the first implementation and it can disagree with a successful
+        write -- a user setting a window and seeing the sensor not move.
+
+        `daily_start` and `daily_end` are minutes since midnight; the
+        container carries hour and minute separately. Both end up as
+        HH:MM here so the caller never has to know which arrived.
+        """
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_schedule_coordinator", None
         )
-        if coordinator is None or coordinator.data is None:
+        if coordinator is None:
+            return []
+        dnd = getattr(coordinator, "quiet_hours", None)
+        start = getattr(dnd, "daily_start", None)
+        end = getattr(dnd, "daily_end", None)
+        if start is not None and end is not None:
+            clock_start = _minutes_to_clock(start)
+            clock_end = _minutes_to_clock(end)
+            # A VALUE OUTSIDE 0-1439 IS NOT A TIME, and a window with
+            # `None` for one end is worse than no window: `is_on` skips
+            # it either way, but it renders in the attributes as a
+            # quiet-hours period the robot never reported.
+            if clock_start is None or clock_end is None:
+                return []
+            return [{
+                "start": clock_start,
+                "end": clock_end,
+                # The endpoint has no per-window enabled flag: a window
+                # it reports IS the household's window. `None` rather
+                # than True, so the "unknown counts as active" rule
+                # below applies unchanged.
+                "enabled": None,
+                "source": "dnd endpoint",
+            }]
+        if coordinator.data is None:
             return []
         return quiet_hours_windows(coordinator.data)
 

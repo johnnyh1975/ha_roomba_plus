@@ -677,8 +677,51 @@ MISSION_EVENT_TYPE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
 # v2.6.3 B1 — evac moved to CLEANING_PHASES: robots with self-emptying bases
 # (i7+, s9+) go through evac mid-mission; treating it as MISSION_END would
 # prematurely trigger _handle_mission_end() and reset the map renderer.
+# THE VENDOR'S OWN RULE, and it disagrees with both sets.
+# `isMissionPhaseStillRunning` (app 3.0.0) declares:
+#
+#   still running   run · mapupd · hmMidMsn · hmUsrDock · hmUsrChrg
+#                   hmPostMsn · stuck
+#   not running     stop · evac · refill · padWash · padDry
+#
+# THREE DIFFERENCES, and one of them we are right about.
+#
+# `evac` is "not running" for the vendor and CLEANING_PHASES for us --
+# deliberately, since v2.6.3: an i7+ or s9+ goes through evac MID-
+# mission, and treating it as an ending prematurely reset the map
+# renderer. A field observation beats a rule table, and this one is
+# eight months old.
+#
+# `hmPostMsn` is "still running" for the vendor and MISSION_END for us.
+# Ours is the useful reading for a mission-end trigger; theirs is
+# probably about whether the robot is still busy. Different questions,
+# and worth knowing they are not the same one.
+#
+# THE PHASE GAP HAS AN ANSWER AND IT WAS IN THE PACKAGE. `padWash`,
+# `padDry` and `refill` sit in neither set here, and this project has
+# been asking testers which category they belong to since the mid-
+# mission wash was found. The vendor puts all three in "not running" --
+# and `isCleanDockTask` puts the same three in a category of their own:
+# a DOCK task, which is why they are neither a cleaning phase nor an
+# ending.
+#
+# So the gap is not a missing decision; it is a third state this
+# project does not model. Leaving them out of both sets is closer to
+# right than adding them to either.
 CLEANING_PHASES: Final[frozenset[str]] = frozenset({"run", "hmMidMsn", "evac"})
 MISSION_END_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn", "stop"})
+
+#: `isCleanDockTask` (app 3.0.0) -- the robot is at the dock doing
+#: something that is not a mission.
+#:
+#: Not consumed anywhere yet. Recorded because it names the third state
+#: the two sets above leave out, and because a "mission running" sensor
+#: built from CLEANING_PHASES alone will read false during a mid-mission
+#: pad wash -- which is correct by this rule and surprising to a user
+#: watching the robot work.
+DOCK_TASK_PHASES: Final[frozenset[str]] = frozenset(
+    {"padWash", "padDry", "refill"}
+)
 
 # v2.8.1 (END-DEBOUNCE) — shared between callbacks.py (MissionTimerStore /
 # MissionStore mission-end detection) and image.py (map renderer / ZoneStore /

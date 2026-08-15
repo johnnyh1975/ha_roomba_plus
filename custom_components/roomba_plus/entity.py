@@ -297,6 +297,29 @@ class IRobotEntity(Entity):
           1. vacuum_state['name'] — user-assigned name from the iRobot app
           2. 'Roomba {blid[-4:]}' — BLID suffix for unnamed robots
         """
+        # PRIME NEVER FILLS `vacuum_state`, SO THIS RENAMED THE DEVICE TO
+        # A FALLBACK ON EVERY SETUP.
+        #
+        # `roomba_reported_state(None)` returns `{}` on a CLOUD_ONLY entry
+        # by design, so `_resolve_name` fell through to
+        # `Roomba {blid[-4:]}` -- while `_build_prime_device_info` names
+        # the device from `config_entry.title`, which is the robot's own
+        # name. Two sources, and this one runs from EVERY entity's
+        # `async_added_to_hass`.
+        #
+        # @ratpic83 caught it from the far end: `friendly_name` flipping
+        # between "MalleHausMaus" and "Roomba 6099" on 72 entities at
+        # once, four times in an hour, each flip a 72-entity state burst
+        # that dropped every websocket client with "4096 pending
+        # messages". A wall-mounted tablet and two browser sessions went
+        # down together, which is what ruled out a slow client.
+        #
+        # Prime has nothing to resolve here: the name is decided once, at
+        # config entry level, and re-asserting a fallback over it is
+        # strictly destructive.
+        if self.vacuum is None:
+            return
+
         name = self._resolve_name(self.vacuum_state, self._blid)
 
         # 1. Keep _attr_device_info in sync (used when HA re-registers)

@@ -47,6 +47,9 @@ from roombapy_prime.models.mission_history import FaultScene
 from .prime_dirt import unfinished_missions
 from .const import (
     ERROR_CODE_LABELS,
+    CLEANING_PHASES,
+    DOCK_TASK_PHASES,
+    JOB_INITIATOR_LABELS,
     PRIME_BLOCKING_FAULTS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
@@ -1935,6 +1938,31 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         # that does not.
         return text if text in self.options else None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Which of the three phase categories this one is in.
+
+        THE THIRD CATEGORY IS WHY THIS EXISTS. `CLEANING_PHASES` and
+        `MISSION_END_PHASES` between them leave `padWash`, `padDry` and
+        `refill` in neither -- and the vendor's `isCleanDockTask` names
+        exactly those three as a DOCK task, a state that is neither
+        cleaning nor an ending.
+
+        A combo robot with `pwReturn: 2` washes its pad mid-mission, so
+        an automation gating on "is it cleaning" goes false while the
+        robot is plainly working. `dock_task` says why, without changing
+        what the phase sets mean.
+        """
+        state = self._current_state
+        status = None if state is None else state.clean_mission_status
+        phase = getattr(status, "phase", None)
+        if phase is None:
+            return {}
+        return {
+            "dock_task": str(phase) in DOCK_TASK_PHASES,
+            "cleaning": str(phase) in CLEANING_PHASES,
+        }
+
 
 class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
     """Why the robot will not start, or that it will.
@@ -1976,3 +2004,87 @@ class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
         # than a blank sensor -- @connormxy's error 236 is exactly the
         # case, and it went unnamed because nothing displayed it.
         return READINESS_STATE_LABELS.get(code_int) or f"Unknown ({code_int})"
+
+
+class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
+    """Who started the current or most recent mission.
+
+    PARITY WITH CLASSIC, AND DELIBERATELY THE SAME FIELD. Classic's
+    "Started by" reads `cleanMissionStatus.initiator`, and so does this.
+    Reading a different field under the same name would give two
+    generations two meanings for one sensor, which is the shape that
+    made `Quiet hours` and `Quiet hours active` unreadable until they
+    were renamed.
+
+    THERE IS A SECOND INITIATOR AND IT IS NOT THIS ONE.
+    `rw-software.lastCommand` carries its own, and @chairstacker's robot
+    shows the two disagreeing at the same moment:
+
+        cleanMissionStatus.initiator   "cloud"    started the mission
+        lastCommand.initiator          "rmtApp"   sent `stoppaddry`
+
+    Different questions, both real. The last command is exposed as
+    attributes here rather than as a second entity: "Started by" and
+    "Last command by" side by side in a list would be two names one
+    letter apart in meaning, and a user comparing them would be right to
+    be confused about which one answers "why is it running".
+
+    THE LABEL TABLE IS SHARED WITH CLASSIC. It knew six values and fell
+    through to "None" for the rest -- the same answer as "no information
+    at all" -- until the vendor's own enum was read against it. All 25
+    are named now, and a test asserts the table covers the enum.
+    """
+
+    _attr_has_entity_name = True
+
+    entity_description = SensorEntityDescription(
+        key="job_initiator",
+        translation_key="job_initiator",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:account-question",
+    )
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_job_initiator"
+
+    @property
+    def native_value(self) -> str | None:
+        state = self._current_state
+        if state is None:
+            return None
+        status = state.clean_mission_status
+        raw = getattr(status, "initiator", None)
+        if not raw:
+            return None
+        return JOB_INITIATOR_LABELS.get(str(raw), str(raw))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The last command, which is a different question.
+
+        Raw initiator alongside the label: an automation branching on
+        this should not have to reverse a translation, and the label
+        table is for reading rather than matching.
+        """
+        state = self._current_state
+        attrs: dict[str, Any] = {}
+        if state is not None:
+            raw = getattr(state.clean_mission_status, "initiator", None)
+            if raw:
+                attrs["initiator"] = str(raw)
+
+        last = prime_last_command(self._config_entry.runtime_data)
+        if last:
+            command = last.get("command")
+            initiator = last.get("initiator")
+            if command:
+                attrs["last_command"] = str(command)
+            if initiator:
+                attrs["last_command_by"] = JOB_INITIATOR_LABELS.get(
+                    str(initiator), str(initiator)
+                )
+                attrs["last_command_initiator"] = str(initiator)
+            if last.get("time"):
+                attrs["last_command_time"] = last["time"]
+        return attrs

@@ -1083,9 +1083,9 @@
           "after_each_room": "Na elke kamer",
           "by_time": "Per tijdsinterval",
           "by_area": "Per oppervlakte-interval",
-          "standard": "Standaard",
-          "medium": "Gemiddeld",
-          "high": "Hoog"
+          "mission": "Aan het einde van de missie",
+          "refill": "Bij het bijvullen",
+          "refill_and_room": "Bij bijvullen of nieuwe kamer"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1127,6 +1127,31 @@
           "25": "Elke 25 oppervlakte-eenheden",
           "30": "Elke 30 oppervlakte-eenheden",
           "50": "Elke 50 oppervlakte-eenheden"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Dweilvochtigheid",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

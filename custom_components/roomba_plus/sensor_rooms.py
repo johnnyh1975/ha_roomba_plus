@@ -608,7 +608,23 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         )
 
         if not planned_order:
-            # No room sequence — use elapsed vs. rolling mean as fallback
+            # NO ROOM SEQUENCE -> ELAPSED TIME AGAINST THE ROLLING MEAN.
+            #
+            # This is a duration estimate, not coverage, and it is
+            # convincing enough to be mistaken for one. @ratpic83
+            # watched it climb at a near-constant 1% per minute
+            # (88 -> 93 -> 96 -> 99) while `area_cleaned_today` stayed
+            # at 0.0 m² for the same job -- a reading that looks like
+            # measured progress and is arithmetic on the clock.
+            #
+            # THE 99 CEILING IS DELIBERATE and is the other half of what
+            # he saw: this never returns 100, because "finished" is a
+            # phase transition rather than a percentage. A stuck phase
+            # therefore parks it at 99 indefinitely, and his did.
+            #
+            # Kept because the alternative is no percentage at all on a
+            # robot with no planned room order -- but it is an estimate,
+            # and the release notes and the feature docs now say so.
             rps = getattr(data, "robot_profile_store", None)
             mean_sec = (
                 round((rps.mission_duration_mean or 0) * 60)

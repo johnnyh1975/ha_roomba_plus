@@ -1083,9 +1083,9 @@
           "after_each_room": "Después de cada habitación",
           "by_time": "Por intervalo de tiempo",
           "by_area": "Por intervalo de superficie",
-          "standard": "Estándar",
-          "medium": "Media",
-          "high": "Alta"
+          "mission": "Al final de la misión",
+          "refill": "Al rellenar",
+          "refill_and_room": "Al rellenar o en sala nueva"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1127,6 +1127,31 @@
           "25": "Cada 25 unidades de superficie",
           "30": "Cada 30 unidades de superficie",
           "50": "Cada 50 unidades de superficie"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Humedad de la mopa",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

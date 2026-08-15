@@ -1083,9 +1083,9 @@
           "after_each_room": "Après chaque pièce",
           "by_time": "Par intervalle de temps",
           "by_area": "Par intervalle de surface",
-          "standard": "Standard",
-          "medium": "Moyenne",
-          "high": "Élevée"
+          "mission": "À la fin de la mission",
+          "refill": "Au remplissage",
+          "refill_and_room": "Au remplissage ou nouvelle pièce"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1127,6 +1127,31 @@
           "25": "Toutes les 25 unités de surface",
           "30": "Toutes les 30 unités de surface",
           "50": "Toutes les 50 unités de surface"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Humidité de la serpillière",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

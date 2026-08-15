@@ -1083,9 +1083,9 @@
           "after_each_room": "Po każdym pokoju",
           "by_time": "Co określony czas",
           "by_area": "Co określoną powierzchnię",
-          "standard": "Standardowa",
-          "medium": "Średnia",
-          "high": "Wysoka"
+          "mission": "Na koniec misji",
+          "refill": "Przy uzupełnianiu",
+          "refill_and_room": "Przy uzupełnianiu lub nowym pokoju"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1127,6 +1127,31 @@
           "25": "Co 25 jednostek powierzchni",
           "30": "Co 30 jednostek powierzchni",
           "50": "Co 50 jednostek powierzchni"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Wilgotność mopa",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

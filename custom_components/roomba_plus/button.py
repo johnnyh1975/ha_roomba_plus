@@ -37,7 +37,9 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
@@ -152,6 +154,71 @@ async def async_setup_entry(
         entities = await async_build_prime_buttons(config_entry)
         if entities:
             async_add_entities(entities)
+
+        # FAVOURITE BUTTONS FOLLOW THE LIST, and until now they did not.
+        #
+        # Buttons were built exactly once, here. A favourite created in
+        # the iRobot app never got one, and a deleted favourite left its
+        # button behind pointing at an id the server no longer knows.
+        #
+        # This is @DaRealGuGu's schedule-switch problem with a different
+        # entity type -- see switch.py's `_sync_entities`, whose comments
+        # carry the two lessons this reuses: match on the id rather than
+        # the content, and read the REGISTRY rather than a set of what
+        # this session added, or an orphan from before the upgrade can
+        # never be reached.
+        coordinator = getattr(
+            config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is None:
+            return
+
+        known: set[str] = {
+            str(entity.unique_id) for entity in entities
+            if str(entity.unique_id).startswith(
+                f"{config_entry.runtime_data.blid}_favorite_"
+            )
+        }
+
+        @callback
+        def _sync_favorite_buttons() -> None:
+            from .button_prime import build_prime_favorite_buttons  # noqa: PLC0415
+
+            wanted = {
+                str(button.unique_id): button
+                for button in build_prime_favorite_buttons(config_entry)
+            }
+
+            new = [b for uid, b in wanted.items() if uid not in known]
+            if new:
+                known.update(str(b.unique_id) for b in new)
+                async_add_entities(new)
+
+            # REMOVAL ONLY AFTER A READ THAT SUCCEEDED. A refresh that
+            # failed leaves the previous list standing, so nothing would
+            # vanish in practice -- but tying deletion to a flag that
+            # says "this is current" is the difference between a rule and
+            # a coincidence.
+            if not getattr(coordinator, "last_update_success", True):
+                return
+
+            registry = er.async_get(hass)
+            prefix = f"{config_entry.runtime_data.blid}_favorite_"
+            for entry in er.async_entries_for_config_entry(
+                registry, config_entry.entry_id
+            ):
+                if entry.domain != Platform.BUTTON:
+                    continue
+                if not entry.unique_id.startswith(prefix):
+                    continue
+                if entry.unique_id in wanted:
+                    continue
+                known.discard(entry.unique_id)
+                registry.async_remove(entry.entity_id)
+
+        config_entry.async_on_unload(
+            coordinator.async_add_listener(_sync_favorite_buttons)
+        )
         return
 
     roomba = config_entry.runtime_data.roomba

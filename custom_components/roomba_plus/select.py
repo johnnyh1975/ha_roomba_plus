@@ -102,6 +102,8 @@ async def async_setup_entry(
         from .select_prime import (  # noqa: PLC0415
             _autoevac_options,
             _pad_wash_heat_options,
+            _reported_wetness,
+            _wetness_options,
             _robot_sku,
             _settings_keys,
             _sku_narrowed,
@@ -142,6 +144,11 @@ async def async_setup_entry(
                 values = _autoevac_options(cap)
             elif description.wire_key == "pwHeat":
                 values = _pad_wash_heat_options(dock_cap)
+            elif description.wire_key == "padWetness.padPlate":
+                # WIDENED BY WHAT THE ROBOT REPORTS, because the ceiling
+                # here is a guess and a guess must not hide a real
+                # setting. Four is the highest anyone has seen.
+                values = _wetness_options(_reported_wetness(config_entry))
             else:
                 # THREE CONTROLS ARE NARROWED BY PRODUCT MODE. Five SKUs
                 # see shorter interval and duration lists than the enums

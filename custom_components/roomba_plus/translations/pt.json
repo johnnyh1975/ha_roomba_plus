@@ -1083,9 +1083,9 @@
           "after_each_room": "Após cada divisão",
           "by_time": "Por intervalo de tempo",
           "by_area": "Por intervalo de área",
-          "standard": "Padrão",
-          "medium": "Média",
-          "high": "Alta"
+          "mission": "No fim da missão",
+          "refill": "No reabastecimento",
+          "refill_and_room": "No reabastecimento ou nova divisão"
         }
       },
       "prime_pad_wash_area_interval": {
@@ -1127,6 +1127,31 @@
           "25": "A cada 25 unidades de área",
           "30": "A cada 30 unidades de área",
           "50": "A cada 50 unidades de área"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Humidade da mopa",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
         }
       }
     },

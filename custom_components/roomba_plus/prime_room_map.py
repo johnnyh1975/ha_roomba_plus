@@ -304,6 +304,39 @@ def _room_names_from_bundle(features: Any) -> dict[str, str]:
     return names
 
 
+def _zone_names_from_bundle(zone_layers: Any) -> dict[str, str]:
+    """{zone_id: name} from the bundle's `cleanZones` layer.
+
+    ZONES HAVE NAMES AND NOBODY READ THEM. `_room_names_from_bundle`
+    above reads the `rooms` layer only, so a zone fell through to the
+    `Zone {id}` fallback everywhere -- calendar summaries, room lists,
+    the map.
+
+    Two testers reported it independently and neither was answered:
+    @connormxy ("the zones seem to lack a name but have a number") and
+    @chairstacker ("zone names are missing, though -- just as they are
+    in the Whole_House map", i.e. on both of his maps and therefore not
+    a multi-map problem).
+
+    `CleanZoneFeatureProperties` carries `name`, and it is the one field
+    distinguishing a saved clean zone from an ad-hoc one -- which is why
+    only `cleanZones` is read here. An ad-hoc zone is a rectangle
+    somebody drew for one run and has no name to find.
+    """
+    names: dict[str, str] = {}
+    layer = (zone_layers or {}).get("cleanZones")
+    features = (layer or {}).get("features") if isinstance(layer, dict) else None
+    for feature in features or []:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties") or {}
+        zone_id = properties.get("id") or feature.get("id")
+        name = properties.get("name")
+        if zone_id is not None and name:
+            names[str(zone_id)] = str(name)
+    return names
+
+
 def _room_polygons_from_bundle(
     features: Any,
 ) -> dict[str, list[tuple[float, float]]]:
@@ -513,6 +546,20 @@ async def async_build_prime_floor_plan(
     # names and showed `Zone 10` for rooms this bundle names correctly
     # (@utkjmitch, a four-map account). One fetch, two consumers.
     names_for_others = _room_names_from_bundle(parsed.get("rooms"))
+    # ZONES TOO, AND THEY WERE MISSING FROM THIS EXACT LINE.
+    #
+    # The `Zone 10` fix above read the rooms layer and stopped there, so
+    # a saved clean zone still fell through to `Zone {id}` in every
+    # consumer -- which is what @connormxy and @chairstacker each
+    # reported without either being answered.
+    #
+    # Rooms win a collision: a region id appearing in both layers is a
+    # room the user also drew a zone over, and the room name is the one
+    # they set deliberately.
+    zone_names = _zone_names_from_bundle(
+        {"cleanZones": parsed.get("cleanZones")}
+    )
+    names_for_others = {**zone_names, **names_for_others}
     runtime = getattr(config_entry, "runtime_data", None)
     if runtime is not None and names_for_others:
         existing = dict(getattr(runtime, "prime_room_names", None) or {})
