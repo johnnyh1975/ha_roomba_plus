@@ -12,7 +12,7 @@ aiosignal==1.4.0
 aiozoneinfo==0.2.1
 annotated-types==0.7.0
 anyio==4.14.1
-astral==2.2
+astral==3.2
 async-timeout==5.0.1
 async_interrupt==1.2.0
 atomicwrites-homeassistant==1.4.1
