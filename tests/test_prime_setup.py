@@ -929,3 +929,53 @@ class TestThePrimeDiagnosticsBranchLosesNothingItNeeds:
         source = inspect.getsource(diagnostics)
 
         assert "if data.connection_type is ConnectionType.CLOUD_ONLY:" in source
+
+
+class TestRoomPreferencesReachTheDiagnostics:
+    """The version plan carried "Reinigungsmodus und Saugstufe auf der
+    Karte" as unverified since a29. It stayed unverified because nothing
+    could answer it: the data lives on an entity attribute, and asking a
+    tester to expand one is a worse question than reading it from a
+    download they already send.
+
+    Same shape as the favourites block, which sat in the Classic path
+    while the question was about Prime.
+    """
+
+    def test_the_block_is_in_the_prime_branch(self):
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        start = source.find("if data.connection_type is ConnectionType.CLOUD_ONLY:")
+        end = source.find("\n    # ", start + 100)
+        keys = set(re.findall(r'^\s{12}"([a-z_]+)":', source[start:end], re.M))
+
+        assert "room_preferences" in keys
+
+    def test_it_reads_the_entity_rather_than_recomputing(self):
+        """A recomputation could succeed where the entity fails and hide
+        the gap this exists to find."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics._prime_room_preferences)
+
+        assert "hass.states.get" in source
+        assert "room_preferences" in source
+
+    def test_an_empty_attribute_says_why(self):
+        """"Empty" has two causes and they need different follow-ups:
+        the robot reported no defaults, or no room carried a
+        last_operating_mode to read them under."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics._prime_room_preferences)
+
+        assert "last_operating_mode" in source
+        assert "no rooms map entity" in source

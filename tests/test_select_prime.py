@@ -617,3 +617,73 @@ class TestTheSkuTableAgreesWithTheVendorFile:
         standard = set(self._vendor()["standard"]["autoevacFreq"])
 
         assert standard < set(AUTOEVAC_FREQUENCIES)
+
+
+class TestTheUpperRangeIsCumulativeNotExclusive:
+    """@chairstacker's Mop Wash Frequency screen spells out what each of
+    the upper three values does, and each adds a trigger to the one
+    below it:
+
+        100 mission        before and after cleaning routines
+        101 refill         ALSO during refills
+        102 refillAndRoom  ALSO in between rooms
+
+    The first labels read as exclusive events — "At mission end", "On
+    refill", "On refill or new room". Two were incomplete and the first
+    was wrong: it is before AND after.
+    """
+
+    def test_the_labels_read_as_additive(self):
+        import json
+        import pathlib
+
+        strings = json.loads(
+            pathlib.Path("custom_components/roomba_plus/strings.json").read_text()
+        )
+        state = strings["entity"]["select"]["prime_pad_wash_return"]["state"]
+
+        assert state["mission"] == "Before and after routines"
+        assert state["refill"].startswith("Also")
+        assert state["refill_and_room"].startswith("Also")
+
+    def test_no_label_claims_a_single_moment(self):
+        """"At mission end" described a wash that happens twice."""
+        import json
+        import pathlib
+
+        strings = json.loads(
+            pathlib.Path("custom_components/roomba_plus/strings.json").read_text()
+        )
+        state = strings["entity"]["select"]["prime_pad_wash_return"]["state"]
+
+        assert "At mission end" not in state.values()
+
+    def test_the_heat_reading_is_recorded_as_settled(self):
+        """@ratpic83 read these three as heat levels beside a dock
+        reporting `pw: 3`. The app's own subtitles say wash frequency."""
+        import inspect
+
+        from custom_components.roomba_plus import select_prime
+
+        source = inspect.getsource(select_prime)
+
+        assert "SETTLES THE HEAT QUESTION" in source
+
+    def test_the_loop_report_is_kept_with_its_disproof(self):
+        """"My robot keeps going back to the dock" should be one lookup,
+        not an investigation.
+
+        And the first explanation must not outlive itself: the refill
+        hypothesis was recorded, then @chairstacker set Standard (100)
+        — which involves no refill at all — and got the same loop. It is
+        the whole upper range on his robot, not the refill trigger.
+        """
+        import inspect
+
+        from custom_components.roomba_plus import select_prime
+
+        source = inspect.getsource(select_prime)
+
+        assert "five times before he" in source
+        assert "THE FIRST EXPLANATION WAS WRONG" in source
+        assert "UPPER RANGE" in source

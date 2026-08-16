@@ -663,3 +663,64 @@ class TestNoPrimeEntityShipsWithoutAUniqueId:
             "'Unmanageable' and cannot be renamed, hidden or assigned "
             "to an area."
         )
+
+
+class TestTheRemovalPrefixMatchesTheActualUniqueId:
+    """Adding and removing failed differently, which made a wiring bug
+    look like a timing one.
+
+    Adding compares against the wanted set and never touches the prefix,
+    so a new favourite got its button immediately. Removing scans the
+    registry BY prefix — and the prefix was `{blid}_favorite_` while the
+    ids are `roomba_plus_{blid}_favorite_`. It matched nothing, so no
+    button was ever removed.
+
+    @chairstacker: "Creating a favorite in the app makes it show up in
+    HA within a reasonable amount of time. Deleting it in the app has
+    not yet removed it." He attributed it to the six-hour refresh. It
+    would not have gone away after any amount of waiting.
+    """
+
+    def test_the_prefix_is_derived_the_same_way_the_id_is(self):
+        """Not asserted as a literal string: a test that hardcodes the
+        prefix reproduces the bug it is meant to catch."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeFavoriteButton,
+        )
+
+        button = PrimeFavoriteButton("BLID123", MagicMock(), "abc123", "Kitchen")
+
+        assert button.unique_id.startswith("roomba_plus_BLID123_favorite_")
+
+    def test_the_sync_uses_that_prefix(self):
+        import inspect
+
+        from custom_components.roomba_plus import button
+
+        source = inspect.getsource(button)
+
+        assert 'favorite_prefix = f"roomba_plus_{config_entry.runtime_data.blid}_favorite_"' in source
+        assert 'f"{config_entry.runtime_data.blid}_favorite_"' not in source
+
+    def test_a_real_id_matches_the_real_prefix(self):
+        """The check that would have failed before: build an id the way
+        production builds it, and match it against the prefix removal
+        uses."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            PrimeFavoriteButton,
+        )
+
+        blid = "6F55705AE0BF169D69BDBFC9D858B5D2"
+        button = PrimeFavoriteButton(
+            blid, MagicMock(), "8a106edbf128112254cd182814b426bd", "Test_03"
+        )
+        prefix = f"roomba_plus_{blid}_favorite_"
+
+        assert button.unique_id.startswith(prefix), (
+            "removal scans the registry by this prefix -- a mismatch "
+            "means buttons are added and never removed"
+        )

@@ -1974,3 +1974,51 @@ class TestQuietHoursPrefersTheEndpointItWritesTo:
         assert self._windows(
             dnd=SimpleNamespace(daily_start=99999, daily_end=420)
         ) == []
+
+
+class TestTheTankFieldIsKnownUnreliable:
+    """The field-presence rule replaced a `cap.scrub` gate after
+    @chairstacker got a tank sensor for a tank he does not have. It
+    looked like the honest answer: the robot itself would say.
+
+    It does not. His 405 reports `tankPresent: true` with no fill port,
+    no water level for the robot anywhere in the iRobot app, and no
+    movement when either dock tank is pulled.
+
+    Kept, because nothing else distinguishes a robot with a tank from
+    one without — but documented as unreliable rather than quietly
+    trusted.
+    """
+
+    def test_the_disproof_sits_with_the_rule(self):
+        """So the next reader does not re-derive field presence as the
+        honest answer and stop there — it was derived once already, by
+        the same route, from the same tester's earlier report."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor._prime_reports_tank)
+
+        assert "DISPROVEN" in source
+        assert "no fill port" in source.lower() or "NO fill port" in source
+
+    def test_it_names_what_would_settle_it(self):
+        """One robot where the value goes False when a tank is pulled.
+        A caveat with no exit condition becomes permanent."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor._prime_reports_tank)
+
+        assert "WHAT WOULD SETTLE IT" in source
+
+    def test_the_user_is_told_too(self):
+        """A caveat only in the source is a caveat the person reading
+        the sensor never sees."""
+        import pathlib
+
+        features = pathlib.Path("docs/FEATURES.md").read_text()
+
+        assert "mop tank sensor is unreliable" in features.lower()
