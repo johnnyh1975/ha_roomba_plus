@@ -661,6 +661,49 @@ in no vendor enum, no settings-key type and no locale string. Four is the
 highest anyone has seen, and the picker widens itself to include whatever your
 robot reports, so a guessed ceiling cannot hide a real setting.
 
+#### The mop tank sensor is unreliable on some Combos
+
+`binary_sensor.{name}_mop_tank_present` reads the robot's own `tankPresent`
+field, and on at least one Roomba Combo **that field describes nothing**.
+
+@chairstacker's 405 reports `tankPresent: true` while the robot has no fill
+port, the iRobot app shows no water level for the robot at all, and the value
+does not move when either dock tank is removed. On that hardware the pad is
+wetted at the dock and there is no onboard tank to be present.
+
+**It is kept rather than removed**, because nothing distinguishes a robot with
+a tank from one without: there is no capability flag for it, and `cap.ppWetLvl`
+describes pad wetness the dock applies. Withholding it everywhere on one
+robot's evidence would take a working reading away from any robot where the
+field is real.
+
+**If yours reads `off` when you pull the tank, it works and this note does not
+apply to you** — and that observation is worth reporting, because nobody has
+made it yet.
+
+#### Per-room preferences (V4/Prime)
+
+`image.{name}_rooms_map` carries a `room_preferences` attribute: what each room
+is already set to in the iRobot app.
+
+```
+{ "7": {"profile": "deep", "suction_level": 4, "two_pass": true} }
+```
+
+Keys are room ids. Each value carries only what that room reports — `profile`,
+`suction_level`, `two_pass`, `carpet_boost`, `scrub` — and **an absent key means
+the robot did not report it, which is not the same as a zero.**
+
+The settings are read under the mode the room last ran in, because
+`operating_mode_defaults` stores one set per mode and reading any other would
+report a setting for a mode the room is not in.
+
+Use it to honour a room's own configuration instead of overriding it — see
+[Automations](AUTOMATIONS.md#cleaning-a-room-the-way-it-is-set-up).
+
+**Not confirmed on any robot.** A diagnostics download from a36 onwards
+includes it, and says which of two reasons applies when it is empty.
+
 #### Started by, on Prime (a35)
 
 `sensor.{name}_job_initiator` says who started the current or most recent

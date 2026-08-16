@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a35-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a36-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -18,7 +18,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale** — 3,937 tests, 8 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 5,400+ tests, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -298,7 +298,23 @@ protocol: [Release notes →](release-notes/)
 
 1. HACS → Integrations → ⋮ → Custom repositories
 2. URL: `https://github.com/johnnyh1975/ha_roomba_plus` · Category: Integration
-3. Install **Roomba+** → restart HA
+3. **Open Roomba+ → ⋮ → Redownload → enable "Show beta versions"**
+4. Pick the newest `v4.0.0aNN` → restart HA
+
+> ⚠️ **Step 3 is not optional.** Every release so far is a pre-release, because
+> v4 is in alpha and no stable version has been tagged yet. Without beta
+> versions enabled HACS shows only **`main`** — and selecting it fails with a
+> spinning wheel and a 404 in the log:
+>
+> ```
+> Download failed - Got status code 404 when trying to download
+> .../releases/download/main/ha_roomba_plus.zip
+> ```
+>
+> That is HACS looking for a release asset on a tag called `main`, which does
+> not exist. Nothing is wrong with your setup.
+>
+> (Found by @pk-1966, who worked it out unaided.)
 
 ### Manual
 

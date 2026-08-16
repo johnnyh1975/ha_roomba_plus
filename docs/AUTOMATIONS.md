@@ -230,6 +230,37 @@ when a block appears rather than being polled.
 **Nothing is prevented.** The command still goes out if you send it; this only
 lets you ask first.
 
+### Cleaning a room the way it is set up
+
+The Rooms Map image carries a `room_preferences` attribute: the settings each
+room already has in the iRobot app.
+
+```yaml
+# Clean the kitchen with its own suction level rather than a fixed one.
+- variables:
+    prefs: >
+      {{ state_attr('image.robot_rooms_map', 'room_preferences') | default({}, true) }}
+- action: roomba_plus.clean_room
+  target: {entity_id: vacuum.robot}
+  data:
+    room_name: Kitchen
+    two_pass: "{{ prefs.get('7', {}).get('two_pass', false) }}"
+```
+
+Keys are room ids; each value carries whatever that room reports — `profile`,
+`suction_level`, `two_pass`, `carpet_boost`, `scrub`. **An absent key means the
+robot did not report it, which is not the same as a zero**, so read with a
+default rather than assuming.
+
+The point is to honour what somebody configured in the app instead of
+overriding it: *"clean the kitchen the way I set it up"* rather than *"clean
+the kitchen on deep because the automation says so"*.
+
+**Not confirmed on any robot yet.** The settings come from
+`operating_mode_defaults`, and a room only carries them under the mode it last
+ran in. If your `room_preferences` is empty, that is worth reporting — a
+diagnostics download now says which of the two reasons applies.
+
 ### Quiet hours (a34)
 
 ```yaml

@@ -4,6 +4,55 @@
 
 ---
 
+## Installing
+
+**HACS shows only `main`, and downloading it hangs**
+
+The log carries a 404:
+
+```
+Download failed - Got status code 404 when trying to download
+.../releases/download/main/ha_roomba_plus.zip
+```
+
+**Enable beta versions in HACS** — Roomba+ → ⋮ → Redownload → "Show beta
+versions" — then pick the newest `v4.0.0aNN`. That is the working install
+today.
+
+**Why `main` fails:** with betas off HACS finds no eligible release and offers
+the default branch instead. It then looks for a release asset on a tag called
+`main`, which does not exist — so the download 404s and the wheel spins
+forever. Nothing is wrong with your setup.
+
+**Every v4 release is a pre-release**, because v4 is in alpha. With betas off,
+HACS has nothing in the v4 line to offer.
+
+**The stable v3.5.1 is not reachable through HACS's picker either.** Confirmed
+by @pk-1966, who was trying to install it and was offered only `main`.
+
+**The mechanism, read from HACS's own source** rather than guessed:
+`RepositoryBase.get_releases()` makes ONE call to GitHub's release list and
+filters what comes back — it does not paginate. GitHub returns 30 releases per
+page by default, so HACS only ever sees the 30 most recent.
+
+There are now **37 v4 pre-releases** on top of v3.5.1. All thirty HACS sees are
+pre-releases, every one is skipped when betas are off, and it ends up with an
+empty list — hence the fallback to the default branch. With betas on you get a
+v4 alpha instead, not v3.
+
+This is also why it used to work: the stable release stayed reachable until the
+**thirtieth** alpha pushed it out of the window.
+
+**Install v3.5.1 manually:** download the `ha_roomba_plus.zip` asset from the
+[v3.5.1 release](https://github.com/johnnyh1975/ha_roomba_plus/releases), unpack
+it into `config/custom_components/roomba_plus/`, and restart. HACS will then
+show it as installed but will not offer updates for it.
+
+That is a consequence of running a long alpha in the same repository as the
+stable line, not something you did wrong.
+
+---
+
 ## Setup & connection
 
 **"Failed to connect" during setup**
