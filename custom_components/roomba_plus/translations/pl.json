@@ -1083,9 +1083,9 @@
           "after_each_room": "Po każdym pokoju",
           "by_time": "Co określony czas",
           "by_area": "Co określoną powierzchnię",
-          "mission": "Na koniec misji",
-          "refill": "Przy uzupełnianiu",
-          "refill_and_room": "Przy uzupełnianiu lub nowym pokoju"
+          "mission": "Przed i po rutynach",
+          "refill": "Także przy uzupełnianiu",
+          "refill_and_room": "Także między pokojami"
         }
       },
       "prime_pad_wash_area_interval": {

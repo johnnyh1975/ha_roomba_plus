@@ -173,11 +173,30 @@ async def async_setup_entry(
         if coordinator is None:
             return
 
+        # THE PREFIX IS `roomba_plus_{blid}_favorite_`, NOT
+        # `{blid}_favorite_`.
+        #
+        # `IRobotEntity.robot_unique_id` returns
+        # `f"roomba_plus_{blid}"`, and the favourite button's unique id
+        # is built from it. The first version of this sync used the bare
+        # blid, so the prefix matched nothing.
+        #
+        # THE TWO HALVES FAILED DIFFERENTLY, which is what made it look
+        # like a timing problem. Adding compares against `wanted` and
+        # never touches the prefix, so a new favourite got its button
+        # immediately. Removing scans the registry BY prefix, so it
+        # matched nothing and no button was ever removed.
+        #
+        # @chairstacker described exactly that asymmetry: "Creating a
+        # favorite in the app makes it show up in HA within a reasonable
+        # amount of time. Deleting it in the app has not yet removed
+        # it." He put it down to the six-hour refresh; it would not have
+        # gone away after any amount of waiting.
+        favorite_prefix = f"roomba_plus_{config_entry.runtime_data.blid}_favorite_"
+
         known: set[str] = {
             str(entity.unique_id) for entity in entities
-            if str(entity.unique_id).startswith(
-                f"{config_entry.runtime_data.blid}_favorite_"
-            )
+            if str(entity.unique_id).startswith(favorite_prefix)
         }
 
         @callback
@@ -203,7 +222,7 @@ async def async_setup_entry(
                 return
 
             registry = er.async_get(hass)
-            prefix = f"{config_entry.runtime_data.blid}_favorite_"
+            prefix = favorite_prefix
             for entry in er.async_entries_for_config_entry(
                 registry, config_entry.entry_id
             ):

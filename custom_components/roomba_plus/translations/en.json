@@ -1083,9 +1083,9 @@
           "after_each_room": "After each room",
           "by_time": "By time interval",
           "by_area": "By area interval",
-          "mission": "At mission end",
-          "refill": "On refill",
-          "refill_and_room": "On refill or new room"
+          "mission": "Before and after routines",
+          "refill": "Also during refills",
+          "refill_and_room": "Also between rooms"
         }
       },
       "prime_pad_wash_area_interval": {

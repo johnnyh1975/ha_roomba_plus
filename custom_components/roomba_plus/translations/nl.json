@@ -1083,9 +1083,9 @@
           "after_each_room": "Na elke kamer",
           "by_time": "Per tijdsinterval",
           "by_area": "Per oppervlakte-interval",
-          "mission": "Aan het einde van de missie",
-          "refill": "Bij het bijvullen",
-          "refill_and_room": "Bij bijvullen of nieuwe kamer"
+          "mission": "Voor en na routines",
+          "refill": "Ook tijdens bijvullen",
+          "refill_and_room": "Ook tussen kamers"
         }
       },
       "prime_pad_wash_area_interval": {

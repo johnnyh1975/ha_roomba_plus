@@ -226,6 +226,39 @@ def _redact_values(value: Any, blid: str | None) -> Any:
     return value
 
 
+def _prime_room_preferences(config_entry: RoombaConfigEntry) -> dict[str, Any]:
+    """The Rooms Map's `room_preferences`, or why there are none.
+
+    Read from the entity rather than recomputed, so a download reports
+    what a consumer would actually see. A recomputation could succeed
+    where the entity fails and hide the gap this exists to find.
+    """
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    data = config_entry.runtime_data
+    hass = getattr(config_entry, "hass", None)
+    if hass is None:
+        return {"note": "no hass on this entry"}
+    registry = er.async_get(hass)
+    unique = f"{data.blid}_rooms_map"
+    entity_id = registry.async_get_entity_id("image", DOMAIN, unique)
+    if entity_id is None:
+        return {"note": "no rooms map entity"}
+    state = hass.states.get(entity_id)
+    if state is None:
+        return {"note": "rooms map has no state yet"}
+    prefs = state.attributes.get("room_preferences")
+    if not prefs:
+        return {
+            "note": (
+                "attribute absent or empty -- the robot reported no "
+                "operating_mode_defaults, or no room carried a "
+                "last_operating_mode to read them under"
+            )
+        }
+    return prefs
+
+
 async def _prime_favorites_raw(data: Any) -> Any:
     """The unparsed favourites response, for a diagnostics download.
 
@@ -920,6 +953,27 @@ async def _build_diagnostics(
             "stores": _prime_store_summary(data),
             "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
+
+            # PER-ROOM PREFERENCES, WHICH NOTHING HAS EVER CONFIRMED.
+            #
+            # `prime_room_map` reads `profile`, `suctionLevel`, `twoPass`,
+            # `carpetBoost` and `swScrub` per room from
+            # `operating_mode_defaults`, and `image.py` publishes them as
+            # the `room_preferences` attribute on the Rooms Map so an
+            # automation can honour a room's own settings rather than
+            # override them.
+            #
+            # The version plan has carried this as "a29, unverified"
+            # since it was built. It stayed unverified because nothing
+            # here could answer it: the data lives on an entity
+            # attribute, and asking a tester to expand one is a worse
+            # question than reading it from a download they already
+            # send.
+            #
+            # Same fix as the favourites block, which sat in the Classic
+            # path while the question was about Prime: put the
+            # instrument where the question is.
+            "room_preferences": _prime_room_preferences(config_entry),
             # THE LIST THE ROBOT MARKER IS DRAWN FROM, and the one thing
             # the counters above cannot tell you.
             #

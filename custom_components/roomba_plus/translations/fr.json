@@ -1083,9 +1083,9 @@
           "after_each_room": "Après chaque pièce",
           "by_time": "Par intervalle de temps",
           "by_area": "Par intervalle de surface",
-          "mission": "À la fin de la mission",
-          "refill": "Au remplissage",
-          "refill_and_room": "Au remplissage ou nouvelle pièce"
+          "mission": "Avant et après les routines",
+          "refill": "Aussi lors des remplissages",
+          "refill_and_room": "Aussi entre les pièces"
         }
       },
       "prime_pad_wash_area_interval": {

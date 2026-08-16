@@ -63,7 +63,36 @@ def _prime_reports_tank(config_entry: RoombaConfigEntry) -> bool:
     Deliberately checks for the KEY, not its value: False means "the
     tank is currently out", which is exactly what the sensor exists to
     show. Only a missing key means this robot has no onboard tank at
-    all -- as on a Combo whose water lives in the Clean Base."""
+    all -- as on a Combo whose water lives in the Clean Base.
+
+    THAT LAST SENTENCE IS DISPROVEN, BY THE TESTER WHO PROMPTED IT.
+
+    This rule replaced a `cap.scrub` gate after @chairstacker got a tank
+    sensor for a tank he does not have. Field presence looked like the
+    honest answer: the robot itself would say.
+
+    It does not. His 405 reports `tankPresent: true` and:
+
+      - the iRobot app shows NO water level for the robot, only for the
+        dock's two tanks
+      - the robot has NO fill port on its body
+      - the value does not move when either dock tank is removed
+
+    So the field is present, constant, and describes nothing. A robot
+    with no tank reports one as present.
+
+    KEPT ANYWAY, AND NOT BECAUSE THE RULE SURVIVED. Nothing else
+    distinguishes a robot with a tank from one without: there is no
+    capability flag for it, `cap.ppWetLvl` describes pad wetness the
+    DOCK applies, and `dock.cap.fr` is about the dock refilling itself.
+    Removing the sensor for every Prime robot on one robot's evidence
+    would take a working reading away from any robot where the field is
+    real -- and none has been observed either way.
+
+    WHAT WOULD SETTLE IT: one robot where `tankPresent` goes False when
+    a tank is pulled. That is a working sensor and this stays. Until
+    then it is documented as unreliable rather than quietly trusted,
+    which is the difference between a caveat and a lie."""
     coordinator = getattr(config_entry.runtime_data, "prime_status_coordinator", None)
     data = getattr(coordinator, "data", None) or {}
     current = data.get("ro-currentstate") or {}

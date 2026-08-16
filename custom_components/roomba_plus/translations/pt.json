@@ -1083,9 +1083,9 @@
           "after_each_room": "Após cada divisão",
           "by_time": "Por intervalo de tempo",
           "by_area": "Por intervalo de área",
-          "mission": "No fim da missão",
-          "refill": "No reabastecimento",
-          "refill_and_room": "No reabastecimento ou nova divisão"
+          "mission": "Antes e depois das rotinas",
+          "refill": "Também ao reabastecer",
+          "refill_and_room": "Também entre divisões"
         }
       },
       "prime_pad_wash_area_interval": {

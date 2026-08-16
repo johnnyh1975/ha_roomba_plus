@@ -176,6 +176,21 @@ def _pad_wash_heat_options(dock_cap: Any) -> dict[int, str]:
 #: `pwAreaInterval` -- wash the pad every N units of area.
 #:
 #: `ReturnByArea` (app 3.0.0). Only meaningful while `pwReturn` is 2.
+#:
+#: THE APP OFFERS THREE OF THESE AND CALLS ONE OF THEM 5.
+#: @ratpic83's AutoWash screen has a three-way frequency picker --
+#: "Hoch (5 m²) · Mittel (10 m²) · Niedrig (15 m²)" -- against the five
+#: values this enum declares. There is no 5 in `ReturnByArea`, so the
+#: app is almost certainly displaying 6 rounded, and 10 and 15 are the
+#: only two that line up cleanly on both sides.
+#:
+#: KEPT AT FIVE, and the difference is the point rather than a problem:
+#: 8 and 20 are the vendor's own values and unreachable from their own
+#: UI. Narrowing to match the app would remove two settings the robot
+#: accepts, on the strength of one screenshot from one product mode.
+#:
+#: WHAT WOULD CHANGE THIS: a robot that rejects 8 or 20, or a second
+#: app screen showing a different three. Neither has been seen.
 PAD_WASH_AREA_INTERVALS: dict[int, str] = {
     6: "6", 8: "8", 10: "10", 15: "15", 20: "20",
 }
@@ -216,6 +231,121 @@ PAD_WASH_TIME_INTERVALS: dict[int, str] = {
 #: ONE ENTITY, NOT TWO. `_updateWashFreqByType` branches on the value's
 #: type and writes this single field; splitting the ranges into two
 #: entities would mean two controls fighting over one wire key.
+#:
+#: THE APP'S OWN DESCRIPTIONS, FIELD-CAPTURED, AND THEY ARE CUMULATIVE.
+#: @chairstacker's Mop Wash Frequency screen (app 3.0.0) spells out what
+#: each of the upper three does, and it maps onto the vendor names one
+#: for one:
+#:
+#:   100 mission        "Standard -- before and after cleaning routines"
+#:   101 refill         "Medium   -- DURING REFILLS, and before and after"
+#:   102 refillAndRoom  "High     -- IN BETWEEN ROOMS, during refills,
+#:                                   and before and after"
+#:
+#: Each adds a trigger to the one below it. The first labels here said
+#: "At mission end", "On refill" and "On refill or new room" -- the
+#: first is wrong (it is before AND after) and the other two read as
+#: exclusive when they are additive.
+#:
+#: AND THIS SETTLES THE HEAT QUESTION FOR GOOD. @ratpic83 read
+#: standard/medium/high beside a dock reporting `pw: 3` and concluded
+#: they were heat levels. They are wash FREQUENCY, and the app says so
+#: in its own subtitles.
+#:
+#: A BEHAVIOUR REPORT WORTH KEEPING. @chairstacker set Medium (101) in
+#: the iRobot app and his robot became unusable for mopping: it entered
+#: the room, spun on its axis, announced a mid-session pad wash,
+#: returned to the dock, washed, came back -- five times before he
+#: stopped it. Vacuum-only runs were fine. Setting `byArea` (2) from
+#: Home Assistant restored normal behaviour.
+#:
+#: THE FIRST EXPLANATION WAS WRONG, AND HE DISPROVED IT IN A DAY.
+#:
+#: His dock reports `cap {evac, pd, pw, pwo}` and no `fr`, so "wash
+#: during refills" on a dock that cannot refill looked like a plausible
+#: loop. He then set STANDARD (100) -- which washes before and after a
+#: routine and involves no refill at all -- and got exactly the same
+#: behaviour.
+#:
+#: So it is not the refill trigger. WHAT MISBEHAVES IS THE UPPER RANGE
+#: AS A WHOLE. On his robot 100 and 101 both loop, and `byArea` (2)
+#: works. The lower range is fine; the upper range is not honoured,
+#: whatever the app offers.
+#:
+#: A MECHANISM THAT FITS EVERY OBSERVATION, offered as a hypothesis
+#: because nobody can read that firmware.
+#:
+#: The three upper values are CUMULATIVE, and the app's own subtitles
+#: say what they share: all three wash "before and after cleaning
+#: routines". That trigger is the ONLY thing common to 100, 101 and 102
+#: that `byArea` does not have.
+#:
+#: Now read his sequence again: enter the room, spin twice (the start
+#: sequence), announce a wash, go to the dock, wash, come back -- and
+#: repeat. If the robot treats RESUMING after a mid-mission dock visit
+#: as starting a routine, then "wash before the routine" fires again on
+#: every return. It never gets past its own first step.
+#:
+#: THIS PREDICTS THINGS, WHICH IS WHY IT IS WORTH WRITING DOWN:
+#:   - 102 loops too (it includes the same trigger) -- untested, and
+#:     not worth a wasted mopping run to confirm
+#:   - `byTime` and `evRoom` do NOT loop (no event trigger)
+#:   - vacuum-only runs are unaffected, which is what he saw
+#:
+#: AND IT EXPLAINS WHY THE APP CANNOT HELP HIM. `v3_sku_value_lists.json`
+#: gives `pwReturn: [100, 101, 102]` as the STANDARD list -- the lower
+#: range appears in no SKU list at all. iRobot's app is built to offer
+#: only the upper range, so on a robot where that range loops, every
+#: value the app can write is broken and the one that works is one the
+#: app never shows.
+#:
+#: NOT GATED, and now for a better reason than "one robot is not a
+#: rule". A gate would have to hide 100/101/102 from robots like his,
+#: and nothing yet distinguishes his from @ratpic83's -- whose app
+#: shows an entirely different picker for the same field on the same
+#: robot model.
+#:
+#: AN EARLIER VERSION OF THIS PARAGRAPH ARGUED that hiding the three
+#: would remove the recovery path. That is wrong, and worth correcting
+#: rather than deleting: hiding 100/101/102 leaves 0/1/2, which IS the
+#: recovery path. The argument was against hiding them for EVERYONE and
+#: got used against hiding them for HIS robot, which is a different
+#: question with a different answer.
+#:
+#: SO THE OBSTACLE IS IDENTIFICATION, NOT DESIRABILITY. This select
+#: offers a user three values that make his robot unusable for mopping,
+#: and "the app offers them too" is no defence -- writing one from Home
+#: Assistant produces the same loop. If we could tell his robot from
+#: one where the upper range works, withholding them would be right.
+#:
+#: WHAT WOULD SETTLE IT: one Combo with a `pw: 3` dock setting
+#: `mission` (100) and running a mop job. Loops -> the range is broken
+#: everywhere and hiding it is a decision about all Prime robots.
+#: Works -> the dock capability separates them and a gate on `pw` has
+#: two data points instead of one.
+#:
+#: RECORDED SO THE NEXT REPORT IS A LOOKUP. "My robot keeps returning
+#: to the dock while mopping" -> read `pwReturn`; if it is 100, 101 or
+#: 102, write `by_area` from Home Assistant, which the app may not
+#: offer.
+#:
+#: TWO TESTERS, TWO DIFFERENT SCREENS, SAME APP VERSION. Before reading
+#: any of this as "3.0.0 removed the area options": @ratpic83's Mop
+#: Wash Frequency picker on app 3.0.0 shows three AREA presets --
+#: 5, 10 and 15 m² -- while @chairstacker's shows Standard/Medium/High
+#: with no areas at all. Both are 405 Combos; their DOCKS differ
+#: (`pw: 3` against `pw: 1`).
+#:
+#: So the picker is not the same everywhere, and neither the removal
+#: nor the loop generalises from one household to the other. What
+#: generalises is the field: six values in two ranges, whatever any one
+#: app build chooses to show.
+#:
+#: THE APP COULD NOT UNDO IT. Its picker offers only 100/101/102; his
+#: previous area-based setting had vanished with the 3.0.0 update.
+#: Home Assistant could write `byArea` because this control carries
+#: both ranges -- which is the concrete payoff of modelling the field
+#: as the vendor declares it rather than as the app presents it.
 #:
 #: THE APP SHOWS A THIRD THING AGAIN. @ratpic83's AutoWash screen has
 #: exactly two entries -- wash frequency and dry duration -- and the
