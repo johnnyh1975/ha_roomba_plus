@@ -5263,3 +5263,89 @@ class TestSensorValueFnResilience:
             assert isinstance(REAL_980_STATE[key], dict)
         assert REAL_980_STATE["bbrun"]["hr"] == 438
         assert REAL_980_STATE["bbmssn"]["nMssn"] == 425
+
+
+class TestMissionStoreSensorsRefreshOnTheStore:
+    """@scenicsystemsllc: sensors do not refresh across rapid
+    back-to-back missions. He flagged it as a hypothesis — source
+    consistent, no captured payload — and proposed that a fast second
+    mission could arrive on a delta omitting `cleanMissionStatus`.
+
+    There is a second source-consistent mechanism: these sensors read
+    from `mission_store`, while `new_state_filter` gates them on the
+    delta. Mission-end processing is debounced (two consecutive signals
+    plus a minimum hold on ambiguous phases), so the delta that triggers
+    a recompute can arrive before the record exists. With a gap the next
+    delta cleans it up; back to back, the next delta belongs to the next
+    mission.
+
+    Telling the two apart needs a captured payload. Listening for
+    `EVENT_MISSION_COMPLETED` — fired *after* the store write — makes
+    both moot, because the refresh trigger and the value source finally
+    agree.
+    """
+
+    def test_the_store_backed_sensors_are_listed(self):
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+        )
+
+        assert "last_mission_result" in _MISSION_STORE_SENSORS
+        assert "area_cleaned_today" in _MISSION_STORE_SENSORS
+        assert "clean_streak" in _MISSION_STORE_SENSORS
+
+    def test_a_delta_only_sensor_is_not_listed(self):
+        """`battery` reads the delta it is woken by. Subscribing it to
+        mission-end would be a wasted state write per mission."""
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+        )
+
+        assert "battery" not in _MISSION_STORE_SENSORS
+        assert "phase" not in _MISSION_STORE_SENSORS
+
+    def test_the_handler_filters_by_entry(self):
+        """One household can hold several robots, and a mission ending
+        on one says nothing about the others' counters."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        source = inspect.getsource(RoombaSensor._async_mission_completed)
+
+        assert "entry_id" in source
+        assert "return" in source
+
+    def test_it_forces_a_recompute(self):
+        """A plain state write would re-publish the cached value — the
+        point is to read the store again."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        source = inspect.getsource(RoombaSensor._async_mission_completed)
+
+        assert "force_refresh=True" in source
+
+
+class TestTheMissionStoreKeysExist:
+    """`_MISSION_STORE_SENSORS` is a hand-written list of keys, and a
+    typo in it fails silently: the listener simply never fires for that
+    sensor, and nothing goes red.
+
+    That failure mode has turned up repeatedly in this project — a
+    hand-kept list drifting from the thing it names. This makes it loud.
+    """
+
+    def test_every_key_names_a_real_sensor(self):
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+            SENSORS,
+        )
+
+        invented = _MISSION_STORE_SENSORS - {d.key for d in SENSORS}
+
+        assert not invented, (
+            f"keys that name no sensor: {sorted(invented)} -- the "
+            "mission-end listener would never fire for these"
+        )

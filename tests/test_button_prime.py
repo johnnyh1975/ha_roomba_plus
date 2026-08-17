@@ -7,10 +7,24 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
-def _favorite(fav_id="f1", name="Evening", commands=None, deleted=False, hidden=False):
+def _favorite(fav_id="f1", name="Evening", commands=None, deleted=False,
+              hidden=False, robot="BLID"):
+    """`robot` is the favourite's `commanddefs[].robot_id`.
+
+    Defaults to the blid `_entry()` uses, because the common case is a
+    favourite belonging to the robot it is shown under. Pass a different
+    value to build another robot's favourite, or `None` for one that
+    names no robot at all.
+
+    The old default was a bare `MagicMock()` for `command_defs`, whose
+    `asset_id` is a Mock rather than a blid -- which, once favourites
+    were filtered per robot, made every fixture look like it belonged to
+    somebody else."""
+    if commands is None:
+        commands = [MagicMock(asset_id=robot)] if robot else []
     favorite = MagicMock(
         favorite_id=fav_id,
-        command_defs=commands if commands is not None else [MagicMock()],
+        command_defs=commands,
         is_deleted=deleted,
         is_hidden=hidden,
     )
@@ -724,3 +738,81 @@ class TestTheRemovalPrefixMatchesTheActualUniqueId:
             "removal scans the registry by this prefix -- a mismatch "
             "means buttons are added and never removed"
         )
+
+
+class TestFavouritesBelongToOneRobot:
+    """`GET /v1/user/favorites` is ACCOUNT-level. Every config entry was
+    building a button for every favourite on the account, so a two-robot
+    household saw both robots' favourites under each of them.
+
+    Reported by @scenicsystemsllc, whose severity analysis is the part
+    worth keeping: pressing a mislabelled button commands the robot it
+    is displayed under — correctly, over that robot's own connection —
+    but with a payload built from a *different* robot's map. Usually a
+    no-op or an error. In the worst case a region id is coincidentally
+    valid on the receiving robot's map too, and it cleans somewhere
+    nobody asked for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_another_robots_favourite_is_excluded(self):
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        result = await async_favorites_attribute(
+            _entry([
+                _favorite("mine", "Kitchen"),
+                _favorite("theirs", "Upstairs", robot="OTHER_BLID"),
+            ])
+        )
+
+        assert result == [{"id": "mine", "name": "Kitchen"}]
+
+    @pytest.mark.asyncio
+    async def test_an_unattributable_favourite_is_kept(self):
+        """Fails open. A favourite nobody can attribute is better shown
+        under every robot than hidden from all of them — the same
+        contract the capability gates use. Only an explicit,
+        non-matching id excludes."""
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        result = await async_favorites_attribute(
+            _entry([_favorite("orphan", "Nowhere", robot=None)])
+        )
+
+        assert result == [{"id": "orphan", "name": "Nowhere"}]
+
+    @pytest.mark.asyncio
+    async def test_a_favourite_naming_several_robots_is_kept(self):
+        """A favourite whose command defs span two robots belongs to
+        both. Excluding it from either would lose a real control."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        shared = _favorite(
+            "shared", "Both",
+            commands=[MagicMock(asset_id="OTHER"), MagicMock(asset_id="BLID")],
+        )
+        result = await async_favorites_attribute(_entry([shared]))
+
+        assert result == [{"id": "shared", "name": "Both"}]
+
+    def test_the_match_uses_the_stated_id_not_geometry(self):
+        """The report suggested filtering by whether region ids exist on
+        the robot's pmap. That works, and infers from geometry what the
+        record states outright: each command def carries `robot_id`,
+        which is `RoutineCommand.asset_id` here."""
+        import inspect
+
+        from custom_components.roomba_plus import button_prime
+
+        source = inspect.getsource(button_prime._favorite_is_for)
+
+        assert "asset_id" in source
+        assert "pmap" not in source.lower() or "region-id" in source

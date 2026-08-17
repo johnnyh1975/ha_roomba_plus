@@ -2367,3 +2367,63 @@ class TestZonesHaveNamesToo:
         source = inspect.getsource(prime_room_map)
 
         assert "{**zone_names, **names_for_others}" in source
+
+
+class TestTheRobotIsDrawnOnlyOnItsOwnMap:
+    """The zone fix bound clean and keep-out outlines to the plan being
+    drawn, and stopped there. Positions and the trail belong to the
+    ROBOT, not to the map on screen.
+
+    @chairstacker, same shape of report as the zones: "the robot still
+    shows up on an incorrectly selected map - and so do the trails."
+    His screenshots show a Whole_House run laid over a second map's
+    rooms.
+    """
+
+    @staticmethod
+    def _image(plan_id, live_id):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        image = PrimeRoomsImage.__new__(PrimeRoomsImage)
+        image._floor_plan = SimpleNamespace(p2map_id=plan_id)
+        image._config_entry = MagicMock()
+        # ON THE ENTITY, not on runtime_data. The first version of this
+        # test set `runtime_data.prime_live_bundle` -- which nothing in
+        # production writes -- so it agreed with a check that read the
+        # same non-existent attribute. Both were wrong together and the
+        # suite was green.
+        image._live_bundle = (
+            {"manifest": {"pmap_id": live_id}} if live_id else None
+        )
+        return image
+
+    def test_a_different_map_hides_the_robot(self):
+        assert not self._image("MAP_A", "MAP_B")._live_position_belongs_here()
+
+    def test_the_driving_map_shows_it(self):
+        assert self._image("MAP_A", "MAP_A")._live_position_belongs_here()
+
+    def test_no_live_bundle_counts_as_matching(self):
+        """One map is the common case, and its positions are always the
+        right ones. A single-map household must not lose its live
+        position to fix a multi-map one."""
+        assert self._image("MAP_A", None)._live_position_belongs_here()
+
+    def test_a_plan_without_an_id_counts_as_matching(self):
+        assert self._image(None, "MAP_B")._live_position_belongs_here()
+
+    def test_the_trail_uses_the_same_gate(self):
+        """Positions and trail are drawn from one list — gating the list
+        gates both. A separate check for the trail would be a second
+        rule to keep in step."""
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+        idx = source.find("_live_position_belongs_here()")
+        assert idx > 0
+        assert "prime_positions" in source[max(0, idx - 400):idx]

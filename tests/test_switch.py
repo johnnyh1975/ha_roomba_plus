@@ -468,26 +468,58 @@ class TestPrimeSettingSwitches:
         """An exact set, not a minimum, so that adding one is a
         deliberate act with a reason attached.
 
-        padDryAllowed joined the four in a20. It is the only one of the
-        seven AutoWash-related rw-settings fields with its own
-        SetPadDryAllowCommand in the app; the rest travel through
-        SetAllRoombaPreferences as a bundle, and writing one field of a
-        bundle alone is how schedHold behaves -- accepted, ignored."""
+        padDryAllowed joined the four in a20, as the only AutoWash field
+        with its own `SetPadDryAllowCommand` in app 2.2.4 -- the rest
+        appeared to travel as a bundle, and writing one field of a
+        bundle alone is how schedHold behaves: accepted, ignored.
+
+        padWashAllowed joined after app 3.0.0 inverted that reading. Its
+        settings handler writes 24 keys INDIVIDUALLY and padWashAllowed
+        is among them, while padDryAllowed is not -- the field this
+        project withheld turned out to be the writable one, and the
+        field it shipped is the exception that needs its own command.
+
+        @chairstacker asked for these controls in issue #46. Five
+        shipped as selects in a33; this is the sixth."""
         assert {d.wire_key for d in self._descriptions()} == {
             "childLock", "ecoCharge", "noAutoPasses", "vacHigh",
-            "padDryAllowed",
+            "padDryAllowed", "padWashAllowed",
         }
 
-    def test_the_bundled_autowash_settings_stay_out(self):
-        """Six siblings sit next to padDryAllowed in the same shadow and
-        are deliberately not offered: the app writes them together
-        through a ten-boolean command value, and which of them move
-        together is not statically readable."""
+    def test_the_autowash_settings_are_selects_not_switches(self):
+        """These were once withheld entirely, on the reading that app
+        2.2.4 wrote them as a ten-boolean bundle whose grouping was not
+        statically readable.
+
+        App 3.0.0 settled it the other way: its settings handler writes
+        24 keys individually. Five of the six became SELECTS in a33 —
+        they carry values, not flags — and `padWashAllowed` is the sixth
+        and is a switch.
+
+        This test used to assert all six stayed out. It kept passing
+        after five of them shipped, because they shipped as selects and
+        it only looked at switches.
+        """
         offered = {d.wire_key for d in self._descriptions()}
 
-        for bundled in ("padDryDur", "padWashAllowed", "pwAreaInterval",
-                        "pwTimeInterval", "pwReturn", "autoevacFreq"):
-            assert bundled not in offered
+        # A flag, and now offered.
+        assert "padWashAllowed" in offered
+
+        # Values, so they belong in select_prime rather than here.
+        for valued in ("padDryDur", "pwAreaInterval", "pwTimeInterval",
+                       "pwReturn", "autoevacFreq"):
+            assert valued not in offered
+
+    def test_the_five_valued_settings_exist_somewhere(self):
+        """The guard the old test could not give: asserting they are not
+        switches says nothing about whether they exist at all."""
+        from custom_components.roomba_plus.select_prime import PRIME_SELECTS
+
+        keys = {d.wire_key for d in PRIME_SELECTS}
+
+        for valued in ("padDryDur", "pwAreaInterval", "pwTimeInterval",
+                       "pwReturn", "autoevacFreq"):
+            assert valued in keys
 
     def test_sched_hold_is_absent(self):
         """THE exclusion that matters. schedHold writes and reads back

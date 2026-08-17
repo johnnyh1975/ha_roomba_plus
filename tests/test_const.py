@@ -716,3 +716,104 @@ class TestEveryInitiatorHasALabel:
         from custom_components.roomba_plus.const import JOB_INITIATOR_LABELS
 
         assert JOB_INITIATOR_LABELS["demand"] == "Demand clean"
+
+
+class TestThePhaseSetsAgreeAcrossModules:
+    """`{"run", "hmMidMsn", "evac"}` is written out as a literal in
+    three places: `const.CLEANING_PHASES`, `callbacks`
+    and `presence_manager`.
+
+    Only const.py carries the reasoning — including that `evac` is in
+    the set DELIBERATELY, against the vendor's own rule, because an i7+
+    goes through evac mid-mission and treating it as an ending reset the
+    map renderer early.
+
+    So a later reader who finds the vendor rule and "fixes" const.py
+    leaves two copies behind, and the ones without the comment are the
+    ones that keep the old behaviour. This makes that loud.
+    """
+
+    def test_callbacks_matches_const(self):
+        from custom_components.roomba_plus.callbacks import (
+            _ACTIVE_CLEANING_PHASES,
+        )
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        assert _ACTIVE_CLEANING_PHASES == CLEANING_PHASES
+
+    def test_presence_manager_matches_const(self):
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+        from custom_components.roomba_plus.presence_manager import (
+            _ACTIVE_CLEANING_PHASES,
+        )
+
+        assert _ACTIVE_CLEANING_PHASES == CLEANING_PHASES
+
+    def test_the_wider_end_set_is_a_superset(self):
+        """`callbacks._MISSION_END_PHASES` adds `completed` and
+        `cancelled` on purpose — valid end states in some firmware
+        variants. Deliberately wider is fine; diverging is not."""
+        from custom_components.roomba_plus.callbacks import (
+            _MISSION_END_PHASES,
+        )
+        from custom_components.roomba_plus.const import MISSION_END_PHASES
+
+        assert _MISSION_END_PHASES >= MISSION_END_PHASES
+
+
+class TestThePhaseSetHasOneSource:
+    """`{"run", "hmMidMsn", "evac"}` existed as a literal in three
+    files: const.py, callbacks.py and presence_manager.py.
+
+    They agreed, which is why nothing caught it. The risk is what
+    happens next: only const.py carries the reasoning — including why
+    `evac` deliberately differs from the vendor's own rule table, an
+    i7+ evacuating mid-mission and a map renderer that reset early when
+    that was read as an ending.
+
+    A copy without the reasoning is the one somebody "corrects" later,
+    and then presence logic and mission logic disagree about whether the
+    robot is cleaning.
+    """
+
+    def test_no_module_repeats_the_literal(self):
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        pattern = re.compile(
+            r'frozenset\(\{\s*"run",\s*"hmMidMsn",\s*"evac"\s*\}\)'
+        )
+        offenders = [
+            path.name for path in base.glob("*.py")
+            if path.name != "const.py" and pattern.search(path.read_text())
+        ]
+
+        assert not offenders, (
+            f"{offenders} repeat the cleaning-phase literal instead of "
+            "importing CLEANING_PHASES -- and would not carry the reason "
+            "`evac` is in it"
+        )
+
+    def test_the_importers_get_the_same_set(self):
+        from custom_components.roomba_plus.callbacks import (
+            _ACTIVE_CLEANING_PHASES as from_callbacks,
+        )
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+        from custom_components.roomba_plus.presence_manager import (
+            _ACTIVE_CLEANING_PHASES as from_presence,
+        )
+
+        assert from_callbacks is CLEANING_PHASES
+        assert from_presence is CLEANING_PHASES
+
+    def test_the_mission_end_set_is_deliberately_wider(self):
+        """callbacks.py's end set is NOT the same as const.py's — it
+        adds `completed` and `cancelled`, which are valid end states on
+        some firmware. That difference is documented and must survive
+        this consolidation."""
+        from custom_components.roomba_plus.callbacks import _MISSION_END_PHASES
+        from custom_components.roomba_plus.const import MISSION_END_PHASES
+
+        assert MISSION_END_PHASES < _MISSION_END_PHASES
+        assert {"completed", "cancelled"} <= _MISSION_END_PHASES

@@ -687,3 +687,128 @@ class TestTheUpperRangeIsCumulativeNotExclusive:
         assert "five times before he" in source
         assert "THE FIRST EXPLANATION WAS WRONG" in source
         assert "UPPER RANGE" in source
+
+
+class TestAValueOutsideTheListIsShown:
+    """Issue #46 promised: "Show a value even when it is outside the
+    list. Otherwise we reproduce the app's 'not set', and it looks like
+    our bug rather than theirs."
+
+    The code did the opposite — an unknown value returned None, which
+    made the entity `unavailable`.
+
+    Not hypothetical: @DaRealGuGu's 515 holds `pwAreaInterval = 8`,
+    which belongs to the 410's value set and not to his. His iRobot app
+    cannot render it, and neither could we.
+    """
+
+    @staticmethod
+    def _select(reported):
+        """Drives the REAL `current_option` through the shadow.
+
+        The first version of this patched `current_option` itself and
+        asserted against its own mock — it passed against the code it
+        was written to reject. A test that stubs the thing it is
+        testing tests nothing.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.select_prime import (
+            PAD_WASH_AREA_INTERVALS,
+            PrimeSettingSelect,
+        )
+
+        entity = PrimeSettingSelect.__new__(PrimeSettingSelect)
+        # @DaRealGuGu'S ACTUAL SITUATION, not the full list.
+        #
+        # His 515 is narrowed to the 505 series' set, and holds
+        # `pwAreaInterval = 8` -- a value from the 410's set. The first
+        # version of this test used the FULL list, where 8 is present,
+        # so it passed against the very code it was written to reject.
+        # Third time today a test of mine did that.
+        entity._values = {
+            v: label for v, label in PAD_WASH_AREA_INTERVALS.items()
+            if v in (10, 15, 20)
+        }
+        entity.entity_description = SimpleNamespace(
+            model_attr="pad_wash_area_interval"
+        )
+        # THE REAL SHADOW, PARSED BY THE REAL `RobotSettings`.
+        #
+        # No patching at all: `pwAreaInterval` is the wire key, and
+        # letting the actual parser read it means this test exercises
+        # the same path production does. Patching `RobotSettings` failed
+        # anyway, because `current_option` imports it inside the
+        # function.
+        coordinator = SimpleNamespace(
+            data={"rw-settings": {"pwAreaInterval": reported}}
+        )
+        entity._config_entry = MagicMock()
+        entity._config_entry.runtime_data.prime_status_coordinator = coordinator
+        return entity
+
+
+
+    def test_an_unknown_value_shows_as_itself(self):
+        """"8" is what the robot reports. A guessed label would be an
+        invention the user cannot check."""
+        assert self._select(8).current_option == "8"
+
+    def test_the_unknown_value_is_offered_in_options(self):
+        """Home Assistant rejects a `current_option` that is not in
+        `options` — showing it requires offering it."""
+        assert "8" in self._select(8).options
+
+    def test_known_values_are_not_duplicated(self):
+        assert self._select(10).options.count("10") == 1
+
+    def test_the_entity_is_not_unavailable_for_an_unknown_value(self):
+        """The failure this fixes: `available` is `current_option is not
+        None`, so returning None hid the entity entirely."""
+        assert self._select(8).current_option is not None
+
+
+class TestEveryControlPointsAtSomethingReal:
+    """Two hand-written strings per control, and both fail silently when
+    wrong.
+
+    `wire_key` is what `set_setting()` writes; a typo produces a write
+    the robot ignores. `model_attr` is what the value is read back
+    from; a typo makes `current_option` return None for ever, so the
+    entity is created and permanently unavailable.
+
+    Neither raises. Both have happened in this project — `vacHigh` sat
+    unavailable on a tester's robot for weeks, and the cause turned out
+    to be a different one of exactly this family.
+    """
+
+    @staticmethod
+    def _pairs():
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        out = []
+        for name in ("select_prime.py", "switch.py"):
+            source = (base / name).read_text()
+            out += [(name, m.group(1)) for m in
+                    re.finditer(r'model_attr="([^"]+)"', source)]
+        return out
+
+    def test_every_model_attr_is_a_real_settings_field(self):
+        import dataclasses
+
+        from roombapy_prime.models import RobotSettings
+
+        known = {f.name for f in dataclasses.fields(RobotSettings)}
+        missing = [f"{f}: {a}" for f, a in self._pairs() if a not in known]
+
+        assert not missing, (
+            f"model_attr values with no matching RobotSettings field: "
+            f"{missing} -- these controls would be permanently unavailable"
+        )
+
+    def test_there_are_controls_to_check(self):
+        """A guard that silently checks nothing is worse than none."""
+        assert len(self._pairs()) >= 10

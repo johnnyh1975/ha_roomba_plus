@@ -660,3 +660,55 @@ class TestLifecycleDoc:
         assert "Replacing or selling your robot" in content
         assert "Factory reset" in content
         assert "format=export" in content
+
+
+class TestLocalesAreActuallyTranslated:
+    """@dixi83 sent a one-line PR fixing a Dutch label. Looking at the
+    file around it turned up **36 long strings still in English** across
+    five locales — config dialogs, service descriptions, and six
+    exception messages a user sees when something goes wrong.
+
+    Nothing caught them, because the key check passes: every locale had
+    every key. Structural completeness and translation are different
+    properties, and only one was being measured.
+    """
+
+    def test_no_locale_leaves_long_strings_in_english(self):
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/check_translations.py"],
+            capture_output=True, text=True,
+        )
+
+        assert "Untranslated values found" not in result.stdout, result.stdout
+        assert result.returncode == 0
+
+    def test_the_allow_list_stays_short(self):
+        """A long allow-list turns this check off by attrition, which is
+        how the originals survived."""
+        from importlib import util
+        import pathlib
+
+        spec = util.spec_from_file_location(
+            "ct", pathlib.Path("scripts/check_translations.py")
+        )
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert len(module.IDENTICAL_IS_FINE) <= 20
+
+    def test_the_threshold_is_justified(self):
+        """26 characters, set from the shortest real miss found when
+        this was written — not picked to make the check pass."""
+        from importlib import util
+        import pathlib
+
+        spec = util.spec_from_file_location(
+            "ct", pathlib.Path("scripts/check_translations.py")
+        )
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert module.UNTRANSLATED_MIN_LENGTH <= 26
