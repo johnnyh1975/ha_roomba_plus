@@ -1228,7 +1228,7 @@ class TestCloudOnlyVacuumActions:
 
         attrs = v.extra_state_attributes
 
-        assert attrs["status"] is None
+        assert attrs["status"] == "idle"
         assert "error" not in attrs
         assert "error_code" not in attrs
 

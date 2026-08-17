@@ -86,12 +86,24 @@ def match_room_names(
     """
     by_name = {name.casefold(): rid for name, rid in available.items()}
     by_slug = {room_slug(name): rid for name, rid in available.items()}
+    by_id: dict[str, str] = {}
+    ambiguous_ids: set[str] = set()
+    for rid in available.values():
+        bare_id = rid.rsplit("/", 1)[-1]
+        if bare_id in by_id and by_id[bare_id] != rid:
+            ambiguous_ids.add(bare_id)
+        else:
+            by_id[bare_id] = rid
 
     matched: list[str] = []
     unmatched: list[str] = []
     for raw in requested:
         wanted = raw.strip()
-        rid = by_name.get(wanted.casefold()) or by_slug.get(room_slug(wanted))
+        rid = (
+            by_name.get(wanted.casefold())
+            or by_slug.get(room_slug(wanted))
+            or (by_id.get(wanted) if wanted not in ambiguous_ids else None)
+        )
         if rid is None:
             unmatched.append(raw)
         elif rid not in matched:
