@@ -142,6 +142,25 @@ Roomba+ creates a `Rooms Map` image entity. Depending on when the integration wa
 
 Both are the same entity with the same attributes. Check **Developer Tools → States** and filter for `image.` to find yours. The examples below use `image.roomba_rooms_map` — substitute your actual entity name.
 
+### If you have a Prime robot
+
+Prime robots (Roomba Max, Combo 400-series) create **three** image entities, and
+only one of them is the card source:
+
+| Entity | Use it for |
+|---|---|
+| `image.{prefix}_rooms_map` | **The card.** Carries `calibration_points` and selectable rooms |
+| `image.{prefix}_cleaning_map` | A picture-entity showing the clean in progress. Deliberately carries no calibration points, so it cannot be a card source |
+| `image.{prefix}_map` | The raw live map, before rendering |
+
+The Rooms Map draws the live cleaning layers as well, so you do not lose the
+progress view by using it — the card takes one raster source and cannot stack a
+second image on top.
+
+**Room ids are stable on Prime.** Renaming a room in the iRobot app does not
+break a saved card configuration: the card sends the room's id, not its name.
+Room and zone names both come from the robot's own map data.
+
 ---
 
 ## Path B, step 1 — Getting room coordinates

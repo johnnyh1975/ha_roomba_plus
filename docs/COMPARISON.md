@@ -2,12 +2,33 @@
 
 # Roomba Integrations — Feature Comparison
 
-> Based on source code analysis · last verified July 2026 against
-> Roomba+ **v3.3.0** and roomba_rest980 **v1.19.1**
-> (manifest version; quality_scale.yaml documents Bronze→Platinum rules, all met).
-> Covers all three main integration paths for iRobot robots in Home Assistant.
+> **Fully re-verified August 2026**, all three columns read from source.
+>
+> | Column | Version | How it was checked |
+> |---|---|---|
+> | **Roomba+** | v4.0.0a37 | this repository |
+> | **HA Core** `roomba` | ships with Home Assistant, `roombapy==1.8.1` | the installed component |
+> | **roomba_rest980** | v1.20.0-beta4 (`ia74/roomba_rest980`) | cloned from GitHub |
+>
+> Counts below are entity and feature counts read out of each codebase, not
+> estimates. Where a row says ❌ it means the code has no such thing, not that it
+> was not found.
 
 **Legend:** ✅ Supported &nbsp;·&nbsp; ⚠️ Partial / limited &nbsp;·&nbsp; ❌ Not available &nbsp;·&nbsp; ★ Best in class
+
+---
+
+## Prime-generation robots
+
+**No other integration supports them.** Roomba Max, Combo/Plus 400-series and
+other robots on iRobot's newer cloud protocol do not speak the local MQTT
+protocol that the built-in HA integration and rest980 are built on — there is
+nothing for those paths to connect to.
+
+Roomba+ v4 talks to iRobot's cloud instead. That is a different trade rather
+than a free win: it needs your iRobot credentials, it needs internet, and the
+v4 line is still alpha. But it is the only option, and the comparison below
+does not apply to those robots at all.
 
 ---
 
@@ -57,11 +78,11 @@
 | Cloud-free operation | ✅ Fully local ★ | ✅ Fully local | ❌ Cloud required for map and zone features |
 | iRobot cloud dependency | ⚠️ Optional — same Gigya→AWS Cognito flow | ✅ None | ⚠️ Required — same Gigya→AWS Cognito flow |
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
-| Supported models | ✅ 600–900, i, s, j, Braava m6 ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
+| Supported models | ✅ 600–900, i, s, j, Braava m6, **and Prime-generation** ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ 3,803 tests ★ | ✅ | ❌ |
-| Quality Scale | **Gold ★** | Silver | **Bronze** |
-| Translations | ✅ DE / EN / ES / FR / IT / NL / PT ★ | ⚠️ EN only | ⚠️ EN only |
+| Unit tests | ✅ **5,499 tests** ★ | ✅ in the HA core suite | ❌ none in the repository |
+| Quality Scale | **Gold ★** | not declared in its manifest | **Bronze** (rules file present, several `todo`) |
+| Translations | ✅ 8 languages, complete and enforced by a check | ✅ **38 languages ★** — it ships with Home Assistant | ⚠️ 1 |
 
 ---
 
@@ -69,35 +90,38 @@
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| **Total sensor count** | **100+ ★** | 13 | ~29 base sensors + dynamic room/zone selects and favourite buttons |
+| **Entity count** | **236 ★** — 154 sensors, 22 binary sensors, 20 buttons, 17 selects, 15 switches, 5 images, calendar, to-do, device tracker | **11** — 10 sensors, 1 binary sensor | ~51 sensor descriptions, 4 selects, 2 buttons, 1 camera |
 | Battery | ✅ | ✅ | ✅ + dynamic icon + `batInfo` attributes |
+| Battery cycles | ✅ | ✅ | ✅ |
 | Phase / status | ✅ dedicated sensor + idle/stopped detection ★ | ⚠️ via vacuum state only | ✅ idle/stopped detection |
-| Error code (80+ codes) | ✅ label + description + recommended action ★ | ❌ | ✅ mapped text label — no raw code, description, or action attributes |
-| Readiness / not-ready | ✅ | ❌ | ✅ dedicated sensor with mapped text labels |
-| Job initiator | ✅ | ❌ | ✅ |
-| Next scheduled clean | ✅ cleanSchedule + cleanSchedule2 ★ | ❌ | ❌ |
-| Mission statistics (per-mission) | ✅ MissionStore: 365 entries, full breakdown ★ | ⚠️ total, ok, failed | ❌ lifetime totals only — no per-mission breakdown |
-| Lifetime stats (area, time, jobs) | ✅ from cloud ★ | ❌ | ✅ total area + time + jobs from local MQTT (`runtimeStats`, `bbmssn`) |
+| Error codes | ✅ **112 codes in iRobot's own wording**, eight languages, with description and recommended action ★ | ❌ | ✅ mapped text label — no raw code, description or action |
+| Readiness / not-ready | ✅ | ❌ | ✅ dedicated sensor with mapped labels |
+| Job initiator | ✅ 25 values ★ | ❌ | ✅ |
+| Next scheduled clean | ✅ ★ | ❌ | ❌ |
+| Per-mission history | ✅ 365 entries with full breakdown ★ | ⚠️ totals only: missions, successful, cancelled, failed | ❌ lifetime totals only |
+| Lifetime stats (area, time, jobs) | ✅ | ✅ total cleaning time, area, average mission time | ✅ from local MQTT |
+| Last mission | ✅ result, duration, rooms ★ | ✅ timestamp only | ⚠️ partial |
 | Mission elapsed time | ✅ | ❌ | ✅ |
-| Mission progress (%) | ✅ v2.6+, SMART + cloud ★ | ❌ | ❌ |
+| Mission progress (%) | ✅ SMART + cloud, and Prime ★ | ❌ | ❌ |
 | Mission recharge / expire time | ✅ all firmware families ★ | ❌ | ✅ |
-| Mission log (persistent, 365 entries) | ✅ hass.storage, `query_by_day()` ★ | ❌ | ❌ |
 | Maintenance — filter / brushes | ✅ hours remaining + wear rate + reset buttons ★ | ❌ | ❌ |
-| Maintenance — wheel / contacts / bin | ✅ last-cleaned timestamp + reset service (v2.7+) ★ | ❌ | ❌ |
+| Maintenance — wheel / contacts / bin | ✅ last-cleaned timestamp + reset ★ | ❌ | ❌ |
+| Scrub count | ✅ | ✅ | ⚠️ |
 | Navigation quality (`l_squal`) | ✅ opt-in, VSLAM robots ★ | ❌ | ❌ |
-| Wi-Fi — RSSI / SNR / Noise | ✅ all three, opt-in | ❌ | ✅ all three, enabled by default ★ |
-| IP address | ✅ opt-in | ❌ | ✅ |
-| Carpet Boost mode (readable) | ✅ | ❌ | ✅ |
-| Clean mode / passes (readable) | ✅ | ❌ | ✅ |
-| Edge cleaning (readable) | ✅ | ❌ | ✅ |
+| Wi-Fi — RSSI / SNR / noise | ✅ all three, opt-in | ❌ | ✅ all three, on by default ★ |
+| Bin full / present | ✅ | ✅ binary sensor | ✅ |
 | Clean Base status | ✅ | ❌ | ✅ 12 state codes |
-| Mop sensors — Braava m6 | ✅ 5 sensors: clean mode, tank status, ARS behavior, pad type, tank level ★ | ❌ | ✅ 5 sensors ★ |
-| Cloud diagnostics | ✅ 4 consolidated sensors: performance, analytics 30d, Wi-Fi health, event counts (v2.7+) ★ | ❌ | ❌ |
-| Cloud lifetime stats | ✅ area, time, mission count ★ | ❌ | ❌ |
-| Map learning / completeness | ✅ v2.6+, SMART + cloud ★ | ❌ | ❌ |
-| Zone summary (clean / keepout / observed) | ✅ v2.6+, SMART + cloud ★ | ❌ | ❌ |
-| Raw state / cloud state dump | ❌ diagnostics download only | ❌ | ✅ 2 sensors: local + cloud raw dumps ★ |
-| Cloud pmap sensor | ❌ | ❌ | ✅ one sensor per saved map ★ |
+| Mop sensors — Braava m6 | ✅ 5 sensors ★ | ❌ | ✅ 5 sensors ★ |
+| Cloud diagnostics | ✅ 4 consolidated sensors ★ | ❌ | ❌ |
+| Map learning / completeness | ✅ SMART + cloud ★ | ❌ | ❌ |
+| Zone summary (clean / keep-out / observed) | ✅ SMART + cloud ★ | ❌ | ❌ |
+| Raw state dump as a sensor | ❌ diagnostics download instead | ❌ | ✅ local + cloud raw dumps ★ |
+| Cloud pmap sensor | ❌ | ❌ | ✅ one per saved map ★ |
+
+> **HA Core's ten sensors** are battery, battery cycles, total cleaning time,
+> average mission time, total missions, successful missions, cancelled missions,
+> failed missions, scrub count, total cleaned area and last mission — plus one
+> binary sensor. That is the whole set, read from its `strings.json`.
 
 ---
 
@@ -105,18 +129,29 @@
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| Start / Stop / Pause / Return | ✅ | ✅ | ✅ |
-| Spot clean | ✅ ★ | ✅ | ✅ native vacuum feature |
-| Cleaning passes per room | ✅ global Select entity, fully local ★ | ❌ | ⚠️ Staging Select entity per room + zone (set pass count, then press Start) ² |
-| Edge cleaning — HA entity | ✅ Switch entity, fully local ★ | ❌ | ❌ REST API only ² |
-| Always finish (`binPause`) | ✅ Switch entity ★ | ❌ | ❌ REST API only ² |
-| Schedule hold (`schedHold`) | ✅ Switch entity ★ | ❌ | ❌ |
-| Carpet Boost — writable | ✅ Switch (980) + fan_speed | ✅ via `fan_speed` on 980 | ❌ REST API only ² |
-| Repeat last mission | ✅ Button entity ★ | ❌ | ❌ |
-| Locate robot | ✅ | ✅ | ❌ |
+| Start / stop / pause / return | ✅ | ✅ | ✅ |
+| Locate | ✅ | ✅ | ❌ |
+| Fan speed | ✅ | ✅ | ⚠️ REST only |
+| Send raw command | ✅ | ✅ | ✅ `action` service |
+| Clean a specific room | ✅ by name or HA area ★ | ❌ | ✅ `clean` service + selects |
+| Cleaning passes per room | ✅ Select, fully local ★ | ❌ | ⚠️ staging Select — stages the value, you press Start |
+| Edge cleaning | ✅ Switch ★ | ❌ | ❌ REST only |
+| Always finish (`binPause`) | ✅ Switch ★ | ❌ | ❌ REST only |
+| Schedule hold | ✅ Switch ★ | ❌ | ❌ |
+| Carpet boost — writable | ✅ Switch + fan_speed | ✅ via `fan_speed` on 980 | ❌ REST only |
+| Repeat last mission | ✅ Button ★ | ❌ | ❌ |
 | Evacuate Clean Base | ✅ ★ | ❌ | ❌ |
-| Maintenance reset | ✅ with hass.storage persistence ★ | ❌ | ❌ |
-| Favourites / cloud routines | ✅ Button per favourite ★ | ❌ | ✅ Button per favourite ★ |
+| Maintenance reset | ✅ with persistence ★ | ❌ | ❌ |
+| Favourites / cloud routines | ✅ Button per favourite, **filtered to the robot it belongs to** ★ | ❌ | ✅ Button per favourite |
+| Schedule create / edit / delete | ✅ plus an editable HA calendar ★ | ❌ | ❌ |
+| **AutoWash dock controls** | ✅ six: wash frequency, area and time intervals, dry duration, wash and dry permissions ★ | ❌ | ❌ |
+| **Do Not Disturb** | ✅ write the window, switch it on now, read whether one covers this moment ★ | ❌ | ❌ |
+| **Start-blocked reasons** | ✅ names the fault *and which half of the robot still works* ★ | ❌ | ❌ |
+| **Pad wetness** | ✅ ★ | ❌ | ❌ |
+
+> **HA Core's vacuum entity** advertises battery, fan speed, locate, pause,
+> return home, send command, start, state and stop — read from its
+> `VacuumEntityFeature` flags. It has no services of its own.
 
 ---
 
@@ -140,6 +175,9 @@
 | Automatic room detection (900-series) | ✅ gap segmentation + EMA confidence ★ | ❌ | ❌ |
 | Door-width calibration | ✅ ★ | ❌ | ❌ |
 | xiaomi-vacuum-map-card support | ✅ `calibration_points` + `rooms` on both map entities, auto-detected by card (v2.7+) ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
+| **Prime-generation map** | ✅ floor plan with walls, doorway cut-outs and furniture; live coverage and trajectories composited over it ★ | ❌ no support for these robots | ❌ no support for these robots |
+| **Stable room ids** | ✅ renaming a room in the iRobot app does not break a saved card configuration ★ | ❌ | ❌ names only |
+| **Several maps, zones follow the selected one** | ✅ ★ | ❌ | ⚠️ one sensor per saved map, no selection |
 
 ---
 
@@ -199,6 +237,11 @@
 **³ roomba_rest980 map approach** fetches the iRobot cloud UMF floor plan and renders it as a static `CameraEntity` using Python/Pillow. The map shows the stored floor plan — not the live cleaning path. Keep-out zones and robot-learned obstacle zones are overlaid on the floor plan. Cloud credentials and a trained Smart Map are required. Supports `calibration` and `rooms` attributes for xiaomi-vacuum-map-card.
 
 **⁴ ha-rest980** (jeremywillans/ha-rest980) is a separate project from roomba_rest980. It used the rest980 Node.js container as middleware to provide a live cleaning path, but has been broken since firmware 3.20+ removed local `pose` reporting.
+
+**⁷ Prime-generation rows** are marked ❌ for HA Core and roomba_rest980 because
+neither supports those robots at all — they speak only the local MQTT protocol,
+and a Prime robot has none. Verified against `ia74/roomba_rest980` v1.20.0-beta4:
+no reference to the newer cloud protocol anywhere in the component.
 
 **⁵ iRobot / Picea Robotics cloud** — iRobot was acquired by Picea Robotics in January 2026. Both Roomba+ and roomba_rest980 use the same Gigya→AWS Cognito authentication flow against iRobot's API endpoints.
 

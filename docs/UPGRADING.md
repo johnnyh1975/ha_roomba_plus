@@ -9,6 +9,27 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.0.0 (alpha) — from any v3.x
+
+**No migration step, and no entity ids change.** The v4 line adds support for
+Prime-generation robots (Roomba Max, Combo 400-series) and carries a number of
+Classic fixes with it.
+
+**One thing to do after upgrading:** the maintenance to-do list is now **opt-in**
+on both generations. If you use it, switch it back on in the integration options
+— it takes a place in the sidebar, and it should be asked for rather than
+assumed.
+
+**If you have several Prime robots:** expect **fewer** favourite buttons per
+robot from v4.0.0a37 on. Favourites are an account-level list and every robot
+was previously shown all of them; the ones that disappear belonged to a
+different robot, and pressing them sent that robot's map regions to this one.
+
+**Going back to v3.5.x** works for Classic robots and does not for Prime ones —
+the stable line cannot connect to them at all.
+
+---
+
 ### Upgrading to v3.4.0
 
 No config entry migration — all persisted data is additive, existing stored

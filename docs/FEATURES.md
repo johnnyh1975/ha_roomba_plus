@@ -29,6 +29,16 @@ Every feature below is tagged with which robots support it:
 | `[SMART]` | i/s/j-series or Braava m6 (persistent Smart Map) — cloud not required |
 | `[SMART+CLOUD]` | Smart Map robot **and** iRobot cloud credentials configured |
 | `[BRAAVA]` | Braava m6 (mopping) specific |
+| `[PRIME]` | V4/Prime generation — Roomba Max, Combo 400-series and other robots on iRobot's newer cloud protocol |
+
+**Classic and Prime are different generations, not tiers of one.** A Classic robot
+talks to Home Assistant over your own network and can work with no internet at all;
+EPHEMERAL and SMART describe how much map it keeps. A Prime robot has **no local
+connection** — everything goes through iRobot's cloud — and it is not supported by
+the stable v3.x line at all.
+
+Sections below that carry no tag apply to Classic robots. Prime-only entities are
+marked in their own headings.
 
 ---
 
@@ -648,6 +658,48 @@ indefinitely.
 it stays at 0.0 m² while progress climbs. The two are not measuring the same
 thing.
 
+#### Favourites are per robot
+
+Your iRobot account's favourites are shared across every robot on it, but each
+favourite names the robot it was built for. **Only that robot gets a button.**
+
+A favourite that names no robot is shown under all of them — better visible
+everywhere than hidden from all.
+
+If you have several Prime robots and a button disappeared after upgrading, it
+belonged to a different one. Pressing it would have sent that robot's map
+regions to this one.
+
+#### Pad washing allowed (V4/Prime)
+
+`switch.{name}_pad_wash_allowed` turns pad washing on and off, gated on the
+dock's wash capability. Its sibling — pad **drying** allowed — has been there
+since a20; this one was withheld until iRobot's newer app showed it is written
+on its own rather than as part of a bundle.
+
+#### Pad wash interval: what the numbers mean
+
+`select.{name}_pad_wash_area_interval` carries bare numbers — 6, 8, 10, 15, 20 —
+and the unit is **tens of square feet**:
+
+| Value | Robot cleans before washing |
+|---|---|
+| 6 | 60 ft² ≈ 5 m² |
+| 8 | 80 ft² ≈ 7 m² |
+| 10 | 100 ft² ≈ 9 m² |
+| 15 | 150 ft² ≈ 14 m² |
+| 20 | 200 ft² ≈ 19 m² |
+
+**Smaller means more frequent washing**, which is the opposite of how it reads.
+The iRobot app hides this behind "High / Medium / Low" and shows the area in
+your own units — @chairstacker sees "after every 100 ft²" for value 10, while
+@ratpic83 sees "5 / 10 / 15 m²" for 6, 10 and 15.
+
+The numbers are kept here rather than translated to High/Medium/Low for two
+reasons: **the sets differ per robot series**, so the same word would mean a
+different area on different hardware, and a robot can report a value outside
+its own set — which has no position to name.
+
 #### Pad wetness (V4/Prime, a35)
 
 `select.{name}_pad_wetness` writes `padWetness.padPlate`, gated on
@@ -703,6 +755,15 @@ Use it to honour a room's own configuration instead of overriding it — see
 
 **Not confirmed on any robot.** A diagnostics download from a36 onwards
 includes it, and says which of two reasons applies when it is empty.
+
+#### Settings showing an unusual value
+
+A control whose current value is not in the list your robot's series normally
+offers now **shows that value** rather than going unavailable.
+
+@DaRealGuGu's 515 holds a pad wash interval belonging to a different series,
+and the iRobot app renders it as "not set". Selecting it again is a no-op — it
+is the value the robot already has.
 
 #### Started by, on Prime (a35)
 

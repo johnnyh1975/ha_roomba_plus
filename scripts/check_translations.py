@@ -131,7 +131,14 @@ def _report_key_syntax() -> int:
             failures.append(f"  {path.name}: {problem}")
 
     if not failures:
-        return 0
+        untranslated = check_untranslated()
+    if untranslated:
+        print("Untranslated values found:")
+        for line in untranslated:
+            print(f"  - {line}")
+        return 1
+
+    return 0
 
     print(f"\n{len(failures)} translation key(s) Home Assistant will reject:\n")
     print("\n".join(failures))
@@ -142,6 +149,81 @@ def _report_key_syntax() -> int:
     )
     return 1
 
+
+
+
+#: Values that are legitimately identical to English.
+#:
+#: Kept short and specific. A long allow-list turns this check off by
+#: attrition, which is how the untranslated strings survived in the
+#: first place -- `check_translations.py` compared KEYS and never
+#: values, so a locale file could be structurally complete and still be
+#: in English.
+IDENTICAL_IS_FINE: set[str] = {
+    # Placeholders and wire identifiers, which must not be translated.
+    "{name}", "{entity_id}", "{minutes}", "{zone_summary}", "{error}",
+    # Words that are the same in several of these languages.
+    "Status", "Filter", "Filtro", "Filtr", "OK",
+    # Product and protocol names.
+    "Roomba", "Braava", "iRobot", "MQTT", "Wi-Fi", "SNR",
+}
+
+#: Below this length, an identical value is usually a shared word
+#: rather than a missed translation. Set from the shortest real miss
+#: found when this check was written ("Connection settings updated
+#: successfully." at 40 characters), with room to spare.
+UNTRANSLATED_MIN_LENGTH = 26
+
+
+def check_untranslated() -> list[str]:
+    """Values a locale left in English.
+
+    WHY THIS EXISTS. @dixi83 sent a one-line PR fixing a Dutch label,
+    and looking at the file around it turned up **36 long strings that
+    were still English** in five locales -- config dialogs, service
+    descriptions, and six exception messages a user sees when something
+    goes wrong.
+
+    Nothing caught them because the key check passes: every locale had
+    every key. Structural completeness and translation are different
+    properties, and only one of them was being measured.
+    """
+    import json
+    import pathlib
+
+    base = pathlib.Path("custom_components/roomba_plus")
+    english = _flatten(json.loads((base / "strings.json").read_text()))
+    problems: list[str] = []
+
+    for path in sorted((base / "translations").glob("*.json")):
+        if path.stem == "en":
+            continue
+        local = _flatten(json.loads(path.read_text()))
+        missed = [
+            key for key, value in local.items()
+            if key in english
+            and value == english[key]
+            and isinstance(value, str)
+            and len(value) >= UNTRANSLATED_MIN_LENGTH
+            and value not in IDENTICAL_IS_FINE
+        ]
+        if missed:
+            problems.append(
+                f"{path.name}: {len(missed)} value(s) still in English, "
+                f"first: {missed[0]}"
+            )
+    return problems
+
+
+def _flatten(data: dict, prefix: str = "") -> dict:
+    out: dict = {}
+    for key, value in data.items():
+        full = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            out.update(_flatten(value, full))
+        else:
+            out[full] = value
+    return out
 
 if __name__ == "__main__":
     # BOTH run, always.  short-circuits:

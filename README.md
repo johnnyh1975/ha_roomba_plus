@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a36-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a37-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -11,7 +11,22 @@
 
 Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
-> 🔬 **New (v4.0.0a0, alpha):** initial support for iRobot's newer, cloud-only "Prime" robots (Combo/Plus 400-series and similar) — these don't speak the local MQTT protocol everything below is built on, so this is a genuinely separate, less mature path. See [V4/Prime support (alpha) →](#v4prime-support-alpha) before assuming everything on this page applies to your robot.
+## Which version do I need?
+
+| Your robot | Install | Why |
+|---|---|---|
+| **i · s · j · 900 · e-series · Braava** | **v3.5.2** (stable) — the default in HACS | Fully supported. The v4 alphas add nothing for you |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.0.0aNN** — enable *Show beta versions* in HACS | The stable line **cannot connect to your robot at all** |
+| Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
+
+> ⚠️ If HACS shows you only `main` and downloading it hangs, see
+> [Troubleshooting → Installing](docs/TROUBLESHOOTING.md#installing). Nothing is wrong
+> with your setup.
+
+> 🔬 **V4/Prime is alpha.** These robots don't speak the local MQTT protocol everything
+> below is built on, so it is a genuinely separate and less mature path. See
+> [V4/Prime support (alpha) →](#v4prime-support-alpha) before assuming everything on
+> this page applies to your robot.
 
 **Why Roomba+?**
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
@@ -100,19 +115,26 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 
 **What works on your robot** — the fast answer to the most common setup question:
 
-| Capability | 600 | 900 (EPHEMERAL) | i / s / j-series (SMART) | Braava m6 |
-|---|---|---|---|---|
-| Live cleaning map & path | ❌ | ✅ | ✅ | ✅ |
-| Clean by room name | ❌ | ✅ auto-detected zones | ✅ named rooms | ✅ named rooms |
-| Cloud room names, favourites, history | ❌ | ⚠️ history only | ✅ optional | ✅ optional |
-| Presence-aware scheduling & demand cleaning | ❌ | ✅ | ✅ | ✅ |
-| Room rhythms, overdue-room cleaning, mission maps *(v3.3.0)* | ❌ | ❌ — needs cloud room data | ✅ requires cloud | ✅ requires cloud |
-| Dirt ↔ sensor correlation *(v3.3.0)* | ❌ | ❌ | ✅ requires cloud | ✅ requires cloud |
-| Maintenance reminders (filter/brush/battery) | ✅ | ✅ | ✅ | ✅ |
-| Mop control (pad wetness, tank status) | — | — | — | ✅ |
-| Cleaning schedule as HA calendar *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ |
-| Maintenance tasks as HA to-do list *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ |
-| — incl. "unnamed zones" reminder *(v3.4.0, SMART only)* | ❌ | ❌ | ✅ | ✅ |
+| Capability | 600 | 900<br>EPHEMERAL | i / s / j<br>SMART | Braava m6 | Prime |
+|---|---|---|---|---|---|
+| Live cleaning map & path | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Clean by room name | ❌ | ✅ auto-detected zones | ✅ named rooms | ✅ named rooms | ✅ named rooms |
+| Cloud room names, favourites, history | ❌ | ⚠️ history only | ✅ optional | ✅ optional | ✅ always — cloud is the only path |
+| Presence-aware scheduling & demand cleaning | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Room rhythms, overdue-room cleaning, mission maps *(v3.3.0)* | ❌ | ❌ — needs cloud room data | ✅ requires cloud | ✅ requires cloud | ✅ |
+| Dirt ↔ sensor correlation *(v3.3.0)* | ❌ | ❌ | ✅ requires cloud | ✅ requires cloud | ✅ |
+| Maintenance reminders (filter/brush/battery) | ✅ | ✅ | ✅ | ✅ | ✅ real part names |
+| Mop control (pad wetness, tank status) | — | — | — | ✅ | ✅ plus AutoWash dock controls |
+| Cleaning schedule as HA calendar *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Maintenance tasks as HA to-do list *(v3.4.0)* | ✅ | ✅ | ✅ | ✅ | ✅ |
+| — incl. "unnamed zones" reminder *(v3.4.0, SMART only)* | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Do Not Disturb, start-blocked reasons | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Local connection (works without internet) | ✅ | ✅ | ✅ | ✅ | ❌ cloud only |
+
+**EPHEMERAL** and **SMART** are the two capability tiers among Classic robots: an
+EPHEMERAL robot builds a fresh map each run, a SMART robot keeps a persistent one it
+can name rooms on. **Prime** is a different generation entirely — newer robots that
+talk to iRobot's cloud protocol and have no local connection at all.
 
 *Cloud features require your iRobot app email and password and are entirely optional — all local MQTT functionality works without them.*
 
@@ -301,10 +323,16 @@ protocol: [Release notes →](release-notes/)
 3. **Open Roomba+ → ⋮ → Redownload → enable "Show beta versions"**
 4. Pick the newest `v4.0.0aNN` → restart HA
 
-> ⚠️ **Step 3 is not optional.** Every release so far is a pre-release, because
-> v4 is in alpha and no stable version has been tagged yet. Without beta
-> versions enabled HACS shows only **`main`** — and selecting it fails with a
-> spinning wheel and a 404 in the log:
+> ⚠️ **Step 3 is not optional for the v4 alpha.** Every v4 release is a
+> pre-release, so without beta versions enabled HACS will not offer you one.
+>
+> **Without betas you get v3.5.2**, the stable line — which is the right choice
+> for an i-series, s-series, 900-series, e-series or Braava, and which does
+> **not support Prime-generation robots at all**. If you have a Roomba Max or a
+> Combo 405/415, the v4 alpha is the only version that will connect.
+>
+> If HACS offers you only **`main`** and downloading it hangs, you are on a
+> checkout from before v3.5.2 was tagged. Selecting `main` fails with a 404:
 >
 > ```
 > Download failed - Got status code 404 when trying to download

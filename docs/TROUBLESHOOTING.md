@@ -27,8 +27,11 @@ forever. Nothing is wrong with your setup.
 **Every v4 release is a pre-release**, because v4 is in alpha. With betas off,
 HACS has nothing in the v4 line to offer.
 
-**The stable v3.5.1 is not reachable through HACS's picker either.** Confirmed
-by @pk-1966, who was trying to install it and was offered only `main`.
+**Fixed in v3.5.2**, confirmed installable from HACS's picker. If you are
+seeing this on an older checkout: v3.5.1 became unreachable, and v3.5.2 is the
+same code re-tagged so HACS can find it. Update normally.
+
+The rest of this section explains why, because it will recur.
 
 **The mechanism, read from HACS's own source** rather than guessed:
 `RepositoryBase.get_releases()` makes ONE call to GitHub's release list and
