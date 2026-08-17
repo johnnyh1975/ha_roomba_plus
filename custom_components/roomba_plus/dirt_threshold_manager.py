@@ -40,6 +40,11 @@ if TYPE_CHECKING:
 
 from .const import SQFT_TO_M2
 
+from .prime_dirt import dirty_rooms
+from .room_cleaning import async_get_room_cleaning_backend
+from .structural_failures import record_failure, record_success
+from .prime_coordinator import prime_mission_cycle
+
 _LOGGER = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -328,12 +333,103 @@ class DirtThresholdManager:
             return True, "blocking_sensor_queued"
 
         # Gate 4: robot must be docked/idle
-        state = data.roomba_reported_state()
-        cycle = (state.get("cleanMissionStatus") or {}).get("cycle", "none")
+        #
+        # THROUGH THE PRIME FALLBACK. This gate is reused untouched by
+        # async_evaluate_prime(), and `roomba_reported_state()` returns {}
+        # there -- so `cycle` defaulted to "none" and the gate passed on
+        # every Prime robot, cleaning or not. Failing open on a "must be
+        # docked" check is the wrong direction.
+        cycle = prime_mission_cycle(data) or "none"
         if cycle != "none":
             return True, f"robot_busy_{cycle}"
 
         return False, ""
+
+    async def async_evaluate_prime(self, entry_id: str) -> None:
+        """The Prime path: the robot says which rooms are dirty.
+
+        THE GATES ARE THE SAME. Presence, blocking sensors and the
+        enable switch are questions about the household, not about the
+        robot's generation, so `gate_blocked()` is reused untouched.
+
+        WHAT DIFFERS IS EVERYTHING BEFORE THEM. Classic derives dirt
+        density from cloud mission records, builds a weekday baseline
+        from at least four of them, and compares today against it with a
+        user-set multiplier -- three layers of inference. A Prime robot
+        reports a per-room value and the threshold to judge it by, in
+        one response.
+
+        AND WHAT DIFFERS AFTER: Classic starts a whole clean, because a
+        density averaged over a mission cannot say which room was dirty.
+        This starts the rooms that are.
+        """
+        blocked, reason = self.gate_blocked()
+        if blocked:
+            _LOGGER.debug("DirtThresholdManager (Prime): blocked — %s", reason)
+            return
+
+        data = self._entry.runtime_data
+        robot = getattr(data, "prime_robot", None)
+        if robot is None:
+            return
+
+        # THE MAP ID IS REQUIRED. `get_clean_score_raw` takes one, and
+        # scores are per map -- a household with two floors has two.
+        #
+        # Resolved the same way the room map resolves it: the user's
+        # selection when there is one, otherwise the robot's current
+        # map. A first attempt invented `prime_active_p2map_id`, which
+        # exists nowhere -- the second time today a guessed attribute
+        # name got as far as a passing test suite.
+        backend = async_get_room_cleaning_backend(self._entry, self._hass)
+        if backend is None:
+            _LOGGER.debug("DirtThresholdManager (Prime): no room cleaning backend")
+            return
+        p2map_id = getattr(data, "prime_selected_map_id", None)
+        if not p2map_id:
+            try:
+                p2map_id = await backend._current_map_id()  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                p2map_id = None
+        if not p2map_id:
+            _LOGGER.debug("DirtThresholdManager (Prime): no active map yet")
+            return
+
+        try:
+            response = await robot.get_clean_score_raw(p2map_id)
+        except Exception:  # noqa: BLE001
+            record_failure("prime clean score", "reading per-room dirtiness")
+            _LOGGER.debug(
+                "DirtThresholdManager (Prime): could not read clean score",
+                exc_info=True,
+            )
+            return
+        record_success("prime clean score")
+        # KEPT FOR THE MISSION SENSOR, not only for the decision below.
+        #
+        # The same response says which rooms the last run left undone --
+        # @chairstacker's blocked-door mission that left no trace
+        # anywhere. Fetching it twice for two readers would double a
+        # cloud call to answer one question.
+        data.prime_clean_scores = response
+
+        dirty = dirty_rooms(response)
+        if not dirty:
+            _LOGGER.debug("DirtThresholdManager (Prime): no room past threshold")
+            return
+
+        # ONE ROOM, THE DIRTIEST. Sending the robot to everything above
+        # the line would be a whole-house clean by another name on a bad
+        # week, and the point of a per-room score is to do less than
+        # that. A second room gets its turn at the next evaluation.
+        room_id, score = dirty[0]
+        _LOGGER.info(
+            "DirtThresholdManager (Prime): starting room %s (score %.3f)",
+            room_id, score,
+        )
+        await backend.clean_rooms([room_id])
+        self._last_trigger_time = dt_util.utcnow()
+        await self.async_save(entry_id)
 
     async def async_evaluate(
         self,

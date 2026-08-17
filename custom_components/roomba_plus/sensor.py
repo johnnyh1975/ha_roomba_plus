@@ -39,9 +39,13 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    SensorEntity,
     SensorStateClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 )
-from homeassistant.core import HomeAssistant
+from collections.abc import Callable
+from typing import Any
+
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 # ir/dt_util: not used by this module's own code. Kept importable here as
 # `sensor.ir`/`sensor.dt_util` purely so that tests using
@@ -55,7 +59,35 @@ from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT faca
 
 from . import roomba_reported_state
 from .const import CONF_CORRELATION_ENTITIES
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
+from .sensor_prime import (
+    PrimeBatterySensor,
+    PrimeCanceledMissionsSensor,
+    PrimeChargeCyclesErrorSensor,
+    PrimeChargeCyclesOkSensor,
+    PrimeConnectionHealthSensor,
+    PrimeCleaningModeSensor,
+    PrimeDetectedPadSensor,
+    PrimeDockStatusSensor,
+    PrimeErrorSensor,
+    PrimePhaseSensor,
+    PrimeReadinessSensor,
+    PrimeFailedMissionsSensor,
+    PrimeFirmwareVersionSensor,
+    PrimeConsumablePartSensor,
+    PrimeMissionEventSensor,
+    PrimeNavigationResetsSensor,
+    PrimeDockTankLevelSensor,
+    PrimePadDryStatusSensor,
+    PrimeJobInitiatorSensor,
+    PrimePadWashStatusSensor,
+    PrimeRuntimeHoursSensor,
+    PrimeSerialNumberSensor,
+    PrimeSuccessfulMissionsSensor,
+    PrimeSuctionLevelSensor,
+    PrimeSystemUptimeSensor,
+    PrimeTotalMissionsSensor,
+)
 
 from .sensor_core import (
     RoombaSensor,
@@ -160,10 +192,155 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up all applicable sensors for this Roomba."""
+    data = config_entry.runtime_data
+
+    # NEW (this session): CLOUD_ONLY (V4/Prime) branch -- deliberately
+    # separate from the classic path below, not routed through
+    # SENSORS/RoombaSensor (see sensor_prime.py's own module docstring
+    # for why). Returns early; none of the classic-specific code below
+    # (roomba_reported_state(), SENSORS filter_fn list, cloud-history/
+    # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
+    # a different coordinator entirely) applies to a CLOUD_ONLY entry.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+
+        entities: list[SensorEntity] = [
+            PrimeMissionEventSensor(data.blid, config_entry),
+            PrimeConnectionHealthSensor(data.blid, config_entry),
+            PrimeBatterySensor(data.blid, config_entry),
+            PrimeRuntimeHoursSensor(data.blid, config_entry),
+            PrimeFirmwareVersionSensor(data.blid, config_entry),
+            PrimeDockStatusSensor(data.blid, config_entry),
+            PrimeErrorSensor(data.blid, config_entry),
+            # The most basic state sensor there is, and Prime did not
+            # have it -- found by comparing Classic value_fns against a
+            # real Prime shadow, not by anyone reporting it.
+            PrimePhaseSensor(data.blid, config_entry),
+            PrimeReadinessSensor(data.blid, config_entry),
+            # NEW (this session): ro-stats-backed lifetime stats,
+            # confirmed with real values (see StatsShadow's own
+            # docstring). Four mission-outcome sensors reuse Classic's
+            # own translation_keys (same confirmed field family);
+            # charge/uptime/reset sensors use new keys -- see each
+            # class's own docstring for why.
+            PrimeTotalMissionsSensor(data.blid, config_entry),
+            PrimeSuccessfulMissionsSensor(data.blid, config_entry),
+            PrimeCanceledMissionsSensor(data.blid, config_entry),
+            PrimeFailedMissionsSensor(data.blid, config_entry),
+            PrimeChargeCyclesOkSensor(data.blid, config_entry),
+            PrimeChargeCyclesErrorSensor(data.blid, config_entry),
+            PrimeSystemUptimeSensor(data.blid, config_entry),
+            PrimeNavigationResetsSensor(data.blid, config_entry),
+            # NEW (this session): ro-configinfo-backed, confirmed real
+            # value (see ConfigInfoShadow's own docstring).
+            PrimeSerialNumberSensor(data.blid, config_entry),
+        ]
+        # NEW (this session): capability-gated -- see
+        # get_prime_capability_flags()'s own docstring for the "None
+        # means unknown, only explicit 0 means absent" contract.
+        # NO CAPABILITY GATE. Every robot vacuums, so the sensor is
+        # meaningful even on one that cannot mop -- it just never
+        # reports "mopping". Gating on scrub would hide the vacuum half
+        # from exactly the robots where it is the only half.
+        entities.append(PrimeCleaningModeSensor(data.blid, config_entry))
+        if cap is None or cap.scrub != 0:
+            entities.append(PrimeDetectedPadSensor(data.blid, config_entry))
+        if cap is None or cap.suction_lvl != 0:
+            entities.append(PrimeSuctionLevelSensor(data.blid, config_entry))
+        # A PRESENT dock.cap WITHOUT the key means the dock cannot do
+        # it -- which is different from having no dock.cap at all.
+        #
+        # The "None means unknown" contract above is right for the ROBOT
+        # capabilities, where a missing cap object means the shadow has
+        # not arrived. It is wrong here: @jouwdan's evac-only dock
+        # reports `cap: {"evac": 1}` -- the object is there, and the
+        # absence of `pw` inside it is a statement, not a gap.
+        #
+        # Failing open gave a vacuum-only Roomba Max 705 a pad-wash and
+        # a pad-dry sensor, both permanently meaningless. His own
+        # diagnostics said so: "created (capability unknown -- failing
+        # open)".
+        # A DOCK THE ROBOT SAYS IT DOES NOT KNOW IS NOT AN UNKNOWN DOCK.
+        #
+        # @utkjmitch's Y351020 reports
+        # `dock: {"known": false, "error": 0, "fwVer": ""}` -- no `cap`
+        # object at all. NOT a plain charge dock, corrected by the
+        # tester: it is an auto-empty dock with a bag, and
+        # `cap.autoevac = 1`. `known: false` is narrower than "no dock".
+        # See button_prime.py's gate for what that does and does not
+        # justify. The rule below reads a missing cap as "shadow
+        # has not arrived, fail open", which is right when the shadow
+        # really is incomplete and wrong here: `known: false` is the
+        # robot stating there is no such dock.
+        #
+        # It produced pad wash and pad dry sensors, plus the wash and dry
+        # buttons, on a robot that can do neither. Same family as the
+        # a17 Max 705 fix and a different trigger -- there the cap object
+        # was present and the key absent, here the object never comes.
+        dock_known = _dock_reports_itself(config_entry)
+        dock_cap_known = dock_cap is not None
+        # NOT CONVERTED TO created-but-disabled, and PR #76 proposes it.
+        #
+        # Seventeen tests encode this contract, and the strongest is
+        # field-derived: @utkjmitch's Y351020 reports
+        # `dock: {"known": false}` and got pad wash and pad dry sensors
+        # for a dock that has neither. `known: false` is the robot
+        # stating there is no such dock -- not an incomplete shadow.
+        #
+        # A disabled entity is still an entity in the registry. For a
+        # dock that does not exist, that is a row the owner has to
+        # understand and dismiss, which is what the original fix
+        # removed. The disabled pattern fits a capability a robot HAS
+        # and reports off; it does not fit hardware that is absent.
+        # NOT GATED. Every robot reports `cleanMissionStatus.initiator`,
+        # and a household that only ever starts from the app still gets
+        # a useful answer -- the sensor exists to distinguish `schedule`
+        # from `alexa` from `dockBtn`, not to detect a capability.
+        entities.append(PrimeJobInitiatorSensor(data.blid, config_entry))
+        if dock_known and (not dock_cap_known or dock_cap.pad_wash not in (0, None)):
+            entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
+        if dock_known and (not dock_cap_known or dock_cap.pad_dry not in (0, None)):
+            entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
+        # PRESENCE, not capability. See PrimeDockTankLevelSensor's
+        # docstring: which docks report tankLvl is not decidable from
+        # dock.cap, and a sensor reading "unknown" forever is worse than
+        # no sensor.
+        coordinator = getattr(config_entry.runtime_data,
+                              "prime_status_coordinator", None)
+        raw_dock = ((getattr(coordinator, "data", None) or {})
+                    .get("ro-currentstate") or {}).get("dock") or {}
+        if isinstance(raw_dock, dict) and raw_dock.get("tankLvl") is not None:
+            entities.append(PrimeDockTankLevelSensor(data.blid, config_entry))
+
+        async_add_entities(entities)
+
+        # Consumable parts: one sensor per part the ROBOT reports,
+        # discovered rather than hard-coded.
+        #
+        # The set differs by model -- a vacuum-only robot has no mop
+        # pads, one without a self-emptying base has no dirt bag. A
+        # fixed list would invent entities for hardware that lacks them
+        # and miss whatever exists on hardware nobody here owns.
+        #
+        # ADDED VIA A LISTENER, not just once at setup. The parts fetch
+        # is best-effort: if it fails during startup -- a cloud hiccup,
+        # a rate limit -- there is no data yet and nothing to create.
+        # Adding them only here would mean those users never get the
+        # sensors until they reload the config entry, for a failure
+        # that resolves itself within hours.
+        #
+        # The listener also covers a part appearing later for a real
+        # reason: a dirt bag showing up after someone attaches a
+        # self-emptying base.
+        _add_discovered_parts(data, config_entry, async_add_entities)
+        _add_prime_mission_sensors(data, config_entry, async_add_entities)
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
-    data = config_entry.runtime_data
 
     entities: list = [
         RoombaSensor(roomba, blid, description, config_entry)
@@ -287,3 +464,135 @@ async def async_setup_entry(
         entities.append(RoombaRelocalisationRateSensor(roomba, blid, config_entry))
 
     async_add_entities(entities)
+
+
+#: Mission-history sensors that work for Prime robots.
+#:
+#: NAMED EXPLICITLY rather than filtered. The Classic path decides which
+#: sensors to create by running every description's filter_fn against
+#: roomba_reported_state(), and Prime has no such state -- so a filter
+#: would either pass everything or nothing.
+#:
+#: It is also the safer shape. All filter_fn calls happen inside one
+#: list comprehension, so a single crash takes down the entire sensor
+#: platform. An explicit list cannot crash.
+#:
+#: Each of these was checked against a real Prime mission record and
+#: returns a correct value. Deliberately absent:
+#:   - area_cleaned_today: gated on has_pose(), a Classic capability,
+#:     even though Prime does report square footage. Reachable later,
+#:     but it needs the gate rewritten rather than bypassed.
+#:   - problem_zone: reads zone data Prime has no equivalent for.
+_PRIME_MISSION_SENSOR_KEYS: frozenset[str] = frozenset({
+    # Gated on has_pose() in the shared SENSORS list, which is a Classic
+    # capability -- but that gate is about the 600-series not reporting
+    # square footage at all, and Prime does report it. The mission
+    # records carry area_sqft, so the sensor works; only the Classic-side
+    # filter would have excluded it.
+    "area_cleaned_today",
+    "last_mission",
+    "last_mission_result",
+    "last_mission_duration",
+    "clean_streak",
+    "consecutive_mission_anomalies",
+})
+
+#: Maintenance-date sensors that work for Prime robots.
+#:
+#: These record when the USER last changed a part, not anything the
+#: robot reports -- so unlike every other store, MaintenanceStore is
+#: generation-independent by nature. The reset service handler was
+#: already written without a Classic assumption; it only checked whether
+#: the store existed, and for Prime it never did.
+#:
+#: Deliberately absent:
+#:   - bin_last_cleaned, contact_last_cleaned, wheel_last_cleaned: their
+#:     reset services exist, but a Prime robot's own consumable sensors
+#:     already track the dirt bag, and the contact/wheel cleaning
+#:     reminders are 900-series concepts. Offering a date field for
+#:     something nothing prompts you about is clutter.
+#:   - consecutive_clean_skips: counts schedule skips detected from the
+#:     Classic MQTT stream. Prime has schedule data but no skip
+#:     detection, so this would sit at 0 forever and read as a fact.
+_PRIME_MAINTENANCE_SENSOR_KEYS: frozenset[str] = frozenset({
+    "filter_last_replaced",
+    "brush_last_replaced",
+    "pad_last_replaced",
+    "battery_last_replaced",
+})
+
+
+def _add_prime_mission_sensors(
+    data: Any,
+    config_entry: RoombaConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Mission-history sensors for Prime robots.
+
+    MissionStore was left at None for Prime since v4.0.0a0, so these
+    were empty even though the data was reachable over REST. Filling the
+    store was only half the fix: the Prime branch of async_setup_entry
+    returns before the mission sensors are ever created, so nothing read
+    it.
+
+    That is the same shape as two other bugs this project has had --
+    working data that no entity consumes. PrimeMapImage was unreachable
+    for a whole release because IMAGE was missing from PRIME_PLATFORMS,
+    and CLEAN_AREA was advertised without the method that supplies the
+    room list.
+    """
+    wanted: set[str] = set()
+    if getattr(data, "mission_store", None) is not None:
+        wanted |= _PRIME_MISSION_SENSOR_KEYS
+    if getattr(data, "maintenance_store", None) is not None:
+        wanted |= _PRIME_MAINTENANCE_SENSOR_KEYS
+    entities: list[Any] = [
+        RoombaSensor(None, data.blid, description, config_entry)
+        for description in SENSORS
+        if description.key in wanted
+    ]
+
+    # Mission progress: elapsed time, current room, remaining estimate.
+    # Not part of SENSORS -- it is its own entity class, and Classic
+    # gates it on map_capability == SMART plus a cloud coordinator,
+    # neither of which describes a Prime robot. What it actually needs is
+    # the timer store, and the phase transitions that feed it now come
+    # from PrimeStatusCoordinator.
+    if getattr(data, "mission_timer_store", None) is not None:
+        from .sensor_rooms import RoombaMissionProgress  # noqa: PLC0415
+
+        entities.append(RoombaMissionProgress(None, data.blid, config_entry))
+
+    if entities:
+        async_add_entities(entities)
+
+
+def _add_discovered_parts(
+    data: Any, config_entry: RoombaConfigEntry, async_add_entities: Callable[..., None]
+) -> None:
+    """Creates a sensor for each consumable part, now and as they appear.
+
+    Entities are added exactly once per part_id. `known` is captured by
+    the closure rather than stored on the coordinator, so a reload
+    starts clean -- Home Assistant builds fresh entities on reload
+    anyway, and a stale set would silently suppress them.
+    """
+    coordinator = getattr(data, "prime_parts_coordinator", None)
+    if coordinator is None:
+        return
+
+    known: set[str] = set()
+
+    @callback
+    def _add_new() -> None:
+        parts = coordinator.data or {}
+        new = [pid for pid in sorted(parts) if pid not in known]
+        if not new:
+            return
+        known.update(new)
+        async_add_entities(
+            PrimeConsumablePartSensor(data.blid, pid, config_entry) for pid in new
+        )
+
+    _add_new()
+    config_entry.async_on_unload(coordinator.async_add_listener(_add_new))

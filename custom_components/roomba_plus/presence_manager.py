@@ -30,10 +30,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CLEANING_PHASES,
     CONF_AWAY_DELAY_MIN,
+    CONF_CLEAN_DELAY_MIN,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
     DEFAULT_AWAY_DELAY_MIN,
+    DEFAULT_CLEAN_DELAY_MIN,
     DEFAULT_PRESENCE_MODE,
     EVENT_ALL_AWAY,
     EVENT_PERSON_DETECTED_DURING_CLEAN,
@@ -48,8 +51,12 @@ _LOGGER = logging.getLogger(__name__)
 _HOME_STATES = frozenset({"home", "on", "true"})
 # States where the person entity is unreliable — treat as "might be home" (safe default)
 _PRESENCE_UNUSABLE = frozenset({"unavailable", "unknown"})
-# Mission phases that indicate an active clean in progress
-_ACTIVE_CLEANING_PHASES = frozenset({"run", "hmMidMsn", "evac"})
+# Mission phases that indicate an active clean in progress.
+#
+# IMPORTED, not repeated: const.py owns this set and carries the reason
+# `evac` is in it. Two copies drifting apart would mean presence logic
+# and mission logic disagreeing about whether the robot is cleaning.
+_ACTIVE_CLEANING_PHASES = CLEANING_PHASES
 
 
 def _event_dt(item: object) -> object:
@@ -151,15 +158,42 @@ class PresenceManager:
         except asyncio.CancelledError:
             return
 
+        # THE SECOND DELAY, which existed as an option and was never
+        # read. The two answer different questions: the away delay waits
+        # to be sure everyone has really gone -- somebody walking to the
+        # postbox should not start a mission -- and this one waits before
+        # cleaning, because a car still on the drive is not a reason to
+        # send the robot out.
+        #
+        # Somebody who set both got only the first, and the dialog said
+        # nothing about it.
+        clean_delay: int = self._entry.options.get(
+            CONF_CLEAN_DELAY_MIN, DEFAULT_CLEAN_DELAY_MIN
+        )
+        if clean_delay > 0:
+            _LOGGER.debug(
+                "PresenceManager: away confirmed, %d min before cleaning",
+                clean_delay,
+            )
+            try:
+                await asyncio.sleep(clean_delay * 60)
+            except asyncio.CancelledError:
+                # An arrival during this window cancels the whole task,
+                # and cleaning must not start after it.
+                return
+
         mode = self._entry.options.get(CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE)
         if mode == "away_only":
-            await self._set_sched_hold(False)
+            await self._set_schedules_paused(False)
             self._managed_hold = False
             self._did_unfreeze = True  # remember we performed the unfreeze
         else:
             # always_ask: fire event and let user automation handle it
             self._hass.bus.async_fire(EVENT_ALL_AWAY, {})
         self._away_task = None
+        #: Which schedules WE switched off, so a resume does not enable
+        #: one the user had turned off themselves.
+        self._paused_schedule_ids: set[str] = set()
 
     async def _handle_someone_home(self) -> None:
         """A person arrived — cancel delay and re-freeze if WE unfroze it."""
@@ -182,7 +216,7 @@ class PresenceManager:
         # _did_unfreeze is set True only when _away_delay calls _set_sched_hold(False).
         # This prevents the PM from claiming ownership of a manual hold.
         if not state.get("schedHold", False) and self._did_unfreeze:
-            await self._set_sched_hold(True)
+            await self._set_schedules_paused(True)
             self._managed_hold = True
             self._did_unfreeze = False
 
@@ -190,6 +224,70 @@ class PresenceManager:
             phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
             if phase in _ACTIVE_CLEANING_PHASES:
                 self._hass.bus.async_fire(EVENT_PERSON_DETECTED_DURING_CLEAN, {})
+
+    async def _set_schedules_paused(self, paused: bool) -> None:
+        """Pauses or resumes the robot's schedules, either generation.
+
+        CLASSIC HAS A FIELD FOR THIS AND PRIME DOES NOT. `schedHold` is
+        Classic's way of holding a schedule without changing it -- the
+        entry stays visible in the app and simply does not run.
+
+        A Prime robot carries `schedHold` in its shadow, accepts a write
+        to it, reads it back changed, **and runs anyway**. APK research
+        10 explains why: the field appears once in the Prime app, with no
+        serialisation annotation and no consumer across 3801 classes. It
+        is inherited plumbing, not a control.
+
+        What Prime offers instead is `enabled` per schedule, which the
+        app itself uses. So this disables and re-enables them.
+
+        **ONE VISIBLE DIFFERENCE, and it is worth knowing:** a paused
+        Classic schedule still looks scheduled in the iRobot app; a
+        paused Prime one looks switched off. Somebody checking the app
+        while the house is empty will see their schedules off. That is
+        honest -- they are -- but it is not what Classic does.
+        """
+        data = self._entry.runtime_data
+        if getattr(data, "prime_robot", None) is None:
+            await self._set_sched_hold(paused)
+            return
+
+        # LATE ON PURPOSE: prime_schedule_switch imports back into the
+        # presence chain, so a module-level import here is a real cycle.
+        from .prime_schedule_switch import (  # noqa: PLC0415
+            async_read_schedule_containers,
+        )
+
+        containers = await async_read_schedule_containers(self._entry)
+        if not containers:
+            return
+
+        # ONLY SCHEDULES WE PAUSED GET RESUMED. Turning everything back
+        # on would enable a schedule the user had deliberately switched
+        # off before leaving -- the robot would then run on a day they
+        # had opted out of, and nothing in Home Assistant would explain
+        # why.
+        for container_id, schedules in containers:
+            changed = False
+            for schedule in schedules or []:
+                options = getattr(schedule, "options", None)
+                if options is None or getattr(options, "deleted", None):
+                    continue
+                sid = getattr(schedule, "schedule_id", None)
+                if paused:
+                    if getattr(options, "enabled", None) is not True:
+                        continue
+                    self._paused_schedule_ids.add(sid)
+                    options.enabled = False
+                    changed = True
+                elif sid in self._paused_schedule_ids:
+                    options.enabled = True
+                    self._paused_schedule_ids.discard(sid)
+                    changed = True
+            if changed:
+                await data.prime_robot.update_schedules(
+                    data.prime_household_id, container_id, schedules
+                )
 
     async def _set_sched_hold(self, value: bool) -> None:
         """Write schedHold preference to the robot.

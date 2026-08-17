@@ -33,6 +33,8 @@ roombapy internals.
 """
 from __future__ import annotations
 
+import logging
+
 import voluptuous as vol
 
 from homeassistant.components.device_automation import DEVICE_TRIGGER_BASE_SCHEMA
@@ -62,12 +64,23 @@ from .const import (
     HEALTH_BAND_RANK,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 # ── Trigger type constants ────────────────────────────────────────────────────
 
 TRIGGER_CLEANING_STARTED  = "cleaning_started"
 TRIGGER_CLEANING_FINISHED = "cleaning_finished"
 TRIGGER_STUCK             = "stuck"
 TRIGGER_BIN_FULL          = "bin_full"
+#: A fault that stops a mission from STARTING, as opposed to one that
+#: interrupts a running one. `TRIGGER_ERROR` covers the second; this
+#: covers the case where nothing has gone wrong yet and nothing will
+#: begin either -- a pad plate fitted when the user wanted a vacuum.
+#:
+#: Worth its own trigger because the useful automation is different:
+#: an error while cleaning wants a notification, a blocked start wants
+#: "tell me before I press the button".
+TRIGGER_START_BLOCKED     = "start_blocked"
 TRIGGER_DOCKED            = "docked"
 TRIGGER_ERROR             = "error"
 # v2.9.0 TRIGGER+
@@ -83,6 +96,7 @@ TRIGGER_TYPES = {
     TRIGGER_CLEANING_FINISHED,
     TRIGGER_STUCK,
     TRIGGER_BIN_FULL,
+    TRIGGER_START_BLOCKED,
     TRIGGER_DOCKED,
     TRIGGER_ERROR,
     TRIGGER_ROOM_COMPLETED,
@@ -173,6 +187,7 @@ async def async_get_triggers(
         {**base, CONF_TYPE: TRIGGER_CLEANING_FINISHED},
         {**base, CONF_TYPE: TRIGGER_STUCK},
         {**base, CONF_TYPE: TRIGGER_BIN_FULL},
+        {**base, CONF_TYPE: TRIGGER_START_BLOCKED},
         {**base, CONF_TYPE: TRIGGER_DOCKED},
         {**base, CONF_TYPE: TRIGGER_ERROR},
         {**base, CONF_TYPE: TRIGGER_ROOM_COMPLETED},
@@ -236,6 +251,25 @@ async def async_attach_trigger(
                 CONF_PLATFORM: "state",
                 CONF_ENTITY_ID: entity_id,
                 "to": _STUCK_PHASE,
+            }
+        )
+        return await state_trigger.async_attach_trigger(
+            hass, state_config, action, trigger_info, platform_type="device"
+        )
+
+    if trigger_type == TRIGGER_START_BLOCKED:
+        # Fires when a blocking fault APPEARS. The binary sensor carries
+        # `blocked_reason` and `available_modes` as attributes, so an
+        # automation can say what to do instead rather than only that
+        # something is wrong.
+        entity_id = _find_entity(hass, device_id, "prime_start_blocked")
+        if not entity_id:
+            return lambda: None
+        state_config = state_trigger.TRIGGER_STATE_SCHEMA(
+            {
+                CONF_PLATFORM: "state",
+                CONF_ENTITY_ID: entity_id,
+                "to": "on",
             }
         )
         return await state_trigger.async_attach_trigger(
@@ -336,11 +370,31 @@ async def async_attach_trigger(
         entry_id = _entry_id_for_device(hass, device_id)
         if not entry_id:
             return lambda: None
+        # NO KeyError ON AN UNKNOWN TRIGGER TYPE.
+        #
+        # `trigger_type` comes from a stored automation, so it is
+        # whatever was written when that automation was created. A
+        # trigger renamed or removed in a later version arrives here as
+        # a string this dict does not have, and a KeyError inside an
+        # automation's attach step breaks the automation with a
+        # traceback rather than a message.
+        #
+        # The same lookup-without-a-fallback pattern crashed a tester's
+        # tooling run twice in one day, once for "FAIL" and once for
+        # "SKIP". Worth not repeating where a user's automation is on
+        # the other end.
         event_type = {
             TRIGGER_ROOM_COMPLETED: EVENT_ROOM_COMPLETED,
             TRIGGER_MAP_RETRAIN_STARTED: EVENT_MAP_RETRAIN_STARTED,
             TRIGGER_MAP_RETRAIN_COMPLETED: EVENT_MAP_RETRAIN_COMPLETED,
-        }[trigger_type]
+        }.get(trigger_type)
+        if event_type is None:
+            _LOGGER.warning(
+                "roomba_plus: automation uses unknown trigger type %r -- "
+                "it will never fire. Recreate the trigger.",
+                trigger_type,
+            )
+            return lambda: None
         event_config = event_trigger.TRIGGER_SCHEMA(
             {
                 CONF_PLATFORM: "event",
@@ -366,6 +420,7 @@ async def async_attach_trigger(
             return lambda: None
 
         from homeassistant.core import HassJob
+
 
         trigger_data = trigger_info["trigger_data"]
         job = HassJob(action, f"health_score_drop device trigger {trigger_info}")

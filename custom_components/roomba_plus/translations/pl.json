@@ -1,4 +1,13 @@
 {
+  "common": {
+    "weekday_0": "Nd",
+    "weekday_1": "Pn",
+    "weekday_2": "Wt",
+    "weekday_3": "Śr",
+    "weekday_4": "Cz",
+    "weekday_5": "Pt",
+    "weekday_6": "So"
+  },
   "config": {
     "step": {
       "user": {
@@ -63,6 +72,39 @@
           "irobot_username": "Adres e-mail używany do logowania w aplikacji iRobot.",
           "irobot_password": "Twoje aktualne hasło do aplikacji iRobot."
         }
+      },
+      "prime_account": {
+        "title": "Zaloguj się przy użyciu konta iRobot",
+        "description": "Dla nowszych modeli bez lokalnej konfiguracji (np. roboty Combo/generacji V4). Wprowadź adres e-mail i hasło aplikacji iRobot — spowoduje to również wykrycie ewentualnych robotów Classic na tym samym koncie, które można później dokończyć konfigurować przez sieć lokalną.",
+        "data": {
+          "irobot_username": "Adres e-mail iRobot",
+          "irobot_password": "Hasło iRobot"
+        },
+        "data_description": {
+          "irobot_username": "Adres e-mail używany do logowania w aplikacji iRobot.",
+          "irobot_password": "Hasło do aplikacji iRobot."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Wybierz robota",
+        "description": "Roboty znalezione na tym koncie. Wybierz jednego do skonfigurowania — dodaj kolejne roboty, uruchamiając tę konfigurację ponownie.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Adres w sieci lokalnej",
+        "description": "Nie udało się automatycznie znaleźć {name} w sieci lokalnej. Wprowadź jego lokalny adres IP — dane logowania już potwierdzone przez konto iRobot zostaną ponownie wykorzystane.",
+        "data": {
+          "host": "Adres IP"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Funkcje chmurowe dla {name}",
+        "description": "Czy zachować dane logowania konta iRobot także dla tego robota, aby włączyć odczyt nazw pomieszczeń, historii misji i ulubionych z chmury? Wszystkie polecenia i tak nadal działają lokalnie przez MQTT.",
+        "data": {
+          "enable_cloud_analytics": "Włącz funkcje chmurowe dla tego robota"
+        }
       }
     },
     "error": {
@@ -71,14 +113,24 @@
       "unknown": "Nieoczekiwany błąd. Sprawdź logi Home Assistant, aby uzyskać szczegóły.",
       "cloud_auth_failed": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
       "cloud_unavailable": "Nie można połączyć się z chmurą iRobot. Sprawdź połączenie internetowe i spróbuj ponownie.",
-      "invalid_cloud_credentials": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot."
+      "invalid_cloud_credentials": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
+      "cloud_rate_limited": "Logowanie do chmury iRobot jest tymczasowo ograniczone. Zamknij aplikację iRobot na telefonie i spróbuj ponownie.",
+      "cloud_ssl_certificate_error": "Nie udało się zweryfikować certyfikatu serwera chmury iRobot. To niemal zawsze tymczasowy problem po stronie iRobot — spróbuj ponownie za kilka godzin."
     },
     "abort": {
       "already_configured": "Ten robot jest już skonfigurowany.",
       "not_irobot_device": "Wykryte urządzenie nie jest urządzeniem iRobot.",
       "short_blid": "Przepływ konfiguracji dla tego robota jest już w toku.",
       "cannot_connect": "Nie można połączyć się z robotem pod podanym adresem.",
-      "reconfigure_successful": "Ustawienia połączenia zostały pomyślnie zaktualizowane."
+      "reconfigure_successful": "Ustawienia połączenia zostały pomyślnie zaktualizowane.",
+      "no_new_robots_found": "Nie znaleziono nowych robotów na tym koncie iRobot — wszystkie roboty są już skonfigurowane.",
+      "prime_classic_password_missing": "Hasło tego robota nie zostało uwzględnione w odpowiedzi konta iRobot. Spróbuj zamiast tego dodać go ręcznie.",
+      "demand_cleaning_not_supported": "Ten robot nie zgłasza danych wykrywania zabrudzeń wymaganych do sprzątania na żądanie.",
+      "integration_not_loaded": "Integracja nie jest załadowana. Uruchom ponownie Home Assistant i spróbuj jeszcze raz.",
+      "room_schedule_no_rooms": "Dla tego robota nie są jeszcze znane żadne pomieszczenia. Pozwól mu najpierw ukończyć mapowanie.",
+      "room_schedule_not_supported": "Harmonogramy pomieszczeń wymagają robota zgłaszającego dane pomieszczeń.",
+      "no_rooms_to_name": "Nie znaleziono pokoi do nazwania. Pokoje tego robota pojawią się, gdy przynajmniej raz posprząta konkretne pokoje lub gdy jego mapa będzie dostępna z konta iRobot.",
+      "all_rooms_named": "Każdy pokój ma już nazwę. Zmień nazwę jednego z nich w selektorze stref na stronie urządzenia."
     }
   },
   "options": {
@@ -114,7 +166,14 @@
           "map_size_px": "Rozmiar mapy (piksele)",
           "map_scale_mm_per_px": "Skala (mm/piksel)",
           "floor_label": "Etykieta piętra (np. Parter)",
-          "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)"
+          "correlation_entities": "Koreluj brud z czujnikami (opcjonalne)",
+          "map_room_labels": "Rysuj nazwy pomieszczeń na obrazie mapy",
+          "prime_favorite_buttons": "Utwórz przycisk dla każdego zapisanego ulubionego",
+          "enable_schedule_calendar": "Pokaż harmonogramy sprzątania jako kalendarz",
+          "map_clean_zones": "Pokaż strefy sprzątania",
+          "map_keepout_zones": "Pokaż strefy zakazane",
+          "map_nomop_zones": "Pokaż strefy bez mopowania",
+          "enable_maintenance_list": "Pokaż konserwację jako listę zadań"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
@@ -218,7 +277,9 @@
       "invalid_cloud_credentials": "Uwierzytelnianie w chmurze nie powiodło się. Sprawdź adres e-mail i hasło iRobot.",
       "cannot_connect": "Nie można nawiązać połączenia. Sprawdź połączenie internetowe i spróbuj ponownie.",
       "no_valid_ids": "Nie znaleziono prawidłowych wpisów. Użyj formatu id=Nazwa, jeden wpis na linię.",
-      "pmap_not_resolved": "Nie można rozwiązać ID mapy. Upewnij się, że robot jest zadokowany i połączony, a następnie spróbuj ponownie."
+      "pmap_not_resolved": "Nie można rozwiązać ID mapy. Upewnij się, że robot jest zadokowany i połączony, a następnie spróbuj ponownie.",
+      "cloud_rate_limited": "Logowanie do chmury iRobot jest tymczasowo ograniczone. Zamknij aplikację iRobot na telefonie i spróbuj ponownie.",
+      "cloud_ssl_certificate_error": "Nie udało się zweryfikować certyfikatu serwera chmury iRobot. To niemal zawsze tymczasowy problem po stronie iRobot — spróbuj ponownie za kilka godzin."
     },
     "abort": {
       "integration_not_loaded": "Nie można załadować integracji. Sprawdź logi i przeładuj przed otwarciem ustawień.",
@@ -226,7 +287,9 @@
       "no_rest980_rooms_found": "Nie znaleziono pomieszczeń w instalacji roomba_rest980.",
       "rest980_rooms_already_imported": "Wszystkie pomieszczenia z roomba_rest980 są już nazwane w Roomba+.",
       "room_schedule_not_supported": "Częstotliwości dla poszczególnych pomieszczeń wymagają robota z Smart Map i danymi logowania do chmury.",
-      "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map."
+      "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map.",
+      "no_rooms_to_name": "Nie znaleziono pokoi do nazwania. Pokoje tego robota pojawią się, gdy przynajmniej raz posprząta konkretne pokoje lub gdy jego mapa będzie dostępna z konta iRobot.",
+      "all_rooms_named": "Każdy pokój ma już nazwę. Zmień nazwę jednego z nich w selektorze stref na stronie urządzenia."
     }
   },
   "entity": {
@@ -658,6 +721,99 @@
       },
       "dirt_weather_correlation": {
         "name": "Korelacja brudu"
+      },
+      "prime_mission_event": {
+        "name": "Zdarzenie misji"
+      },
+      "prime_connection_health": {
+        "name": "Stan połączenia"
+      },
+      "prime_detected_pad": {
+        "name": "Wykryta nakładka",
+        "state": {
+          "pad_plate": "Wszystkie nakładki założone",
+          "no_pad": "Brak nakładki",
+          "disp_dry": "Nakładka jednorazowa sucha",
+          "disp_wet": "Nakładka jednorazowa mokra",
+          "reusable_dry": "Nakładka wielorazowa sucha",
+          "reusable_wet": "Nakładka wielorazowa mokra",
+          "invalid": "Nakładka nierozpoznana"
+        }
+      },
+      "prime_runtime_hours": {
+        "name": "Łączny czas pracy"
+      },
+      "prime_firmware_version": {
+        "name": "Wersja oprogramowania układowego"
+      },
+      "prime_dock_status": {
+        "name": "Stan doku"
+      },
+      "prime_pad_wash_status": {
+        "name": "Stan prania nakładki"
+      },
+      "prime_pad_dry_status": {
+        "name": "Stan suszenia nakładki"
+      },
+      "prime_suction_level": {
+        "name": "Poziom ssania",
+        "state": {
+          "invalid": "Nieprawidłowy",
+          "low": "Niski",
+          "medium": "Średni",
+          "high": "Wysoki",
+          "turbo": "Turbo"
+        }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Cykle ładowania (udane)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Cykle ładowania (nieudane)"
+      },
+      "prime_system_uptime": {
+        "name": "Czas pracy systemu"
+      },
+      "prime_navigation_resets": {
+        "name": "Resety nawigacji"
+      },
+      "prime_serial_number": {
+        "name": "Numer seryjny"
+      },
+      "prime_consumable_part": {
+        "name": "Konserwacja – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Konserwacja – Szczotka boczna"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Konserwacja – Szczotki główne"
+      },
+      "prime_part_filter": {
+        "name": "Konserwacja – Filtr wysokowydajny"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Konserwacja – Worek na kurz"
+      },
+      "prime_part_mop_pads": {
+        "name": "Konserwacja – Nakładki mopujące DualClean"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Konserwacja – Czujniki krawędzi"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Konserwacja – System mycia stacji dokującej"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Konserwacja – Nakładka mopująca z możliwością prania"
+      },
+      "prime_cleaning_mode": {
+        "name": "Tryb sprzątania",
+        "state": {
+          "vacuuming": "Odkurzanie",
+          "mopping": "Mycie",
+          "vacuuming_and_mopping": "Odkurzanie i mycie"
+        }
       }
     },
     "binary_sensor": {
@@ -674,7 +830,10 @@
         "name": "Problem z mopem"
       },
       "mop_tank_present": {
-        "name": "Zbiornik mopa obecny"
+        "name": "Zbiornik wody w robocie"
+      },
+      "prime_dock_error": {
+        "name": "Błąd stacji dokującej"
       },
       "mop_lid_closed": {
         "name": "Pokrywa mopa otwarta"
@@ -734,6 +893,12 @@
       },
       "layout_change_detected": {
         "name": "Wykryto zmianę układu"
+      },
+      "prime_start_blocked": {
+        "name": "Start zablokowany"
+      },
+      "prime_quiet_hours": {
+        "name": "W godzinach ciszy"
       }
     },
     "button": {
@@ -778,6 +943,24 @@
       },
       "map_training": {
         "name": "Akcja – Rozpocznij trening mapy"
+      },
+      "prime_favorite": {
+        "name": "Ulubione – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Zlokalizuj"
+      },
+      "prime_empty_bin": {
+        "name": "Opróżnij pojemnik"
+      },
+      "prime_wash_pad": {
+        "name": "Umyj nakładkę"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Zatrzymaj suszenie"
+      },
+      "prime_start_pad_dry": {
+        "name": "Rozpocznij suszenie"
       }
     },
     "switch": {
@@ -798,6 +981,33 @@
       },
       "gentle_mode": {
         "name": "Ustawienie – Tryb delikatny"
+      },
+      "prime_carpet_boost": {
+        "name": "Ustawienie – Wzmocnienie na dywanie"
+      },
+      "prime_schedule": {
+        "name": "Harmonogram – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Blokada rodzicielska"
+      },
+      "prime_eco_charge": {
+        "name": "Ładowanie eko"
+      },
+      "prime_pad_dry_allowed": {
+        "name": "Suszenie nakładki"
+      },
+      "prime_two_pass": {
+        "name": "Sprzątanie w dwóch przejściach"
+      },
+      "prime_vac_high": {
+        "name": "Zwiększona siła ssania"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Nie przeszkadzać"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Mycie mopa dozwolone"
       }
     },
     "select": {
@@ -836,6 +1046,116 @@
           "eco": "Eco",
           "performance": "Wydajność"
         }
+      },
+      "prime_suction_level": {
+        "name": "Poziom ssania",
+        "state": {
+          "light": "Lekkie",
+          "normal": "Normalne",
+          "deep": "Dokładne"
+        }
+      },
+      "prime_map": {
+        "name": "Mapa",
+        "state": {
+          "follow_robot": "Podążaj za robotem"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Tryb sprzątania",
+        "state": {
+          "vacuum": "Odkurzanie",
+          "mop": "Mopowanie",
+          "vacuum_and_mop": "Odkurzanie i mopowanie",
+          "vacuum_then_mop": "Odkurzanie, potem mopowanie"
+        }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Czas suszenia mopa",
+        "state": {
+          "2_hours": "2 godziny",
+          "3_hours": "3 godziny",
+          "4_hours": "4 godziny",
+          "5_hours": "5 godzin",
+          "6_hours": "6 godzin"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Częstotliwość prania mopa",
+        "state": {
+          "after_each_room": "Po każdym pokoju",
+          "by_time": "Co określony czas",
+          "by_area": "Co określoną powierzchnię",
+          "mission": "Przed i po rutynach",
+          "refill": "Także przy uzupełnianiu",
+          "refill_and_room": "Także między pokojami"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Interwał prania wg powierzchni",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Interwał prania wg czasu",
+        "state": {
+          "10": "10 minut",
+          "15": "15 minut",
+          "20": "20 minut",
+          "25": "25 minut"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Podgrzewana woda do mopa",
+        "state": {
+          "no_heat": "Bez podgrzewania",
+          "default_heat": "Standardowe podgrzewanie",
+          "high_heat": "Wysokie podgrzewanie"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Częstotliwość automatycznego opróżniania",
+        "state": {
+          "every_routine": "Po każdej rutynie",
+          "every_2_routines": "Co 2 rutyny",
+          "every_3_routines": "Co 3 rutyny",
+          "on_dock_return": "Przy powrocie do stacji",
+          "10": "Co 10 jednostek powierzchni",
+          "15": "Co 15 jednostek powierzchni",
+          "25": "Co 25 jednostek powierzchni",
+          "30": "Co 30 jednostek powierzchni",
+          "50": "Co 50 jednostek powierzchni"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Wilgotność mopa",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
+        }
       }
     },
     "image": {
@@ -847,6 +1167,12 @@
       },
       "rooms_map": {
         "name": "Mapa pomieszczeń"
+      },
+      "cleaning_map": {
+        "name": "Mapa sprzątania"
+      },
+      "raw_map": {
+        "name": "Surowa mapa na żywo"
       }
     },
     "device_tracker": {
@@ -964,7 +1290,8 @@
       "health_score_drop": "Ocena kondycji spadła",
       "map_retrain_started": "Trening mapy rozpoczęty",
       "map_retrain_completed": "Trening mapy zakończony",
-      "firmware_updated": "Oprogramowanie zaktualizowane"
+      "firmware_updated": "Oprogramowanie zaktualizowane",
+      "start_blocked": "Start zablokowany przez usterkę"
     }
   },
   "services": {
@@ -1031,6 +1358,24 @@
     "restore_backup": {
       "name": "Przywróć kopię zapasową",
       "description": "Przywraca wszystkie dane z kopii zapasowej ZIP. Działa natychmiast, bez restartu."
+    },
+    "set_quiet_hours": {
+      "name": "Ustaw godziny ciszy",
+      "description": "Zapisuje okno Nie przeszkadzać dla gospodarstwa.",
+      "fields": {
+        "start": {
+          "name": "Początek",
+          "description": "Kiedy godziny ciszy zaczynają się każdego dnia."
+        },
+        "end": {
+          "name": "Koniec",
+          "description": "Kiedy kończą się każdego dnia."
+        },
+        "ends_at": {
+          "name": "Cisza do",
+          "description": "Pojedynczy moment zamiast okna dziennego."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1075,6 +1420,36 @@
     },
     "backup_entity_not_found": {
       "message": "Encji „{entity_id}” nie udało się przypisać do robota Roomba+. Sprawdź identyfikator encji i spróbuj ponownie."
+    },
+    "cloud_credentials_invalid": {
+      "message": "Dane logowania do chmury iRobot są nieprawidłowe: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "Chmura iRobot jest tymczasowo niedostępna: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Nieznane pomieszczenia dla {entity_id}: {rooms}. Znane pomieszczenia: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite jest dostępne tylko dla robotów V4/Prime"
+    },
+    "favorite_not_found": {
+      "message": "Brak wykonywalnego ulubionego o identyfikatorze {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "Stacja jest zajęta ({operation}). Robot nie przyjmie poleceń, dopóki nie skończy."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Godziny ciszy wymagają początku i końca, albo żadnego z nich."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Podaj okno dzienne (początek i koniec) albo pojedynczy moment — robot akceptuje dokładnie jedno z dwóch."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} nie jest robotem V4/Prime z gospodarstwem."
+    },
+    "prime_not_connected": {
+      "message": "Ten robot nie ma połączenia z chmurą."
     }
   },
   "selector": {

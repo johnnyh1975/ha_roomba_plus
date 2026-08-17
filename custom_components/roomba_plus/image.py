@@ -29,6 +29,8 @@ Persistence:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import sys
 import collections
 import datetime
 import io
@@ -40,13 +42,25 @@ from typing import Any
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    CONF_MAP_CLEAN_ZONES,
+    CONF_MAP_KEEPOUT_ZONES,
+    CONF_MAP_NOMOP_ZONES,
+    DEFAULT_MAP_ZONES,
+    room_slug,
+    CONF_MAP_ROOM_LABELS,
+    DEFAULT_MAP_ROOM_LABELS,
     CLEANING_PHASES,
     DOMAIN,
     END_SIGNAL_DEBOUNCE_COUNT,
@@ -60,11 +74,37 @@ from .const import (
     ROOM_TRANSITION_CANDIDATE_PHASES,
 )
 from .entity import IRobotEntity
+from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
-from .models import MapCapability, RoombaConfigEntry
+from .models import ConnectionType, MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+#: How many live positions to keep for the trail.
+#:
+#: A tester's single mission produced 904 points, so this holds several
+#: missions' worth. The cap exists for the robot left running all day,
+#: not for the normal case.
+_MAX_PRIME_POSITIONS = 5000
+
+#: Dispatcher signals for the two independent live-map message shapes.
+#:
+#: The two Prime image entities are split by what they can do: one
+#: watches the map stream and shows iRobot's rendered PNG, the other
+#: draws its own map and never sees the stream. A dispatcher signal is
+#: how the second learns that the first has new data.
+#:
+#: Contributed by @jouwdan (PR #63), who found that MapUpdateMessage
+#: carries a SECOND url -- `livemap_url` alongside `livemap_url_raw` --
+#: and that it returns a full map bundle rather than the raw occupancy
+#: grid. We had been consuming only the raw one.
+_SIGNAL_PRIME_LIVE_BUNDLE = "roomba_plus_prime_live_bundle_{}"
+_SIGNAL_PRIME_LIVE_POSITION = "roomba_plus_prime_live_position_{}"
+_LIVE_MAP_STATE_UPDATE_INTERVAL = 2.0
+_LIVE_BUNDLE_STORAGE_VERSION = 1
+_LIVE_BUNDLE_SAVE_DELAY_SECONDS = 5
+_LIVE_BUNDLE_LAYERS = ("coverage", "trajectories", "hazard")
 PARALLEL_UPDATES = 0
 
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
@@ -111,30 +151,21 @@ async def _async_send_coverage_signal(hass: HomeAssistant, entry_id: str) -> Non
     async_dispatcher_send(hass, _SIGNAL_COVERAGE_UPDATED.format(entry_id))
 
 
+#: Long enough to absorb a mission's worth of frames, short enough that
+#: a map is on disk well before anyone restarts deliberately.
+_MAP_SAVE_DELAY_SECONDS = 60
+
+def _prime_map_storage_key(entry_id: str) -> str:
+    """Separate from the Classic key: different contents entirely (a PNG
+    rather than renderer state), and a robot never switches generation,
+    so the two can never collide."""
+    return f"{DOMAIN}_prime_map_{entry_id}"
+
+
 def _map_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_{entry_id}"
 
 
-def _room_slug(name: str) -> str:
-    """Return an ASCII-safe slug suitable for use as an XVMC predefined_selection id.
-
-    XVMC validates id values and rejects non-ASCII characters (e.g. German umlauts,
-    Italian accents).  This helper performs NFD decomposition to strip combining
-    diacritics, then replaces any remaining non-alphanumeric characters with
-    underscores and collapses runs.
-
-    Examples:
-        "Küche"        → "kuche"
-        "Büro"         → "buro"
-        "Bad & Küche"  → "bad_kuche"
-        "Living Room"  → "living_room"
-    """
-    import unicodedata
-    import re as _re
-    nfd = unicodedata.normalize("NFD", name)
-    ascii_only = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
-    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", ascii_only).strip("_").lower()
-    return _re.sub(r"_+", "_", slug) or "room"
 
 
 async def async_setup_entry(
@@ -144,6 +175,46 @@ async def async_setup_entry(
 ) -> None:
     """Set up map image entities — only if robot reports pose data."""
     data = config_entry.runtime_data
+
+    # NEW (V4/Prime): entirely separate path -- CLOUD_ONLY entries have no
+    # roombapy Roomba object, no MapCapability tier, and their live map
+    # comes from a completely different source (watch_live_map()'s
+    # MapUpdateMessage, downloaded + decoded via decode_rawmap_to_png()),
+    # not local MQTT pose data. Deliberately its own class rather than
+    # threading CLOUD_ONLY branches through the Classic-oriented
+    # RoombaMapImage below, which is built around pose points, mission
+    # tracking, and dock-anchor correction that don't apply here at all.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        if data.prime_robot is not None:
+            # TWO ENTITIES, not one replacing the other.
+            #
+            # PrimeMapImage shows iRobot's own rendered PNG -- where the
+            # robot ACTUALLY CLEANED. PrimeRoomsImage shows the floor
+            # plan with room outlines and, via attributes, room names.
+            # Different information, and Classic carries three map
+            # entities for the same reason.
+            #
+            # Replacing the PNG would also lose it before the trajectory
+            # half exists: the live-map stream carries position samples
+            # too, but nobody has yet counted how many arrive, and the
+            # Classic renderer rejects poses more than 500 mm apart.
+            async_add_entities([
+                PrimeMapImage(
+                    prime_robot=data.prime_robot,
+                    blid=data.blid,
+                    config_entry=config_entry,
+                ),
+                PrimeRoomsImage(
+                    blid=data.blid, config_entry=config_entry, hass=hass
+                ),
+                PrimeRoomsImage(
+                    blid=data.blid,
+                    config_entry=config_entry,
+                    hass=hass,
+                    include_live=True,
+                ),
+            ])
+        return
 
     if data.map_capability == MapCapability.NONE:
         _LOGGER.debug("Roomba+ image: skipped — no pose capability")
@@ -291,6 +362,630 @@ def _interpolate_and_correct_segment(
         weight = i / (n - 1)
         out.append(_apply_dock_correction(p, dx * weight, dy * weight, rotation_rad * weight))
     return out
+
+
+class PrimeMapImage(IRobotEntity, ImageEntity):
+    """Live cleaning map for V4/Prime (CLOUD_ONLY) robots.
+
+    Deliberately minimal, separate from RoombaMapImage below: this
+    consumes an entirely different data source (roombapy-prime's
+    watch_live_map(), a cloud MQTT topic, not local pose messages) and
+    needs none of RoombaMapImage's mission-tracking/dock-anchor/
+    coverage-overlay machinery, since the "rawmap" occupancy grid IS
+    the map directly -- there's no separate pose-trail to render on
+    top of it (yet; see decode_rawmap_to_png()'s own docstring for
+    the confirmed evidence trail behind this format and
+    models/livemap.py's MapUpdateMessage for why no new download/
+    parsing code was needed to consume this live feed).
+
+    A MapUpdateMessage carries a presigned URL (livemap_url_raw), not
+    the image bytes directly -- one extra download step per update,
+    same pattern already used for the REST-fetched map bundle.
+    """
+
+    _attr_translation_key = "raw_map"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # This entity owns the V4 live-map subscription and dispatches its
+    # packets to the rendered map entities, so it cannot be disabled.
+    _attr_entity_registry_enabled_default = True
+    _attr_content_type = "image/png"
+
+    def __init__(self, prime_robot: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
+        self._cache = None
+        self.access_tokens: collections.deque = collections.deque([], 2)
+        self._prime_robot = prime_robot
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_map"
+        self._png_bytes: bytes | None = None
+        self._map_stored_at: str | None = None
+        self._map_store: Store | None = None
+        self._watch_task: asyncio.Task[None] | None = None
+        # NEW (this session): live-map decode statistics, kept on the
+        # CONFIG ENTRY rather than on this entity, so diagnostics can
+        # read them without having to locate the entity instance. Born
+        # from a real field report where the map stayed blank while data
+        # was arriving and failing to decode 106 times an hour -- the
+        # counters make that visible in one glance instead of requiring
+        # someone to scrape their log.
+        # TWO INDEPENDENT STREAMS, and the names invite reading them as
+        # one. A field report compared them directly and asked whether
+        # two thirds of the messages were being coalesced away
+        # (@utkjmitch: 139 messages against 46 updates, ~2.5s against
+        # ~8s). They are not comparable at all:
+        #
+        #   position_messages  pose packets off the MQTT stream --
+        #                      these drive the robot marker and trail
+        #   position_points    poses inside them; one message can
+        #                      carry several
+        #   updates_received   HTTP downloads of the live-map BUNDLE --
+        #                      coverage, trajectories, hazards
+        #
+        # So a gap between the two is a difference in cadence between
+        # two channels, not loss. decode_ok tracks updates_received,
+        # not position_messages: only the bundle is decoded.
+        #
+        # RESET ON EVERY RELOAD, because they live on runtime_data.
+        # Worth knowing before asking anyone for a capture: three
+        # testers reported all-zero counters and every one of those
+        # files had been pulled after a reload.
+        config_entry.runtime_data.live_map_stats = {
+            "updates_received": 0,
+            "position_messages": 0,
+            "position_points": 0,
+            #: What SURVIVED into prime_positions, against the two ways
+            #: a sample can be dropped on the way. position_points minus
+            #: trail_points_added is exactly the two skip counters.
+            "trail_points_added": 0,
+            "trail_skipped_no_point": 0,
+            "trail_skipped_no_xy": 0,
+            #: The OUTER retry loop's own failures. Separate from
+            #: decode_failed, which only covers a payload that arrived
+            #: and could not be read -- these are the cases where
+            #: nothing arrived at all, and they used to be invisible in
+            #: a diagnostics download.
+            "watch_failures": 0,
+            "last_watch_error": None,
+            "watch_retry_backoff_s": None,
+            "decode_ok": 0,
+            "decode_failed": 0,
+            "last_error": None,
+            "last_payload_prefix_hex": None,
+        }
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        await self._async_restore_png()
+        self.async_update_token()
+        # CONSISTENCY FIX (this session): was a bare asyncio.create_task()
+        # here -- every OTHER background task in this project (both
+        # coordinators) uses config_entry.async_create_background_task()
+        # instead, which ties the task's lifetime to the config entry
+        # itself (auto-cancelled on unload/reload by HA's own framework,
+        # not just by this entity's own async_will_remove_from_hass()
+        # below -- kept as a second, redundant cancellation path, not
+        # removed, since it doesn't hurt to have both).
+        self._watch_task = self._config_entry.async_create_background_task(
+            self.hass,
+            self._async_watch_live_map(),
+            name=f"roomba_plus_prime_live_map_{self._blid}",
+        )
+
+    def _feed_trail(self, message: Any) -> None:
+        """Feeds live positions into the trail renderer.
+
+        UNITS ARE THE WHOLE TRAP HERE, and the comment above this call
+        site warned about it before anything used them: Prime reports
+        METRES -- a real keep-out zone measures 2.0 by 2.0 -- while
+        MapRenderer.add_pose takes millimetres. Feeding metres straight
+        in puts every point inside the same pixel and produces a blank
+        map with no error anywhere.
+
+        ORIENTATION IS IN RADIANS on the wire and add_pose wants degrees.
+        Same class of mistake, quieter symptom: the trail would be drawn
+        correctly and only the heading marker would point wrongly.
+
+        Volume is not a concern. A tester's mission produced 904 points
+        across 451 messages -- roughly two per message -- and the
+        renderer already drops jumps over 500 mm as noise, which is what
+        keeps a relocalisation from drawing a line across the room.
+        """
+        from .prime_room_map import METRES_TO_MM  # noqa: PLC0415
+
+        # COLLECTED, NOT DRAWN HERE. This entity shows iRobot's own
+        # rendered PNG and has no renderer of its own; the trail belongs
+        # on the rooms map, which does. A first version called
+        # self._renderer here -- which is None on this class, so every
+        # point was silently discarded.
+        # COUNTED WHERE IT IS DECIDED, not where the message arrives.
+        #
+        # `position_points` above counts len(message.updates) -- what the
+        # robot sent. Everything below can still drop every one of them:
+        # a sample without a `point`, or a point without x/y, is skipped
+        # silently. So 5553 points counted proves nothing about whether
+        # a single one reached the list the trail and the robot marker
+        # are drawn from.
+        #
+        # @DaRealGuGu hit exactly that gap: 2267 messages, 5553 points,
+        # and no marker on the map -- and no number in the capture could
+        # say whether they arrived and were dropped here, or arrived and
+        # were drawn somewhere he could not see.
+        #
+        # Same shape as every other counter mistake in this project:
+        # counting arrival instead of survival.
+        data = self._config_entry.runtime_data
+        stats = data.live_map_stats
+        try:
+            for sample in getattr(message, "updates", None) or []:
+                # A TUPLE, NOT AN OBJECT WITH .x AND .y.
+                #
+                # This read `getattr(point, "x", None)` and skipped every
+                # sample when it came back None -- which it always did,
+                # because PositionSample.point is `(x, y)`. So the trail
+                # list stayed empty on every robot, forever, while
+                # `position_points` counted the samples arriving.
+                #
+                # That is the whole missing-robot-marker story:
+                # @DaRealGuGu's capture showed 2267 messages and 5553
+                # points with no marker on the map, and the marker is
+                # only drawn when this list is non-empty. What he saw
+                # instead was the trajectories layer from the downloaded
+                # bundle, which looks like a trail and is not one.
+                #
+                # Both getattr() calls were defensive code written
+                # against a shape nobody had checked. The defensiveness
+                # is what hid it: an exception would have been found in a
+                # day.
+                point = getattr(sample, "point", None)
+                if point is None:
+                    stats["trail_skipped_no_point"] = (
+                        stats.get("trail_skipped_no_point", 0) + 1
+                    )
+                    continue
+                try:
+                    x_m, y_m = point
+                except (TypeError, ValueError):
+                    stats["trail_skipped_no_xy"] = (
+                        stats.get("trail_skipped_no_xy", 0) + 1
+                    )
+                    continue
+                if x_m is None or y_m is None:
+                    stats["trail_skipped_no_xy"] = (
+                        stats.get("trail_skipped_no_xy", 0) + 1
+                    )
+                    continue
+                orientation_rad = getattr(sample, "orientation", None) or 0.0
+                stats["trail_points_added"] = stats.get("trail_points_added", 0) + 1
+                record_success("live trail points")
+                data.prime_positions.append((
+                    float(x_m) * METRES_TO_MM,
+                    float(y_m) * METRES_TO_MM,
+                    math.degrees(float(orientation_rad)),
+                ))
+            # Bounded. A mission produced 904 points on one tester's
+            # robot; a robot left running for a day would otherwise grow
+            # this without limit. The oldest go first, because a trail
+            # showing the last stretch is more useful than one showing
+            # the first.
+            if len(data.prime_positions) > _MAX_PRIME_POSITIONS:
+                del data.prime_positions[:-_MAX_PRIME_POSITIONS]
+        except Exception:  # noqa: BLE001
+            record_failure("live trail points", "appending a position")
+            _LOGGER.debug("Prime map: could not add live positions", exc_info=True)
+
+    async def async_will_remove_from_hass(self) -> None:
+        # CANCEL AND THEN WAIT. `cancel()` alone only REQUESTS a stop --
+        # it returns before the task has unwound, so its cleanup may
+        # still be pending when the next line runs.
+        #
+        # What is pending here is the livemap unsubscribe, in the
+        # `finally` of `watch_live_map()`. Leave it unfinished and the
+        # broker keeps the old subscription while a reload builds a new
+        # one, and `async_unload_entry` disconnects the robot underneath
+        # both of them.
+        #
+        # Two testers saw a reload leave BOTH irbt-topic streams silent
+        # -- live map and mission timeline together -- while shadow
+        # traffic kept flowing, and a full Home Assistant restart cleared
+        # it. A restart closes the event loop, which finalises async
+        # generators; a reload does not.
+        #
+        # Whether that is the whole story is unproven. Cancelling
+        # without waiting is wrong on its own.
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watch_task
+
+        # FLUSH THE DELAYED MAP WRITE.
+        #
+        # The map is persisted via async_delay_save, so a reload can
+        # leave the OLD entity's pending write to land after the NEW one
+        # has already loaded -- overwriting a current map with a stale
+        # one. Store.async_save cancels the pending timer as well as
+        # writing, which is what makes this both a flush and a guard.
+        #
+        # Exactly the problem Classic solved for MissionTimerStore in
+        # v3.3.0. This entity was written today, with delayed saving
+        # copied from that store, and the flush was not copied with it.
+        if self._map_store is not None and self._png_bytes:
+            try:
+                await self._map_store.async_save(self._map_save_payload())
+            except Exception:  # noqa: BLE001
+                # NOT INSTRUMENTED: runs once when the entity is removed,
+                # where a failure has no next attempt to be compared
+                # against and nothing left to affect.
+                _LOGGER.debug("Prime map: flush on removal failed", exc_info=True)
+
+    async def _async_watch_live_map(self) -> None:
+        """Runs for the entity's lifetime -- watch_live_map() itself
+        reconnects transparently across drops (same reconnect-hardened
+        _watch_topic() engine as watch_mission_timeline(), see
+        prime_coordinator.py's own docstring), so this loop only needs
+        to react to messages, not to handle connection loss itself.
+
+        DEFENSIVE OUTER RETRY LOOP (added alongside the identical fix
+        already made in PrimeCoordinator._async_watch_mission_timeline()
+        and PrimeStatusCoordinator._async_watch_status_updates() --
+        this is the THIRD occurrence of the exact same gap, found only
+        because this entity had NEVER actually run before this session
+        [Platform.IMAGE was missing from PRIME_PLATFORMS the whole
+        time, see const.py's own docstring], so the bug had no chance
+        to surface via real usage the way the other two did. A single
+        unexpected exception here -- even though watch_live_map() is
+        "designed to retry forever internally" per its own docstring --
+        would previously have ended this task PERMANENTLY for the rest
+        of the session, silently freezing the live map at whatever the
+        last-received frame happened to be. Now degrades to "retry
+        after a short delay" instead, for both an exception and the
+        generator simply ending on its own (also anomalous -- see the
+        other two fixes' own docstrings for why that case needs the
+        same backoff, not an immediate, undelayed re-call)."""
+        from roombapy_prime.models.livemap import (
+            MapUpdateMessage,
+            PositionUpdateMessage,
+            decode_rawmap_to_png,
+        )
+
+        session = async_get_clientsession(self.hass)
+        backoff = 5.0
+        while True:
+            # HELD AND CLOSED EXPLICITLY, not consumed inline.
+            #
+            # `async for x in gen():` drops the generator on the floor
+            # when the loop exits, and a cancelled task exits without
+            # closing it -- so the `finally` inside watch_live_map(),
+            # which unsubscribes from the livemap topic, does not run.
+            # Python finalises stray async generators when the event
+            # loop shuts down, which is a Home Assistant RESTART. A
+            # reload leaves them hanging.
+            stream = self._prime_robot.watch_live_map()
+            try:
+                async for message in stream:
+                    # POSITION MESSAGES ARE COUNTED, NOT USED (this session).
+                    #
+                    # The stream carries two kinds: a URL to iRobot's own
+                    # rendered PNG, which is what this entity displays, and
+                    # trajectory samples -- which are the same input the
+                    # Classic MapRenderer draws from. Prime could therefore
+                    # render its own map, with room labels and keep-out
+                    # zones, instead of showing a foreign image with none.
+                    #
+                    # Whether that is worth doing depends on ONE unknown:
+                    # how many points actually arrive. Each message carries
+                    # several, and nothing has ever counted them. A sparse
+                    # stream would render a worse map than the PNG.
+                    #
+                    # So this counts first. Two testers download diagnostics
+                    # regularly, and the answer costs them nothing.
+                    #
+                    # Units, if this is ever built on: Prime reports METRES
+                    # (a real keep-out zone measures 2.0 x 2.0), while
+                    # MapRenderer.add_pose takes millimetres. Feeding metres
+                    # straight in puts every point in the same pixel and
+                    # produces a blank map with no error.
+                    if isinstance(message, MapUpdateMessage) and message.livemap_url:
+                        # THE SECOND URL. `livemap_url_raw` is the
+                        # occupancy grid this entity renders; this one is
+                        # a full bundle with the layers the app draws.
+                        #
+                        # Fetched here because this is where the stream
+                        # is, and handed to the rooms map by signal
+                        # because that is where the renderer is.
+                        try:
+                            from roombapy_prime.models.map_bundle import (  # noqa: PLC0415
+                                parse_map_bundle,
+                            )
+
+                            async with session.get(message.livemap_url) as resp:
+                                if resp.status == 200:
+                                    raw = await resp.read()
+                                    record_success("live bundle fetch")
+                                    bundle = await self.hass.async_add_executor_job(
+                                        parse_map_bundle, raw
+                                    )
+                                    async_dispatcher_send(
+                                        self.hass,
+                                        _SIGNAL_PRIME_LIVE_BUNDLE.format(
+                                            self._config_entry.entry_id
+                                        ),
+                                        bundle,
+                                    )
+                        except Exception:  # noqa: BLE001
+                            record_failure("live bundle fetch", "downloading the live map")
+                            _LOGGER.debug(
+                                "Prime map: live bundle fetch failed", exc_info=True
+                            )
+
+                    if isinstance(message, PositionUpdateMessage):
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["position_messages"] = stats.get("position_messages", 0) + 1
+                        stats["position_points"] = (
+                            stats.get("position_points", 0) + len(message.updates)
+                        )
+                        self._feed_trail(message)
+                        # Position packets carry no bundle. The Rooms Map
+                        # already reads positions from runtime_data.
+                        async_dispatcher_send(
+                            self.hass,
+                            _SIGNAL_PRIME_LIVE_POSITION.format(
+                                self._config_entry.entry_id
+                            )
+                        )
+                        continue
+
+                    if not isinstance(message, MapUpdateMessage) or not message.livemap_url_raw:
+                        continue
+                    try:
+                        async with session.get(message.livemap_url_raw) as resp:
+                            raw_bytes = await resp.read()
+                            http_status = resp.status
+                            content_type = resp.headers.get("Content-Type", "?")
+                        # NEW (this session, prompted by a real field report:
+                        # 106 consecutive decode failures, chairstacker): the
+                        # HTTP status was never checked at all -- an expired
+                        # presigned URL (403) or any other error response would
+                        # have its ERROR BODY fed straight into the protobuf
+                        # parser, producing a confusing parse error instead of
+                        # a clear "the download itself failed". Ruled out as
+                        # the cause of THAT specific report (error-page bodies
+                        # fail at offset 1, the real one failed at offset 6 --
+                        # so the payload really was protobuf-shaped), but it's
+                        # a genuine robustness gap either way.
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["updates_received"] += 1
+                        if http_status != 200:
+                            _LOGGER.warning(
+                                "roomba_plus: live map download for %s returned HTTP %s "
+                                "(%s, %d bytes) -- skipping this frame",
+                                self._blid, http_status, content_type, len(raw_bytes),
+                            )
+                            continue
+                        png_bytes = await self.hass.async_add_executor_job(decode_rawmap_to_png, raw_bytes)
+                        stats["decode_ok"] += 1
+                    except Exception:  # noqa: BLE001
+                        # NEW (same field report): the old message said only
+                        # "failed to decode", with nothing about WHAT arrived --
+                        # leaving the actual payload a complete guess. The
+                        # hex prefix is the single most useful thing for
+                        # identifying an unexpected format (protobuf vs. an
+                        # error page vs. compressed data) from a log alone,
+                        # without needing another round-trip to the reporter.
+                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats["decode_failed"] += 1
+                        stats["last_error"] = repr(sys.exc_info()[1])
+                        stats["last_payload_prefix_hex"] = (
+                            locals().get("raw_bytes", b"")[:32].hex() or None
+                        )
+                        # The first two bytes are what solved this the
+                        # first time round: 78 9c is a zlib header, and
+                        # the payload turned out to be compressed rather
+                        # than the protocol being wrong. Naming that
+                        # directly saves the next person the same detour.
+                        head = locals().get("raw_bytes", b"")[:2]
+                        hint = (
+                            " -- looks zlib-compressed (78 xx); this should be handled, so "
+                            "please report it"
+                            if head[:1] == b"\x78"
+                            else ""
+                        )
+                        _LOGGER.exception(
+                            "roomba_plus: failed to decode live map update for %s "
+                            "(HTTP %s, %s, %d bytes, first 32 bytes: %s)" + hint,
+                            self._blid,
+                            locals().get("http_status", "?"),
+                            locals().get("content_type", "?"),
+                            len(locals().get("raw_bytes", b"")),
+                            locals().get("raw_bytes", b"")[:32].hex(),
+                        )
+                        continue
+                    self._png_bytes = png_bytes
+                    self._map_stored_at = None
+                    self._async_save_png()
+                    self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+                    self.async_write_ha_state()
+                    backoff = 5.0  # a live update means things are healthy again
+                _LOGGER.warning(
+                    "roomba_plus: watch_live_map() for %s ended without an exception "
+                    "(unexpected -- it's meant to run forever) -- retrying in %.0fs",
+                    self._blid, backoff,
+                )
+                self._record_watch_failure(
+                    "the stream ended on its own", backoff
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.exception(
+                    "roomba_plus: watch_live_map() for %s ended unexpectedly -- retrying "
+                    "in %.0fs (this is this entity's own outer safety net; the library "
+                    "itself already retries connection drops internally, so reaching "
+                    "this suggests something else went wrong)", self._blid, backoff,
+                )
+                self._record_watch_failure(repr(exc), backoff)
+            finally:
+                # Runs on a normal exit, on an error, AND on
+                # cancellation -- which is the case that matters. This
+                # is what lets watch_live_map()'s own finally
+                # unsubscribe from the topic before the entity goes
+                # away.
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300.0)
+
+    def _record_watch_failure(self, detail: str, backoff: float) -> None:
+        """Puts a watcher failure where a diagnostics download can see it.
+
+        THE OUTER RETRY LOOP WAS SILENT IN DIAGNOSTICS. It logged, and
+        only the DECODE path ever wrote to `last_error` -- so a capture
+        showing every counter at zero and `last_error: null` could not
+        distinguish "nothing arrived" from "this task has been crashing
+        and retrying since setup".
+
+        @chairstacker hit exactly that: all counters zero, mid-mission,
+        no error anywhere. And his own aside is what points at this
+        loop -- he saw the map's timestamp move at roughly four-minute
+        intervals rather than the two to twelve seconds he was used to.
+        `backoff` doubles from 5s up to 300s, so a four-minute gap is
+        what a grown backoff looks like from the outside.
+
+        The retry count matters as much as the message: one failure at
+        startup is noise, forty is the whole story.
+        """
+        stats = self._config_entry.runtime_data.live_map_stats
+        if stats is None:
+            return
+        stats["watch_failures"] = stats.get("watch_failures", 0) + 1
+        stats["last_watch_error"] = detail
+        stats["watch_retry_backoff_s"] = backoff
+
+    @property
+    def available(self) -> bool:
+        """Unavailable until a map has actually been decoded.
+
+        ADDED (this session, from a field report). This entity served a
+        blank placeholder whenever it had no data, so a tester looked at
+        a white square for weeks with nothing anywhere indicating a
+        fault -- the integration was quietly saying "I have nothing to
+        show" and it was indistinguishable from "the map is empty right
+        now".
+
+        There was a second symptom too: with no image ever produced,
+        image_last_updated never moves, so the frontend keeps requesting
+        a signed URL that eventually expires and logs an authentication
+        error pointing at Home Assistant rather than at us.
+
+        Unavailable is the honest state. The placeholder stays for the
+        window between the entity appearing and the first map arriving,
+        which is normal and brief."""
+        return super().available and self._png_bytes is not None
+
+    async def async_image(self) -> bytes | None:
+        return self._png_bytes or self._blank_image()
+
+    async def _async_restore_png(self) -> None:
+        """Bring back the last map from storage.
+
+        WHY THIS IS NEEDED AT ALL. Unlike Classic, which draws its own
+        map from pose data and already persists renderer state, Prime
+        displays a finished PNG that iRobot produces -- and that arrives
+        only DURING AND AFTER a mission. So after any restart, reload or
+        update there is no map until the robot next runs, which two
+        testers hit within minutes of updating.
+
+        The a11 change to report `unavailable` instead of a blank white
+        square did not cause this; it made it visible. Before, the same
+        absence merely looked like a broken image.
+
+        Storing the last frame is not the ideal fix -- rendering our own
+        map from the position samples in the same stream would bring
+        room labels and keep-out zones with it -- but it is honest about
+        what it is: the most recent map, replaced as soon as the next
+        mission produces one.
+        """
+        import base64  # noqa: PLC0415
+
+        store = Store(
+            self.hass,
+            _MAP_STORAGE_VERSION,
+            _prime_map_storage_key(self._config_entry.entry_id),
+        )
+        try:
+            stored = await store.async_load()
+        except Exception:  # noqa: BLE001
+            # DELIBERATELY NOT INSTRUMENTED. A fresh install has no
+            # stored map, so failing here is the normal first-run state
+            # rather than a defect -- reporting it would produce a false
+            # positive on every new setup and teach people to ignore the
+            # warning.
+            _LOGGER.debug("Prime map: could not read stored map", exc_info=True)
+            return
+        if not stored or not stored.get("png_b64"):
+            return
+        try:
+            self._png_bytes = base64.b64decode(stored["png_b64"])
+        except Exception:  # noqa: BLE001
+            # Corrupt or truncated: start blank rather than raising. A
+            # missing map is a normal state here; a crash is not.
+            _LOGGER.debug("Prime map: stored map unreadable", exc_info=True)
+            return
+        self._map_stored_at = stored.get("saved_at")
+        _LOGGER.debug("Prime map: restored %d bytes", len(self._png_bytes))
+
+    def _async_save_png(self) -> None:
+        """Persist the current frame, on a delay.
+
+        DELAYED, NOT IMMEDIATE. A mission produces around 26 map frames
+        (26 in one real capture), and the first version wrote all of
+        them -- roughly 670 KB of base64 JSON each time, so about 17 MB
+        per mission and 6 GB a year on a daily schedule.
+        
+        Only the LAST frame is ever read back, so 25 of those 26 writes
+        were pure flash wear. Home Assistant commonly runs from an SD
+        card or eMMC, where that is a real cost rather than a
+        theoretical one.
+
+        async_delay_save coalesces them: the callback is invoked once,
+        after the burst settles, with whatever the latest frame is by
+        then. The store is cached on the entity so the pending timer
+        survives between frames -- creating a new Store each call would
+        restart the delay and defeat it entirely.
+
+        HA also flushes pending delayed saves on shutdown, so the last
+        map is not lost to a restart.
+        """
+        if not self._png_bytes:
+            return
+        if self._map_store is None:
+            self._map_store = Store(
+                self.hass,
+                _MAP_STORAGE_VERSION,
+                _prime_map_storage_key(self._config_entry.entry_id),
+            )
+        self._map_store.async_delay_save(self._map_save_payload, _MAP_SAVE_DELAY_SECONDS)
+
+    def _map_save_payload(self) -> dict[str, Any]:
+        """Called by the store when the delay elapses -- so it captures
+        the frame current at THAT moment, not the one that scheduled the
+        save. That is the intended behaviour: the newest map wins."""
+        import base64  # noqa: PLC0415
+
+        from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+        return {
+            "png_b64": base64.b64encode(self._png_bytes or b"").decode("ascii"),
+            "saved_at": dt_util.utcnow().isoformat(),
+        }
+
+    @staticmethod
+    def _blank_image() -> bytes:
+        from PIL import Image
+        img = Image.new("RGBA", (200, 200), (255, 255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
 
 
 class RoombaMapImage(IRobotEntity, ImageEntity):
@@ -575,7 +1270,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
-                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -1126,6 +1821,45 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             )
 
     def _handle_mission_end(self, ending_phase: str = "") -> None:
+        """End-of-mission processing. ORDER-SENSITIVE THROUGHOUT.
+
+        READ THIS BEFORE MOVING ANYTHING. Eight releases have patched
+        this method, and four of those patches were ordering fixes --
+        v2.8.2, and three separate ones in v3.2.1. Each shipped as a
+        real bug first.
+
+        The constraints, collected here because they were previously
+        discoverable only by reading all fourteen comment blocks below:
+
+          1. Clear the checkpoint BEFORE the "nothing to process"
+             early-return. A checkpoint may legitimately hold zero pose
+             points, and a checkpoint that survives the return is
+             re-salvaged on every HA restart, forever. (v2.8.2)
+
+          2. Feed GridStore BEFORE recomputing room segmentation or the
+             outline. Both now derive from GridStore.cells, so they
+             need this mission's cells already in it. (v3.2.1)
+
+          3. Record poses into MissionTrajectoryStore BEFORE clearing
+             self._mission_points. The store reads the same list
+             GridStore just consumed. (v3.2.1)
+
+          4. Dock-drift is handled in _handle_dock_contact_confirmed(),
+             which runs BEFORE this method. Do not recompute it here --
+             that redundancy existed until v3.2.1 and produced two
+             independent drift vectors.
+
+        WHY THIS IS A COMMENT AND NOT STRUCTURE. Splitting these steps
+        into named methods was considered and rejected: the
+        dependencies do not flow through values but through SEVEN
+        shared stores as side effects. A signature cannot express "this
+        must run after GridStore already contains the current mission",
+        so extraction would move the constraint further from the code
+        that depends on it, not closer. The ordering is the contract;
+        it needs stating, not hiding.
+
+        The step-order test in test_image.py enforces points 2 and 3.
+        """
         # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
         # hass.async_create_task() is not thread-safe and raises RuntimeError
         # on recent HA versions when called from a foreign thread.
@@ -1804,7 +2538,6 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
         # RoombaMapImage fires the signal after every successful mission end so
         # the frontend knows to re-fetch the coverage image.
         from homeassistant.helpers.dispatcher import async_dispatcher_connect
-        from homeassistant.core import callback
 
         @callback
         def _on_gridstore_updated() -> None:
@@ -2084,6 +2817,30 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             poly_px = [to_px(x, y) for x, y in resolved]
             fill = ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)]
             draw.polygon(poly_px, outline=(100, 149, 237), fill=fill)
+
+            # ROOM NAME, off by default. v2.7.3 removed these because the
+            # xiaomi-vacuum-map-card renders its own overlay from the
+            # `rooms` attribute, and drawing both doubles them up.
+            #
+            # The option restores them for everyone not using that card:
+            # a plain picture-entity shows an image and nothing else, so
+            # for those dashboards the names have to be in the picture or
+            # they do not exist. Same option as the Prime map uses --
+            # this is a preference about maps, not about robot
+            # generations.
+            if self._config_entry is not None and self._config_entry.options.get(
+                CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
+            ):
+                from .map_renderer import LABEL_FONT  # noqa: PLC0415
+
+                name = aligner.rid_to_name().get(rid)
+                if name:
+                    cx = sum(x for x, _ in poly_px) / len(poly_px)
+                    cy = sum(y for _, y in poly_px) / len(poly_px)
+                    draw.text(
+                        (cx, cy), name, fill=(230, 230, 230),
+                        anchor="mm", font=LABEL_FONT,
+                    )
             # v2.7.3: labels removed from PNG — XVMC card renders its own
             # labels from predefined_selections.label.text; drawing them here
             # produced duplicate overlapping labels in the card (veronoicc #2).
@@ -2216,7 +2973,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             rooms[room_name] = {
                 "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
-                "room_id": _room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -2310,3 +3067,974 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
                 b"AABjkB6QAAAABJRU5ErkJggg=="
             )
+
+class PrimeRoomsImage(IRobotEntity, ImageEntity):
+    """V4/Prime static floor plan or live cleaning map.
+
+    BUILT THE SAME WAY AS RoombaRoomsImage, on purpose. The canvas
+    colour, the rotating ROOM_FILL_PALETTE fill, the fixed outline
+    colour, the auto-fit transform and the attribute shape the
+    xiaomi-vacuum-map-card expects are all reused rather than
+    reimplemented.
+
+    NAMES ARE NOT DRAWN INTO THE IMAGE. That is easy to get backwards --
+    "a room map with names" sounds like labels in the picture. Classic
+    removed them in v2.7.3 precisely because the card renders its own
+    overlay from `rooms`, and drawing both doubles them up. The rotating
+    fill colours are what keep adjacent rooms distinguishable without
+    labels.
+
+    WHAT PRIME DOES NOT NEED. Classic has to fit its cloud UMF map onto
+    the robot's pose coordinate space first, which is what UmfAligner
+    and the whole `aligned` state exist for. Prime's polygons arrive
+    already in the robot's own coordinates, so there is no transform and
+    no alignment gate -- which is also why this entity is available
+    immediately rather than after the first mission.
+    """
+
+    _attr_has_entity_name  = True
+    _attr_content_type     = "image/png"
+    _attr_translation_key  = "rooms_map"
+    _attr_entity_category  = None
+
+    def __init__(
+        self,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        hass: Any,
+        *,
+        include_live: bool = False,
+    ) -> None:
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        # hass IS PASSED IN, not read off the config entry. ConfigEntry
+        # has no `hass` attribute, so `config_entry.hass` raises
+        # AttributeError -- and an exception in a constructor means the
+        # entity is never created.
+        ImageEntity.__init__(self, hass)
+        self._config_entry = config_entry
+        self._include_live = include_live
+        # The rooms image is the xiaomi-vacuum-map-card source.  It must
+        # receive the live layers too: the card accepts one raster source,
+        # not a stack of image entities.
+        self._show_live_overlay = True
+        if include_live:
+            self._attr_translation_key = "cleaning_map"
+            self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_map"
+        else:
+            self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._polygons: dict[str, list[tuple[float, float]]] = {}
+        self._names: dict[str, str] = {}
+        self._floor_plan: Any = None
+        self._live_bundle: Any = None
+        self._preferences: dict[str, Any] = {}
+        self._renderer: Any = None
+        self._png: bytes | None = None
+        self._live_dirty = False
+        self._last_live_state_write = 0.0
+        self._live_bundle_store: Store | None = None
+        self._stored_live_bundle: dict[str, Any] | None = None
+        self._current_map_id: str | None = None
+        self._rendered_for_map_version: str | None = None
+        self._rendered_map_id: str | None = None
+
+    @property
+    def suggested_object_id(self) -> str:
+        """Locale-independent slug. With has_entity_name plus a
+        translation_key, HA would otherwise derive the entity_id from the
+        TRANSLATED name and produce different ids per language."""
+        return "prime_cleaning_map" if self._include_live else "rooms_map"
+
+    @property
+    def available(self) -> bool:
+        """Unavailable until rooms have been read.
+
+        Honest rather than a blank canvas: a robot that has not finished
+        mapping has no rooms, and an empty image looks like a fault.
+        """
+        return super().available and bool(
+            self._polygons or getattr(self._floor_plan, "floor_plan", None)
+        )
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        if self._show_live_overlay:
+            self._live_bundle_store = Store(
+                self.hass,
+                _LIVE_BUNDLE_STORAGE_VERSION,
+                f"roomba_plus_prime_live_bundle_{self._config_entry.entry_id}",
+            )
+            stored = await self._live_bundle_store.async_load()
+            if isinstance(stored, dict):
+                self._stored_live_bundle = stored
+        await self._async_refresh_rooms()
+
+        # LIVE BUNDLES from the other Prime image entity, which watches
+        # the map stream. The two are split by capability: that one has
+        # the stream and no renderer, this one has the renderer and no
+        # stream.
+        if self._show_live_overlay:
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    _SIGNAL_PRIME_LIVE_BUNDLE.format(self._config_entry.entry_id),
+                    self._on_live_bundle,
+                )
+            )
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    _SIGNAL_PRIME_LIVE_POSITION.format(self._config_entry.entry_id),
+                    self._on_live_position,
+                )
+            )
+
+        # NO SUBSCRIPTION, and no re-render per image request.
+        #
+        # Both were tried and both are wrong for this entity.
+        #
+        # A status-coordinator subscription fires on every shadow change
+        # -- battery percent, phase, dock state -- and each one would
+        # trigger a get_map_metadata() call. A cloud request per battery
+        # percentage point, for data that changes when somebody renames
+        # a room.
+        #
+        # Classic's rooms map re-renders on every image request instead,
+        # which is free there: its polygons already sit in runtime_data.
+        # Prime's require a cloud call, so the same approach would hit
+        # iRobot's servers for as long as a dashboard stays open.
+        #
+        # What actually invalidates this image is the MAP VERSION. The
+        # robot re-versions its map when the geometry changes, so that is
+        # the thing worth watching -- and it is already being read for
+        # room cleaning. Checked when the image is requested, and the
+        # cloud is only called when it has actually moved.
+        #: Which map that version belongs to. Without it, a robot moving
+        #: between floors would render a different map while the version
+        #: it is compared against stays put.
+
+    async def _async_refresh_rooms(self) -> None:
+        """Reads the current map's rooms and renders them."""
+        from .prime_room_map import async_build_prime_room_polygons
+        from .room_cleaning import async_get_room_cleaning_backend
+
+        backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+        if backend is None:
+            return
+        map_ids = await backend._all_map_ids()  # noqa: SLF001
+        if not map_ids:
+            return
+
+        # One image per entity, so the current map wins where the robot
+        # says which one it is on; otherwise the first is as good a
+        # choice as any, since with one map there is no ambiguity.
+        # A USER CHOICE OUTRANKS THE ROBOT'S OWN REPORT, and only when
+        # it is still a map this account has -- a map deleted in the app
+        # must not leave the image stuck on nothing.
+        chosen = getattr(self._config_entry.runtime_data, "prime_selected_map_id", None)
+        if chosen in map_ids:
+            p2map_id = chosen
+        else:
+            current = await backend._current_map_id()  # noqa: SLF001
+            p2map_id = current if current in map_ids else map_ids[0]
+        self._current_map_id = p2map_id
+
+        # Some lightweight callers (including HA's entity test helpers)
+        # construct the image without running async_added_to_hass().
+        saved_bundle = getattr(self, "_stored_live_bundle", None)
+        if (
+            getattr(self, "_show_live_overlay", True)
+            and
+            getattr(self, "_live_bundle", None) is None
+            and isinstance(saved_bundle, dict)
+            and saved_bundle.get("map_id") == p2map_id
+            and isinstance(saved_bundle.get("bundle"), dict)
+        ):
+            self._live_bundle = saved_bundle["bundle"]
+
+        polygons, names, preferences = await async_build_prime_room_polygons(
+            self._config_entry, p2map_id
+        )
+
+
+        # The floor plan is a SECOND cloud call, and a failure costs only
+        # the walls and carpet -- the rooms are what the map is for.
+        from .prime_room_map import (  # noqa: PLC0415
+            PrimeFloorPlan,
+            async_build_prime_floor_plan,
+        )
+
+        # The bundle link needs the map VERSION, which _all_map_ids()
+        # does not carry -- it returns ids. Asked for separately rather
+        # than widening that helper, whose callers all want ids.
+        version = ""
+        try:
+            robot = self._config_entry.runtime_data.prime_robot
+            versions = await robot.get_active_map_versions() or []
+            record_success("map version read")
+            for entry in versions:
+                if entry.get("p2map_id") == p2map_id:
+                    version = entry.get("active_p2mapv_id") or ""
+                    break
+        except Exception:  # noqa: BLE001
+            record_failure("map version read", "listing active map versions")
+            _LOGGER.debug("Prime map: could not read map versions", exc_info=True)
+
+        floor_plan = (
+            await async_build_prime_floor_plan(self._config_entry, p2map_id, version)
+            if version
+            else PrimeFloorPlan(
+                room_names={}, room_polygons={}, floor_plan=[], borders=[],
+                carpet=[], furniture=[], dock=None,
+            )
+        )
+
+        # BUNDLE NAMES WIN where present.
+        #
+        # get_map_metadata() is not always complete: one tester's robot
+        # returns four rooms with only three names, while his iRobot app
+        # shows all four. The bundle's rooms layer is what the app
+        # appears to read.
+        #
+        # Metadata names stay as the fallback -- they are confirmed on
+        # three accounts, and the bundle layer is not guaranteed to
+        # exist. Only a name actually present in the bundle replaces one,
+        # so a robot without that layer is unaffected.
+        for room_id, name in (floor_plan.room_names or {}).items():
+            if room_id in names:
+                names[room_id] = name
+
+        # OUTLINES FROM THE BUNDLE, where the metadata has none.
+        #
+        # On several robots get_map_metadata() returns names and cleaning
+        # defaults per room but no geometry at all -- so `_polygons`
+        # stayed empty and the rooms map reported itself unavailable,
+        # permanently and without explanation.
+        #
+        # Confirmed on three models by three testers, each arriving at
+        # rooms.geojson independently.
+        #
+        # Metadata geometry still wins where it exists: it is what this
+        # entity was built on and is confirmed working elsewhere. The
+        # bundle fills the gap rather than replacing the source.
+        for room_id, ring in (floor_plan.room_polygons or {}).items():
+            polygons.setdefault(room_id, ring)
+            names.setdefault(
+                room_id,
+                (floor_plan.room_names or {}).get(room_id) or f"Room {room_id}",
+            )
+        if not polygons and not floor_plan.floor_plan:
+            # A post-mission shadow can announce a new map version before
+            # its bundle is available. Do not turn a working map unavailable
+            # just because this transient refresh has no geometry.
+            _LOGGER.debug(
+                "Prime map: refresh returned no geometry; keeping cached map"
+            )
+            return
+
+        self._polygons = polygons
+        self._names = names
+        self._preferences = preferences
+        self._floor_plan = floor_plan
+        if self._polygons:
+            self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+
+    @staticmethod
+    def _draw_zone_layer(draw, to_px, layer, *, outline, scale=1000.0) -> None:
+        """Outlines every polygon of one zone layer.
+
+        Outline only, never filled: a filled zone hides the room under
+        it, and the rooms are what the map is for. A reader needs to see
+        that a zone is there and where its edge runs, not to have it
+        painted over the floor.
+        """
+        for feature in (layer or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            for ring in coords or []:
+                try:
+                    # The scale is passed in rather than imported: this
+                    # module reads METRES_TO_MM through a late import
+                    # inside another method, and a static helper cannot
+                    # see it.
+                    points = [
+                        to_px(float(x) * scale, float(y) * scale)
+                        for x, y in ring
+                    ]
+                except (TypeError, ValueError):
+                    continue
+                if len(points) >= 3:
+                    draw.polygon(points, outline=outline)
+
+    def _dock_position(self) -> tuple[float, float] | None:
+        """Where to draw the dock: seen beats remembered.
+
+        The map bundle's `dockPose` records where the dock stood when
+        the map was BUILT, and nothing corrects it when the dock moves.
+        @utkjmitch's map put it on a spot now occupied by a treadmill
+        while the iRobot app showed it correctly -- so the app reads
+        something fresher, and `dockPose` is the only dock data the
+        bundle carries.
+
+        A robot reporting `charge` is standing on the dock, and its
+        position comes through the same stream in the same coordinates.
+        That observation wins when it exists.
+
+        The bundle stays as the fallback rather than being dropped: it
+        is available immediately, on every account, without waiting for
+        a mission to end. A remembered dock in roughly the right place
+        beats no dock at all, which is what a fresh install would
+        otherwise show.
+        """
+        observed = getattr(
+            self._config_entry.runtime_data, "prime_observed_dock", None
+        )
+        if isinstance(observed, (tuple, list)) and len(observed) >= 2:
+            return (float(observed[0]), float(observed[1]))
+        if self._floor_plan.dock is not None:
+            dx, dy, _orientation = self._floor_plan.dock
+            return (dx, dy)
+        return None
+
+    def _render_png(self) -> bytes:
+        """Draws the polygons, reusing the Classic renderer's transform."""
+        from PIL import Image, ImageDraw  # noqa: PLC0415
+
+        from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM, rings_mm  # noqa: PLC0415
+
+        if self._renderer is None:
+            self._renderer = MapRenderer(RendererConfig(), None, None)
+
+        # Seed the auto-fit transform from the room extents. Classic gets
+        # this from accumulated poses; Prime has the polygons up front,
+        # which is why its map is complete before the first mission.
+        rings = [
+            *self._polygons.values(),
+            *getattr(self._floor_plan, "floor_plan", ()),
+            *self._floor_plan.carpet,
+            *self._floor_plan.borders,
+            *getattr(self._floor_plan, "furniture", ()),
+        ]
+        self._renderer._points = [  # noqa: SLF001
+            self._renderer._mm_to_px(x, y)  # noqa: SLF001
+            for ring in rings
+            for x, y in ring
+        ]
+        _, _, _, fit_scale, fit_cx, fit_cy = self._renderer._compute_fit()  # noqa: SLF001
+        self._renderer._fit_scale = fit_scale  # noqa: SLF001
+        self._renderer._fit_cx = fit_cx  # noqa: SLF001
+        self._renderer._fit_cy = fit_cy  # noqa: SLF001
+
+        size = self._renderer._cfg.size_px  # noqa: SLF001
+        img = Image.new("RGB", (size, size), (30, 30, 30))
+        draw = ImageDraw.Draw(img)
+
+        to_px = self._renderer._mm_to_px_fit  # noqa: SLF001
+        show_live = getattr(self, "_show_live_overlay", True)
+        show_room_fills = getattr(self, "_include_live", True)
+        live_bundle = self._live_bundle or {} if show_live else {}
+        live_coverage = rings_mm(live_bundle.get("coverage"))
+
+        # LAYER ORDER MATTERS, bottom to top: rooms, coverage, structural
+        # floor plan, then furniture and borders.
+        #
+        # Carpet over rooms because it is a property OF a room, and a
+        # room drawn on top would hide it. Walls over both because they
+        # bound everything. The dock over walls because it sits against
+        # one. Labels last so nothing covers them.
+        if show_room_fills:
+            room_outline = (
+                None
+                if getattr(self._floor_plan, "floor_plan", ())
+                else (100, 149, 237)
+            )
+            for idx, ring in enumerate(self._polygons.values()):
+                draw.polygon(
+                    [to_px(x, y) for x, y in ring],
+                    outline=room_outline,
+                    fill=ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)],
+                )
+
+        for ring in self._floor_plan.carpet:
+            # Outline only, no fill: a filled overlay would flatten the
+            # per-room colours that keep adjacent rooms distinguishable.
+            draw.polygon([to_px(x, y) for x, y in ring], outline=(150, 120, 80))
+
+        # The live bundle is the data the app uses for cleaned coverage,
+        # trajectories and hazards. Keep the static-map fit: these layers
+        # share its coordinate frame and must not move the room layout.
+        for ring in live_coverage:
+            draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
+
+        # Older bundles have room regions but no detailed floor plan.
+        # Keep that static image useful without pretending it has walls.
+        if not show_room_fills and not getattr(self._floor_plan, "floor_plan", ()):
+            for ring in self._polygons.values():
+                draw.polygon(
+                    [to_px(x, y) for x, y in ring], outline=(175, 175, 175), width=2
+                )
+
+        # `rooms` marks where the robot can clean.  `floorPlan` is the
+        # detailed saved-map geometry the iRobot app uses for interior
+        # walls and doorways.  It shares the map coordinate system, so it
+        # must use the same fit transform rather than a second registration.
+        for ring in getattr(self._floor_plan, "floor_plan", ()):
+            points = [to_px(x, y) for x, y in ring]
+            draw.line(points, fill=(175, 175, 175), width=2)
+
+        # Furniture is useful context, but an outline keeps it from hiding
+        # the selectable room colours or live cleaning coverage.
+        for ring in getattr(self._floor_plan, "furniture", ()):
+            draw.polygon(
+                [to_px(x, y) for x, y in ring], outline=(90, 90, 90), width=1
+            )
+
+        for ring in self._floor_plan.borders:
+            # OUTLINE ONLY, for the reason written two lines above about
+            # carpet and then not applied here.
+            #
+            # Borders are MultiPolygon AREAS, not thin walls. Filling
+            # them paints a solid grey slab over the rooms underneath --
+            # @jouwdan sent before/after screenshots of exactly that
+            # (PR #64), with the room colours completely hidden.
+            #
+            # The wall is the outline. Drawing it as one shows the same
+            # geometry without covering anything.
+            draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
+
+        # THE BUNDLE'S TRAJECTORIES FILL A GAP, they do not compete with
+        # the live trail.
+        #
+        # Our own trail only exists while Home Assistant is watching. A
+        # restart mid-mission loses it; the bundle has the whole path,
+        # because iRobot recorded it. That is what this layer is for.
+        #
+        # But it also carries the PREVIOUS mission until the robot
+        # uploads a new bundle, which is why @chairstacker saw the old
+        # route persist as a thin line under the new one and could only
+        # clear it by reloading. Our trail had already been cleared; the
+        # bundle brought the old path back.
+        #
+        # So: once we have points of our own, they are the better
+        # answer and this layer stands down. With none -- a fresh start,
+        # a restart mid-run -- the bundle fills in.
+        have_own_trail = bool(
+            getattr(self._config_entry.runtime_data, "prime_positions", None)
+        ) if show_live else False
+        for feature in (
+            [] if have_own_trail
+            else (live_bundle.get("trajectories") or {}).get("features") or []
+        ):
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                points = [
+                    to_px(float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
+                    for x, y in coords
+                ]
+            except (TypeError, ValueError):
+                continue
+            if len(points) >= 2:
+                draw.line(points, fill=(80, 150, 235), width=2)
+
+        # ZONES, EACH BEHIND ITS OWN TICK BOX and all off by default.
+        #
+        # @chairstacker asked for exactly this shape: "my map in the app
+        # is getting a little busy but it's still readable; the room map
+        # would face the same issue as soon as the zones are being
+        # displayed permanently. So, maybe there's a possibility for
+        # making their display optional."
+        #
+        # Three options rather than one, because the three answer
+        # different questions -- where the robot should go, where it must
+        # not, and where it must not mop -- and wanting keep-out zones on
+        # screen does not imply wanting clean zones too.
+        options = self._config_entry.options if show_live else {}
+        # ZONES COME FROM WHICHEVER BUNDLE HAS THEM.
+        #
+        # The live bundle arrives on a map-update message -- only while a
+        # mission runs. @chairstacker ticked all three boxes, reloaded
+        # twice and saw nothing, which was correct behaviour and useless
+        # to him: zones barely change, and nobody inspects their keep-out
+        # areas mid-clean.
+        #
+        # The floor plan's bundle is fetched whenever the room map is
+        # built and carries the same three files.
+        def _live_bundle_matches_plan() -> bool:
+            """Whether the live bundle describes the map being drawn.
+
+            UNKNOWN COUNTS AS MATCHING, deliberately. A robot with one
+            map is the common case and its live bundle is always the
+            right one; refusing it because a manifest lacks an id would
+            take working zones away from every single-map household to
+            fix a multi-map one.
+
+            THE PERSISTED BUNDLE CARRIES NO MANIFEST -- the store keeps
+            coverage, trajectories and hazard only. It carries no zone
+            layers either, so after a reload `_zone_layer` falls through
+            to the saved floor plan and this check never decides
+            anything. It matters during a live mission, which is exactly
+            when the wrong map's zones could be drawn.
+            """
+            plan_id = getattr(self._floor_plan, "p2map_id", None)
+            if not plan_id:
+                return True
+            manifest = live_bundle.get("manifest")
+            if not isinstance(manifest, dict):
+                return True
+            live_id = manifest.get("pmap_id") or manifest.get("p2map_id")
+            if not live_id:
+                return True
+            return str(live_id) == str(plan_id)
+
+        def _zone_layer(name: str) -> Any:
+            # THE LIVE BUNDLE ONLY WINS FOR THE MAP IT BELONGS TO.
+            #
+            # It arrives on a map-update message during a mission, so it
+            # describes whichever map the robot is DRIVING -- which is
+            # not necessarily the one the dropdown selected.
+            #
+            # @chairstacker selected Master_Bathroom while a Whole_House
+            # mission ran and saw Whole_House's clean and keep-out
+            # boundaries drawn over the bathroom floor plan. His summary
+            # was exact: two sets of maps switching properly, one set of
+            # zones that is either on or off.
+            #
+            # Preferring live unconditionally was right while a robot had
+            # one map. With several it draws the wrong zones on the right
+            # floor plan, which is worse than drawing none -- a boundary
+            # in the wrong place invites trusting it.
+            if _live_bundle_matches_plan():
+                layer = live_bundle.get(name)
+                if layer:
+                    return layer
+            return (getattr(self._floor_plan, "zone_layers", None) or {}).get(name)
+
+        if options.get(CONF_MAP_CLEAN_ZONES, DEFAULT_MAP_ZONES):
+            self._draw_zone_layer(
+                draw, to_px, _zone_layer("cleanZones"),
+                outline=(120, 200, 120),
+            )
+            # Ad-hoc zones are clean zones the user drew for one run.
+            # Same colour, because they mean the same thing to a reader.
+            self._draw_zone_layer(
+                draw, to_px, _zone_layer("adHocCleanZones"),
+                outline=(120, 200, 120),
+            )
+
+        keepout = options.get(CONF_MAP_KEEPOUT_ZONES, DEFAULT_MAP_ZONES)
+        nomop = options.get(CONF_MAP_NOMOP_ZONES, DEFAULT_MAP_ZONES)
+        if keepout or nomop:
+            # One raw list holds both kinds, told apart by `type`. The
+            # only two real values are KeepOutZone and NoMopZone -- a
+            # virtual wall is a KeepOutZone with a thin geometry, not a
+            # third type.
+            for feature in (_zone_layer("policyZones") or {}).get("features") or []:
+                zone_type = str(
+                    (feature.get("properties") or {}).get("type") or ""
+                )
+                if zone_type == "KeepOutZone" and not keepout:
+                    continue
+                if zone_type == "NoMopZone" and not nomop:
+                    continue
+                if zone_type not in ("KeepOutZone", "NoMopZone"):
+                    # An unrecognised type is drawn only when both boxes
+                    # are ticked -- it belongs to neither, and guessing
+                    # which box governs it would hide it from somebody
+                    # who asked to see everything.
+                    if not (keepout and nomop):
+                        continue
+                self._draw_zone_layer(
+                    draw, to_px, {"features": [feature]},
+                    outline=(220, 120, 120) if zone_type == "KeepOutZone"
+                    else (200, 160, 220),
+                )
+
+        for feature in (live_bundle.get("hazard") or {}).get("features") or []:
+            coords = (feature.get("geometry") or {}).get("coordinates")
+            try:
+                px, py = to_px(
+                    float(coords[0]) * METRES_TO_MM,
+                    float(coords[1]) * METRES_TO_MM,
+                )
+            except (TypeError, ValueError, IndexError):
+                continue
+            draw.regular_polygon((px, py, 8), 3, fill=(240, 150, 60))
+
+        # THE TRAIL, on top of the floor plan and under the labels.
+        #
+        # Fed from the live map stream, which the OTHER Prime image
+        # entity watches -- the positions are collected into
+        # runtime_data because the entity receiving them has no renderer
+        # and the one that draws has no stream.
+        #
+        # Drawn as a polyline rather than through MapRenderer.add_pose:
+        # that path maintains its own bounds and coordinate frame, and
+        # this map is already anchored on the room polygons. Two frames
+        # for one picture would misplace one of them.
+        # ONLY ON THE MAP THE ROBOT IS ACTUALLY DRIVING.
+        #
+        # The zone fix bound clean and keep-out outlines to the plan
+        # being drawn, and stopped there. Positions and the trail belong
+        # to the ROBOT, not to the map on screen -- so selecting a
+        # different floor plan still drew the robot, and its trail, over
+        # rooms it had never entered.
+        #
+        # @chairstacker again, with the same shape of report as the
+        # zones: "the robot still shows up on an incorrectly selected
+        # map - and so do the trails". His screenshots show a
+        # Whole_House run laid over a second map's rooms.
+        #
+        # Same rule as the zones, same fail-open contract: an unknown
+        # map id counts as matching, because a single-map household must
+        # not lose its live position to fix a multi-map one.
+        positions = (
+            getattr(self._config_entry.runtime_data, "prime_positions", None) or []
+            if show_live and self._live_position_belongs_here()
+            else []
+        )
+        if len(positions) >= 2:
+            trail: list[tuple[float, float]] = []
+            previous: tuple[float, float] | None = None
+            for x_mm, y_mm, _deg in positions:
+                # Same 500 mm jump rejection the Classic renderer uses.
+                # A relocalisation would otherwise draw a straight line
+                # across the whole home.
+                if previous is not None:
+                    dx, dy = x_mm - previous[0], y_mm - previous[1]
+                    if (dx * dx + dy * dy) ** 0.5 > 500.0:
+                        if len(trail) >= 2:
+                            draw.line(trail, fill=(120, 200, 255), width=2)
+                        trail = []
+                        previous = (x_mm, y_mm)
+                        continue
+                trail.append(to_px(x_mm, y_mm))
+                previous = (x_mm, y_mm)
+            if len(trail) >= 2:
+                draw.line(trail, fill=(120, 200, 255), width=2)
+
+        # SEEN BEATS REMEMBERED -- and `_dock_position()` was written to
+        # say so and never called.
+        #
+        # `dockPose` records where the dock stood when the map was
+        # BUILT. @utkjmitch's map drew it on a spot now occupied by a
+        # treadmill while the iRobot app showed it correctly, so the app
+        # reads something fresher.
+        #
+        # He reported that correction as unreachable in a frozen-shadow
+        # state, which is true -- and it was unreachable in every state,
+        # because nothing invoked it. Found by listing private helpers
+        # whose name appears exactly once in the component.
+        dock_xy = self._dock_position()
+        if show_live and dock_xy is not None:
+            # THE SAME WHITE RING AS THE ROBOT, for the same reason.
+            #
+            # The dock reads clearly against the trail (a difference of
+            # 245 across three channels) and much less so against a
+            # cleaned area: yellow on the coverage green scores 145, and
+            # the dock's own room is exactly the area that gets covered.
+            #
+            # 145 is not the 90 that made the robot invisible, so this
+            # is not a repeat of that bug -- but a marker whose
+            # legibility depends on whether the room has been cleaned
+            # yet is one worth making unconditional. The ring costs
+            # nothing and works over any hue underneath.
+            # A SQUARE, so shape alone says which marker this is.
+            #
+            # Dock and robot used to be circles of 12 and 14 pixels on a
+            # 600-pixel render -- about five and six pixels on a typical
+            # dashboard card. Indistinguishable by size, and a viewer
+            # who spots one dot still cannot tell which it is.
+            px, py = to_px(*dock_xy)
+            draw.rectangle(
+                (px - 8, py - 8, px + 8, py + 8),
+                fill=(200, 200, 90), outline=(255, 255, 255), width=2,
+            )
+
+        # THE ROBOT LAST, and with a ring around it.
+        #
+        # Two testers independently reported the marker "not working" on
+        # a20. It was being drawn the whole time -- in (60, 170, 255),
+        # against a trail in (120, 200, 255), which is a difference of 90
+        # across all three channels out of a possible 765. The dock, at
+        # (200, 200, 90), differs from the trail by 245 and both of them
+        # could see that immediately.
+        #
+        # So this was never a rendering bug: a small circle in nearly the
+        # trail's own colour, sitting at the end of that trail, is
+        # invisible. Measured rather than guessed at, because "I cannot
+        # see it" and "it is not there" look identical in a screenshot.
+        #
+        # The white ring is what does the work. It separates the marker
+        # from anything it happens to sit on, whatever hue that is --
+        # trail, coverage fill, a room, or the dock. Drawing the robot
+        # after the dock matters for the same reason: a docked robot used
+        # to disappear underneath it.
+        if positions:
+            x_mm, y_mm, heading = positions[-1]
+            px, py = to_px(x_mm, y_mm)
+            # BIG ENOUGH TO SURVIVE BEING SCALED DOWN.
+            #
+            # At radius 7 this was fourteen pixels on a 600-pixel
+            # render: under six on a 250-pixel dashboard card, and about
+            # four and a half on the card @chairstacker screenshotted.
+            # At that size a two-pixel ring is half a pixel, so contrast
+            # had nothing left to work with -- which is why he still
+            # could not make out the robot after the colour was fixed.
+            #
+            # Radius 11 gives twenty-two pixels, roughly nine on a
+            # 250-pixel card. Large enough to read, small enough not to
+            # swallow a room on a compact map.
+            draw.ellipse(
+                (px - 11, py - 11, px + 11, py + 11),
+                fill=(20, 110, 220), outline=(255, 255, 255), width=3,
+            )
+            radians = math.radians(heading)
+            draw.line(
+                (px, py, px + math.cos(radians) * 20, py - math.sin(radians) * 20),
+                fill=(255, 255, 255), width=4,
+            )
+
+        # ROOM LABELS ARE OFF BY DEFAULT, which reads backwards until you
+        # know what Classic does: it removed its own in v2.7.3 because
+        # the xiaomi-vacuum-map-card draws an overlay from the `rooms`
+        # attribute, and both at once doubles them up.
+        #
+        # The option exists for everyone not using that card -- a plain
+        # picture-entity shows an image and nothing else, so for them the
+        # names have to be in the picture or they do not exist.
+        #
+        # WHICH IS WHY `show_room_fills` MUST NOT GATE THIS. Splitting
+        # the two Prime maps gave the rooms map plain outlines, on the
+        # reasoning that the card draws its own overlay -- defensible for
+        # the FILLS. Carrying that to the labels disabled an explicit
+        # user option on exactly the entity the paragraph above says the
+        # option exists for.
+        #
+        # @chairstacker: "no room shading colors and no names at all
+        # (even room names are gone)". The shading is the deliberate
+        # half; the names are this.
+        if self._config_entry.options.get(
+            CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
+        ):
+            from .map_renderer import LABEL_FONT  # noqa: PLC0415
+
+            for room_id, ring in self._polygons.items():
+                name = self._names.get(room_id)
+                if not name:
+                    continue
+                cx = sum(x for x, _ in ring) / len(ring)
+                cy = sum(y for _, y in ring) / len(ring)
+                draw.text(
+                    to_px(cx, cy), name, fill=(230, 230, 230),
+                    anchor="mm", font=LABEL_FONT,
+                )
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    async def async_image(self) -> bytes | None:
+        """Re-reads only when the robot's map version has moved.
+
+        The version check is a shadow read that is already happening for
+        other entities, so the common case costs nothing and a genuine
+        map change is picked up without a subscription.
+        """
+        await self._async_refresh_if_map_changed()
+        if getattr(self, "_show_live_overlay", True) and self._live_dirty and self._polygons:
+            self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._live_dirty = False
+        return self._png
+
+    async def _async_refresh_if_map_changed(self) -> None:
+        """Re-reads the rooms when the map ON SCREEN has changed.
+
+        THIS WATCHED p2maps[0] WHILE RENDERING A DIFFERENT MAP.
+        _async_refresh_rooms() picks the map the robot says it is
+        standing on and only falls back to the first one when that is
+        unknown -- so on a two-map account the two could diverge, and
+        then:
+
+          - a change to the map being shown went unnoticed, because the
+            version being compared belonged to the other map, and the
+            image quietly went stale
+          - a change to the OTHER map triggered a pointless refresh
+
+        @chairstacker has two maps and edited the older one, which is
+        exactly the arrangement where this shows.
+
+        Comparing the id as well as the version matters just as much: a
+        robot that moves between floors changes which map is rendered
+        without either map's version moving at all.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        version: str | None = None
+        map_id: str | None = None
+        if coordinator is not None and coordinator.data:
+            current = coordinator.data.get("ro-currentstate") or {}
+            mission = current.get("cleanMissionStatus") or {}
+            reported = mission.get("p2mapId") or mission.get("p2map_id")
+            p2maps = current.get("p2maps") or []
+            if isinstance(p2maps, list) and p2maps:
+                entries = [e for e in p2maps if isinstance(e, dict)]
+                # The same choice _async_refresh_rooms() makes: the map
+                # the robot reports, or the first one when it does not
+                # report a usable one.
+                # Same order of preference as _async_refresh_rooms():
+                # the user's choice, then the robot's report, then the
+                # first. The two MUST agree -- watching one map while
+                # rendering another is the bug this check just had.
+                selected = getattr(
+                    self._config_entry.runtime_data, "prime_selected_map_id", None
+                )
+                chosen = next(
+                    (e for e in entries if e.get("p2map_id") == selected),
+                    None,
+                ) or next(
+                    (e for e in entries if e.get("p2map_id") == reported),
+                    entries[0] if entries else None,
+                )
+                if chosen is not None:
+                    map_id = chosen.get("p2map_id")
+                    version = (
+                        chosen.get("active_p2mapv_id")
+                        or chosen.get("last_p2mapv_ts")
+                    )
+
+        unchanged = (
+            version is not None
+            and version == self._rendered_for_map_version
+            and map_id == self._rendered_map_id
+        )
+        if unchanged:
+            return
+        await self._async_refresh_rooms()
+        self._rendered_for_map_version = version
+        self._rendered_map_id = map_id
+
+    def _live_position_belongs_here(self) -> bool:
+        """Whether the robot's live position describes the map on screen.
+
+        Reads the same source the zone check uses -- the live bundle's
+        manifest against this floor plan's `p2map_id` -- because the
+        positions arrive on the same stream as the bundle. A position
+        without a bundle to place it in is a position for whatever map
+        the robot last reported.
+
+        UNKNOWN COUNTS AS MATCHING. One map is the common case, and its
+        positions are always the right ones.
+        """
+        plan_id = getattr(self._floor_plan, "p2map_id", None)
+        if not plan_id:
+            return True
+        # `self._live_bundle`, NOT `runtime_data`. The first version of
+        # this read `runtime_data.prime_live_bundle`, which nothing sets
+        # -- so it returned True unconditionally and the fix did
+        # nothing. The bundle lives on the entity, beside the renderer
+        # that draws it.
+        live = self._live_bundle or {}
+        manifest = live.get("manifest") if isinstance(live, dict) else None
+        if not isinstance(manifest, dict):
+            return True
+        live_id = manifest.get("pmap_id") or manifest.get("p2map_id")
+        if not live_id:
+            return True
+        return str(live_id) == str(plan_id)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Calibration and room outlines for xiaomi-vacuum-map-card.
+
+        The static Rooms Map is the card source.  The Cleaning Map is a
+        rendered status image, so it must not advertise selectable rooms.
+        """
+        from .prime_room_map import prime_calibration_points
+
+        if self._include_live or not self._polygons or self._renderer is None:
+            return {}
+
+        cal = prime_calibration_points(
+            self._polygons,
+            self._renderer._mm_to_px_fit,  # noqa: SLF001
+        )
+        rooms: dict[str, dict[str, Any]] = {}
+        for room_id, ring in self._polygons.items():
+            name = self._names.get(room_id) or f"Room {room_id}"
+            # xiaomi-vacuum-map-card uses the mapping key as the selection
+            # id when it generates room config. Keep the app's stable ID
+            # there; the display name remains the room's label.
+            rooms[room_id] = {
+                "outline": [[x, y] for x, y in ring],
+                "name": name,
+                "room_id": room_id,
+            }
+
+        attrs: dict[str, Any] = {"rooms": rooms}
+        # Per-room preferences set in the iRobot app, so an automation
+        # can honour them rather than override them.
+        if self._preferences:
+            attrs["room_preferences"] = self._preferences
+        if cal:
+            attrs["calibration_points"] = cal
+        return attrs
+
+    @callback
+    def _on_live_bundle(self, bundle: Any) -> None:
+        """Marks the Rooms Map dirty when a new live bundle arrives.
+
+        THE MAP NOW UPDATES DURING A MISSION rather than only when the
+        map version changes. Contributed by @jouwdan (PR #63), who found
+        the second url on MapUpdateMessage.
+
+        If room geometry has not arrived yet, the initial room refresh renders
+        the already-cached live data. This avoids a blank entity while the
+        static map is loading.
+
+        Rendering happens only when Home Assistant fetches the image.
+        This keeps an idle dashboard from consuming CPU for updates it
+        will never display.
+        """
+        self._live_bundle = bundle
+        live_bundle_store = getattr(self, "_live_bundle_store", None)
+        current_map_id = getattr(self, "_current_map_id", None)
+        if live_bundle_store is not None and current_map_id is not None:
+            live_bundle_store.async_delay_save(
+                self._live_bundle_save_payload,
+                _LIVE_BUNDLE_SAVE_DELAY_SECONDS,
+            )
+        self._mark_live_dirty()
+
+    def _live_bundle_save_payload(self) -> dict[str, Any]:
+        """Persist only the rendered live layers for the current map."""
+        bundle = self._live_bundle if isinstance(self._live_bundle, dict) else {}
+        return {
+            "map_id": getattr(self, "_current_map_id", None),
+            "bundle": {
+                layer: bundle[layer]
+                for layer in _LIVE_BUNDLE_LAYERS
+                if isinstance(bundle.get(layer), (dict, list))
+            },
+        }
+
+    @callback
+    def _on_live_position(self) -> None:
+        """Marks the Rooms Map dirty when a live position arrives."""
+        self._mark_live_dirty()
+
+    @callback
+    def _mark_live_dirty(self) -> None:
+        """Advertise new live data at a bounded frontend update rate."""
+        self._live_dirty = True
+        now = _time_mod.monotonic()
+        if (
+            now - getattr(self, "_last_live_state_write", 0.0)
+            >= _LIVE_MAP_STATE_UPDATE_INTERVAL
+        ):
+            self._last_live_state_write = now
+            self._attr_image_last_updated = dt_util.utcnow()
+            self.async_write_ha_state()

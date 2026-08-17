@@ -23,7 +23,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import SQFT_TO_M2
+from .const import extract_region_id, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,6 +151,16 @@ class MissionStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current records to hass.storage."""
+        # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
+        # hold only a config entry resolve hass through
+        # `prime_mission_sync._hass_of()`, whose own docstring says a
+        # None return means "skip persistence, keep memory" -- and that
+        # every caller handles it. This one did not.
+        #
+        # Records stay in memory for the next attempt rather than
+        # crashing the sync that produced them.
+        if hass is None:
+            return
         store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({"records": self._records})
 
@@ -488,20 +498,16 @@ class MissionStore:
         return [region_map.get(rid, rid) for rid in rid_list]
 
     @staticmethod
-    def extract_rid(item: Any) -> str:
-        """Extract a region ID from a plan.upcoming entry.
+    @staticmethod
+    def extract_rid(region: Any) -> str | None:
+        """Delegates to const.extract_region_id.
 
-        Handles two confirmed formats:
-        - String (some firmware/app versions): "23"
-        - Object (lewis 22.52.10+): {"type": "rid", "rid": "23"}
-          Also accepts {"region_id": "23"} as a fallback.
-
-        Returns an empty string when neither format is recognisable so the
-        caller can filter it out.
+        The two were byte-identical for a long time. Kept as a
+        forwarder rather than deleted because callbacks.py calls it
+        through the class in three places, and a rename there would
+        touch code that has nothing to do with this cleanup.
         """
-        if isinstance(item, dict):
-            return str(item.get("rid") or item.get("region_id") or "")
-        return str(item) if item is not None else ""
+        return extract_region_id(region)
 
     # v3.3.0 STORE-ENCAP — deprecated private alias. 18 test call sites
     # still use the old name; removal earmarked for SENSOR-SPLIT (v3.4.0)

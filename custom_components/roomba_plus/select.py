@@ -29,7 +29,7 @@ from .const import (
     has_smart_map,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
 def resolve_zone_name(
@@ -84,6 +84,103 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up select entities."""
+    data = config_entry.runtime_data
+
+    # PRIME BRANCH. Everything below reads roomba_reported_state(), which
+    # a Prime robot has no equivalent for -- the Classic descriptions
+    # would all evaluate against an empty dict and either all appear or
+    # none would.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
+        from .select_prime import (  # noqa: PLC0415
+            PRIME_SELECTS,
+            PrimeCleaningModeSelect,
+            PrimeMapSelect,
+            PrimeSettingSelect,
+        )
+
+        from .select_prime import (  # noqa: PLC0415
+            _autoevac_options,
+            _pad_wash_heat_options,
+            _reported_wetness,
+            _wetness_options,
+            _robot_sku,
+            _settings_keys,
+            _sku_narrowed,
+        )
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+        # WHICH SETTINGS THIS ROBOT ACTUALLY HAS, read from its own
+        # rw-settings key list rather than inferred from a table.
+        #
+        # @utkjmitch's Y351020 has auto-evac hardware and NO
+        # `autoevacFreq` key, and the iRobot app offers him no
+        # frequency control either. His reading is the one that fits:
+        # the key set tracks what is USER-CONFIGURABLE on the SKU, not
+        # what is installed. A capability flag cannot answer this.
+        #
+        # None means the shadow has not arrived -- offer everything, the
+        # same fail-open contract used for capabilities. An empty set
+        # would hide every control on a slow first connection.
+        present = _settings_keys(config_entry)
+        sku = _robot_sku(config_entry)
+
+        selects = []
+        for description in PRIME_SELECTS:
+            # Same "None means unknown, only an explicit 0 means absent"
+            # contract the switches use: a robot that has not reported
+            # its capabilities yet should get the entity, not lose it.
+            if not (
+                description.cap_attr is None
+                or cap is None
+                or getattr(cap, description.cap_attr, None) != 0
+            ):
+                continue
+            if present is not None and description.wire_key not in present:
+                continue
+            # TWO CONTROLS HAVE DOCK- OR ROBOT-DEPENDENT OPTION SETS.
+            # Everything else offers its full map.
+            if description.wire_key == "autoevacFreq":
+                values = _autoevac_options(cap)
+            elif description.wire_key == "pwHeat":
+                values = _pad_wash_heat_options(dock_cap)
+            elif description.wire_key == "padWetness.padPlate":
+                # WIDENED BY WHAT THE ROBOT REPORTS, because the ceiling
+                # here is a guess and a guess must not hide a real
+                # setting. Four is the highest anyone has seen.
+                values = _wetness_options(_reported_wetness(config_entry))
+            else:
+                # THREE CONTROLS ARE NARROWED BY PRODUCT MODE. Five SKUs
+                # see shorter interval and duration lists than the enums
+                # declare, and two of those five -- V1 and Z1 -- only
+                # became recognisable as Prime in the same session these
+                # controls were built.
+                narrowed = _sku_narrowed(
+                    description.wire_key, sku, description.values
+                )
+                values = narrowed if narrowed != description.values else None
+            # A capability level can narrow the set to nothing --
+            # `taskEndOnly` offers no choice at all. A select with no
+            # options is worse than no select.
+            if values is not None and not values:
+                continue
+            selects.append(
+                PrimeSettingSelect(data.blid, config_entry, description, values)
+            )
+        async_add_entities(selects)
+        # Always, even on a single-map account: an entity that appears
+        # and disappears as maps come and go is worse than a select with
+        # one option, because an automation pointing at a vanished entity
+        # fails for a reason unrelated to automations.
+        async_add_entities([
+            PrimeMapSelect(data.blid, config_entry),
+            # Asked for by a user: the app offers vacuum / mop / both
+            # when starting a clean, and this had a suction control and
+            # nothing for the mode.
+            PrimeCleaningModeSelect(data.blid, config_entry),
+        ])
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
