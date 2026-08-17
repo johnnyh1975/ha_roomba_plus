@@ -51,14 +51,14 @@
         }
       },
       "reconfigure": {
-        "description": "Update the connection settings for {name}.",
+        "description": "Werk de verbindingsinstellingen bij voor {name}.",
         "data": {
           "host": "IP address",
           "password": "Password"
         },
         "data_description": {
-          "host": "The local IP address of the Roomba.",
-          "password": "The robot password (hold HOME button to retrieve)."
+          "host": "Het lokale IP-adres van de Roomba.",
+          "password": "Het robotwachtwoord (houd de HOME-knop ingedrukt om het op te halen)."
         }
       },
       "reauth_confirm": {
@@ -122,15 +122,15 @@
       "not_irobot_device": "Het gevonden apparaat is geen iRobot-apparaat.",
       "short_blid": "Er is al een configuratiestroom actief voor deze robot.",
       "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken.",
-      "reconfigure_successful": "Connection settings updated successfully.",
+      "reconfigure_successful": "Verbindingsinstellingen bijgewerkt.",
       "no_new_robots_found": "Geen nieuwe robots gevonden op dit iRobot-account — alle robots zijn al ingesteld.",
       "prime_classic_password_missing": "Het wachtwoord van deze robot was niet opgenomen in het antwoord van het iRobot-account. Probeer deze in plaats daarvan handmatig toe te voegen.",
       "demand_cleaning_not_supported": "Deze robot rapporteert geen vuildetectiegegevens die nodig zijn voor reiniging op verzoek.",
       "integration_not_loaded": "De integratie is niet geladen. Herstart Home Assistant en probeer het opnieuw.",
       "room_schedule_no_rooms": "Er zijn nog geen kamers bekend voor deze robot. Laat hem eerst een kartering voltooien.",
       "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
-      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
+      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
     }
   },
   "options": {
@@ -210,11 +210,11 @@
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
         },
-        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "description": "Stel sensoren in die inactief moeten zijn voordat een smart_start kan beginnen.",
         "data_description": {
-          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
-          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
-          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
+          "blocking_sensors": "Binaire sensoren die een start blokkeren wanneer ze AAN staan (bijv. deur open, beweging gedetecteerd).",
+          "blocking_behavior": "Direct afbreken of de start in de wachtrij zetten tot de sensoren vrij zijn.",
+          "blocking_timeout_min": "Hoe lang wachten tot de sensoren vrij zijn voordat wordt opgegeven."
         }
       },
       "map_management": {
@@ -222,7 +222,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
+        "description": "Selecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}"
       },
       "map_management_edit": {
         "title": "Zone bewerken: {zone_name}",
@@ -230,10 +230,10 @@
           "display_name": "Display name",
           "hidden": "Hide this zone"
         },
-        "description": "Set a display name and visibility for this zone.",
+        "description": "Stel een weergavenaam en zichtbaarheid in voor deze zone.",
         "data_description": {
-          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
-          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+          "display_name": "Aangepaste naam in selectors. Laat leeg om de standaardnaam te gebruiken.",
+          "hidden": "Verborgen zones verdwijnen uit selectors en veroorzaken geen naamgevingsmeldingen."
         }
       },
       "presence_scheduling": {
@@ -249,10 +249,10 @@
       },
       "demand_cleaning": {
         "title": "Demand cleaning",
-        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "description": "Start automatisch een schoonmaakbeurt wanneer de vloer duidelijk viezer is dan normaal.",
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
-          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
+          "demand_clean_multiplier": "Drempelfactor (bijv. 1,5 = 50% boven gemiddeld)"
         }
       },
       "test_cloud_connection": {
@@ -282,14 +282,14 @@
       "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "integration_not_loaded": "De integratie kon niet worden geladen. Controleer de logboeken en herlaad voordat je de instellingen opent.",
       "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens.",
       "no_rest980_rooms_found": "Geen kamers gevonden in je roomba_rest980-installatie.",
       "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+.",
       "room_schedule_not_supported": "Frequenties per kamer vereisen een Smart Map-robot met cloudgegevens.",
       "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden.",
-      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
+      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
     }
   },
   "entity": {
@@ -942,7 +942,7 @@
         "name": "Uitschakelen (experimenteel)"
       },
       "map_training": {
-        "name": "Actie – Start kartering"
+        "name": "Actie – Kaart trainen starten"
       },
       "prime_favorite": {
         "name": "Favoriet – {favorite}"
@@ -1005,6 +1005,9 @@
       },
       "prime_quiet_hours_active": {
         "name": "Niet storen"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Dweilwassen toegestaan"
       }
     },
     "select": {
@@ -1238,7 +1241,7 @@
       "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
     },
     "dock_contact_health": {
-      "title": "Dock contact health issue detected",
+      "title": "Probleem met dockcontacten gedetecteerd",
       "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
     },
     "mqtt_watchdog": {
@@ -1308,43 +1311,43 @@
     },
     "reset_filter": {
       "name": "Reset filter",
-      "description": "Record the current time as the filter replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van het filter."
     },
     "reset_brush": {
       "name": "Reset brushes",
-      "description": "Record the current time as the brush replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de borstel."
     },
     "reset_battery": {
       "name": "Reset battery",
-      "description": "Record the current time as the battery replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de accu."
     },
     "reset_pad": {
       "name": "Reset cleaning pad",
-      "description": "Record the current time as the pad replacement date (Braava only)."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de doek (alleen Braava)."
     },
     "smart_start": {
       "name": "Smart start",
-      "description": "Start a clean with blocking-sensor checks."
+      "description": "Start een schoonmaakbeurt met controle op blokkerende sensoren."
     },
     "clean_sequence": {
       "name": "Start sequence clean",
-      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "description": "Start robot B wanneer robot A zijn huidige missie voltooit. De luisteraar wordt één keer geactiveerd en verwijdert zichzelf.",
       "fields": {
         "entity_id": {
           "name": "Trigger robot",
-          "description": "Vacuum entity for robot A (must finish first)."
+          "description": "Stofzuigerentiteit voor robot A (moet eerst klaar zijn)."
         },
         "target_entity_id": {
           "name": "Target robot",
-          "description": "Vacuum entity for robot B (started after A finishes)."
+          "description": "Stofzuigerentiteit voor robot B (start nadat A klaar is)."
         },
         "require_completed": {
           "name": "Require completion",
-          "description": "When true, robot B starts only if robot A docked normally."
+          "description": "Indien waar start robot B alleen als robot A normaal is gedockt."
         },
         "delay_minutes": {
           "name": "Delay (minutes)",
-          "description": "Wait this many minutes after robot A docks before starting robot B."
+          "description": "Wacht zoveel minuten nadat robot A is gedockt voordat robot B start."
         }
       }
     },
@@ -1395,22 +1398,22 @@
       "message": "De robot werkt momenteel zijn Smart Map bij. Wacht tot de gereedheidsensor 'Gereed' toont en probeer het opnieuw."
     },
     "entity_not_found": {
-      "message": "Entity {entity_id} not found in the entity registry."
+      "message": "Entiteit {entity_id} niet gevonden in het entiteitenregister."
     },
     "maintenance_store_unavailable": {
-      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+      "message": "Onderhoudsopslag is niet beschikbaar voor {entity_id}. Herlaad de integratie en probeer het opnieuw."
     },
     "no_valid_segments": {
-      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+      "message": "Geen segmenten kwamen overeen met de huidige kaart. De kaart is mogelijk opnieuw geleerd — voer een kamermissie uit in de iRobot-app om de indeling te vernieuwen."
     },
     "config_entry_not_found": {
-      "message": "No config entry found for {entity_id}. Try reloading the integration."
+      "message": "Geen configuratie-item gevonden voor {entity_id}. Probeer de integratie opnieuw te laden."
     },
     "room_name_and_room_passes_conflict": {
-      "message": "Provide either room_name or room_passes, not both."
+      "message": "Geef of room_name of room_passes op, niet beide."
     },
     "room_name_or_room_passes_required": {
-      "message": "Provide either room_name or room_passes."
+      "message": "Geef room_name of room_passes op."
     },
     "no_rooms_resolved": {
       "message": "Geen kamers om te reinigen — geef minstens één kamernaam op."

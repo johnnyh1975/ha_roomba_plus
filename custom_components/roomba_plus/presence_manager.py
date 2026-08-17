@@ -30,6 +30,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CLEANING_PHASES,
     CONF_AWAY_DELAY_MIN,
     CONF_CLEAN_DELAY_MIN,
     CONF_PRESENCE_ENTITIES,
@@ -50,8 +51,12 @@ _LOGGER = logging.getLogger(__name__)
 _HOME_STATES = frozenset({"home", "on", "true"})
 # States where the person entity is unreliable — treat as "might be home" (safe default)
 _PRESENCE_UNUSABLE = frozenset({"unavailable", "unknown"})
-# Mission phases that indicate an active clean in progress
-_ACTIVE_CLEANING_PHASES = frozenset({"run", "hmMidMsn", "evac"})
+# Mission phases that indicate an active clean in progress.
+#
+# IMPORTED, not repeated: const.py owns this set and carries the reason
+# `evac` is in it. Two copies drifting apart would mean presence logic
+# and mission logic disagreeing about whether the robot is cleaning.
+_ACTIVE_CLEANING_PHASES = CLEANING_PHASES
 
 
 def _event_dt(item: object) -> object:

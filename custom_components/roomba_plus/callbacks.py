@@ -22,7 +22,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
+from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
 from .mission_map import (
     MissionMapMismatch,
@@ -44,7 +44,14 @@ _LOGGER = logging.getLogger(__name__)
 # hmPostMsn/hmUsrDock/stuck are NOT included — using had_cleaning_phase flag
 # instead of last_phase guard eliminates the stuck-bypass bug (A) and the
 # false mission-restart bug (D) without needing those phases in either set.
-_ACTIVE_CLEANING_PHASES: frozenset[str] = frozenset({"run", "hmMidMsn", "evac"})
+#: ONE SOURCE, IMPORTED. This was a third literal copy of the same set,
+#: alongside presence_manager.py's and const.py's -- and only const.py
+#: carries the reasoning, including why `evac` deliberately differs from
+#: the vendor's own rule table (an i7+ evacuates MID-mission, and
+#: treating that as an ending reset the map renderer early).
+#:
+#: A copy without the reasoning is the one that gets "corrected" later.
+_ACTIVE_CLEANING_PHASES: frozenset[str] = CLEANING_PHASES
 
 # Aligned with const.py MISSION_END_PHASES plus completed/cancelled which
 # are valid end states in some firmware variants.

@@ -3674,9 +3674,25 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # that path maintains its own bounds and coordinate frame, and
         # this map is already anchored on the room polygons. Two frames
         # for one picture would misplace one of them.
+        # ONLY ON THE MAP THE ROBOT IS ACTUALLY DRIVING.
+        #
+        # The zone fix bound clean and keep-out outlines to the plan
+        # being drawn, and stopped there. Positions and the trail belong
+        # to the ROBOT, not to the map on screen -- so selecting a
+        # different floor plan still drew the robot, and its trail, over
+        # rooms it had never entered.
+        #
+        # @chairstacker again, with the same shape of report as the
+        # zones: "the robot still shows up on an incorrectly selected
+        # map - and so do the trails". His screenshots show a
+        # Whole_House run laid over a second map's rooms.
+        #
+        # Same rule as the zones, same fail-open contract: an unknown
+        # map id counts as matching, because a single-map household must
+        # not lose its live position to fix a multi-map one.
         positions = (
             getattr(self._config_entry.runtime_data, "prime_positions", None) or []
-            if show_live
+            if show_live and self._live_position_belongs_here()
             else []
         )
         if len(positions) >= 2:
@@ -3900,6 +3916,35 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         await self._async_refresh_rooms()
         self._rendered_for_map_version = version
         self._rendered_map_id = map_id
+
+    def _live_position_belongs_here(self) -> bool:
+        """Whether the robot's live position describes the map on screen.
+
+        Reads the same source the zone check uses -- the live bundle's
+        manifest against this floor plan's `p2map_id` -- because the
+        positions arrive on the same stream as the bundle. A position
+        without a bundle to place it in is a position for whatever map
+        the robot last reported.
+
+        UNKNOWN COUNTS AS MATCHING. One map is the common case, and its
+        positions are always the right ones.
+        """
+        plan_id = getattr(self._floor_plan, "p2map_id", None)
+        if not plan_id:
+            return True
+        # `self._live_bundle`, NOT `runtime_data`. The first version of
+        # this read `runtime_data.prime_live_bundle`, which nothing sets
+        # -- so it returned True unconditionally and the fix did
+        # nothing. The bundle lives on the entity, beside the renderer
+        # that draws it.
+        live = self._live_bundle or {}
+        manifest = live.get("manifest") if isinstance(live, dict) else None
+        if not isinstance(manifest, dict):
+            return True
+        live_id = manifest.get("pmap_id") or manifest.get("p2map_id")
+        if not live_id:
+            return True
+        return str(live_id) == str(plan_id)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

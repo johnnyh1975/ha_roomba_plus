@@ -1005,6 +1005,9 @@
       },
       "prime_quiet_hours_active": {
         "name": "Do not disturb"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Pad washing allowed"
       }
     },
     "select": {

@@ -705,6 +705,29 @@ PRIME_SETTING_SWITCHES: tuple[PrimeSettingSwitchDescription, ...] = (
     # app writes it. The other six stay out until a field capture shows
     # whether one slider moves one field or several.
     PrimeSettingSwitchDescription(
+        key="prime_pad_wash_allowed",
+        translation_key="prime_pad_wash_allowed",
+        wire_key="padWashAllowed",
+        model_attr="pad_wash_allowed",
+        # WITHHELD UNTIL NOW ON AN OBSOLETE READING. The comment above
+        # says the only Set*Command covering this area is
+        # `SetPadDryAllowCommand`, so everything else would have to
+        # travel as a bundle -- true of app 2.2.4, and the reason this
+        # switch was not built.
+        #
+        # App 3.0.0 settled it the other way round. Its settings handler
+        # writes 24 keys individually, and `padWashAllowed` is one of
+        # them; `padDryAllowed` is NOT in that list, and is written
+        # through its own command instead. So the field this project
+        # withheld is the writable one.
+        #
+        # Gated on the dock's wash capability for the same reason the
+        # dry switch is gated on `pd`: a dock that cannot wash should
+        # not be offered a permission for washing.
+        dock_cap_attr="pad_wash",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    PrimeSettingSwitchDescription(
         key="prime_pad_dry_allowed",
         translation_key="prime_pad_dry_allowed",
         wire_key="padDryAllowed",

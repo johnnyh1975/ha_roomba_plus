@@ -1330,6 +1330,19 @@ CLEAN_BASE_LABELS: Final[dict[int, str]] = {
 }
 
 JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
+    # A SCHEDULED MISSION MAY NOT REPORT `schedule`. @chairstacker's
+    # scheduled run shows "Cloud" in the iRobot app's own timeline, so
+    # his robot sends `cloud` for it -- and `schedule` may be a value
+    # this account never produces.
+    #
+    # NOT RELABELLED. Renaming `cloud` to "Schedule" on one household's
+    # evidence is exactly the mistake `pwReturn`'s standard/medium/high
+    # labels were: a plausible reading of one observation, written down
+    # as fact, believed by a tester. `cloud` means the cloud started it,
+    # which is true whether or not a schedule was behind it.
+    #
+    # What would settle it: a robot that reports `schedule` for
+    # anything. Nobody has seen one.
     "schedule": "iRobot schedule",
     "rmtApp": "iRobot app",
     "manual": "Robot",
@@ -1367,6 +1380,9 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     "swisscom": "Swisscom",
     "alismart": "AliSmart",
     "team": "Teamed robot",
+    # OBSERVED FOR A SCHEDULED MISSION (@chairstacker, app timeline).
+    # Whether every scheduled run reports this, and whether anything
+    # else does, is unestablished.
     "cloud": "iRobot cloud",
     "rmtAuto": "iRobot automation",
     "loclAuto": "Local automation",

@@ -1005,6 +1005,9 @@
       },
       "prime_quiet_hours_active": {
         "name": "Nicht stören"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Wischtuchwäsche erlaubt"
       }
     },
     "select": {

@@ -536,6 +536,46 @@ def build_prime_favorite_buttons(
 #: drive buttons that would do the same, so the honest fix is a
 #: coordinator here too rather than a timer bolted on. That is a change
 #: worth making deliberately, not as a side effect of a bug report.
+def _favorite_is_for(favorite: Any, blid: str) -> bool:
+    """Whether this account-level favourite belongs to this robot.
+
+    `GET /v1/user/favorites` IS ACCOUNT-LEVEL, NOT PER ROBOT, and every
+    config entry was building a button for every favourite on the
+    account. A two-robot household got both robots' favourites listed
+    under each of them.
+
+    Reported by @scenicsystemsllc, whose severity analysis is the part
+    worth keeping: pressing a mislabelled button commands the robot it
+    is displayed under -- correctly, over that robot's own connection --
+    but with a payload built from a DIFFERENT robot's map. Usually that
+    no-ops or errors. In the worst case a region id happens to be valid
+    on the receiving robot's map too, and it cleans somewhere nobody
+    asked for.
+
+    THE FAVOURITE SAYS WHICH ROBOT IT IS FOR. Each `commanddefs` entry
+    carries `robot_id` -- `RoutineCommand.asset_id` here, same field,
+    and `mission_control.py` writes it back out under the wire name. So
+    this is a direct match rather than the region-id heuristic the
+    report suggested: comparing against a robot's pmap would also work
+    but infers from geometry what the record states outright.
+
+    FAILS OPEN. A favourite whose command defs carry no robot id at all
+    is kept, because a favourite nobody can attribute is better shown
+    under every robot than hidden from all of them -- the same contract
+    the capability gates use. Only an explicit, non-matching id
+    excludes.
+    """
+    commands = getattr(favorite, "command_defs", None) or []
+    attributed = [
+        str(getattr(command, "asset_id", "") or "")
+        for command in commands
+    ]
+    attributed = [value for value in attributed if value]
+    if not attributed:
+        return True
+    return blid in attributed
+
+
 async def async_favorites_attribute(
     config_entry: RoombaConfigEntry,
 ) -> list[dict[str, Any]]:
@@ -573,6 +613,7 @@ async def async_favorites_attribute(
         if getattr(f, "favorite_id", None)
         and not getattr(f, "is_deleted", False)
         and not getattr(f, "is_hidden", False)
+        and _favorite_is_for(f, config_entry.runtime_data.blid)
     ]
 
     # SAY WHAT WAS DROPPED, because silence here is what made this bug

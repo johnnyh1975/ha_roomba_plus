@@ -31,6 +31,7 @@ import datetime as dt_stdlib
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    EVENT_MISSION_COMPLETED,
     CLEAN_BASE_LABELS,
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
@@ -1396,6 +1397,20 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
     ),
 )
+#: Sensors whose value comes from `mission_store` rather than from the
+#: MQTT delta that triggers their recompute.
+#:
+#: Kept as an explicit list rather than derived: the filter above groups
+#: these keys by which delta key wakes them, which is a different
+#: question from where they read.
+_MISSION_STORE_SENSORS: frozenset[str] = frozenset({
+    "clean_streak", "missions_last_30d", "completion_rate_30d",
+    "area_cleaned_today", "last_mission_result", "last_mission_duration",
+    "stuck_count_30d", "problem_zone",
+    "last_error_code", "last_error_at", "last_error_zone",
+})
+
+
 class RoombaSensor(IRobotEntity, SensorEntity):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
 
@@ -1432,12 +1447,54 @@ class RoombaSensor(IRobotEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Register MQTT callback and start the 60-second countdown tick."""
         await super().async_added_to_hass()
+
+        # MISSION-STORE SENSORS REFRESH ON THE STORE, NOT ONLY ON A DELTA.
+        #
+        # `new_state_filter` gates these on `cleanMissionStatus` being in
+        # the incoming MQTT delta, but their VALUE comes from
+        # `mission_store` -- and the store is written on mission-end
+        # processing, which is debounced: an ambiguous end phase needs
+        # two consecutive signals plus a minimum hold. So the delta that
+        # triggers a recompute can arrive before the record it should
+        # display exists.
+        #
+        # With a gap between missions the next delta cleans that up. Back
+        # to back, the next delta belongs to the NEXT mission and the
+        # previous one is never shown. That is @scenicsystemsllc's
+        # report, and his framing was right: source-consistent, not
+        # captured.
+        #
+        # He proposed that a fast second mission could arrive on a delta
+        # omitting `cleanMissionStatus`. That is also possible and needs
+        # a captured payload to tell apart. THIS FIX MAKES BOTH MOOT:
+        # `EVENT_MISSION_COMPLETED` fires after the store write, so the
+        # refresh trigger and the value source finally agree.
+        if self.entity_description.key in _MISSION_STORE_SENSORS:
+            self.async_on_remove(
+                self.hass.bus.async_listen(
+                    EVENT_MISSION_COMPLETED, self._async_mission_completed
+                )
+            )
+
         if self.entity_description.key in self._TICK_SENSORS:
             self._unsub_tick = async_track_time_interval(
                 self.hass,
                 self._async_tick,
                 dt_stdlib.timedelta(seconds=60),
             )
+
+    @callback
+    def _async_mission_completed(self, event: Any) -> None:
+        """Recompute when the mission store gains a record.
+
+        Filtered by entry: one household can hold several robots, and a
+        mission ending on one says nothing about the others' counters.
+        """
+        if event.data.get("entry_id") != getattr(
+            self._config_entry, "entry_id", None
+        ):
+            return
+        self.schedule_update_ha_state(force_refresh=True)
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel the countdown tick when the entity is removed."""

@@ -238,6 +238,10 @@ PAD_WASH_TIME_INTERVALS: dict[int, str] = {
 #: for one:
 #:
 #:   100 mission        "Standard -- before and after cleaning routines"
+#:                      CONFIRMED BOTH WAYS: @chairstacker wrote 100
+#:                      from Home Assistant and his app showed
+#:                      "Standard". The mapping is no longer inferred
+#:                      from screenshots of one direction.
 #:   101 refill         "Medium   -- DURING REFILLS, and before and after"
 #:   102 refillAndRoom  "High     -- IN BETWEEN ROOMS, during refills,
 #:                                   and before and after"
@@ -285,6 +289,18 @@ PAD_WASH_TIME_INTERVALS: dict[int, str] = {
 #: repeat. If the robot treats RESUMING after a mid-mission dock visit
 #: as starting a routine, then "wash before the routine" fires again on
 #: every return. It never gets past its own first step.
+#:
+#: AND THE DRYING IS THE STRONGEST EVIDENCE YET. On the run he made
+#: with `mission` (100) set from Home Assistant, the dock started PAD
+#: DRYING after the mid-mission wash -- which he had not seen on the
+#: earlier attempts and flagged himself as possibly a red herring.
+#:
+#: It is not. Drying is end-of-routine behaviour. A robot that washes
+#: AND dries in the middle of a clean has decided the routine is over.
+#: Combined with it then setting off again, that is the robot cycling
+#: through routine-end and routine-start rather than failing to leave
+#: the dock -- and "before and after cleaning routines" fires on both
+#: edges of exactly that cycle.
 #:
 #: THIS PREDICTS THINGS, WHICH IS WHY IT IS WORTH WRITING DOWN:
 #:   - 102 loops too (it includes the same trigger) -- untested, and
@@ -742,11 +758,40 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
         )
         if value is None:
             return None
-        # A value outside the known set is reported as None rather than
-        # guessed at. The robot may support levels nobody has observed,
-        # and showing "normal" for an unknown number would be a lie the
-        # user cannot detect.
-        return self._values.get(int(value))
+        # A VALUE OUTSIDE THE KNOWN SET IS SHOWN AS ITSELF, not hidden.
+        #
+        # This used to return None, which made the entity `unavailable`
+        # -- reproducing exactly the "not set" the iRobot app shows for
+        # the same situation, and looking like our bug rather than
+        # theirs. Issue #46 promised not to do that.
+        #
+        # It is not hypothetical: @DaRealGuGu's 515 holds
+        # `pwAreaInterval = 8`, which belongs to the 410's value set and
+        # not to his. His app cannot render it and neither could we.
+        #
+        # Showing the raw number is honest in a way a guessed label is
+        # not: "8" is what the robot reports, where "medium" would be an
+        # invention the user cannot check.
+        known = self._values.get(int(value))
+        if known is not None:
+            return known
+        return str(int(value))
+
+    @property
+    def options(self) -> list[str]:
+        """The known options, plus the robot's own value if it is not
+        among them.
+
+        Home Assistant rejects a `current_option` that is not in
+        `options`, so showing an out-of-list value requires offering it
+        here too. Selecting it again is a no-op, which is the right
+        behaviour: it is the value the robot already holds.
+        """
+        base = list(self._values.values())
+        current = self.current_option
+        if current is not None and current not in base:
+            return [*base, current]
+        return base
 
     @property
     def available(self) -> bool:

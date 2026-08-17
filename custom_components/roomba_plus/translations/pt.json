@@ -51,14 +51,14 @@
         }
       },
       "reconfigure": {
-        "description": "Update the connection settings for {name}.",
+        "description": "Atualize as definições de ligação de {name}.",
         "data": {
           "host": "IP address",
           "password": "Password"
         },
         "data_description": {
-          "host": "The local IP address of the Roomba.",
-          "password": "The robot password (hold HOME button to retrieve)."
+          "host": "O endereço IP local do Roomba.",
+          "password": "A palavra-passe do robô (mantenha o botão HOME premido para a obter)."
         }
       },
       "reauth_confirm": {
@@ -122,15 +122,15 @@
       "not_irobot_device": "O dispositivo detetado não é um dispositivo iRobot.",
       "short_blid": "Já existe um fluxo de configuração em curso para este robô.",
       "cannot_connect": "Não é possível contactar o robô no endereço especificado.",
-      "reconfigure_successful": "Connection settings updated successfully.",
+      "reconfigure_successful": "Definições de ligação atualizadas.",
       "no_new_robots_found": "Não foram encontrados robôs novos nesta conta iRobot — todos os robôs já estão configurados.",
       "prime_classic_password_missing": "A palavra-passe deste robô não foi incluída na resposta da conta iRobot. Tenta adicioná-lo manualmente.",
       "demand_cleaning_not_supported": "Este robô não comunica os dados de deteção de sujidade necessários para a limpeza a pedido.",
       "integration_not_loaded": "A integração não está carregada. Reinicie o Home Assistant e tente novamente.",
       "room_schedule_no_rooms": "Ainda não são conhecidas divisões para este robô. Deixe-o concluir primeiro um mapeamento.",
       "room_schedule_not_supported": "Os agendamentos por divisão exigem um robô que comunique dados de divisões.",
-      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "no_rooms_to_name": "Não foram encontradas divisões para nomear. As divisões deste robô aparecem depois de ter limpo divisões específicas pelo menos uma vez, ou quando o mapa estiver disponível na sua conta iRobot.",
+      "all_rooms_named": "Cada divisão já tem nome. Mude um a partir do seletor de zonas na página do dispositivo."
     }
   },
   "options": {
@@ -210,11 +210,11 @@
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
         },
-        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "description": "Configure os sensores que têm de estar inativos antes de um smart_start poder começar.",
         "data_description": {
-          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
-          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
-          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
+          "blocking_sensors": "Sensores binários que bloqueiam o arranque quando estão ligados (p. ex. porta aberta, movimento detetado).",
+          "blocking_behavior": "Cancelar de imediato ou colocar o arranque em fila até os sensores ficarem livres.",
+          "blocking_timeout_min": "Quanto tempo esperar que os sensores fiquem livres antes de desistir."
         }
       },
       "map_management": {
@@ -222,7 +222,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
+        "description": "Selecione uma zona para renomear ou ocultar. Submeta sem zona selecionada para guardar.\n\n{zone_summary}"
       },
       "map_management_edit": {
         "title": "Editar zona: {zone_name}",
@@ -230,10 +230,10 @@
           "display_name": "Display name",
           "hidden": "Hide this zone"
         },
-        "description": "Set a display name and visibility for this zone.",
+        "description": "Defina um nome apresentado e a visibilidade desta zona.",
         "data_description": {
-          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
-          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+          "display_name": "Nome personalizado mostrado nos seletores. Deixe em branco para usar o nome predefinido.",
+          "hidden": "As zonas ocultas desaparecem dos seletores e não geram avisos de nomeação."
         }
       },
       "presence_scheduling": {
@@ -249,10 +249,10 @@
       },
       "demand_cleaning": {
         "title": "Demand cleaning",
-        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "description": "Inicia automaticamente uma limpeza quando o chão está claramente mais sujo do que o habitual.",
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
-          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
+          "demand_clean_multiplier": "Multiplicador de ativação (p. ex. 1,5 = 50 % acima da média)"
         }
       },
       "test_cloud_connection": {
@@ -282,14 +282,14 @@
       "cloud_ssl_certificate_error": "Não foi possível verificar o certificado do servidor cloud da iRobot. Isto é quase sempre um problema temporário da iRobot — tenta novamente daqui a algumas horas."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "integration_not_loaded": "A integração não pôde ser carregada. Verifique os registos e recarregue antes de abrir as definições.",
       "demand_cleaning_not_supported": "A limpeza por demanda requer um robô SMART com credenciais de nuvem configuradas.",
       "no_rest980_rooms_found": "Nenhum cómodo encontrado na sua instalação roomba_rest980.",
       "rest980_rooms_already_imported": "Todos os cómodos do roomba_rest980 já estão nomeados no Roomba+.",
       "room_schedule_not_supported": "As frequências por divisão exigem um robô Smart Map com credenciais de nuvem.",
       "room_schedule_no_rooms": "Ainda não foram encontradas divisões com nome no Smart Map.",
-      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "no_rooms_to_name": "Não foram encontradas divisões para nomear. As divisões deste robô aparecem depois de ter limpo divisões específicas pelo menos uma vez, ou quando o mapa estiver disponível na sua conta iRobot.",
+      "all_rooms_named": "Cada divisão já tem nome. Mude um a partir do seletor de zonas na página do dispositivo."
     }
   },
   "entity": {
@@ -1005,6 +1005,9 @@
       },
       "prime_quiet_hours_active": {
         "name": "Não incomodar"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Lavagem da mopa permitida"
       }
     },
     "select": {
@@ -1238,7 +1241,7 @@
       "description": "O seu mapa cloud iRobot contém {zone_count} zona(s) de obstáculos detetados pelo robô. Execute algumas missões de limpeza para que o Roomba+ possa confirmá-los localmente."
     },
     "dock_contact_health": {
-      "title": "Dock contact health issue detected",
+      "title": "Detetado um problema nos contactos da base",
       "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
     },
     "mqtt_watchdog": {
@@ -1308,43 +1311,43 @@
     },
     "reset_filter": {
       "name": "Reset filter",
-      "description": "Record the current time as the filter replacement date."
+      "description": "Regista a hora atual como data de substituição do filtro."
     },
     "reset_brush": {
       "name": "Reset brushes",
-      "description": "Record the current time as the brush replacement date."
+      "description": "Regista a hora atual como data de substituição da escova."
     },
     "reset_battery": {
       "name": "Reset battery",
-      "description": "Record the current time as the battery replacement date."
+      "description": "Regista a hora atual como data de substituição da bateria."
     },
     "reset_pad": {
       "name": "Reset cleaning pad",
-      "description": "Record the current time as the pad replacement date (Braava only)."
+      "description": "Regista a hora atual como data de substituição do pano (apenas Braava)."
     },
     "smart_start": {
       "name": "Smart start",
-      "description": "Start a clean with blocking-sensor checks."
+      "description": "Inicia uma limpeza com verificação de sensores bloqueadores."
     },
     "clean_sequence": {
       "name": "Start sequence clean",
-      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "description": "Inicia o robô B quando o robô A termina a missão atual. O ouvinte dispara uma vez e remove-se sozinho.",
       "fields": {
         "entity_id": {
           "name": "Trigger robot",
-          "description": "Vacuum entity for robot A (must finish first)."
+          "description": "Entidade de aspirador do robô A (tem de terminar primeiro)."
         },
         "target_entity_id": {
           "name": "Target robot",
-          "description": "Vacuum entity for robot B (started after A finishes)."
+          "description": "Entidade de aspirador do robô B (arranca depois de A terminar)."
         },
         "require_completed": {
           "name": "Require completion",
-          "description": "When true, robot B starts only if robot A docked normally."
+          "description": "Se ativo, o robô B só arranca se o robô A tiver regressado à base normalmente."
         },
         "delay_minutes": {
           "name": "Delay (minutes)",
-          "description": "Wait this many minutes after robot A docks before starting robot B."
+          "description": "Aguarde estes minutos depois de o robô A regressar à base antes de iniciar o robô B."
         }
       }
     },
@@ -1395,22 +1398,22 @@
       "message": "O robô está a atualizar o seu Smart Map. Aguarda que o sensor de disponibilidade mostre 'Pronto' e tenta novamente."
     },
     "entity_not_found": {
-      "message": "Entity {entity_id} not found in the entity registry."
+      "message": "Entidade {entity_id} não encontrada no registo de entidades."
     },
     "maintenance_store_unavailable": {
-      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+      "message": "O armazenamento de manutenção não está disponível para {entity_id}. Recarregue a integração e tente novamente."
     },
     "no_valid_segments": {
-      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+      "message": "Nenhum segmento corresponde ao mapa atual. O mapa pode ter sido reaprendido — execute uma missão por divisões na app iRobot para atualizar a disposição."
     },
     "config_entry_not_found": {
-      "message": "No config entry found for {entity_id}. Try reloading the integration."
+      "message": "Nenhuma entrada de configuração encontrada para {entity_id}. Tente recarregar a integração."
     },
     "room_name_and_room_passes_conflict": {
-      "message": "Provide either room_name or room_passes, not both."
+      "message": "Indique room_name ou room_passes, não ambos."
     },
     "room_name_or_room_passes_required": {
-      "message": "Provide either room_name or room_passes."
+      "message": "Indique room_name ou room_passes."
     },
     "no_rooms_resolved": {
       "message": "Nenhuma divisão para limpar — indique pelo menos um nome de divisão."
