@@ -37,15 +37,12 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
-from .const import MAP_UPDATING_NOT_READY
 from .entity import IRobotEntity
-from .models import ConnectionType, RoombaConfigEntry
+from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -143,103 +140,6 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up all button entities for this Roomba."""
-    data = config_entry.runtime_data
-
-    # PRIME BRANCH. Everything below is Classic: the buttons act through
-    # roomba.send_command() on a local MQTT connection Prime does not
-    # have, and most have no identified Prime equivalent at all.
-    if data.connection_type is ConnectionType.CLOUD_ONLY:
-        from .button_prime import async_build_prime_buttons  # noqa: PLC0415
-
-        entities = await async_build_prime_buttons(config_entry)
-        if entities:
-            async_add_entities(entities)
-
-        # FAVOURITE BUTTONS FOLLOW THE LIST, and until now they did not.
-        #
-        # Buttons were built exactly once, here. A favourite created in
-        # the iRobot app never got one, and a deleted favourite left its
-        # button behind pointing at an id the server no longer knows.
-        #
-        # This is @DaRealGuGu's schedule-switch problem with a different
-        # entity type -- see switch.py's `_sync_entities`, whose comments
-        # carry the two lessons this reuses: match on the id rather than
-        # the content, and read the REGISTRY rather than a set of what
-        # this session added, or an orphan from before the upgrade can
-        # never be reached.
-        coordinator = getattr(
-            config_entry.runtime_data, "prime_schedule_coordinator", None
-        )
-        if coordinator is None:
-            return
-
-        # THE PREFIX IS `roomba_plus_{blid}_favorite_`, NOT
-        # `{blid}_favorite_`.
-        #
-        # `IRobotEntity.robot_unique_id` returns
-        # `f"roomba_plus_{blid}"`, and the favourite button's unique id
-        # is built from it. The first version of this sync used the bare
-        # blid, so the prefix matched nothing.
-        #
-        # THE TWO HALVES FAILED DIFFERENTLY, which is what made it look
-        # like a timing problem. Adding compares against `wanted` and
-        # never touches the prefix, so a new favourite got its button
-        # immediately. Removing scans the registry BY prefix, so it
-        # matched nothing and no button was ever removed.
-        #
-        # @chairstacker described exactly that asymmetry: "Creating a
-        # favorite in the app makes it show up in HA within a reasonable
-        # amount of time. Deleting it in the app has not yet removed
-        # it." He put it down to the six-hour refresh; it would not have
-        # gone away after any amount of waiting.
-        favorite_prefix = f"roomba_plus_{config_entry.runtime_data.blid}_favorite_"
-
-        known: set[str] = {
-            str(entity.unique_id) for entity in entities
-            if str(entity.unique_id).startswith(favorite_prefix)
-        }
-
-        @callback
-        def _sync_favorite_buttons() -> None:
-            from .button_prime import build_prime_favorite_buttons  # noqa: PLC0415
-
-            wanted = {
-                str(button.unique_id): button
-                for button in build_prime_favorite_buttons(config_entry)
-            }
-
-            new = [b for uid, b in wanted.items() if uid not in known]
-            if new:
-                known.update(str(b.unique_id) for b in new)
-                async_add_entities(new)
-
-            # REMOVAL ONLY AFTER A READ THAT SUCCEEDED. A refresh that
-            # failed leaves the previous list standing, so nothing would
-            # vanish in practice -- but tying deletion to a flag that
-            # says "this is current" is the difference between a rule and
-            # a coincidence.
-            if not getattr(coordinator, "last_update_success", True):
-                return
-
-            registry = er.async_get(hass)
-            prefix = favorite_prefix
-            for entry in er.async_entries_for_config_entry(
-                registry, config_entry.entry_id
-            ):
-                if entry.domain != Platform.BUTTON:
-                    continue
-                if not entry.unique_id.startswith(prefix):
-                    continue
-                if entry.unique_id in wanted:
-                    continue
-                known.discard(entry.unique_id)
-                registry.async_remove(entry.entity_id)
-
-        config_entry.async_on_unload(
-            coordinator.async_add_listener(_sync_favorite_buttons)
-        )
-        return
-
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
@@ -532,7 +432,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         # If a pmap_id is present, refresh user_pmapv_id from live state.pmaps
         # to avoid silent failures after a map retrain.
         if params.get("pmap_id"):
-            from .room_cleaning import _resolve_pmapv_id
+            from .services import _resolve_pmapv_id
             fresh = _resolve_pmapv_id(self.vacuum_state, params["pmap_id"])
             if fresh:
                 params["user_pmapv_id"] = fresh
@@ -579,7 +479,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         never from lastCommand, to avoid stale-map silent failures.
         """
         from homeassistant.helpers import entity_platform as ep
-        from .room_cleaning import _resolve_pmapv_id
+        from .services import _resolve_pmapv_id
 
         region_id: str | None = None
         pmap_id: str | None = None
@@ -638,17 +538,12 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             return
 
         # Guard: reject if the robot is currently updating its Smart Map.
-        #
-        # EQUALITY, not a bit test -- notReady is a scalar index into a
-        # readiness enum, and 67 is the value that means DownloadingMap.
-        # This carried a bare 64, which is why the first sweep for the
-        # named constant missed it: eight unrelated states share that
-        # bit, so an expired subscription blocked a zone clean with a
-        # message about a map update. See const.MAP_UPDATING_NOT_READY.
+        # notReady bit 6 (64) = map save/upload in progress — same guard as
+        # the clean_room service action.
         not_ready: int = self.vacuum_state.get(
             "cleanMissionStatus", {}
         ).get("notReady", 0)
-        if not_ready == MAP_UPDATING_NOT_READY:
+        if not_ready & 64:
             _LOGGER.warning(
                 "SmartZoneButton: robot is updating Smart Map (notReady=%d) — "
                 "wait for map update to complete before starting a zone clean",

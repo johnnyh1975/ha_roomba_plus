@@ -16,8 +16,6 @@ No HA dependencies at import time beyond hass.storage — fully unit-testable.
 """
 from __future__ import annotations
 
-from .geometry_utils import point_in_polygon
-
 import logging
 import math
 from typing import Any
@@ -805,7 +803,7 @@ class GridStore:
                     cx, cy = _cell_to_mm(gx, gy)
                     if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
                         continue
-                    if not point_in_polygon(cx, cy, polygon):
+                    if not _point_in_polygon_grid(cx, cy, polygon):
                         continue
                     total += 1
                     score = self._cells.get((gx, gy))
@@ -852,7 +850,7 @@ class GridStore:
                 cx, cy = _cell_to_mm(gx, gy)
                 if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
                     continue
-                if not point_in_polygon(cx, cy, polygon):
+                if not _point_in_polygon_grid(cx, cy, polygon):
                     continue
                 count += v.get("count", 0)
             result[rid] = count
@@ -1071,3 +1069,20 @@ class GridStore:
         return buf.getvalue()
 
 
+def _point_in_polygon_grid(
+    x: float, y: float, polygon: list[tuple[float, float]]
+) -> bool:
+    """Ray-casting point-in-polygon test for grid cell centres.
+
+    Module-level (not on GridStore) so umf_aligner.py can import the same
+    algorithm independently without cross-import. Returns True when inside.
+    """
+    inside = False
+    px, py = polygon[-1]
+    for qx, qy in polygon:
+        if ((qy > y) != (py > y)) and (
+            x < (px - qx) * (y - qy) / (py - qy) + qx
+        ):
+            inside = not inside
+        px, py = qx, qy
+    return inside

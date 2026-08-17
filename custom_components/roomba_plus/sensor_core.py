@@ -31,7 +31,6 @@ import datetime as dt_stdlib
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    EVENT_MISSION_COMPLETED,
     CLEAN_BASE_LABELS,
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
@@ -45,7 +44,6 @@ from .const import (
     has_carpet_boost,
     has_clean_base,
     has_pose,
-    is_braava,
     is_mop,
 )
 from .entity import IRobotEntity
@@ -809,15 +807,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Brushes last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
-        # STILL is_mop, NOT is_braava -- and that is a store limitation,
-        # not an oversight. MaintenanceStore has ONE slot for this
-        # (`brush_*`), used for a brush or a pad depending on the robot.
-        # A Combo has both, so switching this gate would give it two
-        # sensors reading the same number, which is worse than one
-        # sensor that is at least unambiguous.
-        #
-        # The filter gates below DID move: the filter has its own store
-        # slot, and a Combo definitely has a filter.
         filter_fn=lambda s: not is_mop(s),  # Braava uses pad_last_replaced
         value_fn=lambda e: (
             dt_util.parse_datetime(
@@ -1144,7 +1133,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: not is_braava(s),
+        filter_fn=lambda s: not is_mop(s),
         value_fn=_filter_wear_rate,
     ),
     RoombaSensorDescription(
@@ -1176,7 +1165,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        filter_fn=lambda s: not is_braava(s),
+        filter_fn=lambda s: not is_mop(s),
         value_fn=_filter_days_until_due,
     ),
     RoombaSensorDescription(
@@ -1397,20 +1386,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
     ),
 )
-#: Sensors whose value comes from `mission_store` rather than from the
-#: MQTT delta that triggers their recompute.
-#:
-#: Kept as an explicit list rather than derived: the filter above groups
-#: these keys by which delta key wakes them, which is a different
-#: question from where they read.
-_MISSION_STORE_SENSORS: frozenset[str] = frozenset({
-    "clean_streak", "missions_last_30d", "completion_rate_30d",
-    "area_cleaned_today", "last_mission_result", "last_mission_duration",
-    "stuck_count_30d", "problem_zone",
-    "last_error_code", "last_error_at", "last_error_zone",
-})
-
-
 class RoombaSensor(IRobotEntity, SensorEntity):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
 
@@ -1423,7 +1398,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         description: RoombaSensorDescription,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid, config_entry)
+        super().__init__(roomba, blid)
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
@@ -1447,54 +1422,12 @@ class RoombaSensor(IRobotEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Register MQTT callback and start the 60-second countdown tick."""
         await super().async_added_to_hass()
-
-        # MISSION-STORE SENSORS REFRESH ON THE STORE, NOT ONLY ON A DELTA.
-        #
-        # `new_state_filter` gates these on `cleanMissionStatus` being in
-        # the incoming MQTT delta, but their VALUE comes from
-        # `mission_store` -- and the store is written on mission-end
-        # processing, which is debounced: an ambiguous end phase needs
-        # two consecutive signals plus a minimum hold. So the delta that
-        # triggers a recompute can arrive before the record it should
-        # display exists.
-        #
-        # With a gap between missions the next delta cleans that up. Back
-        # to back, the next delta belongs to the NEXT mission and the
-        # previous one is never shown. That is @scenicsystemsllc's
-        # report, and his framing was right: source-consistent, not
-        # captured.
-        #
-        # He proposed that a fast second mission could arrive on a delta
-        # omitting `cleanMissionStatus`. That is also possible and needs
-        # a captured payload to tell apart. THIS FIX MAKES BOTH MOOT:
-        # `EVENT_MISSION_COMPLETED` fires after the store write, so the
-        # refresh trigger and the value source finally agree.
-        if self.entity_description.key in _MISSION_STORE_SENSORS:
-            self.async_on_remove(
-                self.hass.bus.async_listen(
-                    EVENT_MISSION_COMPLETED, self._async_mission_completed
-                )
-            )
-
         if self.entity_description.key in self._TICK_SENSORS:
             self._unsub_tick = async_track_time_interval(
                 self.hass,
                 self._async_tick,
                 dt_stdlib.timedelta(seconds=60),
             )
-
-    @callback
-    def _async_mission_completed(self, event: Any) -> None:
-        """Recompute when the mission store gains a record.
-
-        Filtered by entry: one household can hold several robots, and a
-        mission ending on one says nothing about the others' counters.
-        """
-        if event.data.get("entry_id") != getattr(
-            self._config_entry, "entry_id", None
-        ):
-            return
-        self.schedule_update_ha_state(force_refresh=True)
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel the countdown tick when the entity is removed."""

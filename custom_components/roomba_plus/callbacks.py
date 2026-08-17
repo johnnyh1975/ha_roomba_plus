@@ -22,7 +22,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
+from .const import CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
 from .mission_map import (
     MissionMapMismatch,
@@ -35,8 +35,6 @@ if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry, RoombaData
 
-from .structural_failures import record_failure, record_success
-
 _LOGGER = logging.getLogger(__name__)
 
 # v2.6.3 A+D — phases used ONLY for mission start/stuck detection (not end).
@@ -44,14 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 # hmPostMsn/hmUsrDock/stuck are NOT included — using had_cleaning_phase flag
 # instead of last_phase guard eliminates the stuck-bypass bug (A) and the
 # false mission-restart bug (D) without needing those phases in either set.
-#: ONE SOURCE, IMPORTED. This was a third literal copy of the same set,
-#: alongside presence_manager.py's and const.py's -- and only const.py
-#: carries the reasoning, including why `evac` deliberately differs from
-#: the vendor's own rule table (an i7+ evacuates MID-mission, and
-#: treating that as an ending reset the map renderer early).
-#:
-#: A copy without the reasoning is the one that gets "corrected" later.
-_ACTIVE_CLEANING_PHASES: frozenset[str] = CLEANING_PHASES
+_ACTIVE_CLEANING_PHASES: frozenset[str] = frozenset({"run", "hmMidMsn", "evac"})
 
 # Aligned with const.py MISSION_END_PHASES plus completed/cancelled which
 # are valid end states in some firmware variants.
@@ -1305,11 +1296,6 @@ def make_mission_callback(
                                     )
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug(
-                                # NOT INSTRUMENTED: an estimate is
-                                # legitimately absent for Auto pass mode
-                                # and for rooms the robot has not
-                                # learned, so a failure here is a normal
-                                # state rather than a defect.
                                 "AUTO-ADVANCE-ROOM: room time estimate lookup "
                                 "failed — continuing without estimates",
                                 exc_info=True,
@@ -1366,8 +1352,6 @@ def make_mission_callback(
                             )
                     except Exception:  # noqa: BLE001
                         _LOGGER.debug(
-                            # NOT INSTRUMENTED: the retry exists because
-                            # the first attempt legitimately finds nothing.
                             "AUTO-ADVANCE-ROOM: estimate retry failed — "
                             "continuing without estimates",
                             exc_info=True,
@@ -1674,9 +1658,7 @@ def make_map_retrain_callback(
             )
         try:
             await cloud_coordinator.async_request_refresh()
-            record_success("map retrain refresh")
         except Exception:  # noqa: BLE001
-            record_failure("map retrain refresh", "refreshing after a retrain")
             _LOGGER.debug(
                 "Roomba+ cloud: map retrain refresh failed for pmap(s) %s — "
                 "no map_retrain_completed event fired",
@@ -1718,7 +1700,7 @@ def make_map_updating_callback(
 ) -> Any:
     """Return an MQTT callback for MAP-RETRAIN-WF (v2.9.0).
 
-    Tracks cleanMissionStatus.notReady == 67 ("Smart Map updating") on every
+    Tracks cleanMissionStatus.notReady & 64 ("Smart Map updating") on every
     message and forwards the live boolean to repairs.async_check_map_
     retrain_workflow(), which owns the duration tracking and Repair Issue
     escalation. No separate timer needed — the robot keeps sending regular
@@ -1728,7 +1710,7 @@ def make_map_updating_callback(
     SMART-tier only (registered conditionally in __init__.py) — notReady's
     bit-64 meaning is specific to Smart Map robots.
     """
-    from .const import MAP_UPDATING_NOT_READY
+    from .const import MAP_UPDATING_NOT_READY_BIT
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
@@ -1736,8 +1718,7 @@ def make_map_updating_callback(
         if mission is None:
             return
         not_ready = mission.get("notReady", 0) or 0
-        # Equality: notReady is a scalar index, not a mask.
-        map_updating = not_ready == MAP_UPDATING_NOT_READY
+        map_updating = bool(not_ready & MAP_UPDATING_NOT_READY_BIT)
 
         # v2.9.0 — this callback runs on roombapy's MQTT thread, not the
         # event loop thread (same reason make_map_retrain_callback bridges

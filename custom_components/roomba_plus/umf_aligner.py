@@ -10,8 +10,6 @@ so that internal calculations and thresholds remain in mm throughout.
 
 from __future__ import annotations
 
-from .geometry_utils import point_in_polygon
-
 import logging
 import math
 from typing import TYPE_CHECKING, Any
@@ -245,7 +243,7 @@ class UmfAligner:
         """Return room name for a UMF-space point, or None if outside all rooms."""
         rid_map = self.rid_to_name()
         for rid, poly in self._room_polygons.items():
-            if point_in_polygon(x_umf, y_umf, poly):
+            if _point_in_polygon(x_umf, y_umf, poly):
                 return rid_map.get(rid, rid)
         return None
 
@@ -540,3 +538,20 @@ def _polygon_area_m2(vertices_mm: list[tuple[float, float]]) -> float | None:
     return round(abs(area_mm2) / 2.0 / 1_000_000.0, 1)
 
 
+def _point_in_polygon(
+    x: float, y: float, polygon: list[tuple[float, float]]
+) -> bool:
+    """Ray-casting point-in-polygon test.
+
+    Returns True when (x, y) is inside the polygon.
+    No external geometry library required.
+    """
+    inside = False
+    px, py = polygon[-1]
+    for qx, qy in polygon:
+        if ((qy > y) != (py > y)) and (
+            x < (px - qx) * (y - qy) / (py - qy) + qx
+        ):
+            inside = not inside
+        px, py = qx, qy
+    return inside

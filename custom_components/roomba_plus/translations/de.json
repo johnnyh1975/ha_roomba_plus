@@ -1,13 +1,4 @@
 {
-  "common": {
-    "weekday_0": "So",
-    "weekday_1": "Mo",
-    "weekday_2": "Di",
-    "weekday_3": "Mi",
-    "weekday_4": "Do",
-    "weekday_5": "Fr",
-    "weekday_6": "Sa"
-  },
   "config": {
     "step": {
       "user": {
@@ -72,39 +63,6 @@
           "irobot_username": "Die E-Mail-Adresse für die Anmeldung in der iRobot-App.",
           "irobot_password": "Dein aktuelles iRobot-App-Passwort."
         }
-      },
-      "prime_account": {
-        "title": "Mit deinem iRobot-Konto anmelden",
-        "description": "Für neuere Modelle ohne lokale Einrichtung (z. B. Combo-/V4-Generation-Roboter). Gib deine iRobot-App-E-Mail und dein Passwort ein — dabei werden auch eventuelle Classic-Roboter auf demselben Konto gefunden, die anschließend über dein lokales Netzwerk fertiggestellt werden können.",
-        "data": {
-          "irobot_username": "iRobot E-Mail",
-          "irobot_password": "iRobot Passwort"
-        },
-        "data_description": {
-          "irobot_username": "Die E-Mail-Adresse zur Anmeldung in der iRobot App.",
-          "irobot_password": "Dein iRobot App-Passwort."
-        }
-      },
-      "prime_robot_picker": {
-        "title": "Roboter auswählen",
-        "description": "Auf diesem Konto gefundene Roboter. Wähle einen zur Einrichtung aus — weitere Roboter fügst du hinzu, indem du diese Einrichtung erneut startest.",
-        "data": {
-          "blid": "Roboter"
-        }
-      },
-      "prime_classic_ip": {
-        "title": "Lokale Netzwerkadresse",
-        "description": "{name} konnte nicht automatisch in deinem lokalen Netzwerk gefunden werden. Gib die lokale IP-Adresse ein — Anmeldename/Passwort, die bereits über dein iRobot-Konto bestätigt wurden, werden weiterverwendet.",
-        "data": {
-          "host": "IP-Adresse"
-        }
-      },
-      "prime_classic_analytics": {
-        "title": "Cloud-Funktionen für {name}",
-        "description": "Sollen die Zugangsdaten deines iRobot-Kontos auch für diesen Roboter behalten werden, um Raumnamen, Missionsverlauf und Favoriten aus der Cloud zu lesen? Alle Befehle laufen so oder so weiterhin lokal über MQTT.",
-        "data": {
-          "enable_cloud_analytics": "Cloud-Funktionen für diesen Roboter aktivieren"
-        }
       }
     },
     "error": {
@@ -113,24 +71,14 @@
       "unknown": "Unerwarteter Fehler. Die Home Assistant-Protokolle für Details prüfen.",
       "cloud_auth_failed": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
       "cloud_unavailable": "Die iRobot-Cloud ist nicht erreichbar. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.",
-      "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
-      "cloud_rate_limited": "Die iRobot-Cloud-Anmeldung ist vorübergehend limitiert. Schließen Sie die iRobot-App auf Ihrem Smartphone und versuchen Sie es erneut.",
-      "cloud_ssl_certificate_error": "Das Zertifikat des iRobot-Cloud-Servers konnte nicht überprüft werden. Das liegt fast immer an einem vorübergehenden Problem bei iRobot — versuchen Sie es in ein paar Stunden erneut."
+      "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort."
     },
     "abort": {
       "already_configured": "Dieser Roboter ist bereits eingerichtet.",
       "not_irobot_device": "Das entdeckte Gerät ist kein iRobot-Gerät.",
       "short_blid": "Ein Konfigurationsablauf für diesen Roboter ist bereits aktiv.",
       "cannot_connect": "Der Roboter ist unter der angegebenen Adresse nicht erreichbar.",
-      "reconfigure_successful": "Verbindungseinstellungen erfolgreich aktualisiert.",
-      "no_new_robots_found": "Keine neuen Roboter auf diesem iRobot-Konto gefunden — alle Roboter sind bereits eingerichtet.",
-      "prime_classic_password_missing": "Das Passwort dieses Roboters war nicht in der Antwort des iRobot-Kontos enthalten. Bitte füge ihn stattdessen manuell hinzu.",
-      "demand_cleaning_not_supported": "Dieser Roboter meldet keine Verschmutzungsdaten, die für die Bedarfsreinigung nötig sind.",
-      "integration_not_loaded": "Die Integration ist nicht geladen. Starte Home Assistant neu und versuche es erneut.",
-      "room_schedule_no_rooms": "Für diesen Roboter sind noch keine Räume bekannt. Lass ihn zuerst eine Kartierungsfahrt abschließen.",
-      "room_schedule_not_supported": "Raumzeitpläne brauchen einen Roboter, der Raumdaten meldet.",
-      "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
-      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
+      "reconfigure_successful": "Verbindungseinstellungen erfolgreich aktualisiert."
     }
   },
   "options": {
@@ -166,14 +114,7 @@
           "map_size_px": "Kartengröße (Pixel)",
           "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
           "floor_label": "Etage (z. B. Erdgeschoss)",
-          "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)",
-          "map_room_labels": "Raumnamen ins Kartenbild zeichnen",
-          "prime_favorite_buttons": "Für jeden gespeicherten Favoriten einen Knopf anlegen",
-          "enable_schedule_calendar": "Reinigungspläne als Kalender anzeigen",
-          "map_clean_zones": "Reinigungszonen zeichnen",
-          "map_keepout_zones": "Sperrzonen zeichnen",
-          "map_nomop_zones": "Wischverbotszonen zeichnen",
-          "enable_maintenance_list": "Wartung als Aufgabenliste anzeigen"
+          "correlation_entities": "Schmutz mit Sensoren korrelieren (optional)"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -277,9 +218,7 @@
       "invalid_cloud_credentials": "Cloud-Authentifizierung fehlgeschlagen. Überprüfen Sie Ihre iRobot E-Mail und Ihr Passwort.",
       "cannot_connect": "Verbindung fehlgeschlagen. Überprüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.",
       "no_valid_ids": "Keine gültigen Einträge gefunden. Format: ID=Name, eine Zeile pro Zone.",
-      "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist.",
-      "cloud_rate_limited": "Die iRobot-Cloud-Anmeldung ist vorübergehend limitiert. Schließen Sie die iRobot-App auf Ihrem Smartphone und versuchen Sie es erneut.",
-      "cloud_ssl_certificate_error": "Das Zertifikat des iRobot-Cloud-Servers konnte nicht überprüft werden. Das liegt fast immer an einem vorübergehenden Problem bei iRobot — versuchen Sie es in ein paar Stunden erneut."
+      "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist."
     },
     "abort": {
       "integration_not_loaded": "Die Integration konnte nicht geladen werden. Prüfe die Protokolle und lade neu, bevor du die Einstellungen öffnest.",
@@ -287,9 +226,7 @@
       "no_rest980_rooms_found": "Keine Räume in deiner roomba_rest980-Installation gefunden.",
       "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt.",
       "room_schedule_not_supported": "Raum-Frequenzen erfordern einen Smart-Map-Roboter mit Cloud-Zugangsdaten.",
-      "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden.",
-      "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
-      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
+      "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden."
     }
   },
   "entity": {
@@ -721,99 +658,6 @@
       },
       "dirt_weather_correlation": {
         "name": "Schmutz-Korrelation"
-      },
-      "prime_mission_event": {
-        "name": "Missionsereignis"
-      },
-      "prime_connection_health": {
-        "name": "Verbindungsstatus"
-      },
-      "prime_detected_pad": {
-        "name": "Erkannter Wischpad",
-        "state": {
-          "pad_plate": "Alle Wischtücher eingesetzt",
-          "no_pad": "Wischtuch fehlt",
-          "disp_dry": "Einwegtuch trocken",
-          "disp_wet": "Einwegtuch feucht",
-          "reusable_dry": "Mehrwegtuch trocken",
-          "reusable_wet": "Mehrwegtuch feucht",
-          "invalid": "Wischtuch nicht erkannt"
-        }
-      },
-      "prime_runtime_hours": {
-        "name": "Lebenslaufzeit"
-      },
-      "prime_firmware_version": {
-        "name": "Firmware-Version"
-      },
-      "prime_dock_status": {
-        "name": "Dockstatus"
-      },
-      "prime_pad_wash_status": {
-        "name": "Wischpad-Waschstatus"
-      },
-      "prime_pad_dry_status": {
-        "name": "Wischpad-Trocknungsstatus"
-      },
-      "prime_suction_level": {
-        "name": "Saugstärke",
-        "state": {
-          "invalid": "Ungültig",
-          "low": "Niedrig",
-          "medium": "Mittel",
-          "high": "Hoch",
-          "turbo": "Turbo"
-        }
-      },
-      "prime_charge_cycles_ok": {
-        "name": "Ladezyklen (erfolgreich)"
-      },
-      "prime_charge_cycles_error": {
-        "name": "Ladezyklen (fehlgeschlagen)"
-      },
-      "prime_system_uptime": {
-        "name": "Systemlaufzeit"
-      },
-      "prime_navigation_resets": {
-        "name": "Navigations-Resets"
-      },
-      "prime_serial_number": {
-        "name": "Seriennummer"
-      },
-      "prime_consumable_part": {
-        "name": "Wartung – {part}"
-      },
-      "prime_part_edge_brush": {
-        "name": "Wartung – Seitenbürste"
-      },
-      "prime_part_multi_surface_brush": {
-        "name": "Wartung – Hauptbürste(n)"
-      },
-      "prime_part_filter": {
-        "name": "Wartung – Hocheffizienz-Filter"
-      },
-      "prime_part_dirt_bag": {
-        "name": "Wartung – Staubbeutel"
-      },
-      "prime_part_mop_pads": {
-        "name": "Wartung – DualClean-Wischtücher"
-      },
-      "prime_part_cliff_sensors": {
-        "name": "Wartung – Absturzsensoren"
-      },
-      "prime_part_pad_wash_cleaning": {
-        "name": "Wartung – DockingDock-Waschsystem"
-      },
-      "prime_part_pad_wash_replacement": {
-        "name": "Wartung – Waschbares Wischtuch"
-      },
-      "prime_cleaning_mode": {
-        "name": "Reinigungsmodus",
-        "state": {
-          "vacuuming": "Saugen",
-          "mopping": "Wischen",
-          "vacuuming_and_mopping": "Saugen und Wischen"
-        }
       }
     },
     "binary_sensor": {
@@ -830,10 +674,7 @@
         "name": "Wischroboter-Problem"
       },
       "mop_tank_present": {
-        "name": "Wassertank im Roboter"
-      },
-      "prime_dock_error": {
-        "name": "Dock-Fehler"
+        "name": "Wischwassertank eingesetzt"
       },
       "mop_lid_closed": {
         "name": "Mop-Deckel offen"
@@ -893,12 +734,6 @@
       },
       "layout_change_detected": {
         "name": "Raumlayout-Änderung erkannt"
-      },
-      "prime_start_blocked": {
-        "name": "Start blockiert"
-      },
-      "prime_quiet_hours": {
-        "name": "In Ruhezeit"
       }
     },
     "button": {
@@ -943,24 +778,6 @@
       },
       "map_training": {
         "name": "Aktion – Kartierungs-Scan starten"
-      },
-      "prime_favorite": {
-        "name": "Favorit – {favorite}"
-      },
-      "prime_locate": {
-        "name": "Orten"
-      },
-      "prime_empty_bin": {
-        "name": "Behälter leeren"
-      },
-      "prime_wash_pad": {
-        "name": "Wischtuch waschen"
-      },
-      "prime_stop_pad_dry": {
-        "name": "Trocknen beenden"
-      },
-      "prime_start_pad_dry": {
-        "name": "Trocknen starten"
       }
     },
     "switch": {
@@ -981,33 +798,6 @@
       },
       "gentle_mode": {
         "name": "Einstellung – Sanfter Modus"
-      },
-      "prime_carpet_boost": {
-        "name": "Einstellung – Teppich-Boost"
-      },
-      "prime_schedule": {
-        "name": "Zeitplan – {schedule}"
-      },
-      "prime_child_lock": {
-        "name": "Kindersicherung"
-      },
-      "prime_eco_charge": {
-        "name": "Eco-Laden"
-      },
-      "prime_pad_dry_allowed": {
-        "name": "Wischtuch-Trocknung"
-      },
-      "prime_two_pass": {
-        "name": "Zwei Durchgänge"
-      },
-      "prime_vac_high": {
-        "name": "Erhöhte Saugkraft"
-      },
-      "prime_quiet_hours_active": {
-        "name": "Nicht stören"
-      },
-      "prime_pad_wash_allowed": {
-        "name": "Wischtuchwäsche erlaubt"
       }
     },
     "select": {
@@ -1046,116 +836,6 @@
           "eco": "Eco",
           "performance": "Leistung"
         }
-      },
-      "prime_suction_level": {
-        "name": "Saugstufe",
-        "state": {
-          "light": "Leicht",
-          "normal": "Normal",
-          "deep": "Intensiv"
-        }
-      },
-      "prime_map": {
-        "name": "Karte",
-        "state": {
-          "follow_robot": "Roboter folgen"
-        }
-      },
-      "prime_cleaning_mode": {
-        "name": "Reinigungsmodus",
-        "state": {
-          "vacuum": "Saugen",
-          "mop": "Wischen",
-          "vacuum_and_mop": "Saugen und Wischen",
-          "vacuum_then_mop": "Saugen, dann Wischen"
-        }
-      },
-      "prime_pad_dry_duration": {
-        "name": "Trockendauer Wischtuch",
-        "state": {
-          "2_hours": "2 Stunden",
-          "3_hours": "3 Stunden",
-          "4_hours": "4 Stunden",
-          "5_hours": "5 Stunden",
-          "6_hours": "6 Stunden"
-        }
-      },
-      "prime_pad_wash_return": {
-        "name": "Waschintervall Wischtuch",
-        "state": {
-          "after_each_room": "Nach jedem Raum",
-          "by_time": "Nach Zeitintervall",
-          "by_area": "Nach Flächenintervall",
-          "mission": "Vor und nach Routinen",
-          "refill": "Zusätzlich beim Nachfüllen",
-          "refill_and_room": "Zusätzlich zwischen Räumen"
-        }
-      },
-      "prime_pad_wash_area_interval": {
-        "name": "Waschintervall nach Fläche",
-        "state": {
-          "6": "6",
-          "8": "8",
-          "10": "10",
-          "15": "15",
-          "20": "20"
-        }
-      },
-      "prime_pad_wash_time_interval": {
-        "name": "Waschintervall nach Zeit",
-        "state": {
-          "10": "10 Minuten",
-          "15": "15 Minuten",
-          "20": "20 Minuten",
-          "25": "25 Minuten"
-        }
-      },
-      "prime_pad_wash_heat": {
-        "name": "Beheiztes Wischwasser",
-        "state": {
-          "no_heat": "Ohne Heizung",
-          "default_heat": "Standardheizung",
-          "high_heat": "Hohe Heizstufe"
-        }
-      },
-      "prime_autoevac_frequency": {
-        "name": "Absaugintervall",
-        "state": {
-          "every_routine": "Nach jeder Routine",
-          "every_2_routines": "Nach jeder 2. Routine",
-          "every_3_routines": "Nach jeder 3. Routine",
-          "on_dock_return": "Bei Rückkehr zur Station",
-          "10": "Alle 10 Flächeneinheiten",
-          "15": "Alle 15 Flächeneinheiten",
-          "25": "Alle 25 Flächeneinheiten",
-          "30": "Alle 30 Flächeneinheiten",
-          "50": "Alle 50 Flächeneinheiten"
-        }
-      },
-      "prime_pad_wetness": {
-        "name": "Wischfeuchte",
-        "state": {
-          "1": "1",
-          "2": "2",
-          "3": "3",
-          "4": "4",
-          "5": "5",
-          "6": "6",
-          "7": "7",
-          "8": "8",
-          "9": "9",
-          "10": "10",
-          "11": "11",
-          "12": "12",
-          "13": "13",
-          "14": "14",
-          "15": "15",
-          "16": "16",
-          "17": "17",
-          "18": "18",
-          "19": "19",
-          "20": "20"
-        }
       }
     },
     "image": {
@@ -1167,12 +847,6 @@
       },
       "rooms_map": {
         "name": "Raumkarte"
-      },
-      "cleaning_map": {
-        "name": "Reinigungskarte"
-      },
-      "raw_map": {
-        "name": "Rohe Live-Karte"
       }
     },
     "device_tracker": {
@@ -1290,8 +964,7 @@
       "health_score_drop": "Gesundheitswert gesunken",
       "map_retrain_started": "Karten-Neutraining gestartet",
       "map_retrain_completed": "Karten-Neutraining abgeschlossen",
-      "firmware_updated": "Firmware aktualisiert",
-      "start_blocked": "Start durch einen Fehler blockiert"
+      "firmware_updated": "Firmware aktualisiert"
     }
   },
   "services": {
@@ -1358,24 +1031,6 @@
     "restore_backup": {
       "name": "Backup wiederherstellen",
       "description": "Stellt alle Daten aus einer Backup-ZIP wieder her. Wirkt sofort, kein Neustart nötig."
-    },
-    "set_quiet_hours": {
-      "name": "Ruhezeiten setzen",
-      "description": "Schreibt das Ruhefenster des Haushalts.",
-      "fields": {
-        "start": {
-          "name": "Beginn",
-          "description": "Wann die Ruhezeit täglich beginnt."
-        },
-        "end": {
-          "name": "Ende",
-          "description": "Wann die Ruhezeit täglich endet."
-        },
-        "ends_at": {
-          "name": "Ruhe bis",
-          "description": "Ein einzelner Zeitpunkt statt eines täglichen Fensters."
-        }
-      }
     }
   },
   "exceptions": {
@@ -1420,36 +1075,6 @@
     },
     "backup_entity_not_found": {
       "message": "Die Entität „{entity_id}“ ließ sich keinem Roomba+-Roboter zuordnen. Entity-ID prüfen und erneut versuchen."
-    },
-    "cloud_credentials_invalid": {
-      "message": "Die iRobot-Cloud-Zugangsdaten sind ungültig: {error}"
-    },
-    "cloud_temporarily_unavailable": {
-      "message": "Die iRobot-Cloud ist vorübergehend nicht erreichbar: {error}"
-    },
-    "unknown_rooms": {
-      "message": "Unbekannte(r) Raum/Räume für {entity_id}: {rooms}. Bekannte Räume: {known}."
-    },
-    "favorite_prime_only": {
-      "message": "run_favorite ist nur für V4/Prime-Roboter verfügbar"
-    },
-    "favorite_not_found": {
-      "message": "Kein ausführbarer Favorit mit der ID {favorite_id}"
-    },
-    "dock_operation_in_progress": {
-      "message": "Die Station ist gerade beschäftigt ({operation}). Der Roboter nimmt bis zum Abschluss keine Befehle an."
-    },
-    "quiet_hours_incomplete": {
-      "message": "Ruhezeiten brauchen Beginn und Ende, oder keines von beidem."
-    },
-    "quiet_hours_ambiguous": {
-      "message": "Gib entweder ein tägliches Fenster (Beginn und Ende) oder einen einmaligen Zeitpunkt an — der Roboter akzeptiert genau eines von beidem."
-    },
-    "quiet_hours_not_prime": {
-      "message": "{entity} ist kein V4/Prime-Roboter mit Haushalt."
-    },
-    "prime_not_connected": {
-      "message": "Dieser Roboter hat keine Cloud-Verbindung."
     }
   },
   "selector": {

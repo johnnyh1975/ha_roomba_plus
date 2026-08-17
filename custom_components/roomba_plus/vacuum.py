@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-from typing import Any, Final
+from typing import Any
 
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
@@ -29,12 +29,10 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from . import roomba_reported_state
-from .prime_commands import _send_confirmed
 from .const import (
-    DOMAIN,
     ATTR_BIN_FULL,
     has_carpet_boost,
-    is_braava,
+    is_mop,
     ATTR_BIN_PRESENT,
     ATTR_CLEANED_AREA,
     ATTR_CLEANING_TIME,
@@ -60,12 +58,13 @@ from .const import (
     OVERLAP_DEEP,
     OVERLAP_EXTENDED,
     OVERLAP_STANDARD,
-    MISSION_EVENT_TYPE_TO_ACTIVITY,
+    CONF_FLOOR,
+    DOMAIN,
     PHASE_TO_ACTIVITY,
     SQFT_TO_M2,
 )
 from .entity import IRobotEntity
-from .models import ConnectionType, RoombaConfigEntry
+from .models import MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -99,22 +98,7 @@ async def async_setup_entry(
     # has_carpet_boost() handles both 900-series (top-level key, absent from cap{})
     # and i/s/j-series (cap.carpetBoost == 1) correctly.
     constructor: type[IRobotVacuum]
-    # `is_braava`, NOT `is_mop` -- AND THIS IS THE SECOND TIME.
-    #
-    # `is_mop()` is true for anything with a pad, which includes every
-    # Combo. @connormxy's c755020 was therefore built as a BraavaJet,
-    # whose `supported_features` deliberately excludes CLEAN_AREA
-    # because a Braava genuinely has no regions to clean.
-    #
-    # The same substitution was fixed inside the base class for him
-    # weeks ago. It was the right condition in a place this robot never
-    # reached -- the class was already wrong by then, so the corrected
-    # check never ran.
-    #
-    # His a30 diagnostics said so and I misread them: `withheld_features`
-    # came back EMPTY, meaning the base class considered CLEAN_AREA
-    # offered. It did. Nothing asked it.
-    if is_braava(state):
+    if is_mop(state):
         constructor = BraavaJet
     elif has_carpet_boost(state):
         constructor = RoombaVacuumCarpetBoost
@@ -140,19 +124,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise with roombapy Roomba object and BLID."""
-        super().__init__(roomba, blid, config_entry)
+        super().__init__(roomba, blid)
         self._config_entry = config_entry
-        # NEW (V4/Prime): read connection type / prime_robot from
-        # runtime_data when available. Defaults (LOCAL_PUSH/None)
-        # preserve exact existing behavior for any caller that
-        # constructs an entity without a config_entry (some existing
-        # unit tests do this directly).
-        if config_entry is not None:
-            self._connection_type = config_entry.runtime_data.connection_type
-            self._prime_robot = config_entry.runtime_data.prime_robot
-        else:
-            self._connection_type = ConnectionType.LOCAL_PUSH
-            self._prime_robot = None
         # Vacuum is the primary entity — its unique_id IS the device identifier.
         self._attr_unique_id = self.robot_unique_id
         self._cap_position: bool = (
@@ -178,54 +151,19 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── HA lifecycle ──────────────────────────────────────────────────────────
 
     async def async_added_to_hass(self) -> None:
-        """Extend parent setup to register cloud/prime coordinator listeners.
+        """Extend parent setup to register cloud coordinator listener.
 
         F-I15 (v2.4.0): IRobotVacuum is not a CoordinatorEntity, so the HA
         framework does not call _handle_coordinator_update automatically.
         We register manually so segment change-detection fires after each
         cloud refresh (map retrain → async_create_segments_issue).
-
-        NEW (V4/Prime): same manual-registration pattern for
-        prime_coordinator -- pushes a new MissionTimelineReport on every
-        real mission event, which should re-render activity/
-        extra_state_attributes. A separate, much simpler callback
-        (_handle_prime_coordinator_update) than the cloud one above --
-        just a state re-render, no segment-mismatch logic applies here."""
+        """
         await super().async_added_to_hass()
         if self._config_entry is not None:
             cc = self._config_entry.runtime_data.cloud_coordinator
             if cc is not None:
                 self.async_on_remove(
                     cc.async_add_listener(self._handle_coordinator_update)
-                )
-            pc = self._config_entry.runtime_data.prime_coordinator
-            if pc is not None:
-                self.async_on_remove(
-                    pc.async_add_listener(self._handle_prime_coordinator_update)
-                )
-            # THE STATUS COORDINATOR TOO -- this was missing, and it is
-            # where activity actually comes from.
-            #
-            # ROOT CAUSE of a field report (DaRealGuGu) that survived two
-            # attempted fixes. His vacuum showed "Returning to dock" while
-            # the robot sat on it, and his diagnostics download showed
-            # phase="charge", cycle="none" -- data that maps cleanly to
-            # DOCKED. The data was right the whole time; nothing ever
-            # asked the entity to look at it again.
-            #
-            # activity reads cleanMissionStatus.phase from THIS
-            # coordinator. Subscribing only to the mission-event one
-            # meant the vacuum re-rendered when an event arrived and
-            # never when the phase changed -- so a phase that settled to
-            # "charge" after the last event was simply never displayed.
-            #
-            # Both earlier attempts (a9, a11) corrected the mapping
-            # instead, which was the wrong layer: no mapping fix can
-            # help an entity that is not re-reading its source.
-            sc = self._config_entry.runtime_data.prime_status_coordinator
-            if sc is not None:
-                self.async_on_remove(
-                    sc.async_add_listener(self._handle_prime_coordinator_update)
                 )
 
     # ── Feature flags ────────────────────────────────────────────────────────
@@ -240,260 +178,26 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
           - not a Braava mop (Braava uses padWetness Select, not room segments)
         """
         flags = SUPPORT_IROBOT
-        # SUCTION ON THE VACUUM CARD, for Prime.
-        #
-        # @arielgr went looking for suction and cleaning mode on the card
-        # that opens when you click the robot, because that is where the
-        # iRobot app puts them. Both existed only as separate select
-        # entities under Configuration, which is a different screen.
-        #
-        # Home Assistant renders a speed control on the vacuum card when
-        # the entity advertises FAN_SPEED. Two Classic classes did;
-        # Prime, which uses this class directly, did not -- so the one
-        # control Home Assistant CAN show there was missing on the
-        # generation that has the richest settings.
-        #
-        # The mode has no equivalent vacuum feature and stays a select.
-        if self._config_entry is not None and getattr(
-            self._config_entry.runtime_data, "prime_robot", None
-        ) is not None:
-            flags |= VacuumEntityFeature.FAN_SPEED
-        # ASKS THE BACKEND (this session), not map_capability.
-        #
-        # The service can clean rooms on Prime robots now, but this
-        # property still said it could not -- so the capability worked
-        # while the UI never offered it. Advertising and doing must
-        # agree; a feature reachable only by hand-writing a service call
-        # is barely a feature.
-        #
-        # is_mop stays: a Braava targets rooms through padWetness rather
-        # than region segments, which is a device difference rather than
-        # a generation one.
-        from .room_cleaning import async_get_room_cleaning_backend  # noqa: PLC0415
-
+        data = (
+            self._config_entry.runtime_data
+            if self._config_entry is not None
+            else None
+        )
         if (
-            self._config_entry is not None
-            and async_get_room_cleaning_backend(self._config_entry) is not None
-            # is_braava, NOT is_mop -- the fourteenth site of the same
-            # mistake, and the one that cost a user their room cleaning.
-            #
-            # `is_mop()` answers "can it mop" by looking for
-            # `detectedPad`. A Combo has a pad AND brushes AND stable
-            # region ids, so this excluded it as though it were a
-            # Braava: @connormxy's j7+ Combo advertised no CLEAN_AREA,
-            # Home Assistant filtered the entity out of its own picker,
-            # and he reinstalled three integrations looking for the
-            # cause.
-            #
-            # The intent was always "a Braava targets rooms through
-            # padWetness rather than region segments". That is a
-            # statement about Braavas, and `is_mop`'s own docstring says
-            # so: use is_braava() for anything about vacuum hardware.
-            and not is_braava(self.vacuum_state)
+            data is not None
+            and data.map_capability == MapCapability.SMART
+            and data.has_cloud
+            and not is_mop(self.vacuum_state)
             and hasattr(VacuumEntityFeature, "CLEAN_AREA")  # HA 2026.3+ only; silently absent on older
         ):
             flags |= VacuumEntityFeature.CLEAN_AREA
-        else:
-            # SAY WHY IT IS ABSENT, ONCE.
-            #
-            # @connormxy uninstalled three integrations to find out that
-            # room cleaning was withheld -- there was no message, no log
-            # line, nothing to search for. Home Assistant simply filtered
-            # his robot out of its own service picker.
-            #
-            # A capability that silently fails to appear is a poor way to
-            # say "excluded". This does not fix the exclusion; it makes
-            # the exclusion findable.
-            self._log_clean_area_absent()
         return flags
 
     # ── Activity ──────────────────────────────────────────────────────────
 
-    #: Mission-status operatingMode -> what the robot is doing now.
-    #:
-    #: CONFIRMED across four captures from one Combo (@DaRealGuGu),
-    #: including one taken during the mopping half of a scheduled
-    #: vacuum-then-mop run:
-    #:
-    #:     docked          2   vacuum
-    #:     combo running   6   2|4, vacuuming and mopping together
-    #:     mopping half    4   mop only
-    #:
-    #: NOT THE COMMAND NUMBERS. A command asks for 512 (vacuum then mop)
-    #: or 32 (combined), and neither ever appears here. Reading one
-    #: table against the other is what made 6 look impossible for two
-    #: days.
-    #:
-    #: Anything outside these three is left unreported rather than
-    #: guessed: the bitmask may carry values nobody has seen.
-    _PRIME_CLEANING_MODES: dict[int, str] = {
-        2: "vacuuming",
-        4: "mopping",
-        6: "vacuuming_and_mopping",
-    }
-
-    def _prime_cleaning_mode(self) -> str | None:
-        """Vacuuming, mopping, or both -- while a mission is running.
-
-        Only during a mission. A docked robot still reports a mode, and
-        it describes the last or next job rather than anything happening
-        now -- reporting that would be worse than reporting nothing.
-        """
-        data = getattr(self._config_entry, "runtime_data", None)
-        if data is None or data.connection_type is not ConnectionType.CLOUD_ONLY:
-            return None
-
-        coordinator = getattr(data, "prime_status_coordinator", None)
-        shadows = getattr(coordinator, "data", None) or {}
-        status = (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus") or {}
-
-        if status.get("cycle") in (None, "none"):
-            return None
-        return self._PRIME_CLEANING_MODES.get(status.get("operatingMode"))
-
-    def _prime_dock_activity(self) -> str | None:
-        """What the dock is doing right now, or None if nothing.
-
-        Reads the same two fields the dedicated pad-wash and pad-dry
-        sensors use -- this is a convenience view of them on the entity
-        people actually look at, not a new source of truth.
-
-        Returns a stable slug rather than a translated string: an
-        attribute is consumed by templates and automations, and a value
-        that changes with the user's language breaks both.
-        """
-        data = getattr(self._config_entry, "runtime_data", None)
-        if data is None or data.connection_type is not ConnectionType.CLOUD_ONLY:
-            return None
-
-        coordinator = getattr(data, "prime_status_coordinator", None)
-        shadows = getattr(coordinator, "data", None) or {}
-        dock = (shadows.get("ro-currentstate") or {}).get("dock") or {}
-
-        try:
-            from roombapy_prime.models.robot_info import DockState  # noqa: PLC0415
-
-            # IN PROGRESS ONLY. The "okay" states mean the dock is idle
-            # and well, which the vacuum's own "docked" already says.
-            in_progress = {
-                DockState.PAD_WASH_IN_PROGRESS: "pad_washing",
-                DockState.PAD_DRY_IN_PROGRESS: "pad_drying",
-                DockState.DOCK_EVACUATION_IN_PROGRESS: "evacuating",
-            }
-            for raw in (dock.get("pwState"), dock.get("pdState"), dock.get("state")):
-                if raw is None:
-                    continue
-                try:
-                    activity = in_progress.get(DockState(raw))
-                except ValueError:
-                    continue
-                if activity is not None:
-                    return activity
-        except ImportError:
-            return None
-        return None
-
     @property
     def activity(self) -> VacuumActivity:
-        """Map the current cleanMissionStatus phase to a VacuumActivity.
-
-        NEW (V4/Prime): for CLOUD_ONLY entries, derives activity from
-        the latest mission/timeline/report event type instead -- see
-        MISSION_EVENT_TYPE_TO_ACTIVITY's own docstring (const.py) for
-        the confidence breakdown per event type. Falls back to IDLE if
-        no coordinator data exists yet, or the event type isn't in the
-        known set -- deliberately NOT the classic path's ERROR fallback
-        below: an unrecognized mission-timeline event type here is far
-        more likely to be one of the several known-but-not-yet-mapped
-        types (see MissionTimelineEvent's 20 sub-event types) than a
-        genuine fault, unlike the classic phase map, where an
-        unrecognized phase really would be unexpected. Still NOT a
-        complete state facade -- battery level / a direct docked
-        boolean (RobotStatusV2) remain unconfirmed; this only
-        approximates activity from mission events.
-        """
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            # NEW (this session, prompted by a real field report,
-            # chairstacker): the mission-timeline event type alone
-            # CANNOT express "heading home". His own activity log shows
-            # why -- "travel" fires both for room-to-room travel
-            # mid-mission AND for the final trip back to the dock, so a
-            # completed mission still reported CLEANING all the way
-            # home, only flipping once "evac" arrived (by which point
-            # the robot was already AT the dock being emptied, so even
-            # that RETURNING was both late and, strictly, wrong).
-            #
-            # cleanMissionStatus.phase (ro-currentstate) is CONFIRMED
-            # LIVE for Prime (chairstacker's own real payload, see
-            # CleanMissionStatus's docstring in roombapy-prime) and
-            # draws exactly the distinction the event stream can't:
-            # hmPostMsn (heading home, mission done) vs. hmMidMsn
-            # (heading home to recharge, mission continues) vs. run.
-            # Reuses Classic's own long-proven PHASE_TO_ACTIVITY map
-            # rather than inventing a second, parallel mapping.
-            #
-            # Falls back to the event-type map when phase is absent or
-            # unrecognized -- the event stream stays the safety net,
-            # since phase living in a shadow means it could in
-            # principle lag or be missing on some firmware, which the
-            # event stream would not be.
-            status_coordinator = (
-                self._config_entry.runtime_data.prime_status_coordinator
-                if self._config_entry is not None else None
-            )
-            # Read once, OUTSIDE the branch below. The event branch
-            # further down needs the same cycle value, and scoping it to
-            # the phase branch is what let a9's fix cover only half the
-            # problem.
-            mission_status: dict[str, Any] = {}
-            if status_coordinator is not None and status_coordinator.data:
-                current_state = status_coordinator.data.get("ro-currentstate") or {}
-                mission_status = current_state.get("cleanMissionStatus") or {}
-                phase = mission_status.get("phase")
-                if phase in PHASE_TO_ACTIVITY:
-                    activity = PHASE_TO_ACTIVITY[phase]
-                    if (
-                        activity == VacuumActivity.RETURNING
-                        and self._prime_cycle_is_idle()
-                    ):
-                        return VacuumActivity.DOCKED
-                    return activity
-            coordinator = (
-                self._config_entry.runtime_data.prime_coordinator
-                if self._config_entry is not None else None
-            )
-            report = coordinator.data if coordinator is not None else None
-            if report is None or not report.event:
-                return VacuumActivity.IDLE
-            activity = MISSION_EVENT_TYPE_TO_ACTIVITY.get(
-                report.event[0].event_type, VacuumActivity.IDLE
-            )
-            # THE SAME CORROBORATION AS THE PHASE BRANCH ABOVE, which it
-            # was missing (this session, second field report from the
-            # same tester).
-            #
-            # a9 added the cycle check to the phase branch only. He
-            # still saw "Returning to dock" on a robot sitting at its
-            # dock -- because when the phase is unmapped or the status
-            # shadow has not been seeded, control falls through to HERE,
-            # where nothing checked anything.
-            #
-            # The likely event is "evac": MISSION_EVENT_TYPE_TO_ACTIVITY
-            # maps it to RETURNING on the reasoning that a self-emptying
-            # base can evac MID-mission, so it is not reliably "docked".
-            # That reasoning holds for the mission, not for the robot's
-            # position -- during evac the robot has ARRIVED at the dock,
-            # mid-mission or not. HA's DOCKED means "at the dock", not
-            # "mission over".
-            #
-            # Left as a corroborated correction rather than remapping
-            # evac outright: the mapping's own justification is sound
-            # for the mid-mission case, and cycle == "none" is exactly
-            # what distinguishes that case from this one.
-            if activity == VacuumActivity.RETURNING and self._prime_cycle_is_idle():
-                return VacuumActivity.DOCKED
-            return activity
-
+        """Map the current cleanMissionStatus phase to a VacuumActivity."""
         status = self.vacuum_state.get("cleanMissionStatus") or {}
         # Default to "none" so a missing/sparse cleanMissionStatus (cycle absent
         # → None) is treated as "no active cycle". Without this, `None != "none"`
@@ -525,20 +229,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         All values are JSON-serialisable primitives.
         Datetime objects are converted to ISO-8601 strings.
-
-        BUG FOUND (bug-hunt round, V4/Prime): self.vacuum.current_state/
-        error_code/error_message crashed for a CLOUD_ONLY entity
-        (self.vacuum is None) -- and unlike async_added_to_hass() (called
-        once at setup), this property is evaluated on every state write,
-        so this would have crashed immediately and repeatedly, not just
-        once. "status"/error attrs are None for CLOUD_ONLY -- honest "no
-        data available" (no master_state-shaped translation exists yet,
-        see RobotStatusV2 blocker), not a fabricated guess.
         """
         state = self.vacuum_state
         attrs: dict[str, Any] = {
             ATTR_SOFTWARE_VERSION: state.get("softwareVer"),
-            "status": self.vacuum.current_state if self.vacuum is not None else None,
+            "status": self.vacuum.current_state,
         }
 
         # Cleaning progress (only while actively cleaning)
@@ -548,7 +243,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             attrs[ATTR_CLEANED_AREA] = cleaned_area
 
         # Error info
-        if self.vacuum is not None and self.vacuum.error_code:
+        if self.vacuum.error_code:
             attrs[ATTR_ERROR] = self.vacuum.error_message
             attrs[ATTR_ERROR_CODE] = self.vacuum.error_code
 
@@ -677,80 +372,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                     attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
                     attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
 
-        # NEW (V4/Prime). Informational room/mission-progress attributes
-        # from the confirmed mission/timeline/report channel -- see
-        # activity's own docstring and PrimeCoordinator's module
-        # docstring for the full evidence trail. Deliberately does NOT
-        # attempt battery level or a docked boolean (RobotStatusV2
-        # remains unconfirmed) -- only what this specific channel
-        # actually confirms. Reuses the SAME "mission_id" key the
-        # classic path above already populates (from a different
-        # source) rather than inventing a parallel name, since it's the
-        # same real-world concept either way.
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            coordinator = (
-                self._config_entry.runtime_data.prime_coordinator
-                if self._config_entry is not None else None
-            )
-            report = coordinator.data if coordinator is not None else None
-            if report is not None:
-                attrs["mission_id"] = report.mission_id
-                if report.event:
-                    current = report.event[0]
-                    attrs["mission_event_type"] = current.event_type
-                    room = current.room or current.travel
-                    if room is not None:
-                        attrs["current_room_id"] = room.region_id
-                    if current.room is not None:
-                        attrs["current_room_area"] = current.room.area
-                        attrs["current_room_pass_count"] = current.room.pass_count
-
-
-        # SAVED FAVOURITES, id and name. Prime only -- Classic has no
-        # equivalent concept.
-        #
-        # Costs no entity, and covers what buttons cannot: automations
-        # that iterate, templates that list, and the
-        # xiaomi-vacuum-map-card menu, which reads attributes.
-        #
-        # The ID is here on purpose. An automation written against it
-        # survives a rename in the iRobot app; one written against the
-        # name does not -- and a name is all a button or a select could
-        # offer.
-        favorites = getattr(
-            self._config_entry.runtime_data, "prime_favorites", None
-        )
-        if favorites:
-            attrs["favorites"] = favorites
-
-        # WHAT THE DOCK IS DOING, alongside the vacuum's own state.
-        #
-        # Requested by @DaRealGuGu: a robot having its pad washed shows
-        # as "docked", which is true and unhelpful -- the dock is busy
-        # and he wants to see that on the main entity.
-        #
-        # AN ATTRIBUTE, NOT A STATE. Home Assistant's VacuumActivity has
-        # exactly six members -- cleaning, docked, idle, paused,
-        # returning, error -- and a vacuum entity reporting anything
-        # else is broken, not extended. So "pad washing" cannot be a
-        # state no matter how much it deserves to be one.
-        #
-        # As an attribute it drives a template sensor, a card's
-        # secondary line, or an automation condition, which is what he
-        # actually wants it for.
-        dock_activity = self._prime_dock_activity()
-        if dock_activity is not None:
-            attrs["dock_activity"] = dock_activity
-
-        # WHAT THE ROBOT IS DOING, when a mission is running.
-        #
-        # `cycle` stays "clean" for a whole vacuum-then-mop job, so this
-        # is the only way to tell the two halves apart. Same reasoning
-        # as dock_activity above: an attribute, because VacuumActivity
-        # has six members and none of them is "mopping".
-        cleaning_mode = self._prime_cleaning_mode()
-        if cleaning_mode is not None:
-            attrs["cleaning_mode"] = cleaning_mode
         return attrs
 
     def _get_cleaning_status(
@@ -778,19 +399,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── Commands ──────────────────────────────────────────────────────────
 
     async def async_start(self) -> None:
-        """Start or resume cleaning.
-
-        NEW (V4/Prime): always sends "start" -- self.activity isn't
-        reliable yet for Prime (no master_state-shaped translation
-        exists, see ConnectionType's docstring / the RobotStatusV2
-        blocker in ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md), so trying
-        to detect PAUSED first the way the classic path does would
-        never resolve correctly. send_simple_command() is confirmed
-        live-working (roombapy-prime README's confidence table).
-        """
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await _send_confirmed(self._prime_robot, "start")
-            return
+        """Start or resume cleaning."""
         if self.activity == VacuumActivity.PAUSED:
             await self.hass.async_add_executor_job(
                 self.vacuum.send_command, "resume"
@@ -800,233 +409,13 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.vacuum.send_command, "start"
             )
 
-    def _prime_cycle_is_idle(self) -> bool:
-        """True when the robot reports no active cleaning cycle.
-
-        Used to corroborate a "returning" reading. Returns False when
-        the status shadow is unavailable -- unknown must not be read as
-        idle, or a genuine trip back to the dock would be reported as
-        docked.
-        """
-        coordinator = (
-            self._config_entry.runtime_data.prime_status_coordinator
-            if self._config_entry is not None else None
-        )
-        if coordinator is None or not coordinator.data:
-            return False
-        current_state = coordinator.data.get("ro-currentstate") or {}
-        mission_status = current_state.get("cleanMissionStatus") or {}
-        if "cycle" not in mission_status:
-            return False
-        return (mission_status.get("cycle") or "none") == "none"
-
-    #: Dock sub-states that mean "an operation is running right now",
-    #: from the iRobot app's own res/raw availability spec
-    #: (spec_buttons_cleaning_status_dock_operations). While a mission is
-    #: under way AND one of these is set, the app offers NO robot
-    #: controls at all -- an empty button list, not a greyed-out one.
-    #:
-    #: 302 evacuating · 403 refilling · 602 pad washing · 702 pad drying
-    #:
-    #: evac and fluid replenishment share `dock.state` in this project's
-    #: model; pad wash and pad dry have fields of their own.
-    _DOCK_BUSY_STATES: Final[frozenset[int]] = frozenset({302, 403})
-    _DOCK_BUSY_PAD_WASH: Final[int] = 602
-    _DOCK_BUSY_PAD_DRY: Final[int] = 702
-
-    #: Verbs the dock guard applies to. `find` is deliberately absent:
-    #: the app's spec covers mission controls, and refusing to help
-    #: someone locate their robot has no upside.
-    _DOCK_GUARDED_VERBS: Final[frozenset[str]] = frozenset(
-        {"start", "stop", "pause", "resume", "dock"}
-    )
-
-    def _dock_operation_in_progress(self) -> str | None:
-        """The dock operation currently running, or None.
-
-        PRIME ONLY. These rules come from the Prime app's own spec, and
-        the Classic app was not checked -- a Classic robot keeps every
-        control it has today rather than inheriting a rule from evidence
-        that does not cover it.
-
-        Returns the name so the refusal can say WHICH operation is in
-        the way. "Try again later" without a reason is the kind of
-        message this project has already had to correct once, when eight
-        unrelated readiness states were all reported as a map update.
-        """
-        if self._connection_type is not ConnectionType.CLOUD_ONLY:
-            return None
-        # getattr, not attribute access. `_config_entry` is optional on
-        # this class -- the constructor says so -- and some tests build
-        # the entity without running __init__ at all, so the attribute is
-        # ABSENT rather than None. Reaching through it unguarded turns a
-        # missing fixture into an AttributeError inside a command path,
-        # which is the wrong place to discover it.
-        entry = getattr(self, "_config_entry", None)
-        if entry is None:
-            return None
-        coordinator = entry.runtime_data.prime_status_coordinator
-        if coordinator is None or coordinator.data is None:
-            return None
-        raw = coordinator.data.get("ro-currentstate")
-        if raw is None:
-            return None
-        from roombapy_prime.models import CurrentStateShadow  # noqa: PLC0415
-
-        state = CurrentStateShadow.from_json(raw)
-        mission = getattr(state, "clean_mission_status", None)
-        if getattr(mission, "cycle", None) not in ("clean", "spot"):
-            return None
-        dock = getattr(state, "dock", None)
-        if dock is None:
-            return None
-
-        def _value(attr: str) -> int | None:
-            raw_value = getattr(dock, attr, None)
-            raw_value = getattr(raw_value, "value", raw_value)
-            return raw_value if isinstance(raw_value, int) else None
-
-        if _value("state") in self._DOCK_BUSY_STATES:
-            return "emptying the bin or refilling the tank"
-        if _value("pw_state") == self._DOCK_BUSY_PAD_WASH:
-            return "washing the mop pad"
-        if _value("pd_state") == self._DOCK_BUSY_PAD_DRY:
-            return "drying the mop pad"
-        return None
-
-    async def _async_send_verb(self, verb: str) -> None:
-        """Sends one simple command verb over whichever transport this
-        robot uses.
-
-        EXTRACTED (this session). Four methods -- start, stop, pause and
-        locate -- each carried their own identical copy of this branch:
-
-            if CLOUD_ONLY:
-                await _send_confirmed(self._prime_robot, verb)
-                return
-            await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
-
-        Four copies of one decision is four chances to update three of
-        them. That is not hypothetical here: a fix belonging in one of
-        these branches has already been put in the wrong one once.
-
-        THE DOCK GUARD LIVES HERE for the same reason. While the dock is
-        emptying, refilling, washing or drying mid-mission, the iRobot
-        app offers no robot controls at all -- and a command sent then is
-        one the robot will not act on.
-
-        NOTE ON WHY THIS IS NOT A SUBCLASS. An earlier architecture note
-        proposed an IRobotVacuumPrime subclass for exactly this problem.
-        That was wrong, and the reason is worth recording so nobody
-        tries it again: the entity class is chosen by DEVICE CAPABILITY
-        (BraavaJet / RoombaVacuumCarpetBoost / RoombaVacuum), and
-        connection type is orthogonal to that. A Prime robot can be any
-        of the three, so subclassing would need BraavaJetPrime,
-        RoombaVacuumCarpetBoostPrime and so on -- a combinatorial
-        explosion to remove one if-statement.
-
-        Only the four uniform verbs go through here. return_to_base and
-        send_command keep their own branches because their two paths
-        genuinely differ in behaviour, not just in transport."""
-        busy = (
-            self._dock_operation_in_progress()
-            if verb in self._DOCK_GUARDED_VERBS
-            else None
-        )
-        if busy is not None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="dock_operation_in_progress",
-                translation_placeholders={"operation": busy},
-            )
-
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            await _send_confirmed(self._prime_robot, verb)
-            return
-        await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
-
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum cleaner."""
-        await self._async_send_verb("stop")
+        await self.hass.async_add_executor_job(self.vacuum.send_command, "stop")
 
     async def async_pause(self) -> None:
         """Pause the cleaning cycle."""
-        await self._async_send_verb("pause")
-
-    #: Prime's own three, in the robot's wire values. The names match
-    #: the iRobot app rather than Home Assistant's eco/performance
-    #: vocabulary, because a user reading the card should see what the
-    #: app taught them.
-    PRIME_SUCTION: dict[str, int] = {"light": 2, "normal": 3, "deep": 4}
-
-    @property
-    def fan_speed_list(self) -> list[str]:
-        if self._prime_robot is None:
-            return list(FAN_SPEEDS)
-        return list(self.PRIME_SUCTION)
-
-    @property
-    def fan_speed(self) -> str | None:
-        """The robot's current suction level, from rw-settings.
-
-        None while the shadow has not arrived -- an unknown level should
-        read as unknown rather than defaulting to one the robot may not
-        be using.
-        """
-        if self._prime_robot is None:
-            return None
-        coordinator = getattr(
-            self._config_entry.runtime_data, "prime_status_coordinator", None
-        )
-        shadows = getattr(coordinator, "data", None)
-        settings = shadows.get("rw-settings") if isinstance(shadows, dict) else None
-        level = settings.get("suctionLevel") if isinstance(settings, dict) else None
-        for name, value in self.PRIME_SUCTION.items():
-            if level == value:
-                return name
-        return None
-
-    async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
-        """Writes the suction level the card selected.
-
-        The same `rw-settings` write the suction select already uses, so
-        the card and the select cannot disagree -- both read and write
-        the one value the robot holds.
-        """
-        if self._prime_robot is None:
-            return
-        value = self.PRIME_SUCTION.get(fan_speed)
-        if value is None:
-            raise ServiceValidationError(
-                f"{fan_speed} is not one of this robot's suction levels"
-            )
-        await self._prime_robot.set_setting("suctionLevel", value)
-
-    def _log_clean_area_absent(self) -> None:
-        """Explains a withheld CLEAN_AREA, at most once per entity.
-
-        WARNING RATHER THAN DEBUG, because the person who needs it does
-        not know to turn debug logging on -- they are looking at a
-        service picker that will not offer their robot. Once, because
-        `supported_features` is read on every state write.
-        """
-        if getattr(self, "_clean_area_explained", False):
-            return
-        self._clean_area_explained = True
-
-        if not hasattr(VacuumEntityFeature, "CLEAN_AREA"):
-            return  # Home Assistant older than 2026.3; nothing to explain
-        if is_braava(self.vacuum_state):
-            return  # a Braava targets rooms by pad wetness, by design
-
-        _LOGGER.warning(
-            "roomba_plus: room cleaning (vacuum.clean_area) is not offered for "
-            "%s because this integration has no room list for it. On a locally "
-            "connected robot that list comes from your iRobot account -- adding "
-            "those credentials, or defining smart zones, makes the rooms "
-            "available. Nothing is wrong with the robot.",
-            getattr(self, "_blid", "this robot"),
-        )
+        await self.hass.async_add_executor_job(self.vacuum.send_command, "pause")
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Return the vacuum to its dock.
@@ -1035,26 +424,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         sending dock. If the pause is not confirmed in time, sends stop first
         so the robot is in a defined state before the dock command.
         When already docked or idle: sends dock directly (no-op on robot side).
-
-        NEW (V4/Prime): sends "dock" directly, skipping the pause-then-
-        wait dance above entirely -- self.activity isn't reliable for
-        Prime yet (same reasoning as async_start()), so waiting for it
-        to report PAUSED would never resolve, only ever hit the 10 s
-        timeout every time.
         """
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            # THROUGH _async_send_verb, not around it. "dock" is listed
-            # in _DOCK_GUARDED_VERBS, but this branch called
-            # send_simple_command() directly and skipped the guard
-            # entirely -- so Return to base was the one control that
-            # still fired while the dock was mid-cycle, which is exactly
-            # the case the guard exists for.
-            #
-            # The Classic branch below keeps its own pause-then-wait
-            # dance and needs no guard: those rules come from the Prime
-            # app's spec and Classic was never checked against them.
-            await self._async_send_verb("dock")
-            return
         if self.activity == VacuumActivity.CLEANING:
             await self.async_pause()
             for _ in range(10):
@@ -1070,40 +440,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         await self.hass.async_add_executor_job(self.vacuum.send_command, "dock")
 
     async def async_locate(self, **kwargs: Any) -> None:
-        """Play a sound to locate the robot.
-
-        RESOLVED (jayjay, real device test): send_simple_command("find")
-        is CONFIRMED WORKING -- a genuine, audible chime with no robot
-        movement. This is the third mechanism tried for this feature;
-        the two earlier ones below were both tried live and confirmed
-        NOT working, kept here as historical record, not active code.
-
-        FIRST HYPOTHESIS -- DISPROVEN (chairstacker, v4.0.0a0 field
-        test): poll_echo_value(), a dedicated REST endpoint for this
-        exact feature (CONFIRMED from base_roomba_config.json + native
-        SetRoombaEchoAwsIotSerializer analysis) -- did not actually
-        make the robot chime, even though the equivalent action works
-        fine from the real app.
-
-        SECOND HYPOTHESIS -- ALSO DISPROVEN (chairstacker, real device
-        test): the app's own command config names this feature's
-        underlying command "SetEchoCommand" -- a shadow WRITE, not a
-        REST POST, so roombapy-prime's
-        PrimeRobot.trigger_echo_via_shadow() was tried as an
-        alternative -- writing to the "echo" field of the named
-        "rw-constatus" shadow. The write itself succeeded (a genuine,
-        accepted shadow update/delta came back), but the robot did NOT
-        chime. Not wired in here -- it doesn't work either.
-
-        THIRD, CONFIRMED-WORKING MECHANISM: send_simple_command("find")
-        -- the exact same cmd-topic transport already confirmed for
-        start/pause/stop/resume/dock, just a different verb. See
-        roombapy-prime's own send_simple_command() docstring for the
-        full evidence trail (native analysis tracing the real app's
-        own locate button through MissionUIServiceCommand.
-        FindLocateRobotRunAction to this exact CommandType.FIND value).
-        """
-        await self._async_send_verb("find")
+        """Play a sound to locate the robot."""
+        await self.hass.async_add_executor_job(self.vacuum.send_command, "find")
 
     async def async_send_command(
         self,
@@ -1115,22 +453,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         Supports region cleaning via extended params:
             command="start", params={"regions": [...], "pmap_id": "..."}
-
-        NEW (V4/Prime): not supported yet for CLOUD_ONLY entries -- raises
-        a clear ServiceValidationError rather than crashing on
-        self.vacuum being None. Region-aware commands specifically are
-        explicitly out of v4.0.0a0's scope (send_simple_command() has
-        no known way to specify regions/zones at all -- see its
-        docstring in roombapy-prime), and even a plain passthrough
-        command has no confirmed-safe generic path the way
-        send_simple_command()'s narrow, tested verb set does.
         """
-        if self._connection_type is ConnectionType.CLOUD_ONLY:
-            raise ServiceValidationError(
-                "send_command is not yet supported for V4/Prime robots -- "
-                "use the standard vacuum actions (start/pause/stop/"
-                "return_to_base/locate) instead."
-            )
         _LOGGER.debug("send_command %s params=%s", command, params)
 
         if command == "start" and isinstance(params, dict) and "regions" in params:
@@ -1150,7 +473,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         live state.pmaps via _resolve_pmapv_id so it is never stale after a
         map retrain. Falls back to the first pmap in state if pmap_id is absent.
         """
-        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
+        from .services import _resolve_pmapv_id
 
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
@@ -1195,15 +518,58 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     # ── CLEAN_AREA (F-I15, HA 2026.3) ───────────────────────────────────────
 
     async def async_get_segments(self) -> list:
-        """The rooms HA can map to areas. Delegates to the backend."""
-        from .room_cleaning import (  # noqa: PLC0415
-            async_get_room_cleaning_backend as _get_backend,
-        )
+        """Return regions as Segment objects for the CLEAN_AREA mapping UI.
 
-        backend = _get_backend(self._config_entry, self.hass)
-        if backend is None:
+        Called when the user opens the area↔segment mapping in HA.
+        No async_refresh() needed — last coordinator poll data is current enough.
+        Gate: only reachable when CLEAN_AREA is in supported_features (SMART + cloud + HA 2026.3+).
+        """
+        # Defensive: Segment requires HA 2026.3+; guarded by hasattr in supported_features.
+        try:
+            from homeassistant.components.vacuum import Segment
+        except ImportError:
             return []
-        return await backend.get_segments()
+        data = self._config_entry.runtime_data if self._config_entry else None
+        if not data or not data.has_cloud or data.cloud_coordinator is None:
+            return []
+        active_pmap_id = data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            # Coordinator has not yet fetched pmap data — returning segments with a
+            # None prefix would create IDs that never match in async_clean_segments.
+            _LOGGER.debug(
+                "async_get_segments: active_pmap_id not yet available — returning empty"
+            )
+            return []
+        floor_label = (
+            self._config_entry.options.get(CONF_FLOOR) or None
+            if self._config_entry else None
+        )
+        # Room segments (rid)
+        segments = [
+            Segment(
+                id=f"{active_pmap_id}_{region['id']}",
+                name=region.get("name", region["id"]),
+                group=floor_label,
+            )
+            for region in data.cloud_coordinator.regions
+            if region.get("id")
+        ]
+        # IA74-ZONE full (v2.7.0): zone segments (zid).
+        # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
+        # async_clean_segments can distinguish them from room segments.
+        # Zone type is surfaced as the group label for HA's mapping UI.
+        for zone in data.cloud_coordinator.zones:
+            zid = zone.get("id")
+            if not zid:
+                continue
+            zone_type = zone.get("zone_type", "zone")
+            zone_name = zone.get("name") or f"Zone {zid}"
+            segments.append(Segment(
+                id=f"{active_pmap_id}_zid_{zid}",
+                name=zone_name,
+                group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
+            ))
+        return segments
 
     async def async_clean_area(self, cleaning_area_ids: list[str]) -> None:
         """Handle vacuum.clean_area — VacuumEntityFeature.CLEAN_AREA (HA 2026.3+).
@@ -1223,21 +589,156 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     async def async_clean_segments(
         self, segment_ids: list[str], **kwargs: Any
     ) -> None:
-        """Start a segment-cleaning mission. Delegates to the backend.
+        """Start a region-cleaning mission for the given segment IDs.
 
-        Both generations now go through RoomCleaningBackend, so the id
-        format is agreed inside one class per generation rather than
-        across two files. kwargs (including repeat) are ignored --
-        removed from the HA spec in Oct 2025.
+        F-I15: kwargs (including repeat) silently ignored — removed from spec Oct 2025.
+        twoPass is read from the robot's live noAutoPasses/twoPass state (CleaningPassesSelect).
+        Segments from other pmaps are silently ignored; raises ServiceValidationError
+        if none of the supplied IDs match the current map (F-RB-2).
         """
-        from .room_cleaning import (  # noqa: PLC0415
-            async_get_room_cleaning_backend as _get_backend,
-        )
-
-        backend = _get_backend(self._config_entry, self.hass)
-        if backend is None:
+        data = self._config_entry.runtime_data if self._config_entry else None
+        if not data or not data.has_cloud or data.cloud_coordinator is None:
             return
-        await backend.clean_segments(segment_ids)
+
+        active_pmap_id = data.cloud_coordinator.active_pmap_id
+        if not active_pmap_id:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+        region_ids: list[str] = []
+        prefix = f"{active_pmap_id}_"
+        for seg_id in segment_ids:
+            # v2.4.3 PMAP-UNDERSCORE: pmap_ids may contain underscores (URL-safe
+            # base64 encoding). partition("_") splits on the first underscore and
+            # produces a wrong pmap_id for IDs like "2Bly_kGURy6OcUVTX7FN3w_19".
+            # Use a prefix check instead — region_ids are always plain integers.
+            if seg_id.startswith(prefix):
+                region_ids.append(seg_id[len(prefix):])
+
+        if not region_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+
+        # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
+        # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping
+        # in async_get_segments().  Rooms are plain integers (e.g. "19").
+        _ZONE_PREFIX = "zid_"
+        raw_zone_ids = [r for r in region_ids if r.startswith(_ZONE_PREFIX)]
+        raw_room_ids = [r for r in region_ids if not r.startswith(_ZONE_PREFIX)]
+        # Extract the bare zone_id (strip "zid_" prefix)
+        bare_zone_ids = [z[len(_ZONE_PREFIX):] for z in raw_zone_ids]
+
+        # Validate + auto-heal room IDs against the current cloud map (zone IDs
+        # are stable across map retrains — no validation needed for them).
+        current_regions = data.cloud_coordinator.regions
+        current_region_ids: set[str] = {
+            str(r["id"]) for r in current_regions if r.get("id")
+        }
+        validated_room_ids = list(raw_room_ids)
+        if current_region_ids and raw_room_ids:
+            stale = [rid for rid in raw_room_ids if rid not in current_region_ids]
+            if stale:
+                # Build name → current_id lookup from live cloud data
+                name_to_current: dict[str, str] = {
+                    r["name"].casefold(): str(r["id"])
+                    for r in current_regions
+                    if r.get("name") and r.get("id")
+                }
+                zone_labels: dict[str, str] = (
+                    self._config_entry.options.get("smart_zone_labels", {})
+                    if self._config_entry else {}
+                )
+                healed: list[str] = []
+                for stale_rid in stale:
+                    label = zone_labels.get(stale_rid, "")
+                    current_id = name_to_current.get(label.casefold()) if label else None
+                    if current_id and current_id not in raw_room_ids:
+                        healed.append(current_id)
+                        _LOGGER.info(
+                            "async_clean_segments: auto-healed stale region %s → %s "
+                            "('%s') — map retrained but room name matched current map",
+                            stale_rid, current_id, label,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "async_clean_segments: stale region %s could not be "
+                            "auto-healed (label=%r, not in current map) — skipping. "
+                            "Re-map vacuum segments to areas in HA to fix permanently.",
+                            stale_rid, label or "<unlabeled>",
+                        )
+                validated_room_ids = (
+                    [r for r in raw_room_ids if r in current_region_ids] + healed
+                )
+
+        if not validated_room_ids and not bare_zone_ids:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_valid_segments",
+            )
+
+        regions = [
+            {
+                "region_id": rid,
+                "type": "rid",
+                "params": {"noAutoPasses": False, "twoPass": False},
+            }
+            for rid in validated_room_ids
+        ] + [
+            # IA74-ZONE full (v2.7.0): zones use type "zid" with bare zone_id
+            {
+                "region_id": zid,
+                "type": "zid",
+                "params": {"noAutoPasses": False, "twoPass": False},
+            }
+            for zid in bare_zone_ids
+        ]
+
+        from .services import _resolve_pmapv_id
+        # Primary: cloud coordinator — always authoritative, never stale.
+        user_pmapv_id: str | None = data.cloud_coordinator.active_user_pmapv_id
+        if not user_pmapv_id:
+            user_pmapv_id = _resolve_pmapv_id(self.vacuum_state, active_pmap_id)
+        if user_pmapv_id is None:
+            _LOGGER.warning(
+                "async_clean_segments: user_pmapv_id not found in cloud or "
+                "state.pmaps for pmap %s — sending command without version ID",
+                active_pmap_id,
+            )
+
+        # Bug 5 fix (v2.7.0): per field logs, including user_pmapv_id in pure
+        # zone (zid) commands causes error 224. Omit it when no room regions
+        # are present. Mixed room+zone commands retain it for room-ID validation.
+        include_pmapv = bool(validated_room_ids)
+
+        params: dict[str, Any] = {
+            "ordered": 1,
+            "pmap_id": active_pmap_id,
+            "regions": regions,
+        }
+        if include_pmapv and user_pmapv_id is not None:
+            params["user_pmapv_id"] = user_pmapv_id
+        await self.hass.async_add_executor_job(
+            self.vacuum.send_command,
+            "start",
+            params,
+        )
+        # F-RB-1: best-effort state update after segment clean command.
+        # Cloud may not yet have the new state; failure is non-fatal.
+        try:
+            await data.cloud_coordinator.async_refresh()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("async_clean_segments: post-command cloud refresh failed (non-fatal)")
+
+    def _get_two_pass(self) -> bool:
+        """Read twoPass preference from live robot state.
+
+        Mirrors what CleaningPassesSelect reads — no entity lookup needed.
+        Returns False when the preference is absent (Auto/One-pass modes).
+        """
+        return bool(self.vacuum_state.get("twoPass", False))
 
     # v3.5.0 — SEGMENT-DEBOUNCE (dixi83 field report): the number of
     # consecutive coordinator refreshes a segment mismatch must persist
@@ -1295,32 +796,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.async_create_segments_issue()
         else:
             self._segment_mismatch_streak = 0
-
-    def _get_two_pass(self) -> bool:
-        """Read twoPass preference from live robot state.
-
-        Mirrors what CleaningPassesSelect reads -- no entity lookup needed.
-        Returns False when the preference is absent (Auto/One-pass modes).
-
-        UNCALLED BY PRODUCTION CODE, and kept anyway. `select.py` reads
-        the same preference itself, so this is a second reader with no
-        consumer -- but it has its own tests, and deleting a tested
-        helper to satisfy a "nothing calls this" check would trade a
-        harmless duplicate for a lost intent.
-
-        If a caller ever needs the preference in `vacuum.py`, this is
-        it. If none appears, it costs four lines.
-        """
-        return bool(self.vacuum_state.get("twoPass", False))
-
-    def _handle_prime_coordinator_update(self) -> None:
-        """NEW (V4/Prime). Registered as prime_coordinator's listener in
-        async_added_to_hass() -- fires on every new MissionTimelineReport
-        (a real mission event pushed via mission/timeline/report). Unlike
-        _handle_coordinator_update() above, no segment-mismatch logic
-        applies here; this just needs to re-render activity/
-        extra_state_attributes against the newly-arrived report."""
-        self.schedule_update_ha_state()
 
     # ── Push updates ──────────────────────────────────────────────────────
 
@@ -1487,7 +962,6 @@ class BraavaJet(IRobotVacuum):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return Braava-specific state attributes."""
         attrs = super().extra_state_attributes
-
         state = self.vacuum_state
 
         attrs[ATTR_DETECTED_PAD] = state.get("detectedPad")
