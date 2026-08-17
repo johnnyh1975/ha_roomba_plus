@@ -538,7 +538,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         state = self.vacuum_state
         attrs: dict[str, Any] = {
             ATTR_SOFTWARE_VERSION: state.get("softwareVer"),
-            "status": self.vacuum.current_state if self.vacuum is not None else None,
+            "status": (
+                self.vacuum.current_state if self.vacuum is not None else self.activity.value
+            ),
         }
 
         # Cleaning progress (only while actively cleaning)

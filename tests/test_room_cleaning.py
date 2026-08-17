@@ -405,6 +405,17 @@ class TestRoomNameMatching:
     def test_an_exact_name_matches(self):
         assert self._match(["Salon"]) == (["13"], [])
 
+    def test_a_unique_bare_prime_region_id_matches(self):
+        from custom_components.roomba_plus.room_cleaning import match_room_names
+
+        assert match_room_names({"Study": "MAP-1/16"}, ["16"]) == (["MAP-1/16"], [])
+
+    def test_an_ambiguous_bare_region_id_is_rejected(self):
+        from custom_components.roomba_plus.room_cleaning import match_room_names
+
+        rooms = {"Downstairs": "MAP-1/16", "Upstairs": "MAP-2/16"}
+        assert match_room_names(rooms, ["16"]) == ([], ["16"])
+
     def test_case_does_not_matter(self):
         """Automations and voice assistants are inconsistent about it."""
         assert self._match(["salon"]) == (["13"], [])
