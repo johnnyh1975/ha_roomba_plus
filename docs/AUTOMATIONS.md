@@ -46,10 +46,17 @@ data:
 ```
 
 *(Looking for your robot's existing iRobot-app schedule instead of building
-a new HA-side one? That's `calendar.{name}_schedule` — read-only, appears
-automatically, no automation needed. This recipe is for building something
-new, e.g. a schedule the app itself can't express, like room-specific
-timing.)*
+a new HA-side one? That's `calendar.{name}_schedule`, which appears
+automatically. On Prime robots you can create, edit and delete entries
+there and they are written back to the robot; on Classic it is read-only.
+This recipe is for building something the app itself can't express, like
+room-specific timing.)*
+
+**Naming rooms in a calendar entry.** Room names are matched by text
+across the event's **summary, description and location** — write the
+room wherever suits you. Editing a recurring entry has to be done as
+"all events": a robot schedule is one rule, so a single occurrence has
+nothing separate to change.
 
 ### Presence-aware cleaning with full timing control
 

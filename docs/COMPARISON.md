@@ -6,7 +6,7 @@
 >
 > | Column | Version | How it was checked |
 > |---|---|---|
-> | **Roomba+** | v4.0.0a37 | this repository |
+> | **Roomba+** | v4.0.0a38 | this repository |
 > | **HA Core** `roomba` | ships with Home Assistant, `roombapy==1.8.1` | the installed component |
 > | **roomba_rest980** | v1.20.0-beta4 (`ia74/roomba_rest980`) | cloned from GitHub |
 >

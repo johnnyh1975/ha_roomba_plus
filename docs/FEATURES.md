@@ -415,6 +415,21 @@ Learns each room's own typical interval between cleans from its cleaning history
 
 ## Mission history & room intelligence
 
+> **A gap in the history is not a failure.** A robot that is stuck or in
+> an error state does not attempt its scheduled missions, and iRobot
+> records nothing for an attempt that never happened — so "no mission
+> recorded" and "no mission attempted" look identical afterwards.
+>
+> @utkjmitch captured this across a 48-hour stall: two scheduled runs
+> passed with no attempt, no failure and nothing in the history. Every
+> entity was correct throughout — `phase` read `stuck` accurately for
+> the whole period — but nothing in the mission history says why those
+> two days are empty.
+>
+> Schedules run on the robot and in iRobot's cloud, not here, so this is
+> vendor behaviour rather than something the integration can change.
+> Worth knowing before reading a gap as a fault.
+
 #### Room rhythms & mission maps (v3.3.0)
 
 - **`sensor.*_rooms_overdue`** (SMART + cloud) — which rooms are due for a clean. Each room's rhythm is learned from its own history; set an explicit frequency per room in the options flow (Daily / Every 2 days / 3× per week / Weekly) to override the learned interval. Attributes include a fully self-calibrated suggested interval per room and a `daily_suggested` list for rooms that re-dirty fast.
@@ -655,8 +670,14 @@ gets stuck — which can happen cloud-side, see below — it parks at 99
 indefinitely.
 
 `sensor.{name}_area_cleaned_today` is the coverage figure, and on some robots
-it stays at 0.0 m² while progress climbs. The two are not measuring the same
+it stays at zero while progress climbs. The two are not measuring the same
 thing.
+
+The unit follows **your Home Assistant unit system** — square feet on an
+imperial setup, square metres on a metric one. The iRobot account's own
+"Metric Units" switch has no effect: it is not in the data the robot
+sends, and an integration should not override a Home Assistant
+preference from a vendor account setting.
 
 #### Favourites are per robot
 
