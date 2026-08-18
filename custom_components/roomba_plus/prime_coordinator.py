@@ -274,6 +274,20 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                     # thing that distinguishes "quiet because nothing is
                     # happening" from "quiet because the stream died".
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    # `payload` IS `dict | str` ON THE WIRE TYPE. A
+                    # string arrives when the broker delivers something
+                    # unparsed, and `from_json` wants the dict.
+                    #
+                    # Only visible against an installed roombapy-prime:
+                    # an editable install let mypy read the working tree
+                    # and resolve it differently, so this passed locally
+                    # and failed in CI.
+                    if not isinstance(delta.payload, dict):
+                        _LOGGER.debug(
+                            "Prime timeline: non-dict payload (%s) -- skipping",
+                            type(delta.payload).__name__,
+                        )
+                        continue
                     report = MissionTimelineReport.from_json(delta.payload)
                     self.async_set_updated_data(report)
                     self._request_parts_refresh_on_mission_end(report)
@@ -588,7 +602,9 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 )
                 last_exc = exc
                 continue
-            seeded[name] = (response.payload or {}).get("state", {}).get("reported", {})
+            # Same `dict | str`: a string payload carries no shadow.
+            _payload = response.payload if isinstance(response.payload, dict) else {}
+            seeded[name] = _payload.get("state", {}).get("reported", {})
 
         if not seeded and last_exc is not None:
             raise ConfigEntryNotReady(
@@ -603,7 +619,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # failing shouldn't block setup on its own.
         try:
             state_response = await self.prime_robot.get_state()
-            seeded[self.CLASSIC_SHADOW_KEY] = (state_response.payload or {}).get("state", {}).get("reported", {})
+            seeded[self.CLASSIC_SHADOW_KEY] = (state_response.payload if isinstance(state_response.payload, dict) else {}).get("state", {}).get("reported", {})
         except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
             _LOGGER.warning(
                 "roomba_plus: could not seed classic/unnamed shadow for %s: %s", self.blid, exc
@@ -656,7 +672,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                             break
                     if shadow_name is None:
                         continue
-                    reported = (response.payload or {}).get("state", {}).get("reported", {})
+                    reported = (response.payload if isinstance(response.payload, dict) else {}).get("state", {}).get("reported", {})
                     if not reported:
                         continue
                     updated = dict(self.data or {})

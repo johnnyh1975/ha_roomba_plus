@@ -490,7 +490,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             if report is None or not report.event:
                 return VacuumActivity.IDLE
             activity = MISSION_EVENT_TYPE_TO_ACTIVITY.get(
-                report.event[0].event_type, VacuumActivity.IDLE
+                # `event_type` is Optional on the wire model; a mapping
+                # lookup needs a key it can hold.
+                report.event[0].event_type or "", VacuumActivity.IDLE
             )
             # THE SAME CORROBORATION AS THE PHASE BRANCH ABOVE, which it
             # was missing (this session, second field report from the

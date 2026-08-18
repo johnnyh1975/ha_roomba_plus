@@ -34,13 +34,13 @@
   "documentation": "https://github.com/johnnyh1975/ha_roomba_plus",
   "integration_type": "device",
   "iot_class": "local_push",
-  "quality_scale": "gold",
   "issue_tracker": "https://github.com/johnnyh1975/ha_roomba_plus/issues",
   "loggers": [
     "paho_mqtt",
     "roombapy",
     "roombapy_prime"
   ],
+  "quality_scale": "gold",
   "requirements": [
     "roombapy==1.9.1",
     "roombapy-prime[map]@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b8"

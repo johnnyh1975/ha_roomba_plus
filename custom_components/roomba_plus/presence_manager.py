@@ -326,7 +326,9 @@ class PresenceManager:
             if changed:
                 assert data.prime_robot is not None  # noqa: S101 - branched above
                 await data.prime_robot.update_schedules(
-                    data.prime_household_id, container_id, schedules
+                    # `prime_household_id` is Optional; the API needs a
+                    # string. No household means no schedules to pause.
+                    data.prime_household_id or "", container_id, schedules
                 )
 
     async def _set_sched_hold(self, value: bool) -> None:
