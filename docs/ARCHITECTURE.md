@@ -237,9 +237,41 @@ Recorded because a review that stays in one person's head is not a review.
 
 ## Testing
 
-4,282 tests, ~40 seconds. More test code than production code.
+5,529 tests, ~70 seconds. More test code than production code.
 
-Two conventions worth knowing:
+### mypy: run it against an installed roombapy-prime
+
+`mypy.ini` runs `--strict` with no disabled error codes. It passes — but
+only against the library as it is **built and installed**, which is what
+CI does:
+
+```bash
+pip install --no-deps --force-reinstall ./roombapy-prime
+```
+
+An editable install (`pip install -e`) lets mypy read the working tree
+instead of the package, and the two disagree. a38's CI failed with nine
+errors that were invisible locally for exactly that reason: the working
+tree re-exports `TimeEstimates` on a plain import line, and resolved
+`payload` more loosely than the built package's `dict | str`.
+
+Editable is right for iterating on the library. It is wrong for
+believing a clean mypy run.
+
+Two more things CI checks that a local run does not:
+
+- **Hassfest** validates `manifest.json`, including that keys are
+  `domain`, `name`, then alphabetical. A guard test covers the ordering
+  now, because inserting `quality_scale` where it read naturally broke
+  it.
+- **The Typing job installs mypy; the Test Suite job does not.** A test
+  that shells out to a tool has to ask whether its own job has that
+  tool — `pytest.importorskip` rather than a failure that reads like a
+  real one.
+
+### Conventions
+
+Two worth knowing:
 
 - **Every new `EntityDescription` with a `translation_key` needs entries in all seven language
   files** before merge. Entity ids derive from the *translated* name on first registration, so a
