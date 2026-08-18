@@ -76,3 +76,40 @@ class TestTheQualityScaleFileIsTrue:
             f"quality_scale.yaml claims strict-typing is done, but mypy "
             f"reports: {result.stdout.strip().splitlines()[-1:]}"
         )
+
+
+class TestTheManifestKeysAreOrderedAsHassfestWants:
+    """`domain`, `name`, then alphabetical.
+
+    Adding `quality_scale` after `iot_class` — where it reads naturally
+    beside the other descriptive keys — broke this and failed Hassfest
+    in CI. Hassfest only runs there, so nothing local caught it.
+    """
+
+    def test_domain_and_name_come_first(self):
+        import json
+        import pathlib
+
+        keys = list(json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/manifest.json"
+            ).read_text()
+        ))
+
+        assert keys[:2] == ["domain", "name"]
+
+    def test_everything_else_is_alphabetical(self):
+        import json
+        import pathlib
+
+        keys = list(json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/manifest.json"
+            ).read_text()
+        ))
+        rest = keys[2:]
+
+        assert rest == sorted(rest), (
+            f"manifest keys after domain/name must be alphabetical -- "
+            f"Hassfest refuses otherwise. Got: {rest}"
+        )
