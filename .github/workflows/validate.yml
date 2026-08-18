@@ -79,7 +79,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b7"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b8"
 
       - name: Run full test suite with coverage
         run: |
@@ -125,6 +125,44 @@ jobs:
       # nothing hidden in this workflow or in an external filter.
       - name: Run ruff check
         run: ruff check .
+
+  typing:
+    name: Typing (mypy --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # mypy needs the same environment as the test suite: it resolves
+      # Home Assistant's own types, and a bare install would report
+      # hundreds of missing-import errors instead of real ones.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test-frozen.txt
+          pip install mypy
+
+      # Same --no-deps reasoning as the test suite job above.
+      - name: Install roombapy-prime (--no-deps)
+        run: |
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b8"
+
+      # mypy.ini runs --strict with no disabled error codes. The two
+      # per-module exemptions are for Home Assistant itself and are
+      # explained where they are declared.
+      #
+      # The ratchet script rather than a bare `mypy` call: it fails on
+      # an increase AND on an undeclared decrease, so a fix that lowers
+      # the count has to lower the recorded baseline in the same commit
+      # rather than drifting silently. The baseline is 0.
+      - name: Run mypy
+        run: python scripts/check_typing_baseline.py
 
   translations:
     name: Translation Completeness
