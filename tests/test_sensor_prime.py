@@ -779,8 +779,16 @@ class TestDockCapabilityGating:
 
         source = inspect.getsource(sensor.async_setup_entry)
 
-        assert "dock_cap_known" in source
-        assert "not dock_cap_known or" in source
+        # THE CONTRACT, NOT THE SPELLING. This asserted on
+        # `not dock_cap_known or`, a named flag holding
+        # `dock_cap is not None` -- which is why it narrowed nothing and
+        # mypy flagged every read past it. Asking the value directly
+        # says the same thing and carries the type, so the flag went.
+        #
+        # What has to hold is the fail-open direction: a missing dock
+        # capability creates the entity rather than withholding it.
+        assert "dock_cap is None or" in source
+        assert source.count("dock_cap is None or") >= 2
 
 
 
@@ -1801,3 +1809,57 @@ class TestTheThirdPhaseCategory:
 
         assert "isMissionPhaseStillRunning" in source
         assert "A field observation beats a rule table" in source
+
+
+class TestADockTheRobotDoesNotKnowSaysSo:
+    """@utkjmitch has reported `prime_dock_status` reading "unknown"
+    since a32. His dock block is the whole of
+    `{"fwVer": "", "known": false, "error": 0}` — no `state`, no `cap`.
+
+    @chairstacker's, for contrast, carries
+    `{"cap": {...}, "state": 301, "pdState": 701, "known": true}`.
+
+    That comparison answers the question @utkjmitch left open: he asked
+    whether another robot carries a `cap` where his carries nothing,
+    because that would mean `known: false` is about IDENTITY rather
+    than capability. It does. His dock is mute, not passive — and the
+    sensor was right to have nothing to report; it just did not say
+    which nothing.
+    """
+
+    @staticmethod
+    def _sensor(dock):
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeDockStatusSensor,
+        )
+
+        sensor = object.__new__(PrimeDockStatusSensor)
+        state = MagicMock(dock=dock)
+        with patch.object(
+            type(sensor), "_current_state", PropertyMock(return_value=state)
+        ):
+            return sensor.native_value
+
+    def test_an_unknown_dock_names_its_silence(self):
+        from unittest.mock import MagicMock
+
+        value = self._sensor(MagicMock(state=None, known=False))
+
+        assert value == "Not reported by this dock"
+
+    def test_a_known_dock_with_no_state_still_reads_none(self):
+        """`known: true` and no state is a different situation — the
+        robot recognises the dock and it has not said anything yet."""
+        from unittest.mock import MagicMock
+
+        assert self._sensor(MagicMock(state=None, known=True)) is None
+
+    def test_a_reporting_dock_is_unaffected(self):
+        """@chairstacker's 301."""
+        from unittest.mock import MagicMock
+
+        value = self._sensor(MagicMock(state=301, known=True))
+
+        assert value not in (None, "Not reported by this dock")

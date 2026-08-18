@@ -90,6 +90,13 @@ def _make_entry(sensors: list[str], behavior: str = "abort", timeout: int = 30):
             # accurate, not just absent-and-hope-nothing-reads-it.
             connection_type = ConnectionType.LOCAL_PUSH
 
+            # ACCURACY FIX: `_do_start` now branches on `prime_robot`
+            # rather than on `connection_type` -- the two agree, and
+            # only the value narrows. A Classic entry has None here, and
+            # a fixture that omits the field entirely does not describe
+            # a Classic robot; it describes one that is neither.
+            prime_robot = None
+
             class roomba:
                 @staticmethod
                 def start():
@@ -382,12 +389,18 @@ class TestDoStartConnectionTypeBranching:
         hass = _FakeHass({})
         entry = _make_entry([])
         started = []
-        entry.runtime_data.roomba.start = lambda: started.append(True)
+        # `send_command("start")`, because that is what roombapy has.
+        # This fixture used to set `.start` on the mock -- an attribute
+        # `roombapy.Roomba` does not define -- so the test supplied the
+        # very thing the production path was missing.
+        entry.runtime_data.roomba.send_command = (
+            lambda cmd: started.append(cmd)
+        )
         bm = BlockingManager(hass, entry)
 
         await bm._do_start(None)
 
-        assert started == [True]
+        assert started == ["start"]
 
     @pytest.mark.asyncio
     async def test_prime_whole_house_calls_send_simple_command(self):

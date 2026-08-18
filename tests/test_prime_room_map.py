@@ -959,6 +959,7 @@ class TestTheTrailIsClearedPerMission:
         entry.runtime_data.prime_positions = positions
         entry.runtime_data.mission_timer_store = MagicMock()
         coordinator.config_entry = entry
+        coordinator.entry = entry
         shadows = {
             "ro-currentstate": {
                 "cleanMissionStatus": {"phase": "run", "nMssn": mission_id}
@@ -1928,6 +1929,7 @@ class TestTheTrailClearsOnANewMissionNumber:
             mission_timer_store=MagicMock(),
         )
         coordinator.config_entry = entry
+        coordinator.entry = entry
         return coordinator
 
     @staticmethod
@@ -2051,6 +2053,7 @@ class TestTheDockIsLearnedWhileCharging:
             mission_timer_store=MagicMock(),
         )
         coordinator.config_entry = entry
+        coordinator.entry = entry
         shadows = {"ro-currentstate": {
             "cleanMissionStatus": {"phase": phase, "nMssn": 1}
         }}

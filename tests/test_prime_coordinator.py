@@ -552,7 +552,15 @@ class TestPrimePushFeedsTheFreshnessSignal:
         coordinator = object.__new__(PrimeCoordinator)
         coordinator.blid = "B"
         coordinator.prime_robot = robot
+        # BOTH, because `__new__` skips the constructor that sets them.
+        #
+        # The three coordinators narrow `config_entry` to `self.entry`
+        # in `__init__` -- mypy cannot see through the base class's
+        # `ConfigEntry | None`. A test that builds one with
+        # `object.__new__` has to supply what the constructor would
+        # have.
         coordinator.config_entry = entry
+        coordinator.entry = entry
         coordinator.async_set_updated_data = MagicMock()
 
         # NARROWED (this session): this used to suppress bare Exception,

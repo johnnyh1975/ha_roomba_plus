@@ -3438,4 +3438,14 @@ class TestMissionPhaseSourcePrime:
         data.prime_status_coordinator = coordinator
         sensor._config_entry.runtime_data = data
 
+        # HELD VALUE, NOT A COMPUTED ONE. Since @chairstacker (#72) the
+        # sensor keeps its last percentage past the end of a mission
+        # instead of dropping to Unknown -- so an idle robot reports
+        # whatever the last run reached, and None only when nothing has
+        # run yet.
+        #
+        # What must still hold: a charging robot does not COMPUTE a new
+        # percentage. Setting the held value to None makes that visible.
+        sensor._last_progress = None
+
         assert RoombaMissionProgress.native_value.fget(sensor) is None

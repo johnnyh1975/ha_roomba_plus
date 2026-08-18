@@ -239,3 +239,50 @@ class TestEntityRegistryEnabledDefault:
         tracker, _, _ = _make_tracker()
         assert tracker.entity_registry_enabled_default is True
 
+
+
+class TestPrimeReadsItsPhaseFromTheShadow:
+    """@chairstacker (#70): the tracker always said "Docked" on a Prime
+    robot, whatever it was doing.
+
+    `roomba_reported_state(self.vacuum)` returns `{}` when there is no
+    local robot — which is every Prime entry — so the phase was always
+    empty, the docked guard always matched, and `_resolve_room()`'s own
+    Prime branch was unreachable.
+    """
+
+    @staticmethod
+    def _tracker(phase):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker.vacuum = None
+        tracker._prime_rooms = {}
+        coordinator = SimpleNamespace(
+            data={"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}}
+        )
+        tracker.hass = MagicMock()
+        tracker.hass.config.language = 'en'
+        tracker._config_entry = MagicMock()
+        tracker._config_entry.runtime_data = SimpleNamespace(
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=coordinator,
+            prime_live_rooms=None,
+        )
+        return tracker
+
+    def test_a_running_prime_robot_is_not_reported_as_docked(self):
+        tracker = self._tracker("run")
+
+        assert tracker.location_name != "Docked"
+
+    def test_a_docked_prime_robot_still_is(self):
+        tracker = self._tracker("charge")
+
+        assert tracker.location_name == "Docked"

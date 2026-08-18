@@ -1228,6 +1228,11 @@ class TestCloudOnlyVacuumActions:
 
         attrs = v.extra_state_attributes
 
+        # `idle`, not None. A Prime entry has no local robot and so no
+        # `current_state`, and this attribute used to report nothing at
+        # all for every V4 robot -- an automation templating on `status`
+        # got None. @jouwdan (#88) pointed the fallback at `activity`,
+        # which is derived from the mission phase and always answers.
         assert attrs["status"] == "idle"
         assert "error" not in attrs
         assert "error_code" not in attrs

@@ -120,7 +120,14 @@ class TestTheDescriptionCarriesWhatIsLeft:
         """No estimate rather than a computed one -- a part whose
         remaining count the robot does not report is not a part at
         zero."""
-        text = self._description(count_remaining=None, count_used=99)
+        # Counted in evacuations so this says what it means to say: the
+        # fallback exists, in a unit that needs no conversion. It used
+        # the fixture's default `minutes` and asserted the raw number,
+        # which quietly required the usage line to be un-converted --
+        # exactly the bug @utkjmitch found on the remaining line.
+        text = self._description(
+            count_type="evacs", count_remaining=None, count_used=99
+        )
 
         assert text is not None and "99" in text
 
@@ -499,10 +506,14 @@ class TestPartNamesAreReadableInTheList:
 
     def test_an_unknown_id_falls_back_to_its_number(self):
         """Ugly and honest: a number somebody can quote beats a name we
-        invented. @utkjmitch's 68, 69 and 149 are not in our table, and
-        guessing at them from one household is how wrong mappings get
-        made."""
-        assert self._name("68") == "68"
+        invented.
+
+        This used 68, which was unknown when the test was written.
+        @utkjmitch has since named 149, 69 and 68 by matching the app's
+        robot-health screen -- the first two by value, the third by
+        elimination -- so they are in the table now and this needs an id
+        that is genuinely absent."""
+        assert self._name("999") == "999"
 
     def test_a_broken_translation_lookup_does_not_break_the_list(self):
         from unittest.mock import MagicMock, patch
@@ -629,6 +640,10 @@ class TestTheListActuallyUsesTheReadableName:
         assert self._summaries({"147": self._part()}) == ["Replace Dirt Bag"]
 
     def test_an_unknown_id_keeps_its_number(self):
-        """His 68, 69 and 149. A number he can quote beats a name we
-        invented."""
-        assert self._summaries({"68": self._part()}) == ["Replace 68"]
+        """A number the user can quote beats a name we invented.
+
+        Was 68, which @utkjmitch has since named by elimination against
+        his app's filter warning. The principle is unchanged, so this
+        moved to an id nobody has reported -- if 999 ever turns up in
+        `_KNOWN_PARTS`, move it again rather than deleting the test."""
+        assert self._summaries({"999": self._part()}) == ["Replace 999"]

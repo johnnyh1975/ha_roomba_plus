@@ -1223,3 +1223,33 @@ class TestBoundaryHistory:
         with patch("custom_components.roomba_plus.room_seg_store.Store", return_value=store_mock):
             await store.async_load(MagicMock(), "e1")
         assert list(store._boundary_history) == []
+
+
+class TestAFailedLoadKeepsTheTuning:
+    """The load path reset the store by calling `self.__init__()`, which
+    takes `min_distance_cells` and `merge_ratio` as parameters with
+    defaults — so a store built with non-default tuning silently lost it
+    the first time a stored payload failed to parse.
+
+    Found by mypy, which flags `self.__init__()` as unsound for a
+    different reason (subclassing). The parameter loss was underneath.
+    """
+
+    def test_reset_keeps_the_constructor_arguments(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore(min_distance_cells=3.0, merge_ratio=0.9)
+        store._reset()
+
+        assert store._min_distance_cells == 3.0
+        assert store._merge_ratio == 0.9
+
+    def test_reset_clears_the_data(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+        store.last_cell_count = 42
+        store._reset()
+
+        assert store.last_cell_count == 0
+        assert store.rooms == {}

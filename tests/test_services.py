@@ -313,14 +313,22 @@ class TestHandleSmartStartConnectionTypeBranching:
         entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
         entry.runtime_data.blocking_manager = None
         started = []
-        entry.runtime_data.roomba.start = lambda: started.append(True)
+        # `send_command("start")`, because that is what roombapy has.
+        # This fixture used to set `.start` on the mock -- an attribute
+        # `roombapy.Roomba` does not define -- so the test supplied the
+        # very thing the production path was missing.
+        entry.runtime_data.roomba.send_command = (
+            lambda cmd: started.append(cmd)
+        )
         hass.config_entries.async_get_entry.return_value = entry
-        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+        hass.async_add_executor_job = AsyncMock(
+            side_effect=lambda fn, *a: fn(*a)
+        )
 
         with self._patch_entity_registry("entry1"):
             await async_handle_smart_start(self._make_call(hass))
 
-        assert started == [True]
+        assert started == ["start"]
 
     @pytest.mark.asyncio
     async def test_prime_with_rooms_now_delegates_instead_of_refusing(self):
@@ -396,6 +404,7 @@ class TestHandleResetServiceFiresEvent:
             "custom_components.roomba_plus.services._async_signal_entities",
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": ["sensor.x_filter_remaining_hours"]}
             await _handle_reset_service(hass, call, part)
 
@@ -440,6 +449,7 @@ class TestHandleInspectResetServiceFiresEvent:
             "custom_components.roomba_plus.services._async_signal_entities",
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": ["sensor.x_wheel_last_cleaned"]}
             await _handle_inspect_reset_service(hass, call, "wheel")
 
@@ -1505,6 +1515,14 @@ class TestAutoCleanDirtyRooms:
         entry = MagicMock()
         entry.options = {}
         data = entry.runtime_data
+        # A CLASSIC entry: `prime_robot` is None, not a MagicMock.
+        #
+        # These tests assert on `roomba.start`, so they describe a local
+        # robot -- but a bare MagicMock() answers truthy to every
+        # attribute, so `if data.prime_robot is not None` took the Prime
+        # branch and awaited a Mock. The fixture was describing a robot
+        # that is both generations at once.
+        data.prime_robot = None
         data.map_capability = MapCapability.SMART
         ms = MissionStore(); ms._records = records
         data.mission_store = ms
@@ -1570,7 +1588,7 @@ class TestAutoCleanDirtyRooms:
         with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
             er_m.return_value.async_get.return_value = ent
             await async_handle_auto_clean_dirty_rooms(call)
-        entry.runtime_data.roomba.start.assert_called_once()
+        entry.runtime_data.roomba.send_command.assert_called_once_with("start")
         hass.services.async_call.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1768,6 +1786,12 @@ def _wire_entity_lookup(hass, config_entry):
 
 
 class TestCreateBackup:
+    """These handlers take `call` alone and read `call.hass`, like the
+    other eleven. They used to take `(hass, call)` — which Home
+    Assistant never passes, so the actions raised TypeError on every
+    invocation. These tests called them directly with both arguments
+    and so never went through the registry that would have failed."""
+
     @pytest.mark.asyncio
     async def test_writes_zip_with_available_stores(self, tmp_path):
         from custom_components.roomba_plus.services import async_handle_create_backup
@@ -1787,8 +1811,9 @@ class TestCreateBackup:
             "custom_components.roomba_plus.services.Store.async_load", fake_load
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.test"}
-            result = await async_handle_create_backup(hass, call)
+            result = await async_handle_create_backup(call)
 
         assert "mission_store" in result["included_stores"]
         assert "grid_store" in result["included_stores"]
@@ -1815,9 +1840,10 @@ class TestCreateBackup:
             return_value=MagicMock(async_get=MagicMock(return_value=None)),
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.nonexistent"}
             with pytest.raises(ServiceValidationError):
-                await async_handle_create_backup(hass, call)
+                await async_handle_create_backup(call)
 
 
 class TestRestoreBackup:
@@ -1847,18 +1873,20 @@ class TestRestoreBackup:
             "custom_components.roomba_plus.services.Store.async_save", fake_save
         ):
             create_call = MagicMock()
+            create_call.hass = hass
             create_call.data = {"entity_id": "vacuum.test"}
-            created = await async_handle_create_backup(hass, create_call)
+            created = await async_handle_create_backup(create_call)
 
             entry.runtime_data.mission_store = MagicMock()
             entry.runtime_data.mission_store.async_load = AsyncMock()
 
             restore_call = MagicMock()
+            restore_call.hass = hass
             restore_call.data = {
                 "entity_id": "vacuum.test",
                 "path": created["path"],
             }
-            result = await async_handle_restore_backup(hass, restore_call)
+            result = await async_handle_restore_backup(restore_call)
 
         assert "mission_store" in result["restored_stores"]
         assert "roomba_plus_missions_e1" in saved
@@ -1876,12 +1904,13 @@ class TestRestoreBackup:
         entry = _make_backup_config_entry()
         with _wire_entity_lookup(hass, entry):
             call = MagicMock()
+            call.hass = hass
             call.data = {
                 "entity_id": "vacuum.test",
                 "path": str(tmp_path / "does_not_exist.zip"),
             }
             with pytest.raises(HomeAssistantError):
-                await async_handle_restore_backup(hass, call)
+                await async_handle_restore_backup(call)
 
     @pytest.mark.asyncio
     async def test_corrupt_zip_raises(self, tmp_path):
@@ -1895,9 +1924,10 @@ class TestRestoreBackup:
         entry = _make_backup_config_entry()
         with _wire_entity_lookup(hass, entry):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.test", "path": str(bad_zip)}
             with pytest.raises(HomeAssistantError):
-                await async_handle_restore_backup(hass, call)
+                await async_handle_restore_backup(call)
 
 
 class TestTheRemovalListMatchesWhatIsRegistered:
@@ -2029,3 +2059,53 @@ class TestPrimeBackupsCaptureTheCloud:
 
         assert "schedules" not in snapshot
         assert "incomplete" not in snapshot
+
+
+class TestEveryHandlerMatchesWhatHomeAssistantCalls:
+    """`ServiceRegistry._execute_service` calls `await
+    target(service_call)` — one argument.
+
+    Three handlers took `(hass, call)`: clean_sequence, create_backup
+    and restore_backup. Invoking any of those actions raised TypeError,
+    for as long as they had existed.
+
+    Nothing caught it. The tests called them directly with both
+    arguments, so they never went through the registry that would have
+    failed — and mypy flagged the registration as an `arg-type` error
+    that nobody had run mypy to see.
+    """
+
+    def test_no_registered_handler_takes_hass(self):
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        offenders = []
+        for name in dir(services):
+            if not name.startswith("async_handle_"):
+                continue
+            func = getattr(services, name)
+            if not inspect.iscoroutinefunction(func):
+                continue
+            params = list(inspect.signature(func).parameters)
+            if params[:1] != ["call"]:
+                offenders.append(f"{name}{tuple(params)}")
+
+        assert not offenders, (
+            f"handlers Home Assistant cannot call: {offenders} -- it "
+            f"passes the ServiceCall alone, so read hass from call.hass"
+        )
+
+    def test_there_are_handlers_to_check(self):
+        """A guard that silently checks nothing is worse than none."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        found = [
+            n for n in dir(services)
+            if n.startswith("async_handle_")
+            and inspect.iscoroutinefunction(getattr(services, n))
+        ]
+
+        assert len(found) >= 10

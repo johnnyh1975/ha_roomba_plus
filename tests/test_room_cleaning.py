@@ -405,12 +405,21 @@ class TestRoomNameMatching:
     def test_an_exact_name_matches(self):
         assert self._match(["Salon"]) == (["13"], [])
 
+
     def test_a_unique_bare_prime_region_id_matches(self):
+        """What the map card sends. The Rooms Map publishes each room's
+        own id, and xiaomi-vacuum-map-card sends it back on a tap —
+        matching only on name and slug meant the card could draw rooms
+        and not clean them. @jouwdan (#88)."""
         from custom_components.roomba_plus.room_cleaning import match_room_names
 
         assert match_room_names({"Study": "MAP-1/16"}, ["16"]) == (["MAP-1/16"], [])
 
     def test_an_ambiguous_bare_region_id_is_rejected(self):
+        """A household with several maps can hold the same bare id twice.
+        Picking one would clean a room on the wrong floor, so this
+        reports an honest miss — the same rule the name matching
+        follows."""
         from custom_components.roomba_plus.room_cleaning import match_room_names
 
         rooms = {"Downstairs": "MAP-1/16", "Upstairs": "MAP-2/16"}
@@ -692,6 +701,19 @@ class TestConsumablePartNaming:
         # It is how 202 and 212 should be named, if anyone ever finds
         # them in the app at all.
         "213": "prime_part_cliff_sensors",
+        # @utkjmitch, by the same method: the app's robot-health screen
+        # beside the ids. "Washable mop pad, 8 routines" against 149,
+        # "Multi-surface brush, 179 hrs" against 69. 68 is by
+        # elimination -- the only remaining part on a robot the app
+        # warned needed a new filter -- and he called it the weakest of
+        # the three himself.
+        #
+        # THE SAME THREE PARTS AS 148 / 71 / 72 ABOVE, differently
+        # numbered. The part id space is per-SKU, so both sets belong
+        # here rather than one replacing the other.
+        "68": "prime_part_filter",
+        "69": "prime_part_multi_surface_brush",
+        "149": "prime_part_mop_pads",
         "202": "prime_part_pad_wash_cleaning",
         "212": "prime_part_pad_wash_replacement",
     }

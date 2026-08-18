@@ -229,3 +229,128 @@ class TestPrimeNeverRenamesItsOwnDevice:
         from custom_components.roomba_plus.entity import IRobotEntity
 
         assert IRobotEntity._resolve_name({}, "31B8091056099") == "Roomba 6099"
+
+
+class TestEveryReaderOfConfigEntryIsGuaranteedOne:
+    """`IRobotEntity._config_entry` is declared non-Optional, which is a
+    cast: the parameter still defaults to None because 81 subclasses
+    call `super().__init__(roomba, blid)` and assign the field
+    themselves afterwards.
+
+    The declaration is only honest while every class that READS the
+    field is guaranteed to have one — directly, or through an inherited
+    `__init__`. This checks that, across the whole component, including
+    inheritance chains.
+
+    Without it, the cast would let mypy wave through a real None access
+    — the exact shape of six crashes found by hand this week.
+    """
+
+    @staticmethod
+    def _analyse():
+        import ast
+        import pathlib
+
+        info = {}
+        for p in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            for cls in [
+                n for n in ast.walk(ast.parse(p.read_text()))
+                if isinstance(n, ast.ClassDef)
+            ]:
+                init = next(
+                    (f for f in cls.body
+                     if isinstance(f, ast.FunctionDef) and f.name == "__init__"),
+                    None,
+                )
+                required = False
+                if init is not None:
+                    args = [a.arg for a in init.args.args][1:]
+                    ndef = len(init.args.defaults)
+                    optional = set(args[len(args) - ndef:]) if ndef else set()
+                    required = (
+                        "config_entry" in args and "config_entry" not in optional
+                    )
+                info[cls.name] = {
+                    "file": p.name,
+                    "bases": [
+                        b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")
+                        for b in cls.bases
+                    ],
+                    "has_init": init is not None,
+                    "required": required,
+                    "sets": init is not None and (
+                        any(
+                            isinstance(n, ast.Attribute)
+                            and n.attr in ("_config_entry", "_entry")
+                            and isinstance(n.ctx, ast.Store)
+                            for n in ast.walk(init)
+                        )
+                        # Passing it straight to super() is the better
+                        # form and has to count: the base assigns it.
+                        or any(
+                            isinstance(n, ast.Call)
+                            and isinstance(n.func, ast.Attribute)
+                            and n.func.attr == "__init__"
+                            and (
+                                len(n.args) >= 3
+                                or "config_entry" in {k.arg for k in n.keywords}
+                            )
+                            for n in ast.walk(init)
+                        )
+                    ),
+                    "reads": any(
+                        isinstance(n, ast.Attribute)
+                        and n.attr in ("_config_entry", "_entry")
+                        and isinstance(n.ctx, ast.Load)
+                        for n in ast.walk(cls)
+                    ),
+                }
+        return info
+
+    @classmethod
+    def _guaranteed(cls, name, info, seen=None):
+        """A base class whose own parameter is OPTIONAL guarantees
+        nothing — that is exactly `IRobotEntity`, whose default is None.
+        Only `required and sets` counts, or inheriting from something
+        that has it."""
+        seen = seen or set()
+        if name in seen or name not in info:
+            return False
+        seen.add(name)
+        d = info[name]
+        if d["required"] and d["sets"]:
+            return True
+        if not d["has_init"]:
+            return any(cls._guaranteed(b, info, seen) for b in d["bases"])
+        return any(cls._guaranteed(b, info, seen) for b in d["bases"])
+
+    def test_no_class_reads_an_entry_it_may_not_have(self):
+        info = self._analyse()
+
+        #: CHECKED INDIVIDUALLY, both safe.
+        #:
+        #: `IRobotVacuum` takes the entry optionally and guards every
+        #: read with `if self._config_entry is not None`.
+        #: `PrimeRoomCleaning` is not an entity and does not read the
+        #: field at all -- it matches only because a subclass does.
+        known_safe = {"IRobotVacuum", "PrimeRoomCleaning"}
+
+        risky = [
+            f"{d['file']}:{n}"
+            for n, d in info.items()
+            if d["reads"] and not self._guaranteed(n, info) and n not in known_safe
+        ]
+
+        assert not risky, (
+            f"these read _config_entry without being guaranteed one: "
+            f"{risky} -- either pass it in, or the non-Optional "
+            f"declaration in IRobotEntity is no longer true"
+        )
+
+    def test_the_guard_is_actually_looking_at_something(self):
+        """A census that finds nothing to check passes vacuously."""
+        info = self._analyse()
+
+        readers = [n for n, d in info.items() if d["reads"]]
+
+        assert len(readers) >= 40

@@ -2649,3 +2649,43 @@ class TestRoomLabelsAreNotGatedOnTheMapSplit:
 
         assert 'show_room_fills = getattr(self, "_include_live", True)' in source
         assert "if show_room_fills:" in source
+
+
+class TestRepairIssuesComeFromTheHelper:
+    """`async_create_issue` and `IssueSeverity` live in
+    `homeassistant.helpers.issue_registry`. `homeassistant.components.repairs`
+    has neither.
+
+    `_trigger_zone_issue` imported the components module, so the
+    zones-need-naming prompt raised AttributeError instead of appearing.
+    Found by mypy as "Module has no attribute async_create_issue".
+    """
+
+    def test_nothing_imports_repairs_for_issue_creation(self):
+        import pathlib
+        import re
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            text = path.read_text()
+            for m in re.finditer(
+                r"from homeassistant\.components import repairs(?: as (\w+))?", text
+            ):
+                alias = m.group(1) or "repairs"
+                if f"{alias}.async_create_issue" in text:
+                    offenders.append(path.name)
+
+        assert not offenders, (
+            f"{offenders} create repair issues through "
+            f"homeassistant.components.repairs -- it has no "
+            f"async_create_issue; use helpers.issue_registry"
+        )
+
+    def test_the_helper_is_the_one_with_the_function(self):
+        """If Home Assistant ever moves it, this guard is wrong rather
+        than the call sites."""
+        from homeassistant.components import repairs
+        from homeassistant.helpers import issue_registry
+
+        assert hasattr(issue_registry, "async_create_issue")
+        assert not hasattr(repairs, "async_create_issue")

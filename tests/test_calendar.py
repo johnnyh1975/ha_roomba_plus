@@ -1409,3 +1409,66 @@ class TestRoomNamesComeFromEveryMap:
             side_effect=_polys,
         ):
             assert asyncio.run(entity._names_from_all_maps()) == {"14": "Loft"}
+
+
+class TestTheWeekdayBasisMatchesTheWire:
+    """@chairstacker (#71): a Monday entry created in the HA calendar
+    landed on Sunday, in both Home Assistant and the iRobot app.
+
+    `datetime.weekday()` is Mon=0..Sun=6. The wire table is
+    `sun: 0, mon: 1, ...`. Passing the raw value shifted every day back
+    by one.
+
+    Third time this conversion has gone wrong here: @DaRealGuGu's edit
+    shifted *forward* by one on a30, from a second table that counted
+    from Monday.
+    """
+
+    def test_the_wire_table_still_starts_at_sunday(self):
+        """If this ever changes, the conversion below is wrong rather
+        than the call sites."""
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAYS,
+        )
+
+        assert _WEEKDAYS["sun"] == 0
+        assert _WEEKDAYS["mon"] == 1
+
+    def test_every_calendar_call_converts_the_basis(self):
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import calendar as cal
+
+        source = inspect.getsource(cal)
+        raw = re.findall(r"weekday=local_start\.weekday\(\)", source)
+
+        assert not raw, (
+            "a calendar call passes Python's Monday-based weekday "
+            "straight to a Sunday-based wire table -- every day lands "
+            "one early"
+        )
+
+    def test_monday_converts_to_the_wire_value_for_monday(self):
+        import datetime
+
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAYS,
+        )
+
+        monday = datetime.datetime(2026, 8, 17)      # a Monday
+        assert monday.weekday() == 0
+
+        assert (monday.weekday() + 1) % 7 == _WEEKDAYS["mon"]
+
+    def test_sunday_wraps_to_zero(self):
+        import datetime
+
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _WEEKDAYS,
+        )
+
+        sunday = datetime.datetime(2026, 8, 16)
+        assert sunday.weekday() == 6
+
+        assert (sunday.weekday() + 1) % 7 == _WEEKDAYS["sun"]

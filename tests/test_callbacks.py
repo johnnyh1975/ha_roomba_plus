@@ -2986,7 +2986,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5},  # no pmaps_info at all
         ]
         await _async_update_gs_smart_coverage(hass, entry, MagicMock())
@@ -2999,7 +2999,11 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=10)
-        ms.records.return_value = [
+        # `records` is a PROPERTY. These fixtures set
+        # `ms.records.return_value`, which only works against a call --
+        # and the code under test called it, so both sides agreed on a
+        # shape the real MissionStore does not have.
+        ms.records = [
             {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
             {"id": "m_2", "nMssn": 9, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
@@ -3015,7 +3019,7 @@ class TestGsSmartCoverageDispatchFunction:
             MissionMapUnavailable,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": f"m_{i}", "nMssn": i,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": f"v{i}"}]}
             for i in range(1, 9)  # 8 candidates, backlog > cap
@@ -3033,7 +3037,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_3", "nMssn": 30, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
              "started_at": "2026-07-01T10:00:00+00:00"},
             {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
@@ -3062,7 +3066,7 @@ class TestGsSmartCoverageDispatchFunction:
             MissionMapUnavailable,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
         with patch(
@@ -3082,7 +3086,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
         with patch(
@@ -3102,7 +3106,7 @@ class TestGsSmartCoverageDispatchFunction:
             ROBOT_DIAMETER_MM_ISJ_SERIES,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
              "started_at": "2026-07-04T10:00:00+00:00"},
@@ -3137,7 +3141,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=100)
-        ms.records.return_value = []
+        ms.records = []
         await _async_update_gs_smart_coverage(hass, entry, MagicMock())
         gs.async_save.assert_not_called()
 
@@ -3155,7 +3159,7 @@ class TestGsCoverageLiveCloudMutualExclusion:
         # Simulates image.py having already called
         # grid_store.record_processed_nmssn(77) for this mission.
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=77)
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 77,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
@@ -3311,3 +3315,43 @@ class TestGsCoverageNonNumericCoordinateResilience:
         ]
         result = _gs_coverage_classify_stuck_events(events, aligner)
         assert result == [(11.0, 22.0)]  # only the valid event survives
+
+
+class TestRecordsIsAPropertyNotAMethod:
+    """`MissionStore.records` is a property. One call site wrote
+    `ms.records()`, which raises TypeError — a Sequence is not callable
+    — so `_async_update_gs_smart_coverage` died on its first statement
+    every time it ran.
+
+    Four other call sites in the integration read it correctly. Found by
+    mypy as "Sequence[dict[str, Any]] not callable"; no test exercised
+    the function.
+    """
+
+    def test_nothing_calls_records_as_a_method(self):
+        """Parsed rather than grepped: the comment recording this bug
+        contains the very string a text search looks for."""
+        import ast
+        import pathlib
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "records"
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+
+        assert not offenders, (
+            f"{offenders} call `records()` -- it is a property, and "
+            f"calling it raises TypeError"
+        )
+
+    def test_the_property_is_still_a_property(self):
+        """If it ever becomes a method, the guard above is wrong rather
+        than the call sites."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        assert isinstance(MissionStore.records, property)

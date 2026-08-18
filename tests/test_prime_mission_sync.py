@@ -643,6 +643,7 @@ class TestPartsRefreshOnMissionEnd:
         parts = MagicMock(async_request_refresh=AsyncMock())
         entry.runtime_data.prime_parts_coordinator = parts
         coordinator.config_entry = entry
+        coordinator.entry = entry
         return coordinator, parts, report
 
     def _report(self, *, fin_events=None, event_types=()):

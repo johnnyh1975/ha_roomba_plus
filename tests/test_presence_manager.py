@@ -1259,3 +1259,58 @@ class TestPrimePausesSchedulesInsteadOfHolding:
         await PresenceManager._set_schedules_paused(mgr, True)
 
         mgr._set_sched_hold.assert_awaited_once_with(True)
+
+
+class TestPresenceOnPrimeDoesNotReachForALocalRobot:
+    """`_set_schedules_paused` branches on `prime_robot` correctly and
+    never touches `data.roomba` on a Prime entry. `_handle_someone_home`
+    did not: it read `data.roomba.master_state` to decide whether to
+    re-freeze, before the branch that would have protected it.
+
+    `data.roomba` is None on every CLOUD_ONLY entry by design, so a Prime
+    user with presence scheduling on got an AttributeError the first
+    time somebody came home.
+
+    Found by mypy. No test built a Prime entry with presence enabled,
+    and the field question about presence on Prime had been open in the
+    tester notes for a week with no answer.
+    """
+
+    @staticmethod
+    def _manager(did_unfreeze):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import (
+            PresenceManager,
+        )
+
+        manager = PresenceManager.__new__(PresenceManager)
+        manager._hass = MagicMock()
+        manager._away_task = None
+        manager._did_unfreeze = did_unfreeze
+        manager._managed_hold = False
+        manager._entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(roomba=None, prime_robot=object())
+        )
+        manager._set_schedules_paused = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_a_prime_entry_does_not_raise(self):
+        manager = self._manager(did_unfreeze=False)
+
+        await manager._handle_someone_home()
+
+        manager._set_schedules_paused.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_it_still_refreezes_what_it_unfroze(self):
+        """The ownership check `schedHold` provides on Classic —
+        without a shadow field to read."""
+        manager = self._manager(did_unfreeze=True)
+
+        await manager._handle_someone_home()
+
+        manager._set_schedules_paused.assert_awaited_once_with(True)
+        assert manager._did_unfreeze is False
