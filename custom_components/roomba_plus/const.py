@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import Platform
@@ -1495,7 +1495,7 @@ DIAG_REDACT_KEYS: Final[set[str]] = {
 }
 
 # ── Capability detection ───────────────────────────────────────────────────────
-def has_carpet_boost(state: dict) -> bool:
+def has_carpet_boost(state: dict[str, Any]) -> bool:
     """Return True if this robot supports carpet boost / fan speed control."""
     cap = state.get("cap") or {}
     if cap.get("carpetBoost") == 1:
@@ -1507,17 +1507,17 @@ def has_carpet_boost(state: dict) -> bool:
     )
 
 
-def has_pose(state: dict) -> bool:
+def has_pose(state: dict[str, Any]) -> bool:
     """Return True if this robot reports pose (position) data."""
-    return (state.get("cap") or {}).get("pose", 0) >= 1
+    return bool((state.get("cap") or {}).get("pose", 0) >= 1)
 
 
-def has_smart_map(state: dict) -> bool:
+def has_smart_map(state: dict[str, Any]) -> bool:
     """Return True if this robot has persistent smart maps (pmaps)."""
     return bool(state.get("pmaps"))
 
 
-def is_mop(state: dict) -> bool:
+def is_mop(state: dict[str, Any]) -> bool:
     """True if this robot can mop -- it reports a pad field.
 
     ANSWERS "CAN IT MOP", AND WAS BEING USED TO ASK "HAS IT NO BRUSHES".
@@ -1532,7 +1532,7 @@ def is_mop(state: dict) -> bool:
     return "detectedPad" in state
 
 
-def is_braava(state: dict) -> bool:
+def is_braava(state: dict[str, Any]) -> bool:
     """True for a Braava -- a mop with no vacuum hardware at all.
 
     DECIDED BY SKU PREFIX, not by a capability flag. Two candidates were
@@ -1568,13 +1568,13 @@ def is_braava(state: dict) -> bool:
     return sku[0].lower() == "m"
 
 
-def has_clean_base(state: dict) -> bool:
+def has_clean_base(state: dict[str, Any]) -> bool:
     """Return True if a Clean Base dock is present and communicating."""
     dock = state.get("dock") or {}
     return "fwVer" in dock or isinstance(dock.get("state"), int)
 
 
-def active_charge_cycles(bbchg3: dict) -> int | None:
+def active_charge_cycles(bbchg3: dict[str, Any]) -> int | None:
     """v2.9.0 DAILY-DIGEST — chemistry-aware lifetime charge-cycle count.
 
     Extracted from sensor.py's _total_energy_consumed_kwh()/

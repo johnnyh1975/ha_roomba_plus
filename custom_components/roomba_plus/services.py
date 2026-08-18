@@ -287,7 +287,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
     # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): exactly one of room_name / room_passes.
     raw_room_name = call.data.get(ATTR_ROOM_NAME)
-    raw_room_passes: list[dict] | None = call.data.get(ATTR_ROOM_PASSES)
+    raw_room_passes: list[dict[str, Any]] | None = call.data.get(ATTR_ROOM_PASSES)
 
     if raw_room_name is not None and raw_room_passes is not None:
         raise ServiceValidationError(
@@ -311,7 +311,9 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         ]
     else:
         room_names = (
-            [raw_room_name] if isinstance(raw_room_name, str) else raw_room_name
+            [raw_room_name]
+            if isinstance(raw_room_name, str)
+            else list(raw_room_name or [])
         )
         per_room_two_pass = [None] * len(room_names)
 
@@ -329,9 +331,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": entity_id},
             )
 
-        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
-            entry.config_entry_id
-        )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {entity_id}",
@@ -400,7 +400,7 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -450,9 +450,10 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             # blocking sensors configured, regardless of rooms/override.
             # send_simple_command("start") is the same confirmed-working
             # path the vacuum entity's own start action already uses.
+            assert data.prime_robot is not None  # noqa: S101
             await data.prime_robot.send_simple_command("start")
-        else:
-            await hass.async_add_executor_job(data.roomba.start)
+        elif data.roomba is not None:
+            await hass.async_add_executor_job(data.roomba.send_command, "start")
 
 
 async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
@@ -487,7 +488,7 @@ async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -648,7 +649,7 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -705,7 +706,15 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                 "auto_clean_dirty_rooms: no room passes the dirt-index "
                 "trust gate for %s — whole-house fallback", eid,
             )
-            await hass.async_add_executor_job(data.roomba.start)
+            # BOTH GENERATIONS, like the main path below. This
+            # fallback reached for the local robot alone, so a Prime
+            # entry whose rooms all failed the trust gate raised
+            # AttributeError instead of falling back to a whole-house
+            # clean -- the one case this branch exists for.
+            if data.prime_robot is not None:
+                await data.prime_robot.send_simple_command("start")
+            elif data.roomba is not None:
+                await hass.async_add_executor_job(data.roomba.send_command, "start")
             continue
 
         candidates = _route_optimize_order(data, candidates, region_map)
@@ -737,7 +746,7 @@ async def _handle_reset_service(
         if entry_reg is None:
             _LOGGER.warning("reset_%s: entity not found: %s", part, eid)
             continue
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_%s: config entry not found for %s", part, eid)
             continue
@@ -803,7 +812,7 @@ async def _handle_inspect_reset_service(
         if entry_reg is None:
             _LOGGER.warning("reset_%s_cleaning: entity not found: %s", component, eid)
             continue
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_%s_cleaning: config entry not found for %s", component, eid)
             continue
@@ -845,7 +854,7 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
         if entry_reg is None:
             _LOGGER.warning("reset_robot_profile: entity not found: %s", eid)
             continue
-        config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_robot_profile: config entry not found for %s", eid)
             continue
@@ -886,7 +895,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     entry_reg = ent_reg.async_get(entity_id)
     if entry_reg is None:
         raise ServiceValidationError(f"explain_mission: entity not found: {entity_id}")
-    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
     if config_entry is None:
         raise ServiceValidationError(
             f"explain_mission: config entry not found for {entity_id}"
@@ -922,7 +931,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
             f"explain_mission: mission not found for {entity_id}"
             + (f" (id={mission_id})" if mission_id is not None else "")
         )
-    return result
+    return dict(result)
 
 
 # ── F10d — clean_sequence ─────────────────────────────────────────────────────
@@ -936,7 +945,7 @@ _CLEAN_SEQUENCE_SCHEMA = vol.Schema({
 
 
 async def async_handle_clean_sequence(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> None:
     """F10d — start robot B when robot A mission ends.
 
@@ -953,6 +962,18 @@ async def async_handle_clean_sequence(
                            When False, B starts even if A is idle/error.
         delay_minutes:     Wait this many minutes after A docks before starting B.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     from homeassistant.core import callback
     from homeassistant.helpers import entity_registry as er
 
@@ -976,7 +997,7 @@ async def async_handle_clean_sequence(
         trigger_entity, target_entity, require_completed, delay_minutes,
     )
 
-    unsub_ref: list = []
+    unsub_ref: list[Any] = []
 
     @callback
     def _on_trigger_state_change(
@@ -1073,7 +1094,7 @@ async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
     for entity_id in entity_ids:
         entry_reg = ent_reg.async_get(entity_id)
         entry = (
-            hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+            hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
             if entry_reg is not None else None
         )
         if entry is None:
@@ -1110,6 +1131,11 @@ async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
         else:
             from roombapy_prime.models.schedules_dnd import DNDDailySchedule
 
+            # Both are set here: two checks above enforce "both or
+            # neither" and "exactly one of start/end and ends_at", and
+            # mypy can follow neither -- both are written as comparisons
+            # between None-ness rather than as narrowing checks.
+            assert start is not None and end is not None  # noqa: S101
             body = DNDDailySchedule(
                 daily_start=start.hour * 60 + start.minute,
                 daily_end=end.hour * 60 + end.minute,
@@ -1381,7 +1407,7 @@ async def async_handle_run_favorite(call: ServiceCall) -> None:
         entry = ent_reg.async_get(entity_id)
         if entry is None or entry.config_entry_id is None:
             continue
-        config_entry = hass.config_entries.async_get_entry(entry.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             continue
         if config_entry.runtime_data.connection_type is not ConnectionType.CLOUD_ONLY:
@@ -1433,9 +1459,7 @@ async def async_handle_advance_room(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": entity_id},
             )
 
-        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
-            entry.config_entry_id
-        )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {entity_id}",
@@ -1517,7 +1541,7 @@ def _resolve_config_entry_from_entity(
             translation_key="backup_entity_not_found",
             translation_placeholders={"entity_id": entity_id},
         )
-    config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
     if config_entry is None:
         raise ServiceValidationError(
             f"{service_name}: config entry not found for {entity_id}",
@@ -1529,7 +1553,7 @@ def _resolve_config_entry_from_entity(
 
 
 def _write_backup_zip(
-    backup_dir: str, filename: str, manifest: dict, payloads: dict[str, dict]
+    backup_dir: str, filename: str, manifest: dict[str, Any], payloads: dict[str, dict[str, Any]]
 ) -> str:
     """Blocking: write the manifest + one JSON per store into a ZIP.
 
@@ -1545,12 +1569,12 @@ def _write_backup_zip(
     return zip_path
 
 
-def _read_backup_zip(zip_path: str) -> tuple[dict, dict[str, dict]]:
+def _read_backup_zip(zip_path: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Blocking: read manifest + all store payloads back out of a ZIP."""
     if not Path(zip_path).is_file():
         raise HomeAssistantError(f"Backup file not found: {zip_path}")
-    payloads: dict[str, dict] = {}
-    manifest: dict = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    manifest: dict[str, Any] = {}
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = set(zf.namelist())
@@ -1610,7 +1634,7 @@ async def _async_prime_snapshot(config_entry: Any) -> dict[str, Any]:
 
 
 async def async_handle_create_backup(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> dict[str, Any]:
     """Handle roomba_plus.create_backup.
 
@@ -1626,16 +1650,28 @@ async def async_handle_create_backup(
     maintenance timestamps (filter/brush/pad reset times) legitimately
     belong to this robot and are included here.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     entity_id: str = call.data["entity_id"]
     config_entry = _resolve_config_entry_from_entity(hass, entity_id, "create_backup")
     data = config_entry.runtime_data
     entry_id = config_entry.entry_id
 
-    payloads: dict[str, dict] = {}
+    payloads: dict[str, dict[str, Any]] = {}
     included: list[str] = []
     excluded: list[str] = []
     for attr, prefix in _BACKUP_STORES:
-        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
         raw = await store.async_load()
         if raw is None:
             excluded.append(attr)
@@ -1695,7 +1731,7 @@ async def async_handle_create_backup(
 
 
 async def async_handle_restore_backup(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> dict[str, Any]:
     """Handle roomba_plus.restore_backup.
 
@@ -1704,6 +1740,18 @@ async def async_handle_restore_backup(
     the running integration picks up the restored state immediately — no
     Home Assistant restart required.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     entity_id: str = call.data["entity_id"]
     path: str = call.data["path"]
     config_entry = _resolve_config_entry_from_entity(hass, entity_id, "restore_backup")
@@ -1716,7 +1764,7 @@ async def async_handle_restore_backup(
     for attr, prefix in _BACKUP_STORES:
         if prefix not in payloads:
             continue
-        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
         await store.async_save(payloads[prefix])
         live_store = getattr(data, attr, None)
         if live_store is not None:

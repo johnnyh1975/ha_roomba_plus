@@ -1277,6 +1277,10 @@
     "favorite_multi_commanddefs": {
       "title": "Favorite has multiple command steps",
       "description": "The favorite \"{name}\" has {count} command steps, but only the first one is sent to the robot — the rest are ignored. This is a rare configuration that hasn't been confirmed to work correctly."
+    },
+    "segments_changed": {
+      "title": "Room list changed",
+      "description": "Your robot's map was retrained and its rooms were renumbered, so automations targeting rooms by ID may now clean the wrong room. Open the Rooms map and check your room selections."
     }
   },
   "device_automation": {
@@ -1452,6 +1456,9 @@
     },
     "prime_not_connected": {
       "message": "This robot has no cloud connection."
+    },
+    "cloud_required": {
+      "message": "Room targeting needs iRobot cloud credentials on this robot. Add them in the integration options, or clean the whole house instead."
     }
   },
   "selector": {

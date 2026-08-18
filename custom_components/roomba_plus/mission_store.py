@@ -112,7 +112,7 @@ class MissionStore:
         # Provides a stable baseline for consecutive_anomalous when local
         # records are insufficient (< 20 missions).  Not persisted — computed
         # fresh from MissionArchive each time async_setup_entry runs.
-        self.archive_baseline: dict | None = None
+        self.archive_baseline: dict[str, Any] | None = None
         # v3.3.0 STORE-ENCAP — lazy full-history id index for
         # append_validated(). None until first use; kept in sync by all
         # append paths afterwards. Not persisted (rebuilt on demand).
@@ -137,8 +137,8 @@ class MissionStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted records from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("MissionStore: no persisted data for %s", entry_id)
             return
@@ -161,7 +161,7 @@ class MissionStore:
         # crashing the sync that produced them.
         if hass is None:
             return
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({"records": self._records})
 
     # ── Write ─────────────────────────────────────────────────────────────────
@@ -322,6 +322,11 @@ class MissionStore:
         whatever's appropriate for their transport (ServiceValidationError
         for the service, 404 for the REST view).
         """
+        # Annotated because the first branch fixes the type: the
+        # override is a plain dict, the two lookups below both return
+        # `dict | None`, and the `is None` check two lines down is what
+        # actually handles it.
+        record: dict[str, Any] | None
         if record_override is not None:
             record = record_override
         elif mission_id is not None:
@@ -344,7 +349,16 @@ class MissionStore:
             "anomaly_reason": reason,
             "robot_lifted": npicks_delta > 0,
             "error_code": record.get("error_code"),
-            "recommended_action": self._ANOMALY_RECOMMENDATIONS.get(reason),
+            # `reason` may be None -- one line above records exactly
+            # that as `is_anomalous`. A dict lookup with None is a miss,
+            # which is the right answer for a mission that was not
+            # anomalous, so this reads it as the optional it is rather
+            # than guarding a lookup that already handles it.
+            "recommended_action": (
+                self._ANOMALY_RECOMMENDATIONS.get(reason)
+                if reason is not None
+                else None
+            ),
         }
 
     # All result values that represent a stuck/failure event.
@@ -423,7 +437,7 @@ class MissionStore:
         Returns a dict keyed by date. Days with no missions are omitted.
         """
         from collections import defaultdict
-        buckets: dict[date, list[dict]] = defaultdict(list)
+        buckets: dict[date, list[dict[str, Any]]] = defaultdict(list)
         for r in self.query(days):
             dt = dt_util.parse_datetime(r.get("started_at", ""))
             if dt:
@@ -607,8 +621,11 @@ class MissionStore:
         upcoming = (timeline.get("plan") or {}).get("upcoming")
         if not upcoming:
             return None
-        rids = [self._extract_rid(r) for r in upcoming]
-        rids = [r for r in rids if r]   # drop empty strings from unrecognised formats
+        # NARROWED BY THE FILTER, and now typed as such. `_extract_rid`
+        # returns `str | None`, the next line drops everything falsy,
+        # and mypy kept the optional through the reassignment.
+        raw_rids = [self._extract_rid(r) for r in upcoming]
+        rids: list[str] = [r for r in raw_rids if r]
         if not rids:
             return None
         return self._resolve_region_ids(rids, effective_map)
@@ -983,7 +1000,7 @@ class MissionStore:
         if len(areas) < 5:
             return None
         areas.sort()
-        return areas[int(len(areas) * 0.75)]
+        return float(areas[int(len(areas) * 0.75)])
 
     def wear_data(self, days: int) -> list[dict[str, Any]]:
         """Return daily bbrun.hr snapshots for the last `days` days.
@@ -1041,7 +1058,7 @@ class MissionStore:
         return round(max(0.0, rate), 2)
 
     @staticmethod
-    def _merge_cloud_fields(local: dict, cloud: dict) -> bool:
+    def _merge_cloud_fields(local: dict[str, Any], cloud: dict[str, Any]) -> bool:
         """Copy missing analytics fields from a cloud record into a local record.
 
         Only copies when the local field is absent or None — never overwrites.
@@ -1117,7 +1134,7 @@ class MissionStore:
         return wrote
 
     @staticmethod
-    def _backfill_area_sqft(local: dict) -> bool:
+    def _backfill_area_sqft(local: dict[str, Any]) -> bool:
         """Set local["area_sqft"] from local["sqft"] when the canonical
         field is still absent but the raw cloud field is present.
 
@@ -1140,7 +1157,7 @@ class MissionStore:
 
     # ── L3 — Mission anomaly detection ────────────────────────────────────────
 
-    def compute_rolling_stats(self, days: int = 30) -> dict | None:
+    def compute_rolling_stats(self, days: int = 30) -> dict[str, Any] | None:
         """Compute rolling mean/std for duration_min and area_sqft.
 
         L3 — Returns None when fewer than 20 missions are available (insufficient
@@ -1188,7 +1205,7 @@ class MissionStore:
         }
 
     @staticmethod
-    def compute_archive_stats(derived_records: list[dict]) -> dict | None:
+    def compute_archive_stats(derived_records: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Compute anomaly-detection baseline from ARC1 archive derived records.
 
         L3-ARC (v2.8.0) — identical contract to compute_rolling_stats() but
@@ -1262,8 +1279,8 @@ class MissionStore:
 
     def anomaly_reason(
         self,
-        record: dict,
-        stats: dict,
+        record: dict[str, Any],
+        stats: dict[str, Any],
         profile: Any = None,
     ) -> str | None:
         """v3.2.0 ANOMALY-EXPLAIN — same four conditions as is_anomalous()
@@ -1336,8 +1353,8 @@ class MissionStore:
 
     def is_anomalous(
         self,
-        record: dict,
-        stats: dict,
+        record: dict[str, Any],
+        stats: dict[str, Any],
         profile: Any = None,
     ) -> bool:
         """Return True when a record is statistically anomalous.
@@ -1372,7 +1389,7 @@ class MissionStore:
 
     def backfill_from_cloud(
         self,
-        cloud_records: list[dict],
+        cloud_records: list[dict[str, Any]],
         tolerance_sec: int = 120,
     ) -> BackfillResult:
         """Correct local MissionStore records using cloud /missionhistory timestamps.
@@ -1410,7 +1427,7 @@ class MissionStore:
             return BackfillResult(corrected=0, enriched=0)
 
         # Build index of cloud records keyed by end timestamp for O(1) lookup.
-        cloud_by_end: dict[int, dict] = {}
+        cloud_by_end: dict[int, dict[str, Any]] = {}
         for cr in cloud_records:
             ts = cr.get("timestamp")
             if ts is not None:
@@ -1431,7 +1448,7 @@ class MissionStore:
             local_end_ts = int(ended_dt.timestamp())
 
             # Find nearest cloud record within tolerance
-            best_cr: dict | None = None
+            best_cr: dict[str, Any] | None = None
             best_delta = tolerance_sec + 1
             for cloud_ts, cr in cloud_by_end.items():
                 delta = abs(cloud_ts - local_end_ts)
@@ -1514,7 +1531,7 @@ class MissionStore:
 
     def merge_latest_from_cloud(
         self,
-        cloud_records: list[dict],
+        cloud_records: list[dict[str, Any]],
         tolerance_sec: int = 120,
     ) -> bool:
         """Merge cloud analytics fields into the most recent local record.
@@ -1543,7 +1560,7 @@ class MissionStore:
 
         local_end_ts = int(ended_dt.timestamp())
 
-        best_cr: dict | None = None
+        best_cr: dict[str, Any] | None = None
         best_delta = tolerance_sec + 1
         for cr in cloud_records:
             ts = cr.get("timestamp")
@@ -1604,14 +1621,19 @@ class MissionStore:
 
         import inspect as _inspect
 
-        async def _import_stats(meta, stats):
+        async def _import_stats(meta: Any, stats: Any) -> None:
             """Call async_add_external_statistics, handling both sync and async variants."""
             result = async_add_external_statistics(hass, meta, stats)
             if _inspect.isawaitable(result):
                 await result
 
-        def _make_meta(name, statistic_id, unit):
-            return StatisticMetaData(
+        def _make_meta(name: str, statistic_id: str, unit: str | None) -> Any:
+            # FORWARD-COMPATIBLE ON PURPOSE. `mean_type` and
+            # `unit_class` are required from HA 2026.11 and unknown to
+            # the version pinned here, so mypy reports them as extra
+            # keys against the older TypedDict. Removing them would
+            # break the newer HA; the ignore goes when the pin moves.
+            return StatisticMetaData(  # type: ignore[typeddict-unknown-key]
                 has_mean=False,
                 has_sum=True,
                 mean_type=_mean_type_none,  # 0 = NONE (no mean), required from HA 2026.11

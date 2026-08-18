@@ -85,7 +85,7 @@ _DELETE_SCHEMA = vol.Schema({
 })
 
 
-def _prime_entry_for(hass: HomeAssistant, entity_id: str):
+def _prime_entry_for(hass: HomeAssistant, entity_id: str) -> Any:
     """The Prime config entry behind an entity, or a legible error."""
     registry = er.async_get(hass)
     entry = registry.async_get(entity_id)
@@ -117,7 +117,7 @@ def _schedule_id_from(entry: er.RegistryEntry, blid: str) -> str:
     return unique_id[len(prefix):]
 
 
-def _regions_of(command: Any) -> list[dict]:
+def _regions_of(command: Any) -> list[dict[str, Any]]:
     if not isinstance(command, dict):
         return []
     inner = command.get("command") if isinstance(command.get("command"), dict) else command
@@ -126,8 +126,8 @@ def _regions_of(command: Any) -> list[dict]:
 
 
 def _resolve_rooms(
-    config_entry, rooms: list[str], containers: list
-) -> list[dict]:
+    config_entry: Any, rooms: list[str], containers: list[Any]
+) -> list[dict[str, Any]]:
     """Room names or region ids → region entries.
 
     Names resolve through the schedule coordinator's own room_names map
@@ -143,16 +143,16 @@ def _resolve_rooms(
 
     # Region entries already known to this household's schedules keep
     # their stored shape (type, params) rather than being re-invented.
-    known: dict[str, dict] = {}
+    known: dict[str, dict[str, Any]] = {}
     for _cid, schedules in containers:
         for schedule in schedules:
             for command in getattr(schedule.options, "commands", None) or []:
                 for region in _regions_of(command):
-                    rid = str(region.get("region_id", ""))
+                    rid: str | None = str(region.get("region_id", ""))
                     if rid and rid not in known:
                         known[rid] = region
 
-    resolved: list[dict] = []
+    resolved: list[dict[str, Any]] = []
     unknown: list[str] = []
     for room in rooms:
         rid = by_name.get(room.strip().casefold()) or (
@@ -164,7 +164,7 @@ def _resolve_rooms(
         import copy  # noqa: PLC0415
 
         resolved.append(
-            copy.deepcopy(known.get(str(rid))) or {"region_id": str(rid), "type": "rid"}
+            copy.deepcopy(known.get(str(rid)) or {}) or {"region_id": str(rid), "type": "rid"}
         )
     if unknown:
         raise ServiceValidationError(
@@ -174,7 +174,7 @@ def _resolve_rooms(
     return resolved
 
 
-def _apply_wetness(commands: list, wetness: int) -> list:
+def _apply_wetness(commands: list[Any], wetness: int) -> list[Any]:
     import copy  # noqa: PLC0415
 
     updated = copy.deepcopy([c for c in commands if isinstance(c, dict)])
@@ -184,7 +184,7 @@ def _apply_wetness(commands: list, wetness: int) -> list:
     return updated
 
 
-def _set_operating_mode(commands: list, mode: int) -> list:
+def _set_operating_mode(commands: list[Any], mode: int) -> list[Any]:
     """Template commands with every region's operating mode replaced.
 
     APPLIED TO EVERY REGION, not just the first. A schedule with mixed
@@ -213,7 +213,7 @@ def _set_operating_mode(commands: list, mode: int) -> list:
     return updated
 
 
-def _set_regions(commands: list, regions: list[dict]) -> list:
+def _set_regions(commands: list[Any], regions: list[dict[str, Any]]) -> list[Any]:
     """Template commands with their regions replaced by the requested ones."""
     import copy  # noqa: PLC0415
 
@@ -225,8 +225,8 @@ def _set_regions(commands: list, regions: list[dict]) -> list:
     return updated
 
 
-def _reshaped_options(template_options: Any, call_data: dict, containers: list,
-                      config_entry) -> Any:
+def _reshaped_options(template_options: Any, call_data: dict[str, Any], containers: list[Any],
+                      config_entry: Any) -> Any:
     """A ScheduleOptions carrying the requested changes on top of a template.
 
     Works for create (template = an existing schedule, all required
@@ -280,7 +280,7 @@ def _reshaped_options(template_options: Any, call_data: dict, containers: list,
     return replace(template_options, **changes)
 
 
-async def _refresh(config_entry) -> None:
+async def _refresh(config_entry: Any) -> None:
     """The user sees the result now, not at the next 15-minute tick."""
     coordinator = getattr(
         config_entry.runtime_data, "prime_schedule_coordinator", None
@@ -289,7 +289,7 @@ async def _refresh(config_entry) -> None:
         await coordinator.async_request_refresh()
 
 
-async def _read_containers_or_error(config_entry) -> list:
+async def _read_containers_or_error(config_entry: Any) -> list[Any]:
     containers = await async_read_schedule_containers(config_entry)
     if containers is None:
         raise ServiceValidationError(
@@ -298,7 +298,7 @@ async def _read_containers_or_error(config_entry) -> list:
     return containers
 
 
-async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict:
+async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
     config_entry, _entry = _prime_entry_for(hass, call.data["entity_id"])
     data = config_entry.runtime_data
 
@@ -625,7 +625,7 @@ async def async_delete_schedule_by_id(
     await _refresh(config_entry)
 
 
-async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict:
+async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
     config_entry, entry = _prime_entry_for(hass, call.data["entity_id"])
     data = config_entry.runtime_data
     schedule_id = _schedule_id_from(entry, data.blid)
@@ -673,7 +673,7 @@ async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict:
     raise ServiceValidationError(f"Container for {schedule_id} not found")
 
 
-async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict:
+async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
     config_entry, entry = _prime_entry_for(hass, call.data["entity_id"])
     data = config_entry.runtime_data
     schedule_id = _schedule_id_from(entry, data.blid)
@@ -739,13 +739,13 @@ async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict:
 def async_register_prime_schedule_services(hass: HomeAssistant) -> None:
     """Registered from async_register_services(), removed with the rest."""
 
-    async def handle_create(call: ServiceCall) -> dict:
+    async def handle_create(call: ServiceCall) -> dict[str, Any]:
         return await _async_create(hass, call)
 
-    async def handle_update(call: ServiceCall) -> dict:
+    async def handle_update(call: ServiceCall) -> dict[str, Any]:
         return await _async_update(hass, call)
 
-    async def handle_delete(call: ServiceCall) -> dict:
+    async def handle_delete(call: ServiceCall) -> dict[str, Any]:
         return await _async_delete(hass, call)
 
     for name, handler, schema in (

@@ -95,7 +95,15 @@ from .sensor_helpers import (
 
 @dataclass(frozen=True, kw_only=True)
 class RoombaSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[IRobotEntity], StateType]
+    #: DATETIME IS A VALID SENSOR VALUE, and ten of these return one.
+    #:
+    #: `StateType` is `str | int | float | None`. Home Assistant's own
+    #: `SensorEntity.native_value` is wider -- it accepts `date`,
+    #: `datetime` and `Decimal` too, which is how a timestamp sensor
+    #: works at all. This declaration was the narrower of the two and
+    #: the timestamp sensors have been returning datetimes past it
+    #: since they were written.
+    value_fn: Callable[[IRobotEntity], StateType | dt_stdlib.datetime]
     filter_fn: Callable[[dict[str, Any]], bool] = field(
         default_factory=lambda: lambda _: True
     )
@@ -349,6 +357,20 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="total_cleaned_area",
         translation_key="total_cleaned_area",
         name="Lifetime cleaned area",
+        # WITHOUT device_class HOME ASSISTANT CANNOT CONVERT.
+        #
+        # @chairstacker (#69): his HA is on imperial and his iRobot app
+        # shows square feet, but this read square metres regardless.
+        # The unit was declared and the value converted correctly -- HA
+        # just had nothing to tell it what kind of quantity this is, so
+        # it displayed the native unit as-is.
+        #
+        # With AREA set, HA converts to the user's own unit system. That
+        # is the setting that should win: the iRobot account's "Metric
+        # Units" switch is not in the data we receive, and overriding a
+        # Home Assistant preference from a vendor account setting would
+        # be wrong even if it were.
+        device_class=SensorDeviceClass.AREA,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -731,7 +753,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_registry_enabled_default=False,  # superseded by mop_ars_behavior (F3b)
         filter_fn=lambda s: "rankOverlap" in s,
         value_fn=lambda e: MOP_RANK_LABELS.get(
-            e.vacuum_state.get("rankOverlap"), "Unknown"
+            e.vacuum_state.get("rankOverlap") or 0, "Unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -980,6 +1002,20 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="area_cleaned_today",
         translation_key="area_cleaned_today",
         name="Missions – Area cleaned today",
+        # WITHOUT device_class HOME ASSISTANT CANNOT CONVERT.
+        #
+        # @chairstacker (#69): his HA is on imperial and his iRobot app
+        # shows square feet, but this read square metres regardless.
+        # The unit was declared and the value converted correctly -- HA
+        # just had nothing to tell it what kind of quantity this is, so
+        # it displayed the native unit as-is.
+        #
+        # With AREA set, HA converts to the user's own unit system. That
+        # is the setting that should win: the iRobot account's "Metric
+        # Units" switch is not in the data we receive, and overriding a
+        # Home Assistant preference from a vendor account setting would
+        # be wrong even if it were.
+        device_class=SensorDeviceClass.AREA,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=1,
         state_class=SensorStateClass.MEASUREMENT,
@@ -1096,7 +1132,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # an automation) doesn't need to separately query mission history
         # just to find out which mission this count is even about.
         extra_attributes_fn=lambda e: (
-            {"last_mission_id": e._config_entry.runtime_data.mission_store.latest().get("id")}
+            {"last_mission_id": (
+                (e._config_entry.runtime_data.mission_store.latest() or {}).get("id")
+                if e._config_entry.runtime_data.mission_store is not None
+                else None
+            )}
             if e._config_entry.runtime_data.mission_store is not None
             and e._config_entry.runtime_data.mission_store.latest() is not None
             else {}
@@ -1522,7 +1562,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         return super().available
 
     @property
-    def native_value(self) -> StateType:
+    def native_value(self) -> StateType | dt_stdlib.datetime:
         key = self.entity_description.key
         options = self._config_entry.options
         store = self._config_entry.runtime_data.maintenance_store
@@ -1532,14 +1572,14 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             current_hr = self.run_stats.get("hr", 0)
             if store:
                 return store.filter_remaining(current_hr, threshold)
-            return max(0, threshold - current_hr)
+            return int(max(0, threshold - current_hr))
 
         if key == "brush_remaining_hours":
             threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
             current_hr = self.run_stats.get("hr", 0)
             if store:
                 return store.brush_remaining(current_hr, threshold)
-            return max(0, threshold - current_hr)
+            return int(max(0, threshold - current_hr))
 
         if key == "next_clean":
             return self._calc_next_clean()
@@ -1549,7 +1589,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         # F6b — cache battery retention value to RoombaData
         if key == "battery_capacity_retention":
             data = self._config_entry.runtime_data
-            data.battery_retention_value = float(value) if value is not None else None
+            data.battery_retention_value = (
+                float(value) if isinstance(value, (int, float, str)) else None
+            )
 
         # F6f — battery contact / bus-communication anomaly check, fed
         # directly from the same batPct value this sensor exposes (no
@@ -1581,7 +1623,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if key == "last_error_code":
             code = self.native_value
             if code is not None:
-                catalogue = get_localized_error_entry(int(code), self.hass.config.language)
+                catalogue = get_localized_error_entry(
+                    int(code), self.hass.config.language,  # type: ignore[arg-type]
+                )
                 return {
                     "description": catalogue.get("description", ""),
                     "action": catalogue.get("action", ""),
@@ -1692,7 +1736,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
         return len(new_state) > 1 or "signal" not in new_state
 
-    def _calc_next_clean(self) -> StateType:
+    def _calc_next_clean(self) -> StateType | dt_stdlib.datetime:
         """Return next scheduled cleaning time as a timezone-aware datetime.
 
         v3.4.0 CAL — thin wrapper around schedule_parser.py's
@@ -1709,7 +1753,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         strictly_future = [start for start, _end in occurrences if start > now]
         return min(strictly_future) if strictly_future else None
 
-    def _next_from_schedule2(self, entries: list) -> StateType:
+    def _next_from_schedule2(self, entries: list[Any]) -> StateType | dt_stdlib.datetime:
         """Back-compat wrapper (v3.4.0 CAL extraction) — the actual
         per-format parsing now lives in schedule_parser.py, shared
         with calendar.py. Kept here, delegating, so existing call
@@ -1723,7 +1767,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         future = [o for o in occurrences if o > now]
         return min(future) if future else None
 
-    def _next_from_schedule_v1(self, schedule: dict) -> StateType:
+    def _next_from_schedule_v1(self, schedule: dict[str, Any]) -> StateType | dt_stdlib.datetime:
         """Back-compat wrapper — see _next_from_schedule2()'s docstring."""
         now = dt_util.now()
         occurrences = occurrences_from_schedule_v1(

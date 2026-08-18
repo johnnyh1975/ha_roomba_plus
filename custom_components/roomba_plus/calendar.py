@@ -173,7 +173,7 @@ def _to_calendar_event(
     )
 
 
-def _mode_of(occurrence: tuple) -> str | None:
+def _mode_of(occurrence: tuple[Any, ...]) -> str | None:
     """The operating-mode label an occurrence carries, if any.
 
     By position, like `_uid_of`: Classic occurrences are shorter and
@@ -182,7 +182,7 @@ def _mode_of(occurrence: tuple) -> str | None:
     return _mode_label(occurrence[5]) if len(occurrence) > 5 else None
 
 
-def _uid_of(occurrence: tuple) -> str | None:
+def _uid_of(occurrence: tuple[Any, ...]) -> str | None:
     """The schedule id an occurrence carries, if it carries one.
 
     Read by position rather than unpacked, because the Classic path
@@ -244,8 +244,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
     )
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_schedule"
 
     def _schedule_state(self) -> tuple[str | None, dict[str, Any]]:
@@ -386,9 +385,9 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         non-cloud fallback path."""
         options = self._config_entry.options if self._config_entry is not None else {}
         from .const import CONF_SMART_ZONE_ALIASES
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-        zone_data: dict = options.get("smart_zone_data", {})
-        labels: dict = options.get("smart_zone_labels", {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
+        labels: dict[str, Any] = options.get("smart_zone_labels", {})
         return [
             resolve_zone_name(
                 rid, aliases, None, zone_data.get(rid, {}).get("name"), labels,
@@ -539,8 +538,12 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         #: (start, end, region_ids, name, schedule_id). The last field
         #: is what gives each event a uid, and without a uid Home
         #: Assistant cannot call delete or edit at all.
+        # SIX FIELDS, matching `parse_prime_schedule_occurrences`. The
+        # tuple grew twice -- schedule_id for the calendar uid, then
+        # operating_mode -- and this stayed at five, as the parser's own
+        # local declaration stayed at four.
         self._cached_occurrences: list[
-            tuple[Any, Any, list[str], str | None, str | None]
+            tuple[Any, Any, list[str], str | None, str | None, int | None]
         ] = []
         self._cached_room_names: dict[str, str] = {}
 
@@ -729,7 +732,12 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
 
     async def _fetch_occurrences(
         self, start: dt_stdlib.datetime, end: dt_stdlib.datetime,
-    ) -> list[tuple[dt_stdlib.datetime, dt_stdlib.datetime, list[str], str | None]]:
+    ) -> list[
+        tuple[
+            dt_stdlib.datetime, dt_stdlib.datetime, list[str],
+            str | None, str | None, int | None,
+        ]
+    ]:
         """REAL BUG FOUND AND FIXED (caught before any real device
         test): get_schedules()'s real response shape is
         SchedulesResponse.household_schedules -> list[SchedulesList],
@@ -800,7 +808,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         # call that can fail would make the detection useless.
         record_success("calendar recompute")
 
-    def _estimated_end(self, occurrence: tuple) -> Any:
+    def _estimated_end(self, occurrence: tuple[Any, ...]) -> Any:
         """When this occurrence is expected to finish.
 
         The parser gives every occurrence a flat hour, because a schedule
@@ -844,7 +852,9 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             params = {"operatingMode": mode} if mode is not None else {}
             for rid in region_ids:
                 best = TimeEstimates.best(
-                    estimates.by_region.get(str(rid)) or [], **params
+                    (estimates.by_region.get(str(rid)) if estimates else None)
+                    or [],
+                    **params,
                 )
                 # ONE UNKNOWN ROOM DISCARDS THE WHOLE SUM. A partial
                 # total would be confidently short, and an event that
@@ -934,7 +944,17 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             # BOTH FIELDS, as the edit path already does: a user types
             # where it suits them, and neither is labelled for rooms or
             # for a mode.
-            text = f"{summary} {kwargs.get('description') or ''}"
+            # ALL THREE FIELDS, INCLUDING LOCATION.
+            #
+            # @chairstacker (#71) typed the zone into Location and got
+            # the room matched from somewhere else entirely. Location is
+            # the field a calendar UI labels for "where", so it is the
+            # obvious place to name a room -- and it was the one field
+            # this never read.
+            text = " ".join(
+                str(kwargs.get(k) or "")
+                for k in ("summary", "description", "location")
+            )
             room_ids = match_rooms(text, self._room_names())
         except AmbiguousRoomError as err:
             raise ServiceValidationError(str(err)) from err
@@ -943,7 +963,20 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             self.hass,
             self._config_entry,
             name=summary or None,
-            weekday=local_start.weekday(),
+            # THE ROBOT COUNTS FROM SUNDAY, PYTHON FROM MONDAY.
+            #
+            # @chairstacker (#71): a Monday entry created in the HA
+            # calendar landed on Sunday, in both HA and the iRobot app.
+            # `datetime.weekday()` is Mon=0..Sun=6; the wire table in
+            # prime_schedule_services is `sun: 0, mon: 1, ...`. Passing
+            # the raw value shifted every day back by one.
+            #
+            # Third time this conversion has gone wrong in this project
+            # -- @DaRealGuGu's edit shifted forward by one on a30, from
+            # a second table that counted from Monday. That table was
+            # fixed; this call site was still handing it the wrong
+            # basis.
+            weekday=(local_start.weekday() + 1) % 7,
             hour=local_start.hour,
             minute=local_start.minute,
             frequency=frequency,
@@ -1025,12 +1058,16 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         if event.get("rrule"):
             frequency = self._frequency_from_rrule(event.get("rrule"))
         else:
-            frequency = self._existing_frequency(uid)
+            frequency = self._existing_frequency(uid) or ""
         local_start = dt_util.as_local(start)
         summary = event.get("summary") or ""
         # Both fields, same as create: a user types the rooms wherever it
         # suits them, and neither field is labelled for it.
-        text = f"{summary} {event.get('description') or ''}"
+        # Location too, matching the create path above.
+        text = " ".join(
+            str(event.get(k) or "")
+            for k in ("summary", "description", "location")
+        )
         try:
             room_ids = match_rooms(text, self._room_names())
         except AmbiguousRoomError as err:
@@ -1041,7 +1078,20 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             self._config_entry,
             uid,
             name=summary or None,
-            weekday=local_start.weekday(),
+            # THE ROBOT COUNTS FROM SUNDAY, PYTHON FROM MONDAY.
+            #
+            # @chairstacker (#71): a Monday entry created in the HA
+            # calendar landed on Sunday, in both HA and the iRobot app.
+            # `datetime.weekday()` is Mon=0..Sun=6; the wire table in
+            # prime_schedule_services is `sun: 0, mon: 1, ...`. Passing
+            # the raw value shifted every day back by one.
+            #
+            # Third time this conversion has gone wrong in this project
+            # -- @DaRealGuGu's edit shifted forward by one on a30, from
+            # a second table that counted from Monday. That table was
+            # fixed; this call site was still handing it the wrong
+            # basis.
+            weekday=(local_start.weekday() + 1) % 7,
             hour=local_start.hour,
             minute=local_start.minute,
             frequency=frequency,

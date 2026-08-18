@@ -23,6 +23,7 @@ from homeassistant.components.vacuum import (
 # never sets the flag and HA never calls async_get_segments(). The try/except
 # ImportError below is defensive depth only; the hasattr guard is the primary gate.
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -141,7 +142,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
         """Initialise with roombapy Roomba object and BLID."""
         super().__init__(roomba, blid, config_entry)
-        self._config_entry = config_entry
         # NEW (V4/Prime): read connection type / prime_robot from
         # runtime_data when available. Defaults (LOCAL_PUSH/None)
         # preserve exact existing behavior for any caller that
@@ -163,6 +163,25 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # _handle_coordinator_update()'s call into HA's native remap flow.
         # See that method for the full rationale.
         self._segment_mismatch_streak: int = 0
+
+        #: NEITHER OF THESE EXISTED, and `_handle_coordinator_update`
+        #: read both on every cloud refresh.
+        #:
+        #: `last_seen_segments` and `async_create_segments_issue` come
+        #: from Home Assistant's native segment-remap flow, which
+        #: `StateVacuumEntity` does not provide -- checked directly. So
+        #: the mismatch check raised AttributeError the first time a
+        #: cloud coordinator fired, on every Classic robot with cloud
+        #: credentials.
+        #:
+        #: The tests set both names on the entity by hand before calling
+        #: the method, which is why they pass: the fixture supplied what
+        #: the class lacks. Fifth instance of that shape today.
+        #:
+        #: Declared as the no-op defaults the method already handles:
+        #: `None` means "never configured -- suppress the repair issue",
+        #: which is the behaviour the tests assert for the None case.
+        self.last_seen_segments: list[Any] | None = None
 
     @property
     def suggested_object_id(self) -> str | None:
@@ -349,7 +368,12 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         if status.get("cycle") in (None, "none"):
             return None
-        return self._PRIME_CLEANING_MODES.get(status.get("operatingMode"))
+        # A shadow carrying no operatingMode has no mode to name, and
+        # `dict.get(None)` looks up a key this map cannot hold.
+        mode = status.get("operatingMode")
+        if mode is None:
+            return None
+        return self._PRIME_CLEANING_MODES.get(mode)
 
     def _prime_dock_activity(self) -> str | None:
         """What the dock is doing right now, or None if nothing.
@@ -538,8 +562,19 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         state = self.vacuum_state
         attrs: dict[str, Any] = {
             ATTR_SOFTWARE_VERSION: state.get("softwareVer"),
+            # PRIME HAS NO `current_state`, AND None IS NOT AN ANSWER.
+            #
+            # @jouwdan (#88): a Prime entry has no local robot, so this
+            # attribute read `None` for every V4 robot -- an automation
+            # templating on `status` got nothing at all.
+            #
+            # `activity` is derived for Prime from the mission phase and
+            # always returns a VacuumActivity, never None, so its value
+            # is a real answer: "docked", "cleaning", "returning".
             "status": (
-                self.vacuum.current_state if self.vacuum is not None else self.activity.value
+                self.vacuum.current_state
+                if self.vacuum is not None
+                else self.activity.value
             ),
         }
 
@@ -560,7 +595,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             pos_x_raw = (pos_state.get("point") or {}).get("x")
             pos_y_raw = (pos_state.get("point") or {}).get("y")
             theta = pos_state.get("theta")
-            if all(v is not None for v in (pos_x_raw, pos_y_raw, theta)):
+            if pos_x_raw is not None and pos_y_raw is not None and theta is not None:
                 # v2.9.0 — firmware reports cm, not mm. See
                 # POSE_POINT_CM_TO_MM in const.py.
                 pos_x = pos_x_raw * POSE_POINT_CM_TO_MM
@@ -618,7 +653,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             _live = self._config_entry.runtime_data
             _live_region_map = {
                 r["id"]: r["name"]
-                for r in _live.cloud_coordinator.regions
+                for r in (
+                    _live.cloud_coordinator.regions
+                    if _live.cloud_coordinator is not None
+                    else []
+                )
                 if r.get("id")
             }
             # Try cleanMissionStatus.cmd.regions first, fall back to lastCommand.regions
@@ -648,6 +687,13 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             and self._config_entry.runtime_data.mission_store is not None
         ):
             _data = self._config_entry.runtime_data
+            # BOUND LOCALLY so the check above carries. The condition
+            # narrows `self._config_entry.runtime_data.mission_store`,
+            # and every read below goes through `_data` -- a different
+            # expression as far as mypy is concerned, so the narrowing
+            # was lost at four call sites.
+            _store = _data.mission_store
+            assert _store is not None  # noqa: S101 - narrowed by the condition above
 
             # Build region_map from coordinator (SMART path)
             region_map: dict[str, str] = {}
@@ -668,16 +714,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 umf_regions = _data.umf_aligner.rid_to_name()
 
             if region_map or umf_regions:
-                attrs["last_cleaned_rooms"] = _data.mission_store.latest_cleaned_rooms(region_map, umf_regions)
-                attrs["room_coverage"]      = _data.mission_store.latest_room_coverage(region_map, umf_regions)
+                attrs["last_cleaned_rooms"] = _store.latest_cleaned_rooms(region_map, umf_regions)
+                attrs["room_coverage"]      = _store.latest_room_coverage(region_map, umf_regions)
                 # planned_room_order and mission_destination: only update from
                 # MissionStore when not in an active cleaning phase. During a
                 # mission the live source (lastCommand/cmd.regions) is authoritative;
                 # MissionStore only has the previous mission's timeline at this point
                 # and would overwrite the live values with stale data.
                 if phase not in CLEANING_PHASES:
-                    attrs["planned_room_order"]  = _data.mission_store.latest_planned_order(region_map, umf_regions)
-                    attrs["mission_destination"] = _data.mission_store.latest_mission_destination(region_map, umf_regions)
+                    attrs["planned_room_order"]  = _store.latest_planned_order(region_map, umf_regions)
+                    attrs["mission_destination"] = _store.latest_mission_destination(region_map, umf_regions)
 
         # NEW (V4/Prime). Informational room/mission-progress attributes
         # from the confirmed mission/timeline/report channel -- see
@@ -719,8 +765,13 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # survives a rename in the iRobot app; one written against the
         # name does not -- and a name is all a button or a select could
         # offer.
-        favorites = getattr(
-            self._config_entry.runtime_data, "prime_favorites", None
+        # `_config_entry` DEFAULTS TO None IN THIS CONSTRUCTOR, so it is
+        # genuinely optional rather than an invariant mypy cannot see.
+        # An entity built without one has no favourites to report.
+        favorites = (
+            getattr(self._config_entry.runtime_data, "prime_favorites", None)
+            if self._config_entry is not None
+            else None
         )
         if favorites:
             attrs["favorites"] = favorites
@@ -977,6 +1028,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         """
         if self._prime_robot is None:
             return None
+        if self._config_entry is None:
+            return None
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_status_coordinator", None
         )
@@ -1060,7 +1113,12 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if self.activity == VacuumActivity.CLEANING:
             await self.async_pause()
             for _ in range(10):
-                if self.activity == VacuumActivity.PAUSED:
+                # RE-READ, because `async_pause()` is what changes it.
+                # mypy narrows `self.activity` from the check above and
+                # then reports this comparison as impossible -- it
+                # cannot know the await in between moved the robot.
+                current: VacuumActivity = self.activity
+                if current == VacuumActivity.PAUSED:
                     break
                 await asyncio.sleep(1)
             else:
@@ -1157,7 +1215,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
 
-        pmaps: list[dict] = self.vacuum_state.get("pmaps", [])
+        pmaps: list[dict[str, Any]] = self.vacuum_state.get("pmaps", [])
 
         if not pmap_id and pmaps:
             first_pmap = pmaps[0]
@@ -1196,12 +1254,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     # ── CLEAN_AREA (F-I15, HA 2026.3) ───────────────────────────────────────
 
-    async def async_get_segments(self) -> list:
+    async def async_get_segments(self) -> list[Any]:
         """The rooms HA can map to areas. Delegates to the backend."""
         from .room_cleaning import (  # noqa: PLC0415
             async_get_room_cleaning_backend as _get_backend,
         )
 
+        # `_config_entry` defaults to None in this constructor -- real
+        # optionality, not an invariant mypy cannot see.
+        if self._config_entry is None:
+            return []
         backend = _get_backend(self._config_entry, self.hass)
         if backend is None:
             return []
@@ -1236,6 +1298,10 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             async_get_room_cleaning_backend as _get_backend,
         )
 
+        # `_config_entry` defaults to None in this constructor -- real
+        # optionality, not an invariant mypy cannot see.
+        if self._config_entry is None:
+            return
         backend = _get_backend(self._config_entry, self.hass)
         if backend is None:
             return
@@ -1297,6 +1363,31 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 self.async_create_segments_issue()
         else:
             self._segment_mismatch_streak = 0
+
+    def async_create_segments_issue(self) -> None:
+        """Tell the user their room list no longer matches the robot's.
+
+        DID NOT EXIST. `_handle_coordinator_update` called this after a
+        debounced segment mismatch, and the attribute came from nowhere
+        -- not from `StateVacuumEntity`, not from this component. The
+        tests set it on the entity as a MagicMock before calling the
+        method, so the crash never surfaced.
+
+        A retrained map renumbers regions, which silently breaks any
+        automation targeting rooms by id. A repair issue is how the rest
+        of this integration reports that class of problem.
+        """
+        if self._config_entry is None:
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"segments_changed_{self._config_entry.entry_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="segments_changed",
+        )
 
     def _get_two_pass(self) -> bool:
         """Read twoPass preference from live robot state.
@@ -1442,7 +1533,9 @@ class BraavaJet(IRobotVacuum):
             OVERLAP_DEEP: MOP_DEEP,
             OVERLAP_EXTENDED: MOP_EXTENDED,
         }
-        behaviour = behaviour_map.get(rank_overlap)
+        behaviour = (
+            behaviour_map.get(rank_overlap) if rank_overlap is not None else None
+        )
         pad_wetness = self.vacuum_state.get("padWetness") or {}
         spray_value = pad_wetness.get("disposable")
         if behaviour is None or spray_value is None:

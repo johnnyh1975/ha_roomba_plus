@@ -141,7 +141,7 @@ async def async_setup_entry(
             # TWO CONTROLS HAVE DOCK- OR ROBOT-DEPENDENT OPTION SETS.
             # Everything else offers its full map.
             if description.wire_key == "autoevacFreq":
-                values = _autoevac_options(cap)
+                values: dict[int, str] | None = _autoevac_options(cap)
             elif description.wire_key == "pwHeat":
                 values = _pad_wash_heat_options(dock_cap)
             elif description.wire_key == "padWetness.padPlate":
@@ -158,7 +158,9 @@ async def async_setup_entry(
                 narrowed = _sku_narrowed(
                     description.wire_key, sku, description.values
                 )
-                values = narrowed if narrowed != description.values else None
+                values = (
+                    narrowed if narrowed != description.values else None
+                )
             # A capability level can narrow the set to nothing --
             # `taskEndOnly` offers no choice at all. A select with no
             # options is worse than no select.
@@ -186,7 +188,7 @@ async def async_setup_entry(
     state = roomba_reported_state(roomba)
     data = config_entry.runtime_data
 
-    entities = []
+    entities: list[Any] = []
 
     # Cleaning passes: present when noAutoPasses is in state
     if "noAutoPasses" in state:
@@ -270,7 +272,7 @@ class RoombaPlusSelectDescription(SelectEntityDescription):
     unique_id_suffix: str
     options: list[str]
     current_option_fn: Callable[[dict[str, Any]], str | None]
-    select_fn: Callable[["SimpleRoombaSelect", str], Coroutine]
+    select_fn: Callable[["SimpleRoombaSelect", str], Coroutine[Any, Any, Any]]
     state_filter_keys: tuple[str, ...]
 
 
@@ -475,7 +477,7 @@ class ZoneSelect(IRobotEntity, SelectEntity):
 
     def __init__(
         self,
-        roomba,
+        roomba: Any,
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
@@ -544,12 +546,11 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
     def __init__(
         self,
-        roomba,
+        roomba: Any,
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_smart_zone_select"
         self._selected: str | None = None
         # Track which region_ids we have already raised an issue for so we
@@ -599,9 +600,9 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         """
         from .const import CONF_SMART_ZONE_ALIASES
         options = self._config_entry.options
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-        zone_data: dict = options.get("smart_zone_data", {})
-        labels: dict = options.get("smart_zone_labels", {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
+        labels: dict[str, Any] = options.get("smart_zone_labels", {})
         local_name = zone_data.get(region_id, {}).get("name") if region_id in zone_data else None
         return resolve_zone_name(region_id, aliases, None, local_name, labels)
 
@@ -611,7 +612,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     def options(self) -> list[str]:
         """Return labelled options list, excluding hidden zones."""
         from .const import CONF_SMART_ZONE_HIDDEN
-        hidden_ids: list = self._config_entry.options.get(CONF_SMART_ZONE_HIDDEN, [])
+        hidden_ids: list[Any] = self._config_entry.options.get(CONF_SMART_ZONE_HIDDEN, [])
         return [
             self._region_label(rid)
             for rid in self._collect_region_ids()
@@ -642,7 +643,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         return ids[0] if ids else None
 
     @property
-    def selected_pmap_info(self) -> dict:
+    def selected_pmap_info(self) -> dict[str, Any]:
         """Return pmap_id and user_pmapv_id from the most recent known source."""
         # Try lastCommand first (most recent)
         last = self.vacuum_state.get("lastCommand", {})
@@ -671,7 +672,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
     # ── Push update wiring ────────────────────────────────────────────────────
 
-    def new_state_filter(self, new_state: dict) -> bool:
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanSchedule2" in new_state or "lastCommand" in new_state
 
     def on_message(self, json_data: dict[str, Any]) -> None:
@@ -704,7 +705,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             # vacuum_state may no longer contain the regions.
             captured = sorted(new_unlabelled)
             self.hass.loop.call_soon_threadsafe(
-                lambda ids=captured: self.hass.async_create_task(
+                lambda ids=captured: self.hass.async_create_task(  # type: ignore[misc]
                     self._async_raise_naming_issue(ids)
                 )
             )
@@ -747,7 +748,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         # Exclude hidden zone IDs from the repair issue — users have explicitly
         # chosen to hide these zones and should not be prompted to name them.
         from .const import CONF_SMART_ZONE_HIDDEN
-        hidden_ids: set = set(new_options.get(CONF_SMART_ZONE_HIDDEN, []))
+        hidden_ids: set[Any] = set(new_options.get(CONF_SMART_ZONE_HIDDEN, []))
         unlabelled = [
             rid for rid in new_options["discovered_zone_ids"]
             if rid not in hidden_ids
@@ -817,8 +818,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         zones: list[dict[str, Any]],
         is_active_map: bool = True,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._pmap_id = pmap_id
         self._regions = regions   # list of {id, name, region_type}
         self._zones = zones       # list of {id, name, zone_type}
@@ -843,10 +843,10 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         """
         from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
         options = self._config_entry.options
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-        hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
-        labels: dict = options.get("smart_zone_labels", {})
-        zone_data: dict = options.get("smart_zone_data", {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+        hidden_ids: list[Any] = options.get(CONF_SMART_ZONE_HIDDEN, [])
+        labels: dict[str, Any] = options.get("smart_zone_labels", {})
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
 
         items = []
         for r in self._regions:
@@ -895,7 +895,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         """Return the region/zone id for the currently selected option."""
         for item in self._all_items():
             if item["name"] == self._selected:
-                return item["id"]
+                return str(item["id"])
         items = self._all_items()
         return items[0]["id"] if items else None
 

@@ -84,6 +84,18 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         blid: str,
         prime_robot: PrimeRobot,
     ) -> None:
+        #: NARROWED ONCE PER CLASS, not asserted at fifteen call sites.
+        #:
+        #: `DataUpdateCoordinator.config_entry` is `ConfigEntry | None`
+        #: because the base class allows construction without one. All
+        #: three coordinators in this file take a non-optional entry, so
+        #: it is never None here -- mypy just cannot see that through
+        #: the base class.
+        #:
+        #: A first attempt set the attribute on ONE of the three classes
+        #: and rewrote the reads in all of them. A test caught it
+        #: immediately. Three classes, three declarations.
+        self.entry: ConfigEntry = config_entry
         super().__init__(
             hass,
             _LOGGER,
@@ -127,12 +139,12 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 f"Could not connect to V4/Prime robot {self.blid}: {exc}"
             ) from exc
 
-        self.config_entry.async_create_background_task(
+        self.entry.async_create_background_task(
             self.hass,
             self._async_watch_mission_timeline(),
             name=f"roomba_plus_prime_watch_{self.blid}",
         )
-        self.config_entry.async_create_background_task(
+        self.entry.async_create_background_task(
             self.hass,
             self._async_watch_rejected_commands(),
             name=f"roomba_plus_prime_rejected_{self.blid}",
@@ -261,7 +273,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                     # simply never yields again. A timestamp is the only
                     # thing that distinguishes "quiet because nothing is
                     # happening" from "quiet because the stream died".
-                    self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    self.entry.runtime_data.last_mqtt_message_ts = _time.time()
                     report = MissionTimelineReport.from_json(delta.payload)
                     self.async_set_updated_data(report)
                     self._request_parts_refresh_on_mission_end(report)
@@ -333,7 +345,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             else:
                 return
             parts = getattr(
-                self.config_entry.runtime_data, "prime_parts_coordinator", None
+                self.entry.runtime_data, "prime_parts_coordinator", None
             )
             if parts is None:
                 return
@@ -511,6 +523,18 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         blid: str,
         prime_robot: PrimeRobot,
     ) -> None:
+        #: NARROWED ONCE PER CLASS, not asserted at fifteen call sites.
+        #:
+        #: `DataUpdateCoordinator.config_entry` is `ConfigEntry | None`
+        #: because the base class allows construction without one. All
+        #: three coordinators in this file take a non-optional entry, so
+        #: it is never None here -- mypy just cannot see that through
+        #: the base class.
+        #:
+        #: A first attempt set the attribute on ONE of the three classes
+        #: and rewrote the reads in all of them. A test caught it
+        #: immediately. Three classes, three declarations.
+        self.entry: ConfigEntry = config_entry
         super().__init__(
             hass,
             _LOGGER,
@@ -587,7 +611,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         self.async_set_updated_data(seeded)
 
-        self.config_entry.async_create_background_task(
+        self.entry.async_create_background_task(
             self.hass,
             self._async_watch_status_updates(),
             name=f"roomba_plus_prime_status_watch_{self.blid}",
@@ -637,7 +661,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         continue
                     updated = dict(self.data or {})
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
-                    self.config_entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    self.entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self._note_phase_for_timer(updated)
                     self.async_set_updated_data(updated)
                     backoff = 5.0  # a live update means things are healthy again
@@ -678,7 +702,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         Not done here, because a disagreement has no better answer than
         the docked reading anyway.
         """
-        data = self.config_entry.runtime_data
+        data = self.entry.runtime_data
         positions = getattr(data, "prime_positions", None)
         if not positions:
             return
@@ -706,7 +730,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         down the shadow stream for.
         """
         try:
-            data = self.config_entry.runtime_data
+            data = self.entry.runtime_data
             store = getattr(data, "mission_timer_store", None)
             if store is None:
                 return
@@ -779,7 +803,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 if mission_id == "prime" and previous is None:
                     return
                 positions = getattr(
-                    self.config_entry.runtime_data, "prime_positions", None
+                    self.entry.runtime_data, "prime_positions", None
                 )
                 if positions is not None:
                     positions.clear()
@@ -796,12 +820,12 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # Keyed on the mission id changing rather than on the
                 # phase, because a robot that pauses and resumes re-enters
                 # "run" with the same mission and should keep its trail.
-                store.on_phase_run(mission_id, self.hass, self.config_entry.entry_id)
+                store.on_phase_run(mission_id, self.hass, self.entry.entry_id)
             else:
                 # Anything that is not "run" ends the running segment --
                 # including charge, evac and stuck. The store flushes the
                 # elapsed delta rather than discarding it.
-                store.on_phase_other(self.hass, self.config_entry.entry_id)
+                store.on_phase_other(self.hass, self.entry.entry_id)
         except Exception:  # noqa: BLE001
             # THE SITE THAT HID THE WORST OF THE SIX. An attribute
             # initialised on a different class made this raise on its
@@ -1077,6 +1101,18 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         blid: str,
         config_entry: ConfigEntry,
     ) -> None:
+        #: NARROWED ONCE PER CLASS, not asserted at fifteen call sites.
+        #:
+        #: `DataUpdateCoordinator.config_entry` is `ConfigEntry | None`
+        #: because the base class allows construction without one. All
+        #: three coordinators in this file take a non-optional entry, so
+        #: it is never None here -- mypy just cannot see that through
+        #: the base class.
+        #:
+        #: A first attempt set the attribute on ONE of the three classes
+        #: and rewrote the reads in all of them. A test caught it
+        #: immediately. Three classes, three declarations.
+        self.entry: ConfigEntry = config_entry
         self.prime_robot = prime_robot
         self.blid = blid
 
@@ -1199,13 +1235,13 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         should leave the previous list standing rather than take the
         schedules down with it.
         """
-        data = self.config_entry.runtime_data
+        data = self.entry.runtime_data
         if getattr(data, "prime_robot", None) is None:
             return
         try:
             from .button_prime import async_favorites_attribute  # noqa: PLC0415
 
-            favourites = await async_favorites_attribute(self.config_entry)
+            favourites = await async_favorites_attribute(self.entry)
         except Exception:  # noqa: BLE001
             _LOGGER.debug("roomba_plus: could not refresh favourites", exc_info=True)
             return
@@ -1227,7 +1263,7 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         it through unopened is honest; inventing an interpretation of it
         here would not be.
         """
-        data = self.config_entry.runtime_data
+        data = self.entry.runtime_data
         robot = getattr(data, "prime_robot", None)
         household = getattr(data, "prime_household_id", None)
         if robot is None or household is None:
@@ -1277,7 +1313,7 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         self.quiet_hours = await self._async_read_quiet_hours()
         await self._async_refresh_favourites()
 
-        containers = await async_read_schedule_containers(self.config_entry)
+        containers = await async_read_schedule_containers(self.entry)
         if containers is None:
             # None means the read FAILED, [] means it succeeded and found
             # nothing -- a distinction async_read_schedule_containers()

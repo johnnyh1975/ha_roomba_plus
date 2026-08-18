@@ -50,7 +50,7 @@ _MIN_UNAVAILABLE = timedelta(minutes=2)
 
 
 
-def classify_mission_result(record: dict) -> str:
+def classify_mission_result(record: dict[str, Any]) -> str:
     """Classify a raw /missionhistory record into a canonical result string.
 
     Uses the v2.0 classification scheme, which is more granular than the
@@ -131,7 +131,7 @@ def classify_mission_result(record: dict) -> str:
     return "unknown"
 
 
-def _normalize_mission_history(raw: dict) -> dict:
+def _normalize_mission_history(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a raw /missionhistory record into a consistent shape.
 
     The iRobot cloud /missionhistory endpoint (confirmed from field logs) returns
@@ -185,7 +185,7 @@ def _normalize_mission_history(raw: dict) -> dict:
     if sqft is None:
         sqft = raw.get("sqft")  # per-mission fallback, marked in attributes
 
-    result: dict = {}
+    result: dict[str, Any] = {}
     if sqft is not None or hr is not None or mn is not None:
         result["runtimeStats"] = {}
         if sqft is not None:
@@ -200,7 +200,7 @@ def _normalize_mission_history(raw: dict) -> dict:
     return result
 
 
-def _aggregate_history(records: list) -> dict:
+def _aggregate_history(records: list[Any]) -> dict[str, Any]:
     """Aggregate a list of individual mission records into totals.
 
     Confirmed field names from field logs (980 firmware v2.4.17-138):
@@ -253,7 +253,7 @@ def _aggregate_history(records: list) -> dict:
             total_sqft += int(sqft)
             has_sqft = True
 
-    result: dict = {
+    result: dict[str, Any] = {
         "bbmssn": {"nMssn": n_mssn},
     }
     if total_min > 0:
@@ -267,7 +267,7 @@ def _aggregate_history(records: list) -> dict:
     return result
 
 
-def _compute_daily_dirt_density(records: list[dict]) -> dict[str, float]:
+def _compute_daily_dirt_density(records: list[dict[str, Any]]) -> dict[str, float]:
     """P4 — Build a per-calendar-date median dirt density dict from raw records.
 
     Called once per cloud fetch; result cached on coordinator so api_views.py
@@ -301,7 +301,7 @@ def _compute_daily_dirt_density(records: list[dict]) -> dict[str, float]:
     return {day: statistics.median(dens) for day, dens in by_day.items()}
 
 
-def _parse_time_estimates(raw: list) -> dict[str, int | None]:
+def _parse_time_estimates(raw: list[Any]) -> dict[str, int | None]:
     """TE1 — Normalise a region's time_estimates list to {one_pass_sec, two_pass_sec}.
 
     Returns None for a key when:
@@ -509,8 +509,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # nested_keys: sub-keys one level deep for dict-valued fields.
             _all_keys: set[str] = set()
             _field_coverage: dict[str, int] = {}
-            _array_stats: dict[str, dict] = {}
-            _nested_keys: dict[str, set] = {}
+            _array_stats: dict[str, dict[str, Any]] = {}
+            _nested_keys: dict[str, set[Any]] = {}
 
             for _r in raw_history:
                 if not isinstance(_r, dict):
@@ -719,7 +719,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self.data:
             return []
-        return self.data.get("mission_history_raw", [])
+        return list(self.data.get("mission_history_raw", []))
 
     @property
     def active_pmap_id(self) -> str | None:
@@ -811,7 +811,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pass
         return None
 
-    def seed_pmap_id_from_local(self, reported_state: dict) -> None:
+    def seed_pmap_id_from_local(self, reported_state: dict[str, Any]) -> None:
         """IA74-PMAP — Seed active_pmap_id from local MQTT pmaps field on startup.
 
         Called once in async_setup_entry after the robot connects, before the
@@ -829,7 +829,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if self.data is not None:
             return   # cloud data already present — don't override
-        pmaps: list[dict] = reported_state.get("pmaps", [])
+        pmaps: list[dict[str, Any]] = reported_state.get("pmaps", [])
         if not pmaps:
             return
         best_pid: str | None = None
@@ -878,7 +878,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Try both to be robust — confirmed as a real divergence from
             # live debug data (June 2026): first_region_keys determines which
             # is present. An empty id silently breaks CR4 attribute generation.
-            def _rid(r: dict) -> str:
+            def _rid(r: dict[str, Any]) -> str:
                 return str(r.get("region_id") or r.get("id") or "")
 
             return [
@@ -917,7 +917,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not zones_raw:
                 return []
 
-            def _zid(z: dict) -> str:
+            def _zid(z: dict[str, Any]) -> str:
                 return str(z.get("zone_id") or z.get("id") or "")
 
             return [
@@ -961,12 +961,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return the most recently fetched UMF data, or empty dict."""
         if not self.data:
             return {}
-        return self.data.get("umf", {})
+        return dict(self.data.get("umf", {}))
 
     @property
     def keepout_zones(self) -> list[dict[str, Any]]:
         """Return keep-out zones from the active UMF floor plan."""
-        return self.umf_data.get("keepoutzones", [])
+        return list(self.umf_data.get("keepoutzones", []))
 
     @property
     def region_suggestions(self) -> list[dict[str, Any]]:
@@ -977,7 +977,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         MISSIONSTORE_FIELD_REGISTRY.md) — reliability across many pmaps
         beyond that one sample is unconfirmed, hence the conservative
         score-gating in sensor.py's id_to_display_name()."""
-        return self.umf_data.get("region_suggestions", [])
+        return list(self.umf_data.get("region_suggestions", []))
 
     @property
     def observed_zone_centroids(self) -> list[dict[str, Any]]:
@@ -995,7 +995,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return centroids
 
     async def _fetch_active_umf(
-        self, pmaps: list[dict]
+        self, pmaps: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
         """Fetch UMF floor plan for the active pmap.
 

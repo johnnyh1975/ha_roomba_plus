@@ -33,6 +33,8 @@ roombapy internals.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 
 import voluptuous as vol
@@ -166,7 +168,7 @@ def _entry_id_for_device(hass: HomeAssistant, device_id: str) -> str | None:
 
 async def async_get_triggers(
     hass: HomeAssistant, device_id: str
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return the list of triggers for a Roomba+ device."""
     dev_reg = dr.async_get(hass)
     device = dev_reg.async_get(device_id)

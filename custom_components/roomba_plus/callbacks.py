@@ -164,7 +164,7 @@ def _room_transition_confidence_ok(
             "faster than estimated, or robot just entered it)",
             elapsed, expected, _ROOM_TRANSITION_MIN_ELAPSED_RATIO,
         )
-    return _ok
+    return bool(_ok)
 
 
 # ── Partial-message-safe top-level key lookup ───────────────────────────────
@@ -194,7 +194,7 @@ def _merged_top_level(
     """
     value = reported.get(key)
     if value:
-        return value
+        return dict(value)
     roomba = getattr(entry.runtime_data, "roomba", None)
     master = getattr(roomba, "master_state", None) or {}
     return ((master.get("state") or {}).get("reported") or {}).get(key) or {}
@@ -329,7 +329,7 @@ async def async_record_mission(
 
     # F8b — capture error context at mission end
     # pose is None for firmware 3.20+ and 600-series; absent when null.
-    error_position_mm: dict | None = None
+    error_position_mm: dict[str, Any] | None = None
     if error_code:
         _pose = _merged_top_level(entry, reported, "pose")
         pose_point = _pose.get("point") if _pose else None
@@ -1214,7 +1214,7 @@ def make_mission_callback(
                             if r.get("id") and r.get("name")
                         }
                     _names = [
-                        _cloud_id_to_name.get(_MS.extract_rid(r))
+                        _cloud_id_to_name.get(_MS.extract_rid(r) or "")
                         or r.get("region_name")
                         or (_zone.get(_MS.extract_rid(r)) or {}).get("name")
                         or _MS.extract_rid(r)
@@ -1245,7 +1245,11 @@ def make_mission_callback(
                         _total_est: float | None = None
                         try:
                             from .sensor import _compute_room_time_estimates
-                            _room_secs = _compute_room_time_estimates(entry, _names)
+                            _room_secs = list(
+                                _compute_room_time_estimates(
+                                    entry, [str(x) for x in _names]
+                                )
+                            )
                             _known_secs: list[float] = []
                             for _s in _room_secs:
                                 if _s is None:
@@ -1475,7 +1479,17 @@ def make_mission_callback(
             return
         _on_mission_message({"state": {"reported": cached_state}}, _synthetic=True)
 
-    _on_mission_message.recheck_stuck_end_state = _async_recheck_stuck_end_state
+    # ATTACHED TO THE FUNCTION, which mypy cannot express: a plain
+    # Callable has no attributes. `__init__.py` reads it back off the
+    # returned callback to schedule the stuck-end recheck.
+    #
+    # It works and the alternative -- a small class, or returning a
+    # tuple -- would touch the one call site and every test that builds
+    # this callback. Setting it with a typed cast keeps the checker
+    # honest about what is happening.
+    _on_mission_message.recheck_stuck_end_state = (  # type: ignore[attr-defined]
+        _async_recheck_stuck_end_state
+    )
     return _on_mission_message
 
 
@@ -1692,7 +1706,7 @@ def make_map_retrain_callback(
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
-        pmaps: list[dict] = reported.get("pmaps", [])
+        pmaps: list[dict[str, Any]] = reported.get("pmaps", [])
         changed_pids: list[str] = []
         for pmap_entry in pmaps:
             for pid, pmapv in pmap_entry.items():
@@ -1772,7 +1786,7 @@ def _umf_version_changed(
     aligner = entry.runtime_data.umf_aligner
     if aligner is None:
         return True
-    return aligner.pmap_version_id != current_version
+    return bool(aligner.pmap_version_id != current_version)
 
 
 async def _async_realign(
@@ -1802,7 +1816,7 @@ async def _async_realign(
 
 
 def _extract_traversal_umf_positions(
-    records: list[dict],
+    records: list[dict[str, Any]],
     aligner: Any,
     min_missions: int = 3,
 ) -> list[tuple[float, float]]:
@@ -1888,7 +1902,7 @@ async def _async_update_robot_profile_store(
     # J: lifetime sqft staleness tracking
     try:
         _reported = dict(
-            entry.runtime_data.roomba.master_state
+            (entry.runtime_data.roomba.master_state if entry.runtime_data.roomba else {})
             .get("state", {}).get("reported", {})
         )
         _bbrun = _reported.get("bbrun", {})
@@ -2157,7 +2171,12 @@ async def _async_update_gs_smart_coverage(
 
     watermark = gs.last_processed_nmssn
     candidates = [
-        r for r in ms.records()
+        # `records` IS A PROPERTY, and this was the one place calling it.
+        # `ms.records()` raises TypeError -- a Sequence is not callable --
+        # so this whole coverage pass died on its first line every time
+        # it ran. Four other call sites in the integration read it
+        # correctly; this one did not, and nothing exercised it.
+        r for r in ms.records
         if r.get("pmaps_info")
         and (_gs_coverage_safe_int(r.get("nMssn")) or 0) > watermark
     ]

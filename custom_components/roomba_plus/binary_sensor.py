@@ -173,7 +173,7 @@ async def async_setup_entry(
     blid = data.blid
     state = roomba_reported_state(roomba)
 
-    entities: list[IRobotEntity] = []
+    entities = []
 
     # Bin full: only create when the robot reports bin.full
     if "full" in (state.get("bin") or {}):
@@ -260,14 +260,14 @@ class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_bin_full"
 
     @property
     def is_on(self) -> bool:
         """Return True when the bin is full."""
-        return (roomba_reported_state(self.vacuum).get("bin") or {}).get("full", False)
+        return bool((roomba_reported_state(self.vacuum).get("bin") or {}).get("full", False))
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bin" in new_state
@@ -301,7 +301,7 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
     # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_bin_present"
 
@@ -332,7 +332,7 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_connected"
 
@@ -377,7 +377,7 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_ready"
 
@@ -436,7 +436,7 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
     # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
 
@@ -470,7 +470,7 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_lid_closed"
 
@@ -616,7 +616,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         store = self._entry.runtime_data.maintenance_store
         if not store:
             return []
-        return store.due_items(self.vacuum_state, self._entry.options)
+        return store.due_items(dict(self.vacuum_state), self._entry.options)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bbrun" in new_state
@@ -851,7 +851,7 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
-        return (
+        return bool(
             status.get("phase") == "charge"
             and status.get("cycle", "none") != "none"
         )
@@ -932,8 +932,7 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
     _attr_entity_category = None  # reclassified DIAG→MAIN (v2.6.0)
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_demand_clean_blocked"
 
     @property
@@ -948,7 +947,7 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
         if dtm is None:
             return None
         blocked, _ = dtm.gate_blocked()
-        return blocked
+        return bool(blocked)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
@@ -1438,7 +1437,7 @@ class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         state = self._current_state
         if state is None or state.bin is None:
             return None
-        return state.bin.present
+        return bool(state.bin.present)
 
 
 class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
@@ -1506,7 +1505,7 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         state = self._current_state
         if state is None:
             return None
-        return state.tank_present
+        return bool(state.tank_present)
 
 
 
@@ -1539,7 +1538,7 @@ class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
         state = self._current_state
         if state is None or state.dock is None or state.dock.error is None:
             return None
-        return state.dock.error != 0
+        return bool(state.dock.error != 0)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1624,7 +1623,7 @@ class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):
         raw = coordinator.data.get("rw-constatus")
         if raw is None:
             return None
-        return ConnectionStatusShadow.from_json(raw).connected
+        return bool(ConnectionStatusShadow.from_json(raw).connected)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

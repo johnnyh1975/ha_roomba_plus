@@ -10,7 +10,7 @@ this is a straight move, not a rewrite.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, cast
 import datetime
 import time as _time_mod
 
@@ -300,7 +300,7 @@ def _mission_store_value(entity: "IRobotEntity", fn: Any) -> StateType:
     if store is None:
         return None
     try:
-        return fn(store)
+        return cast('str | int | float | None', fn(store))
     except Exception:  # noqa: BLE001
         return None
 
@@ -327,7 +327,7 @@ def _last_mission_team_id(store: Any) -> StateType:
     latest = store.latest()
     if latest is None:
         return None
-    return latest.get("team_id")
+    return cast('str | int | float | None', latest.get("team_id"))
 
 
 def _area_cleaned_today(store: Any) -> StateType:
@@ -348,14 +348,14 @@ def _last_error_code_value(entity: "IRobotEntity") -> StateType:
     """Live MQTT error code takes priority over persisted value."""
     live = (entity.vacuum_state.get("cleanMissionStatus") or {}).get("error", 0)
     if live:
-        return live
+        return cast('str | int | float | None', live)
     stored = entity._config_entry.runtime_data.last_error_code
     if stored is not None:
         return stored
     return None  # sensor shows Unknown until first error is recorded
 
 
-def _last_error_at_value(entity: "IRobotEntity") -> StateType:
+def _last_error_at_value(entity: "IRobotEntity") -> StateType | datetime.datetime:
     at_str = entity._config_entry.runtime_data.last_error_at
     if not at_str:
         return None
@@ -369,7 +369,7 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     stuck_records = store.query(30, result=store.STUCK_RESULTS)
     if not stuck_records:
         return None
-    zone_counts: Counter = Counter()
+    zone_counts: Counter[str] = Counter()
     for r in stuck_records:
         for z in (r.get("zones") or []):
             zone_counts[z] += 1
@@ -378,7 +378,7 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     return zone_counts.most_common(1)[0][0]
 
 
-def _presence_opportunities(entity: "IRobotEntity", days: int) -> StateType:
+def _presence_opportunities(entity: "IRobotEntity", days: int) -> int | None:
     store = entity._config_entry.runtime_data.mission_store
     if store is None:
         return None
@@ -407,19 +407,22 @@ def _presence_utilisation(entity: "IRobotEntity", days: int) -> StateType:
     return round(used / opportunities * 100, 1)
 
 
-def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
+def _next_likely_clean_window(entity: "IRobotEntity") -> StateType | datetime.datetime:
     store = entity._config_entry.runtime_data.mission_store
     if store is None:
         return None
     windows = store.presence_windows(14)
     if len(windows) < 3:
         return None
-    hour_counts: Counter = Counter()
+    # `Counter[int]`, because hours go in -- same mistake as
+    # grid_store's slot counter: a wrong key type that only shows up
+    # when something reads the value back out.
+    hour_counts: Counter[int] = Counter()
     for w in windows:
         hour_counts[w.started_at.hour] += 1
     most_common_hour = hour_counts.most_common(1)[0][0]
     candidate = dt_util.now().replace(
-        hour=most_common_hour, minute=0, second=0, microsecond=0
+        hour=int(most_common_hour), minute=0, second=0, microsecond=0
     )
     if candidate <= dt_util.now():
         candidate = candidate + datetime.timedelta(days=1)
@@ -454,7 +457,7 @@ def _parse_netinfo_addr(addr: object) -> str | None:
     return None
 
 
-def _raw_wifi_floor(records: list[dict]) -> StateType:
+def _raw_wifi_floor(records: list[dict[str, Any]]) -> StateType:
     """Return the weakest WiFi signal bucket present in the most recent mission.
 
     F1 -- wlBars is a 5-element histogram, NOT a time-series.
@@ -482,7 +485,7 @@ def _raw_wifi_floor(records: list[dict]) -> StateType:
     return None
 
 
-def _raw_wifi_quality_pct(records: list[dict]) -> StateType:
+def _raw_wifi_quality_pct(records: list[dict[str, Any]]) -> StateType:
     """Return average WiFi signal quality (%) across the API window.
 
     v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
@@ -861,7 +864,7 @@ def _robot_health_plain_status(
     return text, rec
 
 
-def _raw_wifi_stability(records: list[dict]) -> StateType:
+def _raw_wifi_stability(records: list[dict[str, Any]]) -> StateType:
     """Return mean weighted standard deviation of WiFi signal across the API window.
 
     F1 -- wlBars is a 5-element histogram (index = signal bucket, value = count).
@@ -887,7 +890,7 @@ def _raw_wifi_stability(records: list[dict]) -> StateType:
         stdevs.append(variance ** 0.5)
     if len(stdevs) < 3:
         return None
-    return round(sum(stdevs) / len(stdevs), 2)
+    return cast('str | int | float | None', round(sum(stdevs) / len(stdevs), 2))
 
 
 # ── F2 — Mop clean mode (RoombaSensor value function) ────────────────────────
@@ -1189,7 +1192,7 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
         remaining_cycles = rps.cap_remaining_cycles(remaining_cycles)
         if remaining_cycles is None:
             return None
-        return max(0, round(remaining_cycles))
+        return cast('str | int | float | None', max(0, round(remaining_cycles)))
 
     # No RobotProfileStore at all (shouldn't normally happen, but handled
     # defensively) — fall back to the same conservative absolute threshold

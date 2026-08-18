@@ -256,7 +256,7 @@ def _prime_room_preferences(config_entry: RoombaConfigEntry) -> dict[str, Any]:
                 "last_operating_mode to read them under"
             )
         }
-    return prefs
+    return dict(prefs)
 
 
 async def _prime_favorites_raw(data: Any) -> Any:
@@ -549,7 +549,7 @@ def _shape_of(value: Any, depth: int = 0) -> Any:
     return type(value).__name__
 
 
-def _vendor_capabilities(config_entry: Any) -> dict:
+def _vendor_capabilities(config_entry: Any) -> dict[str, Any]:
     """The `digiCap` flags, as the robot reports them.
 
     Empty for a Classic robot and for a Prime one that has not reported
@@ -599,7 +599,7 @@ def _vendor_capabilities(config_entry: Any) -> dict:
     return out
 
 
-def _withheld_features(config_entry: Any, state: dict) -> dict:
+def _withheld_features(config_entry: Any, state: dict[str, Any]) -> dict[str, Any]:
     """Capabilities this robot is not offered, and the condition that
     withheld each one.
 
@@ -785,7 +785,7 @@ async def async_get_config_entry_diagnostics(
     later is covered without its author having to remember.
     """
     payload = await _build_diagnostics(hass, config_entry)
-    return _redact_secrets_everywhere(payload)
+    return dict(_redact_secrets_everywhere(payload))
 
 
 def _redact_secrets_everywhere(value: Any) -> Any:
@@ -1122,7 +1122,22 @@ async def _build_diagnostics(
             },
         }
 
+    # NARROWED, NOT ASSERTED. Every CLOUD_ONLY entry returned above, so
+    # `data.roomba` is set from here down -- but that guard is thirty
+    # lines away and mypy cannot follow it, which produced nine
+    # `union-attr` errors in this function alone.
+    #
+    # The crash those errors describe is real and was already found once
+    # by hand: see the comment on the CLOUD_ONLY branch above. This
+    # states the invariant where the code relies on it, so the next
+    # person to add a Classic-only read here gets told rather than
+    # finding out from a Prime user's download.
     roomba = data.roomba
+    if roomba is None:  # pragma: no cover - CLOUD_ONLY returned above
+        raise RuntimeError(
+            "Classic diagnostics reached with no local robot -- the "
+            "CLOUD_ONLY branch above should have returned"
+        )
     state = roomba_reported_state(roomba)
 
     # Check whether the Core roomba integration is also active (conflict warning)

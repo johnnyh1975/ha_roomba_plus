@@ -68,14 +68,13 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
     _attr_supported_features = TodoListEntityFeature.UPDATE_TODO_ITEM
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_maintenance"
 
     # ── Shared helpers (same pattern as button.py's reset buttons) ──────────
 
     def _current_hr(self) -> int:
-        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
+        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
 
     def _maintenance_store(self) -> Any:
         return self._config_entry.runtime_data.maintenance_store

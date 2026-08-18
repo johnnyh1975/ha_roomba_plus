@@ -54,6 +54,7 @@ from .structural_failures import record_failure, record_success
 from .models import ConnectionType, MapCapability
 
 if TYPE_CHECKING:
+    from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry, RoombaData
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,20 +87,34 @@ def match_room_names(
     """
     by_name = {name.casefold(): rid for name, rid in available.items()}
     by_slug = {room_slug(name): rid for name, rid in available.items()}
+
+    # BARE REGION IDS, because that is what the map card sends.
+    #
+    # @jouwdan (#88): the Rooms Map publishes each room's own id in its
+    # `rooms` attribute, and xiaomi-vacuum-map-card sends that id back
+    # when somebody taps a room. Matching only on name and slug meant a
+    # card selection resolved to nothing -- so the card he made work in
+    # an earlier PR could draw rooms and not clean them.
+    #
+    # AMBIGUOUS IDS ARE REFUSED RATHER THAN GUESSED. A household with
+    # several maps can hold the same bare id under two different
+    # qualified ids; picking one would clean a room on the wrong floor.
+    # An honest miss is better, which is the same rule the name matching
+    # above already follows.
     by_id: dict[str, str] = {}
     ambiguous_ids: set[str] = set()
-    for rid in available.values():
-        bare_id = rid.rsplit("/", 1)[-1]
-        if bare_id in by_id and by_id[bare_id] != rid:
+    for qualified in available.values():
+        bare_id = qualified.rsplit("/", 1)[-1]
+        if bare_id in by_id and by_id[bare_id] != qualified:
             ambiguous_ids.add(bare_id)
         else:
-            by_id[bare_id] = rid
+            by_id[bare_id] = qualified
 
     matched: list[str] = []
     unmatched: list[str] = []
     for raw in requested:
         wanted = raw.strip()
-        rid = (
+        rid: str | None = (
             by_name.get(wanted.casefold())
             or by_slug.get(room_slug(wanted))
             or (by_id.get(wanted) if wanted not in ambiguous_ids else None)
@@ -113,7 +128,7 @@ def match_room_names(
 
 
 
-def _per_room(values: list | None, index: int):
+def _per_room(values: list[Any] | None, index: int) -> Any:
     """One per-room setting, or None when the caller said nothing.
 
     Positional and possibly short: callers pass what the user supplied,
@@ -132,7 +147,7 @@ def _region_params(
     suction_level: list[int | None] | None,
     index: int,
     operating_mode: list[int | None] | None = None,
-):
+) -> Any:
     """Per-region params, or None when the caller expressed no opinion.
 
     None rather than an empty params object: the confirmed field payload
@@ -168,8 +183,31 @@ class RoomCleaningBackend(ABC):
         what they will type into a service call or automation.
         """
 
+    async def _all_map_ids(self) -> list[str]:
+        """Every map this robot holds, or empty when it has only one.
+
+        NOT ABSTRACT, and a default rather than a raise: three callers
+        (the rooms image, the calendar, the dirt manager) ask the
+        backend for map ids through this base type. `PrimeRoomCleaning`
+        answers properly; a Classic robot has a single implicit map and
+        nothing to enumerate.
+
+        Those callers used `backend._all_map_ids()  # noqa: SLF001` on a
+        method only the Prime subclass defined -- an AttributeError on
+        every Classic entry, two of them inside a bare except that
+        swallowed it.
+        """
+        return []
+
+    async def _current_map_id(self) -> str | None:
+        """The map the robot is on, or None when it does not track one.
+
+        Same story as `_all_map_ids` above.
+        """
+        return None
+
     @abstractmethod
-    async def get_segments(self) -> list:
+    async def get_segments(self) -> list[Any]:
         """Rooms as Home Assistant Clean Area segments.
 
         The id format is each backend's own business and is agreed with
@@ -314,6 +352,15 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         hass: HomeAssistant | None = None,
     ) -> None:
         self._data = data
+
+        # NARROWED HERE, where it is true. A CLOUD_ONLY entry always has
+        # a prime robot -- `ClassicRoomCleaning` is what a local entry
+        # gets -- and mypy cannot see that across the factory. Stating
+        # it once beats four checks for a condition that cannot occur.
+        if data.prime_robot is None:  # pragma: no cover - Classic gets the other backend
+            raise RuntimeError(
+                "PrimeRoomCleaning built for an entry with no Prime robot"
+            )
         self._robot = data.prime_robot
         # Optional, and only needed to record the mission plan. Kept
         # optional rather than required because several call sites build
@@ -473,7 +520,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
 
     _SEGMENT_PREFIX = "rid_"
 
-    async def get_segments(self) -> list:
+    async def get_segments(self) -> list[Any]:
         """Prime rooms as HA Clean Area segments.
 
         The id format is agreed with clean_segments() below and nowhere
@@ -543,9 +590,16 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     "Those rooms are on different maps. A single cleaning command "
                     "can only target one map, so please clean them separately."
                 )
-            p2map_id = maps.pop()
+            # Optional across both branches: the block further down
+            # clears it when the robot names a map that is not in its
+            # own list, and the fallback keys on `not p2map_id`.
+            p2map_id: str | None = maps.pop()
             room_ids = [r.split("/", 1)[1] for r in qualified]
             self._raise_if_map_updating()
+            # `maps.pop()` yields a str; the annotation is Optional
+            # because a later branch clears it, and mypy keeps the
+            # widened type across the whole function.
+            assert p2map_id is not None  # noqa: S101
             await self._send_region_command(
                 p2map_id, room_ids, ordered=ordered,
                 two_pass=two_pass, suction_level=suction_level,
@@ -737,6 +791,46 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         self._hass = hass
         self._pmap_by_region: dict[str, str] = {}
 
+        #: The local robot, narrowed once for this whole class.
+        #:
+        #: A CLOUD_ONLY entry gets `PrimeRoomCleaning`, never this one,
+        #: so `data.roomba` is always set here. mypy cannot see that
+        #: across the factory, and reported it at each send site --
+        #: which invites an `if roomba is None` at every one of them,
+        #: turning a class-wide invariant into scattered runtime checks
+        #: for a condition that cannot occur.
+        #:
+        #: Stated once, where it is true.
+        if data.roomba is None:  # pragma: no cover - Prime gets the other backend
+            raise RuntimeError(
+                "ClassicRoomCleaning built for an entry with no local "
+                "robot -- a CLOUD_ONLY entry should have PrimeRoomCleaning"
+            )
+        self._roomba = data.roomba
+
+    @property
+    def _cloud(self) -> IrobotCloudCoordinator:
+        """The cloud coordinator, for the room-targeting paths.
+
+        Region ids come from the cloud pmap, so `clean_rooms` and
+        `clean_segments` cannot work without one. Listing rooms and
+        reading names can, and those run on entries with no cloud at
+        all -- which is why this raises where it is read rather than
+        refusing in the constructor.
+
+        Five reads share it. Checking at each would be five runtime
+        tests for one invariant, and mypy cannot follow `has_cloud`
+        because a property narrows nothing.
+        """
+        cloud = self._data.cloud_coordinator
+        if cloud is None:
+            raise ServiceValidationError(
+                "room targeting needs cloud credentials on this robot",
+                translation_domain=DOMAIN,
+                translation_key="cloud_required",
+            )
+        return cloud
+
     def _raise_if_map_updating(self) -> None:
         """Refuses while the robot is rebuilding its map.
 
@@ -779,7 +873,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         self._pmap_by_region = {}
         rooms: dict[str, str] = {}
 
-        zone_data: dict = self._config_entry.options.get(CONF_SMART_ZONE_DATA, {})
+        zone_data: dict[str, Any] = self._config_entry.options.get(CONF_SMART_ZONE_DATA, {})
         entries: list[tuple[str, str, str]] = [
             (str(rid), meta["name"], str(meta.get("pmap_id") or ""))
             for rid, meta in zone_data.items()
@@ -882,7 +976,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 "or start the robot without naming rooms."
             )
         user_pmapv_id: str = (
-            (self._data.cloud_coordinator.active_user_pmapv_id
+            (self._cloud.active_user_pmapv_id
              if self._data.has_cloud else None)
             or _resolve_pmapv_id(state, pmap_id)
             or ""
@@ -963,12 +1057,12 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             user_pmapv_id[:12] if user_pmapv_id else "none",
         )
         await self._hass.async_add_executor_job(
-            self._data.roomba.send_command, "start", params
+            self._roomba.send_command, "start", params
         )
 
 
 
-    async def get_segments(self) -> list:
+    async def get_segments(self) -> list[Any]:
         """The Classic side of HA's Clean Area segment list.
 
         MOVED (this session), completing what clean_segments started.
@@ -994,7 +1088,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         if not self._data.has_cloud or self._data.cloud_coordinator is None:
             return []
-        active_pmap_id = self._data.cloud_coordinator.active_pmap_id
+        active_pmap_id = self._cloud.active_pmap_id
         if not active_pmap_id:
             # Coordinator has not yet fetched pmap data — returning segments with a
             # None prefix would create IDs that never match in async_clean_segments.
@@ -1013,14 +1107,14 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 name=region.get("name", region["id"]),
                 group=floor_label,
             )
-            for region in self._data.cloud_coordinator.regions
+            for region in self._cloud.regions
             if region.get("id")
         ]
         # IA74-ZONE full (v2.7.0): zone segments (zid).
         # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
         # async_clean_segments can distinguish them from room segments.
         # Zone type is surfaced as the group label for HA's mapping UI.
-        for zone in self._data.cloud_coordinator.zones:
+        for zone in self._cloud.zones:
             zid = zone.get("id")
             if not zid:
                 continue
@@ -1067,7 +1161,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         mistake as an earlier draft here that dropped four capabilities
         while "moving" code that it was actually rewriting.
         """
-        active_pmap_id = self._data.cloud_coordinator.active_pmap_id
+        active_pmap_id = self._cloud.active_pmap_id
         if not active_pmap_id:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
@@ -1100,7 +1194,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         # Validate + auto-heal room IDs against the current cloud map (zone IDs
         # are stable across map retrains — no validation needed for them).
-        current_regions = self._data.cloud_coordinator.regions
+        current_regions = self._cloud.regions
         current_region_ids: set[str] = {
             str(r["id"]) for r in current_regions if r.get("id")
         }
@@ -1165,7 +1259,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
         # Primary: cloud coordinator — always authoritative, never stale.
-        user_pmapv_id: str | None = self._data.cloud_coordinator.active_user_pmapv_id
+        user_pmapv_id: str | None = self._cloud.active_user_pmapv_id
         if not user_pmapv_id:
             user_pmapv_id = _resolve_pmapv_id(self._data.roomba_reported_state(), active_pmap_id)
         if user_pmapv_id is None:
@@ -1188,14 +1282,14 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         if include_pmapv and user_pmapv_id is not None:
             params["user_pmapv_id"] = user_pmapv_id
         await self._hass.async_add_executor_job(
-            self._data.roomba.send_command,
+            self._roomba.send_command,
             "start",
             params,
         )
         # F-RB-1: best-effort state update after segment clean command.
         # Cloud may not yet have the new state; failure is non-fatal.
         try:
-            await self._data.cloud_coordinator.async_refresh()
+            await self._cloud.async_refresh()
             record_success("post-command cloud refresh")
         except Exception:  # noqa: BLE001
             record_failure("post-command cloud refresh")
@@ -1299,7 +1393,7 @@ def async_get_room_cleaning_backend(
 # 21 existing clean_room tests cover this and were the check that the
 # move preserved behaviour.
 
-def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
+def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
     """Return user_pmapv_id for pmap_id from local MQTT state.
 
     v2.7.4 (PMAP-PMAPV): prefers lastCommand.user_pmapv_id over state.pmaps.
@@ -1314,17 +1408,17 @@ def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
     """
     last = state.get("lastCommand", {})
     if last.get("pmap_id") == pmap_id and last.get("user_pmapv_id"):
-        return last["user_pmapv_id"]
+        return str(last["user_pmapv_id"])
     for pmap in state.get("pmaps", []):
         if pmap_id in pmap:
-            return pmap[pmap_id]
+            return str(pmap[pmap_id])
     return None
 
 
 def _resolve_rooms(
-    zone_data: dict[str, dict],
+    zone_data: dict[str, dict[str, Any]],
     room_names: list[str],
-    state: dict,
+    state: dict[str, Any],
     cloud_pmap_id: str | None = None,
 ) -> list[tuple[str, str]]:
     """Resolve room names to (region_id, pmap_id) tuples.
@@ -1422,7 +1516,7 @@ def _resolve_rooms(
     #   2. cleanSchedule2[].cmd.pmap_id
     #   3. pmaps[0] key   — last resort
     last = state.get("lastCommand", {})
-    pmaps: list[dict] = state.get("pmaps", [])
+    pmaps: list[dict[str, Any]] = state.get("pmaps", [])
     fallback_pmap_id: str = (
         cloud_pmap_id
         or last.get("pmap_id")

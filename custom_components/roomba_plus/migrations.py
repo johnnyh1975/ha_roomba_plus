@@ -83,7 +83,7 @@ async def async_migrate_entry(
         # keys gracefully via .get() — this migration adds the keys explicitly
         # so the storage file reflects the current schema.
         from homeassistant.helpers.storage import Store as _Store
-        _store = _Store(
+        _store: _Store[dict[str, Any]] = _Store(
             hass, 1,
             f"roomba_plus_maintenance_{config_entry.entry_id}"
         )
@@ -221,7 +221,7 @@ async def async_migrate_entry(
         }
 
         # Build a blid → list[entity] map for all roomba_plus sensors
-        blid_entities: dict[str, list] = {}
+        blid_entities: dict[str, list[Any]] = {}
         for entry_er in list(entity_reg.entities.values()):
             if entry_er.platform != DOMAIN:
                 continue
@@ -243,7 +243,7 @@ async def async_migrate_entry(
                 pass
 
         # Full map: all roomba_plus entities grouped by whatever precedes "_cloud_" or first "_"
-        all_by_blid: dict[str, list] = {}
+        all_by_blid: dict[str, list[Any]] = {}
         for entry_er in list(entity_reg.entities.values()):
             if entry_er.platform != DOMAIN:
                 continue
@@ -396,7 +396,7 @@ async def async_migrate_entry(
                     break
 
         # Build full blid → sibling map for prefix derivation
-        all_blid_entities: dict[str, list] = {}
+        all_blid_entities: dict[str, list[Any]] = {}
         for entry_er in list(entity_reg.entities.values()):
             if entry_er.platform != DOMAIN:
                 continue
@@ -418,7 +418,7 @@ async def async_migrate_entry(
             # Derive device prefix from any sibling whose entity_id name (without
             # domain) ends with the correct suffix for its own unique_id.
             # device_prefix = name portion only (no domain), e.g. "roomba"
-            device_prefix: str | None = None
+            device_prefix = None
             for sibling in all_blid_entities.get(blid_key, []):
                 s_uid = sibling.unique_id or ""
                 s_name = sibling.entity_id.split(".", 1)[-1]   # strip domain
@@ -521,7 +521,7 @@ async def async_migrate_entry(
                     break
 
         # Build blid → sibling list for device-prefix derivation
-        all_blid_entities_14: dict[str, list] = {}
+        all_blid_entities_14: dict[str, list[Any]] = {}
         for entry_er in list(entity_reg.entities.values()):
             if entry_er.platform != DOMAIN:
                 continue
@@ -542,7 +542,7 @@ async def async_migrate_entry(
 
             # Derive device prefix from a sibling entity whose entity_id
             # name already ends with the tail of its own unique_id.
-            device_prefix: str | None = None
+            device_prefix = None
             for sibling in all_blid_entities_14.get(blid_key, []):
                 s_uid = sibling.unique_id or ""
                 s_name = sibling.entity_id.split(".", 1)[-1]
@@ -660,15 +660,15 @@ async def async_migrate_entry(
 
             for uid_suffix, en_slug in _V15_TARGETS:
                 target_uid = f"{blid}{uid_suffix}"
-                entry_er = uid_index.get(target_uid)
+                target_er = uid_index.get(target_uid)
 
-                if entry_er is None:
+                if target_er is None:
                     _LOGGER.debug(
                         "Roomba+: v15 — entity not in registry (uid=%s) — skip", target_uid
                     )
                     continue
 
-                eid = entry_er.entity_id
+                eid = target_er.entity_id
                 expected_suffix = f"_{en_slug}"
                 if eid.endswith(expected_suffix):
                     _LOGGER.debug(
@@ -677,7 +677,7 @@ async def async_migrate_entry(
                     continue
 
                 # Derive correct entity_id from device name
-                device = device_reg.async_get(entry_er.device_id) if entry_er.device_id else None
+                device = device_reg.async_get(target_er.device_id) if target_er.device_id else None
                 if device is None:
                     _LOGGER.warning(
                         "Roomba+: v15 — no device for %s (uid=%s) — skip", eid, target_uid
@@ -770,21 +770,21 @@ async def async_migrate_entry(
 
             for uid_suffix, en_slug in _V16_TARGETS:
                 target_uid = f"{blid_16}{uid_suffix}"
-                entry_er = uid_index_16.get(target_uid)
+                target_er = uid_index_16.get(target_uid)
 
-                if entry_er is None:
+                if target_er is None:
                     _LOGGER.debug(
                         "Roomba+: v16 — uid=%s not in registry — skip", target_uid
                     )
                     continue
 
-                eid = entry_er.entity_id
+                eid = target_er.entity_id
                 expected_suffix = f"_{en_slug}"
                 if eid.endswith(expected_suffix):
                     _LOGGER.debug("Roomba+: v16 — %s already correct — skip", eid)
                     continue
 
-                device = device_reg_16.async_get(entry_er.device_id) if entry_er.device_id else None
+                device = device_reg_16.async_get(target_er.device_id) if target_er.device_id else None
                 if device is None:
                     _LOGGER.warning("Roomba+: v16 — no device for %s — skip", eid)
                     continue
@@ -1245,7 +1245,7 @@ async def async_migrate_entry(
                 continue
             eid = entry_er.entity_id
             domain = eid.split(".", 1)[0]
-            new_eid = None
+            new_eid = ""
 
             # Cloud-prefix sensors
             for wrong, correct in _FIXES_21:

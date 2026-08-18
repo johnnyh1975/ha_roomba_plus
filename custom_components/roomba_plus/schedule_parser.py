@@ -347,7 +347,19 @@ def parse_prime_schedule_occurrences(
     """
     from .const import extract_region_id
 
-    results: list[tuple[datetime.datetime, datetime.datetime, list[str], str | None]] = []
+    # SIX FIELDS, MATCHING THIS FUNCTION'S OWN SIGNATURE.
+    #
+    # The tuple grew twice -- schedule_id so the calendar can give
+    # events a uid (without which delete and edit were unreachable),
+    # then operating_mode -- and this local declaration stayed at four.
+    # The signature above was right the whole time; only the variable
+    # inside disagreed with it.
+    results: list[
+        tuple[
+            datetime.datetime, datetime.datetime, list[str],
+            str | None, str | None, int | None,
+        ]
+    ] = []
     for schedule in schedules:
         options = getattr(schedule, "options", None)
         if options is None or not options.enabled or options.deleted:
@@ -444,7 +456,10 @@ def parse_prime_schedule_occurrences(
             year = getattr(after, "year", None)
             month = getattr(after, "month", None)
             day = getattr(after, "day_of_month", None)
-            if None not in (year, month, day):
+            # Direct comparisons rather than `None not in (...)`: the
+            # membership test is correct and narrows nothing, so the
+            # int() calls below still read as taking Optionals.
+            if year is not None and month is not None and day is not None:
                 try:
                     once_anchor = datetime.date(int(year), int(month), int(day))
                 except ValueError:

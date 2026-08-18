@@ -13,6 +13,10 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from typing import Any
+
 import logging
 import statistics
 from dataclasses import dataclass, field
@@ -86,8 +90,8 @@ class MaintenanceStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("MaintenanceStore: no persisted data for %s", entry_id)
             return
@@ -130,7 +134,7 @@ class MaintenanceStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current reset values to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "filter_reset_hr":  self.filter_reset_hr,
             "brush_reset_hr":   self.brush_reset_hr,
@@ -270,7 +274,9 @@ class MaintenanceStore:
 
     # ── Remaining-life calculations ───────────────────────────────────────────
 
-    def due_items(self, vacuum_state: dict, options: dict) -> list[str]:
+    def due_items(
+        self, vacuum_state: Mapping[str, Any], options: Mapping[str, Any]
+    ) -> list[str]:
         """v3.4.3 FLEET-1 — return consumable keys currently at zero
         remaining hours.
 
@@ -286,7 +292,7 @@ class MaintenanceStore:
             current_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
         ) == 0:
             items.append("filter")
-        brush_key = "pad" if is_mop(vacuum_state) else "brush"
+        brush_key = "pad" if is_mop(dict(vacuum_state)) else "brush"
         if self.brush_remaining(
             current_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
         ) == 0:

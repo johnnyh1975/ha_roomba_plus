@@ -180,8 +180,37 @@ rules:
   strict-typing:
     status: done
     comment: >
-      All functions and methods have return type annotations. All parameters typed.
-      from __future__ import annotations in all 27 source files.
+      mypy --strict passes with no disabled error codes and no
+      per-module exemptions for this integration's own code.
+
+      It said `done` before anyone had run mypy: not installed, no
+      config, no CI step. A first run reported **565** errors, and
+      turning on the two codes that were initially deferred
+      (`no-any-return`, `attr-defined`) took the real total past 800.
+
+      What the pass actually found, beyond annotations: eleven runtime
+      bugs no field report had surfaced. Three services that could
+      never be invoked (their handlers took two arguments where Home
+      Assistant passes one). `ms.records()` calling a property, killing
+      a coverage pass on its first line. `roomba.start`, which
+      roombapy does not have, in three whole-house start paths.
+      `last_seen_segments` and `async_create_segments_issue`, which
+      exist nowhere, read on every cloud refresh. A repair issue
+      imported from `components.repairs`, which has no
+      `async_create_issue`. Two backend methods defined only on the
+      Prime subclass but called through the base type.
+
+      In five of those, a test fixture supplied what the real class
+      lacked -- the mock created the precondition production was
+      missing.
+
+      Two exemptions remain, both scoped to Home Assistant itself and
+      both explained in mypy.ini: HA declares no `__all__` in its
+      component modules, and `AddConfigEntryEntitiesCallback` is absent
+      from the newest HA installable on Python 3.12 (tests/conftest.py
+      shims it for the same reason).
+
+      `scripts/check_typing_baseline.py` holds the count at zero.
 
   # ── Platinum ─────────────────────────────────────────────────────────────
   async-dependency:
@@ -193,11 +222,9 @@ rules:
   migration:
     status: done
     comment: >
-      async_migrate_entry implemented. Config entry at version 13 (v2.3.0).
-      Migrations: v1→v2 (cloud_raw_records_version marker), v2→v3 through
-      v12 (entity renames, options additions, floor_label), v12→v13
-      (language-slug entity_id fix for 9 entities missing _attr_name in
-      v2.2.x and earlier).
+      async_migrate_entry implemented. Config entry is at **version 25**.
+      This entry said 13 until August 2026 -- twelve migrations out of date,
+      because nothing checks it against config_flow.VERSION.
   test-before-configure:
     status: done
     comment: MQTT credentials verified during config flow before entry is created.

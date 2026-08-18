@@ -1,6 +1,8 @@
 """Config flow for the Roomba+ integration."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import asyncio
 from functools import partial
 import logging
@@ -127,7 +129,7 @@ def _is_prime_sku(sku: str | None) -> bool:
     module's own call sites and tests stay unchanged."""
     from roombapy_prime.auth import is_prime_sku  # noqa: PLC0415
 
-    return is_prime_sku(sku)
+    return bool(is_prime_sku(sku))
 
 
 def _log_unknown_skus(devices: list[Any]) -> None:
@@ -192,7 +194,7 @@ def _is_classic_sku(sku: str | None) -> bool:
     """
     from roombapy_prime.auth import is_classic_sku  # noqa: PLC0415
 
-    return is_classic_sku(sku)
+    return bool(is_classic_sku(sku))
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
@@ -237,7 +239,7 @@ async def validate_input(
 REST980_DOMAIN = "roomba_rest980"
 
 
-def _resolve_current_pmap_id(state: dict) -> str:
+def _resolve_current_pmap_id(state: dict[str, Any]) -> str:
     """Best-effort current pmap_id from live local MQTT state.
 
     Same priority order used by the existing smart_zones naming step
@@ -247,12 +249,12 @@ def _resolve_current_pmap_id(state: dict) -> str:
     """
     last = state.get("lastCommand", {})
     if last.get("pmap_id"):
-        return last["pmap_id"]
+        return str(last["pmap_id"])
     for entry in state.get("cleanSchedule2", []):
         cmd = entry.get("cmd", {})
         if cmd.get("pmap_id"):
-            return cmd["pmap_id"]
-    pmaps: list[dict] = state.get("pmaps", [])
+            return str(cmd["pmap_id"])
+    pmaps: list[dict[str, Any]] = state.get("pmaps", [])
     if pmaps:
         return next(iter(pmaps[0]), "")
     return ""
@@ -370,7 +372,10 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # Guard against duplicate flows with truncated hostnames
         for progress in self._async_in_progress():
-            flow_unique_id = progress["context"].get("unique_id", "")
+            # `or ""` as well as the default: `.get(key, default)`
+            # returns an explicit None unchanged, and only a missing key
+            # reaches the default.
+            flow_unique_id = progress["context"].get("unique_id") or ""
             if flow_unique_id.startswith(self.blid):
                 return self.async_abort(reason="short_blid")
             if self.blid.startswith(flow_unique_id):
@@ -780,7 +785,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             if user_input.get("enable_cloud_analytics", True):
                 config[CONF_IROBOT_USERNAME] = self._prime_account_username
                 config[CONF_IROBOT_PASSWORD] = self._prime_account_password
-            return self.async_create_entry(title=self.name, data=config)
+            return self.async_create_entry(title=self.name or "Roomba+", data=config)
 
         return self.async_show_form(
             step_id="prime_classic_analytics",
@@ -895,7 +900,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                     config[CONF_IROBOT_USERNAME] = username
                     config[CONF_IROBOT_PASSWORD] = password
             if not errors:
-                return self.async_create_entry(title=self.name, data=config)
+                return self.async_create_entry(title=self.name or "Roomba+", data=config)
 
         return self.async_show_form(
             step_id="cloud_credentials",
@@ -1115,7 +1120,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         already assigned through our own naming flow.
         """
         discovered = _discover_rest980_rooms(self.hass)
-        existing_labels: dict = self.config_entry.options.get(
+        existing_labels: dict[str, Any] = self.config_entry.options.get(
             "smart_zone_labels", {}
         )
         new_rooms = {
@@ -1130,7 +1135,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             current_pmap_id = _resolve_current_pmap_id(state)
 
             new_labels = dict(existing_labels)
-            new_zone_data: dict = dict(
+            new_zone_data: dict[str, Any] = dict(
                 self.config_entry.options.get("smart_zone_data", {})
             )
             for rid, name in new_rooms.items():
@@ -1369,8 +1374,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
-                            {"value": "abort", "label": "Abort start"},
-                            {"value": "queue", "label": "Queue and wait"},
+                            selector.SelectOptionDict(value="abort", label="Abort start"),
+                            selector.SelectOptionDict(value="queue", label="Queue and wait"),
                         ],
                         mode=selector.SelectSelectorMode.LIST,
                     )
@@ -1433,8 +1438,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
-                            {"value": "away_only",  "label": "Unfreeze when all away"},
-                            {"value": "always_ask", "label": "Fire event (manual control)"},
+                            selector.SelectOptionDict(value="away_only", label="Unfreeze when all away"),
+                            selector.SelectOptionDict(value="always_ask", label="Fire event (manual control)"),
                         ],
                         mode=selector.SelectSelectorMode.LIST,
                     )
@@ -1558,10 +1563,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
     # ── L7 helpers ────────────────────────────────────────────────────────────
 
-    def _build_zone_index_options(self, data: Any, options: dict) -> list[dict]:
+    def _build_zone_index_options(self, data: Any, options: Mapping[str, Any]) -> list[dict[str, Any]]:
         """Build selector option list for the map_management index step."""
 
-        opts: list[dict] = []
+        opts: list[dict[str, Any]] = []
 
         # ROOM-SEG Stage 4 — EPHEMERAL branch backed by RoomSegStore, not
         # ZoneStore (the gap heuristic proved unreliable — see
@@ -1571,7 +1576,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 pending = self._pending_zone_edits.get(str(room.id), {})
                 name = pending.get("display_name") or room.name
                 hidden = pending.get("hidden", room.hidden)
-                tags: list[str] = []
+                tags = []
                 if hidden:
                     tags.append("hidden")
                 if not room.confirmed:
@@ -1582,9 +1587,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 opts.append({"value": str(room.id), "label": label})
 
         elif data.map_capability == MapCapability.SMART:
-            aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-            hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
-            zone_data: dict = options.get("smart_zone_data", {})
+            aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+            hidden_ids: list[Any] = options.get(CONF_SMART_ZONE_HIDDEN, [])
+            zone_data: dict[str, Any] = options.get("smart_zone_data", {})
             region_ids: set[str] = set(zone_data.keys())
             if data.has_cloud:
                 for r in data.cloud_coordinator.regions:
@@ -1604,7 +1609,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     or f"Zone {rid}"
                 )
                 hidden = pending.get("hidden", rid in hidden_ids)
-                tags: list[str] = []
+                tags = []
                 if hidden:
                     tags.append("hidden")
                 if rid in aliases:
@@ -1616,19 +1621,19 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         return opts
 
-    def _resolve_current_zone_name(self, zone_id: str, data: Any, options: dict) -> str:
+    def _resolve_current_zone_name(self, zone_id: str, data: Any, options: Mapping[str, Any]) -> str:
         """Resolve the best current display name for zone_id."""
 
         if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
             room = data.room_seg_store.rooms.get(zone_id)
             if room is not None:
-                return room.name
+                return str(room.name)
             return f"Zone {zone_id}"
 
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
         if zone_id in aliases:
-            return aliases[zone_id]
-        zone_data: dict = options.get("smart_zone_data", {})
+            return str(aliases[zone_id])
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
         if zone_id in zone_data:
             return zone_data[zone_id].get("name") or f"Zone {zone_id}"
         if data.has_cloud:
@@ -1637,13 +1642,13 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     return r.get("name") or f"Zone {zone_id}"
         return f"Zone {zone_id}"
 
-    def _resolve_current_zone_hidden(self, zone_id: str, data: Any, options: dict) -> bool:
+    def _resolve_current_zone_hidden(self, zone_id: str, data: Any, options: Mapping[str, Any]) -> bool:
         """Return the current hidden state for zone_id."""
 
         if data.map_capability == MapCapability.EPHEMERAL and data.room_seg_store:
             room = data.room_seg_store.rooms.get(zone_id)
             if room is not None:
-                return room.hidden
+                return bool(room.hidden)
             return False
         return zone_id in options.get(CONF_SMART_ZONE_HIDDEN, [])
 
@@ -1672,9 +1677,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             )
         else:
             # SMART: alias layer in options
-            aliases: dict = dict(options.get(CONF_SMART_ZONE_ALIASES, {}))
-            hidden: list = list(options.get(CONF_SMART_ZONE_HIDDEN, []))
-            zone_data: dict = options.get("smart_zone_data", {})
+            aliases: dict[str, Any] = dict(options.get(CONF_SMART_ZONE_ALIASES, {}))
+            hidden: list[Any] = list(options.get(CONF_SMART_ZONE_HIDDEN, []))
+            zone_data: dict[str, Any] = options.get("smart_zone_data", {})
 
             for region_id, edit in self._pending_zone_edits.items():
                 display_name = edit.get("display_name", "").strip()
@@ -1803,14 +1808,14 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             if rid:
                 region_ids.add(rid)
 
-        existing_labels: dict = self.config_entry.options.get(
+        existing_labels: dict[str, Any] = self.config_entry.options.get(
             "smart_zone_labels", {}
         )
         unlabelled = sorted(rid for rid in region_ids if rid not in existing_labels)
 
         if user_input is not None:
             new_labels = dict(existing_labels)
-            new_zone_data: dict = dict(
+            new_zone_data: dict[str, Any] = dict(
                 self.config_entry.options.get("smart_zone_data", {})
             )
 
@@ -1830,7 +1835,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         current_pmap_id = cmd["pmap_id"]
                         break
             if not current_pmap_id:
-                pmaps: list[dict] = state.get("pmaps", [])
+                pmaps: list[dict[str, Any]] = state.get("pmaps", [])
                 if pmaps:
                     current_pmap_id = next(iter(pmaps[0]), "")
 
@@ -1907,8 +1912,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=self.config_entry.options)
 
         errors: dict[str, str] = {}
-        existing_labels: dict = self.config_entry.options.get("smart_zone_labels", {})
-        existing_zone_data: dict = self.config_entry.options.get("smart_zone_data", {})
+        existing_labels: dict[str, Any] = self.config_entry.options.get("smart_zone_labels", {})
+        existing_zone_data: dict[str, Any] = self.config_entry.options.get("smart_zone_data", {})
 
         # Two-phase flow:
         # Phase 1 — user enters comma-separated region IDs ("region_ids" key present)
@@ -1966,7 +1971,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         current_pmap_id = entry["cmd"]["pmap_id"]
                         break
             if not current_pmap_id:
-                pmaps: list[dict] = state.get("pmaps", [])
+                pmaps: list[dict[str, Any]] = state.get("pmaps", [])
                 if pmaps:
                     current_pmap_id = next(iter(pmaps[0]), "")
 
@@ -2032,7 +2037,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         Clearing both fields removes the credentials and disables cloud features.
         """
         errors: dict[str, str] = getattr(self, "_cloud_cred_errors", {})
-        self._cloud_cred_errors = {}
+        self._cloud_cred_errors: dict[str, str] = {}
         current_user = self.config_entry.data.get(CONF_IROBOT_USERNAME, "")
 
         if user_input is not None:

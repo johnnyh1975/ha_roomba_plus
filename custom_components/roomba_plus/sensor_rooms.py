@@ -56,8 +56,7 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
     _attr_suggested_display_precision = 3
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_recent_edge_coverage_ratio"
 
     @property
@@ -207,9 +206,13 @@ def _prime_room_time_estimates(
         # The planned order may already be ids; if it is, use them
         # directly rather than looking for a name that will not match.
         key = str(room_name or "")
-        rid = key if key in estimates.by_region else by_name.get(key.lower())
+        # `estimates` is Optional -- a robot the cloud has no timing for
+        # yields no per-room estimate, which is the same answer an
+        # unmatched name gives.
+        by_region = estimates.by_region if estimates is not None else {}
+        rid = key if key in by_region else by_name.get(key.lower())
         best = (
-            TimeEstimates.best(estimates.by_region.get(rid) or [])
+            TimeEstimates.best(by_region.get(rid) or [])
             if rid else None
         )
         if best is None or not best.is_confident or best.seconds is None:
@@ -299,7 +302,7 @@ def _compute_room_time_estimates(
             pass_key = "one_pass_sec"
 
     # Build name→estimates map from coordinator
-    region_map: dict[str, dict] = {}
+    region_map: dict[str, dict[str, Any]] = {}
     for region in cc.regions:
         name = region.get("name", "")
         if name:
@@ -440,16 +443,22 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     next_room: str | None = None
     estimated_remaining_min: int | None = None
 
-    if planned_order and estimates and all(e is not None for e in estimates):
+    # Filtered rather than checked -- ninth instance of this shape
+    # today. `all(e is not None ...)` proves the list is clean without
+    # narrowing it, so every read below still saw Optionals.
+    known = [e for e in (estimates or []) if e is not None]
+    if planned_order and estimates and len(known) == len(estimates):
         cumulative = 0
         for i, est in enumerate(estimates):
             assert est is not None
             if elapsed < cumulative + est:
                 current_room = planned_order[i]
                 next_room = planned_order[i + 1] if i + 1 < len(planned_order) else None
+                # `known` is the narrowed list built above; `estimates`
+                # still reads as holding Optionals.
                 remaining_sec = (cumulative + est - elapsed) + sum(
-                    estimates[j]  # type: ignore[arg-type]
-                    for j in range(i + 1, len(estimates))
+                    known[j]
+                    for j in range(i + 1, len(known))
                 )
                 estimated_remaining_min = max(0, round(remaining_sec / 60))
                 break
@@ -514,6 +523,11 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = None  # main entity — visible on device page
 
+    #: Held so a finished mission reads 100% rather than Unknown.
+    #: Cleared when a new mission id appears. See native_value().
+    _last_progress: int | None = None
+    _last_mission_id: str | None = None
+
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
         super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
@@ -546,7 +560,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             live_delta = int(_time_mod.monotonic() - mts.last_phase_ts)
             if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
                 elapsed += live_delta
-        return elapsed
+        return float(elapsed)
 
     # ── Sensor state ──────────────────────────────────────────────────────────
 
@@ -577,11 +591,26 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         phase = _mission_phase(data)
         mts = data.mission_timer_store
 
-        # Not in a cleaning phase → not active
+        # THE LAST VALUE SURVIVES THE MISSION END.
+        #
+        # @chairstacker (#72): this dropped to "Unknown" the moment a
+        # mission finished, so the graph of a completed clean ended in a
+        # gap rather than at 100%. Returning None is right for "no
+        # mission has run"; it is wrong for "the mission just ended".
+        #
+        # The last figure is held until the next mission starts, which
+        # is also the useful answer for an aborted run: whatever it had
+        # reached when it stopped.
         if phase not in ("run", "hmMidMsn", "evac"):
-            return None
+            return self._last_progress
         if mts is None or mts.mission_id is None:
-            return None
+            return self._last_progress
+
+        # A new mission clears the held value rather than carrying the
+        # previous one into it.
+        if mts.mission_id != self._last_mission_id:
+            self._last_mission_id = mts.mission_id
+            self._last_progress = None
 
         # v2.9.0 — elapsed is now wall-clock mission duration minus
         # robot-confirmed recharge_min (F4e), not the old gap-clamped
@@ -631,7 +660,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                 if rps is not None else 0
             )
             if mean_sec > 0:
-                return min(99, round(elapsed / mean_sec * 100))
+                self._last_progress = min(99, round(elapsed / mean_sec * 100))
+                return self._last_progress
             return None
 
         estimates = self._room_estimates(planned_order)
@@ -654,7 +684,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                     total_rooms, avg_sec, completed_rooms,
                     min(99, round(completed_rooms / total_rooms * 100)),
                 )
-                return min(99, round(completed_rooms / total_rooms * 100))
+                self._last_progress = min(99, round(completed_rooms / total_rooms * 100))
+                return self._last_progress
             # v2.9.0 — known_count==0 here (ALL per-room estimates are None,
             # e.g. Auto pass mode — TE1 cloud data has no per-room times for
             # that mode at all, confirmed via Thonno's field report). Falls
@@ -669,13 +700,15 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                 if rps is not None else 0
             )
             if mean_sec > 0:
-                return min(99, round(elapsed / mean_sec * 100))
+                self._last_progress = min(99, round(elapsed / mean_sec * 100))
+                return self._last_progress
             return None
 
         total_sec = sum(estimates)  # type: ignore[arg-type]
         if total_sec == 0:
             return None
-        return min(99, round(elapsed / total_sec * 100))
+        self._last_progress = min(99, round(elapsed / total_sec * 100))
+        return self._last_progress
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -708,8 +741,7 @@ class RoombaLearningPercentageSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_map_learning"
 
     @property
@@ -758,8 +790,7 @@ class RoombaZoneSummarySensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_zone_summary"
 
     @property
@@ -827,8 +858,7 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_rooms_overdue"
 
     def _merged(self) -> dict[str, dict[str, Any]]:
@@ -918,15 +948,14 @@ class RoombaDirtCorrelationSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_dirt_weather_correlation"
 
     def _results(self) -> dict[str, dict[str, Any]]:
         rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
         if rps is None:
             return {}
-        return rps.correlation_results()
+        return dict(rps.correlation_results())
 
     @staticmethod
     def _passing(results: dict[str, dict[str, Any]]) -> list[tuple[str, float]]:
@@ -1411,7 +1440,7 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
             return None
         if not rps.recent_relocs:
             return None
-        return round(sum(rps.recent_relocs) / len(rps.recent_relocs), 2)
+        return float(round(sum(rps.recent_relocs) / len(rps.recent_relocs), 2))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from .geometry_store import GeometryStore
     from .room_seg_store import RoomSegStore
 
@@ -787,7 +788,7 @@ class MapRenderer:
         ]
 
 
-    def diagnostic_info(self) -> dict:
+    def diagnostic_info(self) -> dict[str, Any]:
         """Return a diagnostics-safe summary with no private attribute access.
 
         Called by diagnostics.py so it never needs to reach into _cfg, _last_png
@@ -915,7 +916,7 @@ class MapRenderer:
     def _draw_dashed_line(
         draw: ImageDraw.ImageDraw,
         x1: int, y1: int, x2: int, y2: int,
-        colour: tuple,
+        colour: tuple[Any, ...],
         dash: tuple[int, int] = (6, 4),
         width: int = 1,
     ) -> None:
@@ -942,7 +943,7 @@ class MapRenderer:
         cls,
         draw: ImageDraw.ImageDraw,
         x1: int, y1: int, x2: int, y2: int,
-        colour: tuple,
+        colour: tuple[Any, ...],
         dash: tuple[int, int] = (6, 4),
     ) -> None:
         """Draw a dashed rectangle by drawing four dashed sides."""
@@ -982,7 +983,7 @@ class MapRenderer:
     def _draw_hatch(
         draw: ImageDraw.ImageDraw,
         x1: int, y1: int, x2: int, y2: int,
-        colour: tuple,
+        colour: tuple[Any, ...],
     ) -> None:
         """Draw diagonal hatching lines inside a rectangle."""
         w, h = x2 - x1, y2 - y1

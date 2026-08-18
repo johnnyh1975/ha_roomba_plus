@@ -25,6 +25,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from PIL.Image import Image
     from .models import RoombaData
 
 _LOGGER = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ async def async_fetch_mission_map(
     now = time.time()
     hit = cache.get(record_id)
     if hit is not None and now - hit[0] < _CACHE_TTL_SEC:
-        return hit[1]
+        return dict(hit[1])
 
     pmaps_info = record.get("pmaps_info") or []
     first = pmaps_info[0] if pmaps_info and isinstance(pmaps_info[0], dict) else {}
@@ -248,7 +249,7 @@ def render_mission_map_png(
         img = _apply_rotation(img, rotate)
         buf = __import__("io").BytesIO()
         img.save(buf, format="PNG")
-        return buf.getvalue()
+        return bytes(buf.getvalue())
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     content_w = max(max_x - min_x, _MIN_CONTENT_MM)
@@ -290,10 +291,10 @@ def render_mission_map_png(
     buf = __import__("io").BytesIO()
     img = _apply_rotation(img, rotate)
     img.save(buf, format="PNG")
-    return buf.getvalue()
+    return bytes(buf.getvalue())
 
 
-def _apply_rotation(img: "Image.Image", rotate: int) -> "Image.Image":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+def _apply_rotation(img: "Image", rotate: int) -> "Image":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
     """Lossless 90°-multiple clockwise rotation via transpose, not rotate().
 
     Unknown/unsupported values silently fall back to no rotation (0)

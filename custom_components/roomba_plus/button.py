@@ -244,7 +244,7 @@ async def async_setup_entry(
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
 
-    entities: list[IRobotEntity] = []
+    entities = []
 
     # Command buttons (capability-gated)
     entities.extend(
@@ -340,7 +340,10 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
     will update on the next bbrun MQTT message.
     """
 
-    _attr_entity_category = EntityCategory.CONFIG
+    # Annotated because two subclasses set None to make their button
+    # a primary action -- without the Optional, that reads as narrowing
+    # the base class's type.
+    _attr_entity_category: EntityCategory | None = EntityCategory.CONFIG
 
     def __init__(
         self,
@@ -348,12 +351,11 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
 
     def _current_hr(self) -> int:
         """Return current bbrun.hr (lifetime operating hours)."""
-        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
+        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
 
     def _maintenance_store(self) -> Any:
         """Return the MaintenanceStore from runtime_data."""
@@ -524,7 +526,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         command = last.get("command", "start")
 
         # Build params from lastCommand — include Smart Map fields if present
-        params: dict = {}
+        params: dict[str, Any] = {}
         for key in ("pmap_id", "user_pmapv_id", "regions", "ordered", "params"):
             if key in last:
                 params[key] = last[key]
@@ -549,7 +551,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
             self.vacuum.send_command, command, params or {}
         )
 
-    def new_state_filter(self, new_state: dict) -> bool:
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "lastCommand" in new_state
 
 
@@ -616,7 +618,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         #   2. Stored in smart_zone_data options (MQTT-only path)
         #   3. lastCommand fallback (least reliable)
         if region_id and not pmap_id:
-            zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
+            zone_data: dict[str, Any] = self._config_entry.options.get("smart_zone_data", {})
             pmap_id = zone_data.get(str(region_id), {}).get("pmap_id") or None
 
         # Fallback: extract pmap/region from lastCommand when smart_zone_data

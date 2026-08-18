@@ -70,7 +70,7 @@ class UmfAligner:
         # GS-SMART-UMF (v2.7.0): synthetic DoorMarker objects seeded from cloud
         # traversal data when local pose is unavailable (lewis firmware).
         # Set via set_bootstrap_markers(); used by align() when GS is empty.
-        self._bootstrap_markers: list = []
+        self._bootstrap_markers: list[Any] = []
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -392,7 +392,7 @@ class UmfAligner:
         # rebind, same rationale as _build_coord_lookup above: readers on
         # the MQTT render thread iterate room_polygons_umf concurrently
         # with a bootstrap re-align.
-        polygons: dict = {}
+        polygons: dict[str, Any] = {}
         for region in self._regions:
             rid       = region.get("id")
             geometry  = region.get("geometry", {})
@@ -474,7 +474,7 @@ class UmfAligner:
         ty = cy_pose - (sin_r * cx_umf + cos_r * cy_umf)
         return (rot, tx, ty)
 
-    def _validate_transform(self, gs_markers: list | None = None) -> float:
+    def _validate_transform(self, gs_markers: list[Any] | None = None) -> float:
         """Validate transform by measuring how well door candidates align with GS markers.
 
         Transforms each UMF door candidate to pose space using the just-estimated

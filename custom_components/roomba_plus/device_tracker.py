@@ -151,8 +151,28 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         deprecation window. It will be removed, not reimplemented.
         """
         data = self._config_entry.runtime_data
-        state = roomba_reported_state(self.vacuum)
-        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+
+        # PRIME HAS NO LOCAL ROBOT TO READ A PHASE FROM.
+        #
+        # @chairstacker (#70): this always said "Docked", whatever the
+        # robot was doing. `roomba_reported_state(self.vacuum)` returns
+        # `{}` when there is no local robot -- which is every Prime
+        # entry -- so `phase` was always "", the guard below always
+        # matched, and `_resolve_room()`'s own Prime branch was never
+        # reached.
+        #
+        # The phase lives in the `ro-currentstate` named shadow on
+        # Prime, which is where the vacuum entity reads it.
+        if data.connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = getattr(data, "prime_status_coordinator", None)
+            shadows = getattr(coordinator, "data", None) or {}
+            phase = (
+                (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus")
+                or {}
+            ).get("phase", "")
+        else:
+            state = roomba_reported_state(self.vacuum)
+            phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
 
         if phase in MISSION_END_PHASES or phase == "":
             return self._label(_DOCKED_LABEL)

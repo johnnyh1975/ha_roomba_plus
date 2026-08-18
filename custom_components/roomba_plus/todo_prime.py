@@ -55,7 +55,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .entity import IRobotEntity
-from .sensor_prime import _KNOWN_PARTS
+from .sensor_prime import _KNOWN_PARTS, part_count_in_display_unit
 from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -162,8 +162,12 @@ def _describe(part: Any, name: str) -> tuple[str, str | None]:
     action = _ACTION_BY_CATEGORY.get(category, "Check")
     summary = f"{action} {name}"
 
-    remaining = getattr(part, "count_remaining", None)
-    used = getattr(part, "count_used", None)
+    # Converted, not just labelled. `_UNITS` renames `minutes` to
+    # "hours" and the number has to make the same trip -- see
+    # part_count_in_display_unit, which the part sensors read too so the
+    # list and the sensor cannot disagree about one part.
+    remaining = part_count_in_display_unit(part, getattr(part, "count_remaining", None))
+    used = part_count_in_display_unit(part, getattr(part, "count_used", None))
     unit = _UNITS.get(str(getattr(part, "count_type", "") or "").lower())
 
     if remaining is None:

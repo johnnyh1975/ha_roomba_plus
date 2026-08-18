@@ -9,10 +9,12 @@ No behaviour change vs. v3.3.1.
 """
 from __future__ import annotations
 
+import datetime
+
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 import logging
 
 from homeassistant.components.sensor import (
@@ -63,7 +65,7 @@ def _mh_sqft_to_m2(history: dict[str, Any]) -> StateType:
     sqft = (history.get("runtimeStats") or {}).get("sqft")
     if sqft is None:
         return None
-    return round(sqft / 10.764, 1)
+    return cast('str | int | float | None', round(sqft / 10.764, 1))
 
 
 def _mh_total_minutes(history: dict[str, Any]) -> StateType:
@@ -77,7 +79,7 @@ def _mh_total_minutes(history: dict[str, Any]) -> StateType:
     mn = stats.get("min")
     if hr is None or mn is None:
         return None
-    return hr * 60 + mn
+    return cast('str | int | float | None', hr * 60 + mn)
 
 
 def _mh_total_missions(history: dict[str, Any]) -> StateType:
@@ -189,7 +191,7 @@ def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
     return None
 
 
-def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> StateType:
+def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> datetime.datetime | None:
     """Return the end timestamp of the most recent failed mission as a datetime."""
     for r in records:
         classified = r.get("classified_result", "")
@@ -224,7 +226,7 @@ def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]
 import statistics as _statistics
 
 
-def _raw_cleaning_speed(records: list[dict]) -> StateType:
+def _raw_cleaning_speed(records: list[dict[str, Any]]) -> StateType:
     """F5a — median cleaning speed (m²/min) across the API window.
 
     Cloud API returns sqft — converted to m² (× SQFT_TO_M2) for consistency
@@ -244,7 +246,7 @@ def _raw_cleaning_speed(records: list[dict]) -> StateType:
     return round(_statistics.median(speeds), 2)
 
 
-def _raw_dirt_density(records: list[dict]) -> StateType:
+def _raw_dirt_density(records: list[dict[str, Any]]) -> StateType:
     """F5b — median dirt events per m² across the API window.
 
     Cloud API returns sqft — converted to m² (÷ SQFT_TO_M2) for consistency.
@@ -263,7 +265,7 @@ def _raw_dirt_density(records: list[dict]) -> StateType:
     return round(_statistics.median(densities), 3)
 
 
-def _raw_dirt_density_trend(records: list[dict]) -> StateType:
+def _raw_dirt_density_trend(records: list[dict[str, Any]]) -> StateType:
     """Dirt density trend: rising / stable / falling / unknown.
 
     THE INPUT `_classify_dirt_cause` WAS WAITING FOR. That classifier
@@ -351,7 +353,7 @@ def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
     return "unknown"
 
 
-def _raw_recharge_fraction(records: list[dict]) -> StateType:
+def _raw_recharge_fraction(records: list[dict[str, Any]]) -> StateType:
     """F5c — median recharge fraction (chrgM / durationM) across window.
 
     Uses the cloud `chrgM` field (minutes recharging mid-mission) divided by
@@ -374,7 +376,7 @@ def _raw_recharge_fraction(records: list[dict]) -> StateType:
     return round(_statistics.median(fractions), 1)
 
 
-def _raw_cleaning_speed_trend(records: list[dict]) -> StateType:
+def _raw_cleaning_speed_trend(records: list[dict[str, Any]]) -> StateType:
     """F5e — cleaning speed trend: improving / stable / declining / unknown.
 
     Compares median of 5 most-recent vs previous 10 records.
@@ -1102,7 +1104,7 @@ class RoombaHealthScoreTrendSensor(IRobotEntity, SensorEntity):
         rps = self._rps
         if rps is None:
             return None
-        return rps.health_score_trend()
+        return cast('str | int | float | None', rps.health_score_trend())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1160,7 +1162,7 @@ class _ArchiveSensor(_ConsolidatedCloudSensor):
     """
 
     @property
-    def _archive(self):
+    def _archive(self) -> Any:
         return getattr(self._config_entry.runtime_data, "mission_archive", None)
 
     @property
@@ -1184,12 +1186,12 @@ class RoombaWifiLastChannelSensor(_ArchiveSensor):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_wifi_last_channel"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1197,7 +1199,7 @@ class RoombaWifiLastChannelSensor(_ArchiveSensor):
         return latest[0].get("wifi_channel") if latest else None
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}
@@ -1221,12 +1223,12 @@ class RoombaWifiChannelStabilitySensor(_ArchiveSensor):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_wifi_channel_stability"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1237,7 +1239,7 @@ class RoombaWifiChannelStabilitySensor(_ArchiveSensor):
         return round(dominant_count / len(series) * 100, 1)
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}
@@ -1267,12 +1269,12 @@ class RoombaMissionsPerChargeSensor(_ArchiveSensor):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_missions_per_charge"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1283,7 +1285,7 @@ class RoombaMissionsPerChargeSensor(_ArchiveSensor):
         return round(len(recent) / max(1, 1 + total_recharges), 2)
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}

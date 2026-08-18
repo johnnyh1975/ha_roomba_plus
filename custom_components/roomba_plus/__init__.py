@@ -9,6 +9,8 @@ v2.0: __init__.py is now the thin setup/teardown shell. Business logic lives in:
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import asyncio
 import contextlib
 import dataclasses
@@ -153,7 +155,7 @@ async def _async_seed_l5_from_archive(
 
     seeded_count = 0
     for record in mission_archive.all_derived_oldest_first():
-        rooms_completed: dict = record.get("rooms_completed") or {}
+        rooms_completed: dict[str, Any] = record.get("rooms_completed") or {}
         for rid, data in rooms_completed.items():
             # Bug-hunt (v2.8.0): this function is awaited directly inside
             # async_setup_entry (not via hass.async_create_task) — an
@@ -255,7 +257,7 @@ class _SetupContext:
     config_entry: RoombaConfigEntry
     # ── Phase 1: connection ───────────────────────────────────────────────────
     roomba: Any = None
-    state: dict = dataclasses.field(default_factory=dict)
+    state: dict[str, Any] = dataclasses.field(default_factory=dict)
     # ── Phase 2: spatial stores ───────────────────────────────────────────────
     map_capability: MapCapability = dataclasses.field(
         default_factory=lambda: MapCapability.NONE
@@ -454,8 +456,12 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
                 room_seg_store.migrated_from_zonestore = True
             await room_seg_store.async_save(hass, config_entry.entry_id)
 
-        # ROOM-SEG Stage 5 — late-attach to renderer
-        renderer._room_seg_store = room_seg_store
+        # ROOM-SEG Stage 5 — late-attach to renderer.
+        #
+        # `renderer` is Optional: a robot with no map has none, and then
+        # there is nothing to attach the store to.
+        if renderer is not None:
+            renderer._room_seg_store = room_seg_store
 
     ctx.map_capability = map_capability
     ctx.renderer = renderer
@@ -638,7 +644,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 len(cloud_coordinator.data.get("pmaps", [])),
                 map_capability.value,
             )
-            if cloud_coordinator.raw_records:
+            if cloud_coordinator.raw_records and ctx.mission_store is not None:
                 _bf = ctx.mission_store.backfill_from_cloud(
                     cloud_coordinator.raw_records
                 )
@@ -730,7 +736,10 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
             await _async_seed_l5_from_archive(
                 hass, config_entry.entry_id, ctx.mission_archive, robot_profile_store
             )
-            await _async_seed_l3_from_archive(ctx.mission_archive, ctx.mission_store)
+            if ctx.mission_store is not None:
+                await _async_seed_l3_from_archive(
+                    ctx.mission_archive, ctx.mission_store
+                )
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "L5-ARC/L3-ARC: archive seeding failed — continuing setup "
@@ -867,7 +876,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
 
     # B9 — late SKU resolve (980 may not send sku in first MQTT dump)
     if config_entry.runtime_data.robot_profile is None:
-        def _set_robot_profile_on_sku(json_data: dict) -> None:
+        def _set_robot_profile_on_sku(json_data: dict[str, Any]) -> None:
             if config_entry.runtime_data.robot_profile is not None:
                 return
             reported = json_data.get("state", {}).get("reported", {})
@@ -1696,9 +1705,13 @@ async def async_unload_entry(
             except Exception:  # noqa: BLE001 — unload must never fail on this
                 _LOGGER.debug("MTS unload flush failed", exc_info=True)
 
-        await async_disconnect_or_timeout(
-            hass, roomba=config_entry.runtime_data.roomba
-        )
+        # `roomba` IS SET FROM HERE DOWN. The CLOUD_ONLY branch above
+        # returns before reaching this code, so a Prime entry -- which
+        # has no local robot -- never gets here. mypy cannot follow the
+        # early return across a hundred lines.
+        _roomba = config_entry.runtime_data.roomba
+        if _roomba is not None:
+            await async_disconnect_or_timeout(hass, roomba=_roomba)
 
         if not hass.config_entries.async_entries(DOMAIN):
             async_remove_services(hass)
@@ -1730,7 +1743,7 @@ async def _async_reload_on_options_change(
     reflect that this set is no longer only about the connection."""
     _RELOAD_TRIGGER_KEYS = {CONF_CONTINUOUS, CONF_DELAY, CONF_ENABLE_SCHEDULE_CALENDAR}
 
-    def _get(source: dict[str, Any], key: str) -> Any:
+    def _get(source: Mapping[str, Any], key: str) -> Any:
         # CONF_ENABLE_SCHEDULE_CALENDAR needs its default applied on BOTH
         # sides of the comparison -- unlike CONF_CONTINUOUS/CONF_DELAY
         # (always seeded into config_entry.data at initial entry

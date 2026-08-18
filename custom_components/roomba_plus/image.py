@@ -393,13 +393,13 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
     def __init__(self, prime_robot: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
         self._cache = None
-        self.access_tokens: collections.deque = collections.deque([], 2)
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
         self._prime_robot = prime_robot
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_map"
         self._png_bytes: bytes | None = None
         self._map_stored_at: str | None = None
-        self._map_store: Store | None = None
+        self._map_store: Store[dict[str, Any]] | None = None
         self._watch_task: asyncio.Task[None] | None = None
         # NEW (this session): live-map decode statistics, kept on the
         # CONFIG ENTRY rather than on this entity, so diagnostics can
@@ -472,6 +472,19 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             name=f"roomba_plus_prime_live_map_{self._blid}",
         )
 
+    def _live_map_stats(self) -> dict[str, Any]:
+        """The live-map counters, created on first use.
+
+        `RoombaData.live_map_stats` defaults to None and four places in
+        this file write into it unconditionally. Each was reached
+        through `self._config_entry.runtime_data.live_map_stats`, so
+        each was a separate optional as far as mypy was concerned.
+        """
+        data = self._config_entry.runtime_data
+        if data.live_map_stats is None:
+            data.live_map_stats = {}
+        return data.live_map_stats
+
     def _feed_trail(self, message: Any) -> None:
         """Feeds live positions into the trail renderer.
 
@@ -515,7 +528,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         # Same shape as every other counter mistake in this project:
         # counting arrival instead of survival.
         data = self._config_entry.runtime_data
-        stats = data.live_map_stats
+        stats = self._live_map_stats()
         try:
             for sample in getattr(message, "updates", None) or []:
                 # A TUPLE, NOT AN OBJECT WITH .x AND .y.
@@ -719,7 +732,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                             )
 
                     if isinstance(message, PositionUpdateMessage):
-                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats = self._live_map_stats()
                         stats["position_messages"] = stats.get("position_messages", 0) + 1
                         stats["position_points"] = (
                             stats.get("position_points", 0) + len(message.updates)
@@ -753,7 +766,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         # fail at offset 1, the real one failed at offset 6 --
                         # so the payload really was protobuf-shaped), but it's
                         # a genuine robustness gap either way.
-                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats = self._live_map_stats()
                         stats["updates_received"] += 1
                         if http_status != 200:
                             _LOGGER.warning(
@@ -772,7 +785,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                         # identifying an unexpected format (protobuf vs. an
                         # error page vs. compressed data) from a log alone,
                         # without needing another round-trip to the reporter.
-                        stats = self._config_entry.runtime_data.live_map_stats
+                        stats = self._live_map_stats()
                         stats["decode_failed"] += 1
                         stats["last_error"] = repr(sys.exc_info()[1])
                         stats["last_payload_prefix_hex"] = (
@@ -907,7 +920,7 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
         """
         import base64  # noqa: PLC0415
 
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MAP_STORAGE_VERSION,
             _prime_map_storage_key(self._config_entry.entry_id),
@@ -1019,7 +1032,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # Manually initialize ImageEntity internals that require hass.
         # async_update_token() is called in async_added_to_hass.
         self._cache = None
-        self.access_tokens: collections.deque = collections.deque([], 2)
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
 
         self._renderer = renderer
         self._map_capability = map_capability
@@ -1166,8 +1179,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         poly_umf = aligner.keepout_polygon_umf(zone)
                         if not poly_umf:
                             continue
-                        poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-                        if not all(p is not None for p in poly_pose):
+                        # FILTERED, NOT CHECKED. `umf_to_pose` returns
+                        # `tuple | None` for a point outside the map, and
+                        # `all(p is not None ...)` proves nothing to a
+                        # reader or a type checker about the list itself.
+                        # Building the narrowed list and comparing lengths
+                        # says the same thing and carries the type.
+                        raw_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                        poly_pose = [p for p in raw_pose if p is not None]
+                        if len(poly_pose) != len(raw_pose):
                             continue
                         polys_px.append(
                             [self._renderer._mm_to_px_fit(x, y) for x, y in poly_pose]
@@ -1255,9 +1275,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         rid_to_name = aligner.rid_to_name()
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in aligner.room_polygons_umf.items():
-            poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-            # Bug 6 fix: guard against empty polygon (vacuous all() on [])
-            if not poly_pose or not all(p is not None for p in poly_pose):
+            # Filtered rather than checked, same as the keep-out path
+            # above: `umf_to_pose` returns None outside the map, and a
+            # length comparison narrows the list where `all(...)` does
+            # not. The empty-polygon guard stays -- `all([])` is True,
+            # which is the bug this line was added for.
+            raw_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+            poly_pose = [p for p in raw_pose if p is not None]
+            if not poly_pose or len(poly_pose) != len(raw_pose):
                 continue
             room_name = rid_to_name.get(rid, rid)
             # XVMC-COORDS: outline and centroid in pose-space mm (not pixels).
@@ -1298,11 +1323,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     "y":    pose_xy[1],
                 })
             for zone in cc.keepout_zones:
-                poly_umf = aligner.keepout_polygon_umf(zone)
-                if not poly_umf:
+                keepout_umf = aligner.keepout_polygon_umf(zone)
+                if not keepout_umf:
                     continue
-                poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-                if not poly_pose or not all(p is not None for p in poly_pose):
+                _raw = [aligner.umf_to_pose(x, y) for x, y in keepout_umf]
+                poly_pose = [q for q in _raw if q is not None]
+                if not poly_pose or len(poly_pose) != len(_raw):
                     continue
                 zones.append({
                     "type":    "keepout",
@@ -1960,7 +1986,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     )
 
         # Persist renderer state so the map survives an HA restart
-        if self._renderer and self._renderer.has_data:
+        _renderer = self._renderer
+        if _renderer and _renderer.has_data:
             asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
 
         # F-EPHEMERAL — Room outline recompute moved AFTER the GridStore
@@ -1970,7 +1997,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # after "Update GridStore for coverage heatmap".
 
         # Update GridStore for coverage heatmap (all pose-capable robots)
-        if self._config_entry is not None and self._mission_points:
+        if (
+            self._config_entry is not None
+            and self._mission_points
+            and self._renderer is not None
+        ):
             _gdata = self._config_entry.runtime_data
             if _gdata.grid_store is not None:
                 # L7 (v2.7.0): compute local (weekday, hour) from mission start here
@@ -1996,6 +2027,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # selection) — grid_store.py stays HA-free by taking
                     # a plain float here rather than importing the
                     # tier-detection logic itself.
+                    # `self._renderer` is checked at the top of this
+                    # block, thirty lines up -- far enough that mypy has
+                    # lost the narrowing by here. Read through a local
+                    # rather than adding a second check for a condition
+                    # already excluded.
                     robot_radius_mm=self._renderer._cfg.robot_diameter_mm / 2,
                 )
                 # v3.4.0 GS-SMART-COVERAGE — stamp this mission's nMssn as
@@ -2198,7 +2234,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """Write renderer state to hass.storage after mission end."""
         if not self._renderer:
             return
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MAP_STORAGE_VERSION,
             _map_storage_key(self._config_entry.entry_id),
@@ -2217,7 +2253,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """
         if not self._renderer:
             return
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MAP_STORAGE_VERSION,
             _map_storage_key(self._config_entry.entry_id),
@@ -2260,7 +2296,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """
         if self._config_entry is None:
             return
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MISSION_CHECKPOINT_STORAGE_VERSION,
             _mission_checkpoint_storage_key(self._config_entry.entry_id),
@@ -2405,7 +2441,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """
         if self._config_entry is None:
             return
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MISSION_CHECKPOINT_STORAGE_VERSION,
             _mission_checkpoint_storage_key(self._config_entry.entry_id),
@@ -2452,7 +2488,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """
         if self._config_entry is None:
             return
-        store = Store(
+        store: Store[dict[str, Any]] = Store(
             self.hass,
             _MISSION_CHECKPOINT_STORAGE_VERSION,
             _mission_checkpoint_storage_key(self._config_entry.entry_id),
@@ -2460,7 +2496,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         await store.async_remove()
 
     async def _trigger_zone_issue(self) -> None:
-        from homeassistant.components import repairs as ir
+        # `helpers.issue_registry`, NOT `components.repairs`.
+        # `async_create_issue` and `IssueSeverity` live in the helper;
+        # the components module has neither, so this raised
+        # AttributeError and the zones-need-naming prompt never
+        # appeared. Every other repair issue in this integration imports
+        # the helper.
+        from homeassistant.helpers import issue_registry as ir
         ir.async_create_issue(
             self.hass, DOMAIN, "zones_need_naming",
             is_fixable=True,
@@ -2522,7 +2564,7 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
     ) -> None:
         IRobotEntity.__init__(self, roomba, blid)
         self._cache: bytes | None = None
-        self.access_tokens: collections.deque = collections.deque([], 2)
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
 
         self._grid_store = grid_store
         self._config_entry = config_entry
@@ -2639,7 +2681,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
     ) -> None:
         IRobotEntity.__init__(self, roomba, blid)
         self._cache = None
-        self.access_tokens: collections.deque = collections.deque([], 2)
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
@@ -2737,7 +2779,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 self._rendered_once = True
             else:
                 self._rendered_fallback = True
-            return cached["png"]
+            return bytes(cached["png"])
 
 
 
@@ -2954,12 +2996,20 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         rid_to_name = aligner.rid_to_name()
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in polygons_umf.items():
+            poly_coords: list[tuple[float, float]]
             if aligned:
-                poly_coords = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-                if not all(p is not None for p in poly_coords):
+                # Filtered, not checked -- third instance of this shape
+                # in the file. `all(p is not None ...)` proves the list
+                # is clean without narrowing it, which is why the else
+                # branch needed a `type: ignore` to assign into the same
+                # name. Comparing lengths says the same thing and
+                # carries the type, so the ignore goes.
+                raw = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                poly_coords = [p for p in raw if p is not None]
+                if len(poly_coords) != len(raw):
                     continue
             else:
-                poly_coords = poly_umf  # type: ignore[assignment]
+                poly_coords = list(poly_umf)
             if not poly_coords:  # Bug 6 fix: guard against empty polygon
                 continue
             room_name = rid_to_name.get(rid, rid)
@@ -3003,11 +3053,12 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                         "y":    pose_xy[1],
                     })
                 for zone in cc.keepout_zones:
-                    poly_umf = aligner.keepout_polygon_umf(zone)
-                    if not poly_umf:
+                    keepout_umf = aligner.keepout_polygon_umf(zone)
+                    if not keepout_umf:
                         continue
-                    poly_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
-                    if not poly_pose or not all(p is not None for p in poly_pose):
+                    _raw2 = [aligner.umf_to_pose(x, y) for x, y in keepout_umf]
+                    poly_pose = [q for q in _raw2 if q is not None]
+                    if not poly_pose or len(poly_pose) != len(_raw2):
                         continue
                     zones.append({
                         "type":    "keepout",
@@ -3134,7 +3185,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._png: bytes | None = None
         self._live_dirty = False
         self._last_live_state_write = 0.0
-        self._live_bundle_store: Store | None = None
+        self._live_bundle_store: Store[dict[str, Any]] | None = None
         self._stored_live_bundle: dict[str, Any] | None = None
         self._current_map_id: str | None = None
         self._rendered_for_map_version: str | None = None
@@ -3254,6 +3305,11 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         ):
             self._live_bundle = saved_bundle["bundle"]
 
+        #  is Optional and both builders want a str. An
+        # entity with no map id has nothing to build, so this returns
+        # rather than passing None down two call levels.
+        if not p2map_id:
+            return
         polygons, names, preferences = await async_build_prime_room_polygons(
             self._config_entry, p2map_id
         )
@@ -3272,7 +3328,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         version = ""
         try:
             robot = self._config_entry.runtime_data.prime_robot
-            versions = await robot.get_active_map_versions() or []
+            versions = await robot.get_active_map_versions() if robot else []
             record_success("map version read")
             for entry in versions:
                 if entry.get("p2map_id") == p2map_id:
@@ -3343,7 +3399,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
     @staticmethod
-    def _draw_zone_layer(draw, to_px, layer, *, outline, scale=1000.0) -> None:
+    def _draw_zone_layer(draw: Any, to_px: Any, layer: Any, *, outline: Any, scale: float = 1000.0) -> None:
         """Outlines every polygon of one zone layer.
 
         Outline only, never filled: a filled zone hides the room under
@@ -3528,7 +3584,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             [] if have_own_trail
             else (live_bundle.get("trajectories") or {}).get("features") or []
         ):
-            coords = (feature.get("geometry") or {}).get("coordinates")
+            coords = (feature.get("geometry") or {}).get("coordinates") or []
             try:
                 points = [
                     to_px(float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
@@ -3653,7 +3709,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 )
 
         for feature in (live_bundle.get("hazard") or {}).get("features") or []:
-            coords = (feature.get("geometry") or {}).get("coordinates")
+            coords = (feature.get("geometry") or {}).get("coordinates") or []
             try:
                 px, py = to_px(
                     float(coords[0]) * METRES_TO_MM,

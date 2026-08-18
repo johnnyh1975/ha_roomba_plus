@@ -225,7 +225,7 @@ async def async_setup_entry(
         # already showed the two disagreeing: `cap.autoevac` 1 with no
         # `autoevacFreq` key.
         present = _settings_keys(config_entry)
-        setting_entities = [
+        setting_entities: list[Any] = [
             PrimeSettingSwitch(data.blid, config_entry, description)
             for description in PRIME_SETTING_SWITCHES
             if _capability_permits(description, cap, dock_cap)
@@ -301,7 +301,7 @@ class EdgeCleanSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "edge_clean"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_edge_clean"
 
@@ -344,7 +344,7 @@ class AlwaysFinishSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "always_finish"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_always_finish"
 
@@ -388,7 +388,7 @@ class ScheduleHoldSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "schedule_hold"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_schedule_hold"
 
@@ -431,7 +431,7 @@ class ChildLockSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "child_lock"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_child_lock"
 
@@ -471,7 +471,7 @@ class EcoChargeSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "eco_charge"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_eco_charge"
 
@@ -516,7 +516,7 @@ class GentleModeSwitch(IRobotEntity, SwitchEntity):
     _attr_translation_key = "gentle_mode"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_gentle_mode"
 
@@ -579,7 +579,7 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
         self._attr_unique_id = f"{self.robot_unique_id}_prime_carpet_boost"
 
     @property
-    def _prime_robot(self):
+    def _prime_robot(self) -> Any:
         return self._config_entry.runtime_data.prime_robot
 
     @property
@@ -592,7 +592,7 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
             return None
         from roombapy_prime.models import RobotSettings
 
-        return RobotSettings.from_json(raw).carpet_boost
+        return bool(RobotSettings.from_json(raw).carpet_boost)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._prime_robot.set_setting("carpetBoost", True)

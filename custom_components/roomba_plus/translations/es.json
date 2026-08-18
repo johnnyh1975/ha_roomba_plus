@@ -1275,6 +1275,10 @@
     "favorite_multi_commanddefs": {
       "title": "El favorito tiene varios pasos de comando",
       "description": "El favorito “{name}” tiene {count} pasos de comando, pero solo el primero se envía al robot — el resto se ignora. Se trata de una configuración poco habitual cuyo funcionamiento correcto no está confirmado."
+    },
+    "segments_changed": {
+      "title": "Lista de habitaciones modificada",
+      "description": "El mapa del robot se ha reentrenado y las habitaciones se han renumerado, así que las automatizaciones que usan el ID pueden limpiar la habitación equivocada. Abre el mapa de habitaciones y revisa tus selecciones."
     }
   },
   "device_automation": {
@@ -1450,6 +1454,9 @@
     },
     "prime_not_connected": {
       "message": "Este robot no tiene conexión con la nube."
+    },
+    "cloud_required": {
+      "message": "Seleccionar habitaciones requiere credenciales de la nube de iRobot en este robot. Añádelas en las opciones de la integración, o limpia toda la casa."
     }
   },
   "selector": {

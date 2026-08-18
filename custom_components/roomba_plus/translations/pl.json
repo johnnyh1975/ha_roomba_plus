@@ -1275,6 +1275,10 @@
     "favorite_multi_commanddefs": {
       "title": "Ulubiony ma wiele kroków poleceń",
       "description": "Ulubiony „{name}” ma {count} kroków poleceń, ale do robota wysyłany jest tylko pierwszy — pozostałe są ignorowane. To rzadka konfiguracja, dla której nie potwierdzono poprawnego działania."
+    },
+    "segments_changed": {
+      "title": "Lista pokoi uległa zmianie",
+      "description": "Mapa robota została nauczona od nowa, a pokoje przenumerowane — automatyzacje wskazujące pokoje po ID mogą teraz sprzątać niewłaściwy pokój. Otwórz mapę pokoi i sprawdź swoje wybory."
     }
   },
   "device_automation": {
@@ -1450,6 +1454,9 @@
     },
     "prime_not_connected": {
       "message": "Ten robot nie ma połączenia z chmurą."
+    },
+    "cloud_required": {
+      "message": "Wybór pokoi wymaga danych logowania do chmury iRobot na tym robocie. Dodaj je w opcjach integracji lub posprzątaj cały dom."
     }
   },
   "selector": {

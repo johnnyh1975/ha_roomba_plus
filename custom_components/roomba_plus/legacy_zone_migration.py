@@ -16,6 +16,8 @@ purpose and nothing else in the integration imports it.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 from dataclasses import dataclass
 
@@ -55,10 +57,10 @@ async def async_load_legacy_zones(
     used), or the file is otherwise unreadable — migration simply finds
     nothing to migrate in any of those cases, rather than raising.
     """
-    store = Store(
+    store: Store[dict[str, Any]] = Store(
         hass, _LEGACY_HA_STORE_VERSION, f"{_LEGACY_STORAGE_KEY_PREFIX}_{entry_id}"
     )
-    data: dict | None = await store.async_load()
+    data: dict[str, Any] | None = await store.async_load()
     if not data:
         _LOGGER.debug("legacy_zone_migration: no old ZoneStore data for %s", entry_id)
         return []

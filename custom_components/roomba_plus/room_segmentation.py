@@ -20,6 +20,8 @@ robots (GridStore only tracks visited/free cells, not obstacle positions).
 That classification step is NOT implemented here.
 """
 from __future__ import annotations
+
+from typing import Any
 from dataclasses import dataclass
 
 from .edt import distance_transform_edt
@@ -32,7 +34,7 @@ from .merge import merge_regions
 @dataclass
 class RoomSegmentationResult:
     rooms: dict[int, set[tuple[int, int]]]
-    doors: list[dict]
+    doors: list[dict[str, Any]]
     dist: dict[tuple[int, int], float]
     seeds: list[tuple[int, int]]
 
@@ -81,7 +83,7 @@ def segment_rooms(
 
     final_ids = sorted(rooms.keys())
     neighbors8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-    doors: list[dict] = []
+    doors: list[dict[str, Any]] = []
     checked: set[tuple[int, int]] = set()
     for a in final_ids:
         for b in final_ids:

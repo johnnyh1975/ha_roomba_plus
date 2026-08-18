@@ -29,12 +29,18 @@ from __future__ import annotations
 import logging
 import statistics
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 if TYPE_CHECKING:
+    # ANNOTATION-ONLY, and it was missing entirely. Two annotations
+    # named `Store` with a noqa blaming a ruff scope limitation --
+    # but nothing imported it, so the name did not exist in this
+    # module at all. Same shape as repairs.py earlier today.
+    from homeassistant.helpers.storage import Store
+
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry
 
@@ -74,7 +80,7 @@ CONF_DEMAND_MULTIPLIER         = "demand_clean_multiplier"
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
-def _compute_dirt_density(record: dict) -> float | None:
+def _compute_dirt_density(record: dict[str, Any]) -> float | None:
     """Compute dirt events per m² for a single cloud record.
 
     Returns None when the record lacks the required fields (e.g. 600-series).
@@ -111,11 +117,11 @@ class DirtThresholdManager:
         self._entry = config_entry
         self._last_trigger_time: datetime | None = None
         # P2: Store is stateless — construct once and reuse across load/save calls
-        self._store: "Store | None" = None  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+        self._store: "Store[dict[str, Any]] | None" = None
         # L1: per-weekday baseline; populated after ≥4 cloud records per weekday
         self._baseline_by_weekday: dict[int, float] = {}
 
-    def _get_store(self, entry_id: str) -> "Store":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    def _get_store(self, entry_id: str) -> "Store[dict[str, Any]]":
         """Return the cached Store, creating it on first call."""
         if self._store is None:
             from homeassistant.helpers.storage import Store
@@ -177,7 +183,7 @@ class DirtThresholdManager:
         """True when demand cleaning is configured and enabled."""
         return bool(self._entry.options.get(CONF_DEMAND_CLEANING_ENABLED, False))
 
-    def compute_baseline(self, records: list[dict]) -> float | None:
+    def compute_baseline(self, records: list[dict[str, Any]]) -> float | None:
         """Return the median dirt density over the most recent BASELINE_WINDOW records.
 
         Returns None when fewer than MIN_RECORDS usable records exist.
@@ -195,7 +201,7 @@ class DirtThresholdManager:
         return statistics.median(densities)
 
     def _update_weekday_baseline(
-        self, records: list[dict], weekday: int
+        self, records: list[dict[str, Any]], weekday: int
     ) -> None:
         """L1 — Rebuild the baseline for a specific weekday from 12 weeks of records.
 
@@ -234,7 +240,7 @@ class DirtThresholdManager:
 
     def should_trigger(
         self,
-        records: list[dict],
+        records: list[dict[str, Any]],
         multiplier: float | None = None,
     ) -> tuple[bool, str]:
         """Evaluate whether a demand clean should be triggered.
@@ -484,7 +490,28 @@ class DirtThresholdManager:
         import time as _time
         data.demand_triggered_ts = _time.monotonic()
 
+        # CLASSIC ONLY, AND THAT IS NOT AN OVERSIGHT.
+        #
+        # This manager is created behind `MapCapability.SMART`, which is
+        # derived from `roomba_reported_state(roomba)` -- and that
+        # returns `{}` when there is no local robot. So a CLOUD_ONLY
+        # entry never reaches SMART, never gets a DirtThresholdManager,
+        # and never arrives here.
+        #
+        # Checked because mypy flagged the unguarded access and the
+        # tester notes carry "demand cleaning on Prime" as never
+        # confirmed. It was never confirmed because it never runs.
+        #
+        # Whether Prime SHOULD have demand cleaning is a separate
+        # question with a real answer available: the per-room dirt data
+        # exists in the map bundle. Nobody has asked for it.
         roomba = data.roomba
+        if roomba is None:  # pragma: no cover - SMART implies a local robot
+            _LOGGER.debug(
+                "DirtThresholdManager: no local robot for %s -- demand "
+                "cleaning is a Classic path", entry_id,
+            )
+            return
         await self._hass.async_add_executor_job(roomba.send_command, "start")
 
         _LOGGER.info("DirtThresholdManager: demand clean sent for %s", entry_id)

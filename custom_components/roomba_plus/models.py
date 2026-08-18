@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
+    from .mission_archive import MissionArchive
     from roombapy import Roomba
     from roombapy_prime import PrimeRobot
     from roombapy_prime.models import RobotSerialInfo
@@ -239,7 +240,7 @@ class RoombaData:
     # degradation (boutXIII field data); persistence would duplicate a
     # reliable source. See MISSION-MAP-ARCHIVE backlog candidate for the
     # opt-in freeze path.
-    mission_map_cache: dict = field(default_factory=dict)
+    mission_map_cache: dict[str, Any] = field(default_factory=dict)
     # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
     blocking_manager: BlockingManager | None = None
     # NEW (this session): live-map decode statistics, populated by
@@ -307,7 +308,7 @@ class RoombaData:
     last_batpct_at: float | None = None   # time.monotonic() of last_batpct_value
     consecutive_battery_contact_anomaly: int = 0
     current_charge_cycle_peak: float | None = None
-    charge_cycle_peaks: list = field(default_factory=list)   # bounded, most-recent-last
+    charge_cycle_peaks: list[Any] = field(default_factory=list)   # bounded, most-recent-last
     was_charging: bool = False   # edge-detect charge-cycle start/end
 
     # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
@@ -395,6 +396,39 @@ class RoombaData:
             self.cloud_coordinator is not None
             and self.cloud_coordinator.data is not None
         )
+
+    @property
+    def cloud(self) -> IrobotCloudCoordinator:
+        """The cloud coordinator, for code that has already checked.
+
+        `has_cloud` answers the question and cannot carry the answer: a
+        property narrows nothing, so twelve call sites guarded by
+        `if data.has_cloud:` still read as accesses on an optional.
+
+        Writing `assert` at each of them would scatter runtime checks
+        for a condition the guard above already excluded. This states it
+        once, and raises rather than returning None so a caller that
+        skipped the guard fails loudly instead of carrying a None into
+        an attribute read three frames later.
+
+        NOT ADOPTED AT THOSE TWELVE SITES YET, and the reason is worth
+        recording. Switching them broke fourteen tests at once: their
+        fixtures build `runtime_data` as a bare MagicMock and set
+        `cloud_coordinator` on it, so reading `.cloud` produced a fresh
+        auto-created Mock rather than the coordinator the test
+        configured.
+
+        That is a fixture problem rather than a design one, but fourteen
+        tests is not a change to make in passing while chasing type
+        errors. The property is here for new code; migrating the
+        existing sites needs the fixtures updated in the same pass.
+        """
+        if self.cloud_coordinator is None:
+            raise RuntimeError(
+                "cloud coordinator requested on an entry that has none -- "
+                "check has_cloud first"
+            )
+        return self.cloud_coordinator
 
 
 # Typed config entry — gives full IDE type safety throughout the integration

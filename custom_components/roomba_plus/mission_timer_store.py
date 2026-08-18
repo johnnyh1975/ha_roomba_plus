@@ -78,7 +78,7 @@ class MissionTimerStore:
         self.run_sec: float = 0.0
         # v3.3.0 DELAY-SAVE — cached Store handle; async_delay_save
         # debounces per Store instance (see _get_ha_store).
-        self._ha_store: Store | None = None
+        self._ha_store: Store[dict[str, Any]] | None = None
         self.total_estimated_sec: float | None = None
         self.planned_rooms: list[str] = []
         self.current_room_idx: int = 0
@@ -120,8 +120,8 @@ class MissionTimerStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted timer from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{_STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{_STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             return
         try:
@@ -152,7 +152,7 @@ class MissionTimerStore:
         except (TypeError, ValueError) as exc:
             _LOGGER.warning("MissionTimerStore: load failed — %s", exc)
 
-    def _payload(self) -> dict:
+    def _payload(self) -> dict[str, Any]:
         """Serialise current timer state (single home for the shape —
         used by both the immediate and the delayed save path)."""
         return {
@@ -174,7 +174,7 @@ class MissionTimerStore:
         store = self._get_ha_store(hass, entry_id)
         await store.async_save(self._payload())
 
-    def _get_ha_store(self, hass: HomeAssistant, entry_id: str) -> Store:
+    def _get_ha_store(self, hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any]]:
         """Cached Store handle. v3.3.0 DELAY-SAVE — async_delay_save
         debounces PER Store instance; the previous new-Store-per-save
         pattern would have defeated the debounce entirely."""

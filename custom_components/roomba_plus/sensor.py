@@ -183,6 +183,20 @@ from .sensor_diagnostics import (
     RoombaResetDiagnosticsSensor,
 )
 
+#: RE-EXPORTED ON PURPOSE. Four private helpers here are imported by
+#: callbacks.py, services.py and sensor_rooms.py -- they live in this
+#: module because that is where the sensor definitions using them are,
+#: not because they are meant to be private to it.
+#:
+#: Under mypy strict, importing a name a module does not explicitly
+#: export is an error. Naming them says the sharing is deliberate.
+__all__ = [
+    "_compute_room_time_estimates",
+    "_region_maps_for",
+    "_resolve_smart_tier_room_state",
+]
+
+
 PARALLEL_UPDATES = 0
 
 
@@ -280,7 +294,6 @@ async def async_setup_entry(
         # a17 Max 705 fix and a different trigger -- there the cap object
         # was present and the key absent, here the object never comes.
         dock_known = _dock_reports_itself(config_entry)
-        dock_cap_known = dock_cap is not None
         # NOT CONVERTED TO created-but-disabled, and PR #76 proposes it.
         #
         # Seventeen tests encode this contract, and the strongest is
@@ -299,9 +312,13 @@ async def async_setup_entry(
         # a useful answer -- the sensor exists to distinguish `schedule`
         # from `alexa` from `dockBtn`, not to detect a capability.
         entities.append(PrimeJobInitiatorSensor(data.blid, config_entry))
-        if dock_known and (not dock_cap_known or dock_cap.pad_wash not in (0, None)):
+        # `dock_cap is None` INSTEAD OF THE SEPARATE FLAG. `dock_cap_known`
+        # holds exactly that answer, but under its own name -- so the
+        # short-circuit is correct and narrows nothing. Asking the value
+        # directly says the same thing and carries the type.
+        if dock_known and (dock_cap is None or dock_cap.pad_wash not in (0, None)):
             entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
-        if dock_known and (not dock_cap_known or dock_cap.pad_dry not in (0, None)):
+        if dock_known and (dock_cap is None or dock_cap.pad_dry not in (0, None)):
             entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
         # PRESENCE, not capability. See PrimeDockTankLevelSensor's
         # docstring: which docks report tankLvl is not decidable from
@@ -342,7 +359,7 @@ async def async_setup_entry(
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
 
-    entities: list = [
+    entities = [
         RoombaSensor(roomba, blid, description, config_entry)
         for description in SENSORS
         if description.filter_fn(state)
@@ -351,8 +368,8 @@ async def async_setup_entry(
     # Cloud history sensors: lifetime stats from /missionhistory.
     # Available for all robots when cloud credentials are configured.
     # Data comes from the cloud coordinator (daily poll) — not from MQTT.
-    if data.has_cloud:
-        cc = data.cloud_coordinator  # type: ignore[union-attr]
+    cc = data.cloud_coordinator
+    if cc is not None and cc.data is not None:
         entities.extend([
             CloudHistorySensor(roomba, blid, cc, desc)
             for desc in CLOUD_HISTORY_SENSORS
@@ -400,8 +417,8 @@ async def async_setup_entry(
         entities.append(RoombaMissionProgress(roomba, blid, config_entry))
 
     # SC1 (v2.7.0) — consolidated analytics sensors (cloud credentials required)
-    if data.has_cloud:
-        cc = data.cloud_coordinator  # type: ignore[union-attr]
+    cc = data.cloud_coordinator
+    if cc is not None and cc.data is not None:
         entities.extend([
             RoombaCleaningPerformanceSensor(roomba, blid, cc, config_entry),
             RoombaCleaningAnalytics30dSensor(roomba, blid, cc, config_entry),

@@ -314,8 +314,8 @@ class RobotProfileStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted learned state from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("RobotProfileStore: no persisted data for %s", entry_id)
             return
@@ -426,7 +426,7 @@ class RobotProfileStore:
         # debug level said so.
         if hass is None:
             return
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "learned_filter_hours": self.learned_filter_hours,
             "learned_brush_hours": self.learned_brush_hours,
@@ -690,7 +690,7 @@ class RobotProfileStore:
         observations yet (Welford's M2/(n-1) is undefined for n<2)."""
         if self.estcap_noise_count < 2:
             return None
-        return (self.estcap_noise_m2 / (self.estcap_noise_count - 1)) ** 0.5
+        return float((self.estcap_noise_m2 / (self.estcap_noise_count - 1)) ** 0.5)
 
     @property
     def estcap_noise_ready(self) -> bool:
@@ -742,9 +742,13 @@ class RobotProfileStore:
         if self.dock_theta_count == 0:
             return None
         n = self.dock_theta_count
-        return (
-            (self.dock_theta_sin_sum / n) ** 2 + (self.dock_theta_cos_sum / n) ** 2
-        ) ** 0.5
+        return float(
+            (
+                (self.dock_theta_sin_sum / n) ** 2
+                + (self.dock_theta_cos_sum / n) ** 2
+            )
+            ** 0.5
+        )
 
     @property
     def dock_theta_circular_stdev_deg(self) -> float | None:
@@ -803,7 +807,7 @@ class RobotProfileStore:
             return degradation_rate >= _ESTCAP_FALLBACK_MIN_RATE
         observed_total_drop = degradation_rate * max(cycles, 1)
         expected_noise_drift = stdev * (max(cycles, 1) ** 0.5)
-        return observed_total_drop > expected_noise_drift * _ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER
+        return bool(observed_total_drop > expected_noise_drift * _ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER)
 
     @staticmethod
     def cap_remaining_cycles(remaining_cycles: float) -> float | None:

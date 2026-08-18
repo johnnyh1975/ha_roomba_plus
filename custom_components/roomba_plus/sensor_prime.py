@@ -59,6 +59,12 @@ from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 from .prime_coordinator import prime_last_command
 
+#: RE-EXPORTED ON PURPOSE. `binary_sensor.py` imports this helper from
+#: here; it lives in this module because the Prime error sensor is its
+#: main user. Naming it says the sharing is deliberate.
+__all__ = ["get_localized_error_entry"]
+
+
 
 class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
     """Current mission-timeline event type, with room-progress attributes.
@@ -107,7 +113,7 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
         report = self._report
         if report is None or not report.event:
             return None
-        return report.event[0].event_type
+        return str(report.event[0].event_type)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -366,7 +372,7 @@ class PrimeCleaningModeSensor(_PrimeCurrentStateSensorBase):
         cycle = getattr(status, "cycle", None)
         if cycle in (None, "none"):
             return None
-        return self._MODES.get(getattr(status, "operating_mode", None))
+        return self._MODES.get(getattr(status, "operating_mode", None) or 0)
 
 
 class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
@@ -600,7 +606,7 @@ def _dock_state_label(raw_value: Any) -> str | None:
         # name.
         known = _FIELD_OBSERVED_DOCK_STATES.get(raw_value)
         return known if known else f"Unknown ({raw_value})"
-    return member.name.replace("_", " ").capitalize()
+    return str(member.name.replace("_", " ").capitalize())
 
 
 class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
@@ -624,6 +630,37 @@ class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
         state = self._current_state
         if state is None or state.dock is None:
             return None
+
+        # A DOCK THE ROBOT DOES NOT KNOW REPORTS NO STATE, and saying
+        # so beats reading "unknown" forever.
+        #
+        # @utkjmitch has reported this since a32. His dock block is the
+        # whole of `{"fwVer": "", "known": false, "error": 0}` -- no
+        # `state`, no `cap`, nothing. @chairstacker's, for contrast:
+        #
+        #     {"cap": {"evac": 1, "pd": 2, "pw": 1, "pwo": 1},
+        #      "state": 301, "pdState": 701, "pwState": 601,
+        #      "known": true, "fwVer": "20"}
+        #
+        # That comparison answers the question @utkjmitch left open --
+        # he asked whether some other robot carries a `cap` object where
+        # his carries nothing, because that would mean `known: false` is
+        # about IDENTITY rather than capability. It does, and it is:
+        # his dock is mute rather than passive. The robot does not
+        # recognise it, so it reports no capability fields at all.
+        #
+        # The sensor was right to have nothing to say. It just did not
+        # say which nothing.
+        if state.dock.state is None:
+            # Plain text, like every other value this sensor returns
+            # -- "Pad wash okay", "Unknown (671)". It has no translated
+            # state list.
+            return (
+                "Not reported by this dock"
+                if state.dock.known is False
+                else None
+            )
+
         return _dock_state_label(state.dock.state)
 
 
@@ -689,7 +726,7 @@ class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
         state = self._current_state
         if state is None or state.dock is None:
             return None
-        return state.dock.tank_lvl
+        return int(state.dock.tank_lvl)
 
 
 class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
@@ -752,7 +789,7 @@ class PrimeSuctionLevelSensor(_PrimeCurrentStateSensorBase):
         if settings.suction_level is None:
             return None
         try:
-            return SuctionLevel(settings.suction_level).name.lower()
+            return str(SuctionLevel(settings.suction_level).name.lower())
         except ValueError:
             return None
 
@@ -781,7 +818,7 @@ class PrimeRuntimeHoursSensor(_PrimeCurrentStateSensorBase):
         state = self._current_state
         if state is None or state.runtime_stats is None:
             return None
-        return state.runtime_stats.hours
+        return int(state.runtime_stats.hours)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -822,7 +859,7 @@ class PrimeFirmwareVersionSensor(IRobotEntity, SensorEntity):
         raw = coordinator.data.get("rw-software")
         if raw is None:
             return None
-        return SoftwareStatusShadow.from_json(raw).software_version
+        return str(SoftwareStatusShadow.from_json(raw).software_version)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -909,7 +946,7 @@ class PrimeTotalMissionsSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbmssn is None:
             return None
-        return stats.bbmssn.n_mssn
+        return int(stats.bbmssn.n_mssn)
 
 
 class PrimeSuccessfulMissionsSensor(_PrimeStatsSensorBase):
@@ -933,7 +970,7 @@ class PrimeSuccessfulMissionsSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbmssn is None:
             return None
-        return stats.bbmssn.n_mssn_ok
+        return int(stats.bbmssn.n_mssn_ok)
 
 
 class PrimeCanceledMissionsSensor(_PrimeStatsSensorBase):
@@ -956,7 +993,7 @@ class PrimeCanceledMissionsSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbmssn is None:
             return None
-        return stats.bbmssn.n_mssn_canceled
+        return int(stats.bbmssn.n_mssn_canceled)
 
 
 class PrimeFailedMissionsSensor(_PrimeStatsSensorBase):
@@ -979,7 +1016,7 @@ class PrimeFailedMissionsSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbmssn is None:
             return None
-        return stats.bbmssn.n_mssn_failed
+        return int(stats.bbmssn.n_mssn_failed)
 
 
 class PrimeChargeCyclesOkSensor(_PrimeStatsSensorBase):
@@ -1010,7 +1047,7 @@ class PrimeChargeCyclesOkSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbchg is None:
             return None
-        return stats.bbchg.n_chg_ok
+        return int(stats.bbchg.n_chg_ok)
 
 
 class PrimeChargeCyclesErrorSensor(_PrimeStatsSensorBase):
@@ -1036,7 +1073,7 @@ class PrimeChargeCyclesErrorSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbchg is None:
             return None
-        return stats.bbchg.n_chg_err
+        return int(stats.bbchg.n_chg_err)
 
 
 class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
@@ -1073,7 +1110,7 @@ class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbsys is None:
             return None
-        return stats.bbsys.hours
+        return int(stats.bbsys.hours)
 
 
 class PrimeNavigationResetsSensor(_PrimeStatsSensorBase):
@@ -1104,7 +1141,7 @@ class PrimeNavigationResetsSensor(_PrimeStatsSensorBase):
         stats = self._stats
         if stats is None or stats.bbrstinfo is None:
             return None
-        return stats.bbrstinfo.n_nav_rst
+        return int(stats.bbrstinfo.n_nav_rst)
 
 
 class PrimeSerialNumberSensor(IRobotEntity, SensorEntity):
@@ -1544,12 +1581,52 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
 #: The inference was right, and hardcoding it was still wrong: the
 #: server states this per part, so a hardcoded table would silently
 #: disagree the moment a robot reports something else.
+#: THE PART ID SPACE IS PER-SKU, NOT UNIVERSAL.
+#:
+#: @utkjmitch's robot numbers the same three parts **149 / 69 / 68**
+#: where the ids already in this table were **148 / 71 / 72**. Same
+#: part, different number, on hardware from the same generation --
+#: which is why both sets appear below rather than one replacing the
+#: other.
+#:
+#: He named his by reading the iRobot app's robot-health screen beside
+#: the ids: "Washable mop pad, 8 routines" against 149, "Multi-surface
+#: brush, 179 hrs" against 69. 68 is by elimination -- the only
+#: remaining part on a robot the app warned needed a new filter -- and
+#: he flagged it as the weakest of the three himself.
+#:
+#: So an unrecognised id is expected rather than exceptional, and the
+#: fallback that shows the bare number is doing real work. A part
+#: labelled with an invented name would be worse than one labelled
+#: with a number the owner can quote at iRobot support.
 _KNOWN_PARTS: dict[str, str] = {
     "67": "prime_part_edge_brush",
     "71": "prime_part_multi_surface_brush",
     "72": "prime_part_filter",
     "147": "prime_part_dirt_bag",
     "148": "prime_part_mop_pads",
+    # 69, 149 AND 68 -- @utkjmitch's robot, by @arielgr's value-match
+    # method against the app's "robot health" screen:
+    #
+    #     Washable mop pad      8 routines   -> 149
+    #     Multi-surface brush   179 hrs      -> 69
+    #     Dirt disposal bag     60 evacs     -> 147   (already named)
+    #
+    # plus two warnings carrying no numbers -- "replace the edge
+    # sweeping brush" and "replace the filter" -- against the only two
+    # parts that robot reports as due: 67, already named, and 68.
+    #
+    # THE ID SPACE IS NOT UNIVERSAL. This robot numbers the same three
+    # parts 149 / 69 / 68 where the entries above have 148 / 71 / 72 --
+    # no more shared across models than the rw-settings key set turned
+    # out to be. So these are additions, not corrections.
+    "69": "prime_part_multi_surface_brush",
+    "149": "prime_part_mop_pads",
+    # 68 IS THE WEAKEST OF THE THREE: named by elimination rather than
+    # by a value match, because the app's filter warning carries no
+    # number to line up against. A second robot reporting 68 with a
+    # readable count would settle it.
+    "68": "prime_part_filter",
     # 213 CONFIRMED BY VALUE MATCH (@arielgr, Roomba 115).
     #
     # He put the app's maintenance list beside Home Assistant's and the
@@ -1665,6 +1742,34 @@ _PART_COUNT_UNITS: dict[str, str | None] = {
 }
 
 
+def part_count_in_display_unit(part: Any, count: int | None) -> int | None:
+    """A part count expressed in the unit the label above names.
+
+    THE TABLE RENAMES A UNIT AND THE VALUE HAS TO FOLLOW. `minutes` is
+    displayed as hours, so a count in minutes has to be divided before
+    it is shown beside that word. Every other count type is displayed in
+    the unit the robot already counts in and passes through untouched.
+
+    Shared because it was not. The sensor divided; the maintenance list
+    looked up the same table for the same part and printed the raw
+    number beside the renamed unit, so one robot showed `179 h` on
+    `sensor.*_prime_part_69` and "10740 hours remaining" on its
+    maintenance list at the same moment -- the same value, one of them
+    sixty times too large (@utkjmitch, part 69, confirmed against the
+    iRobot app's "Multi-surface brush 179 hrs").
+
+    A number and the word it is labelled with cannot drift apart if
+    both come from here.
+    """
+    if count is None:
+        return None
+    if (getattr(part, "count_type", "") or "").lower() == "minutes":
+        # Minutes on the wire, hours in the app -- 5100 -> 85 h,
+        # confirmed on two accounts and then by count_type itself.
+        return round(count / 60)
+    return count
+
+
 class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
     """One V4/Prime consumable: filter, a brush, mop pads, dirt bag.
 
@@ -1730,15 +1835,9 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
     @property
     def native_value(self) -> int | None:
         part = self._part
-        if part is None or part.count_remaining is None:
+        if part is None:
             return None
-        if (part.count_type or "").lower() == "minutes":
-            # Minutes on the wire, hours in the app -- 5100 -> 85 h,
-            # confirmed on two accounts and then by count_type itself.
-            # Showing 5100 unitless beside an app saying "85 heures"
-            # is not a labelling problem, it is a wrong number.
-            return round(part.count_remaining / 60)
-        return part.count_remaining
+        return part_count_in_display_unit(part, part.count_remaining)
 
     @property
     def native_unit_of_measurement(self) -> str | None:

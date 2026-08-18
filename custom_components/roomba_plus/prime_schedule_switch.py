@@ -229,7 +229,7 @@ def _schedule_days(options: Any, weekday_names: dict[int, str] | None = None) ->
         return ""
     if len(days) > 2 and days == list(range(days[0], days[-1] + 1)):
         return f"{labels[0]}-{labels[-1]}"
-    return ", ".join(labels)
+    return ", ".join(str(x) for x in labels)
 
 
 def _schedule_label(
@@ -504,7 +504,7 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         coordinator = self._config_entry.runtime_data.prime_schedule_coordinator
-        if coordinator.data is not None:
+        if coordinator is not None and coordinator.data is not None:
             self._apply(coordinator.data)
             self.async_write_ha_state()
 

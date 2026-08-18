@@ -36,7 +36,12 @@ class IRobotEntity(Entity):
     _attr_should_poll = False
     _attr_has_entity_name = True
 
-    def __init__(self, roomba: Any, blid: str, config_entry: "RoombaConfigEntry | None" = None) -> None:
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        config_entry: "RoombaConfigEntry | None" = None,
+    ) -> None:
         """Initialise the entity with the roombapy Roomba object and BLID.
 
         config_entry is optional and, before this session, was never
@@ -83,6 +88,32 @@ class IRobotEntity(Entity):
         """
         self.vacuum = roomba
         self._blid = blid
+
+        #: ONE FIELD, SET ONCE. Fifty-three subclass constructors write
+        #: `self._config_entry = config_entry` themselves, after calling
+        #: this one -- so the attribute existed everywhere and was
+        #: declared nowhere, which is why mypy reported seventy-one
+        #: reads of it as errors on `IRobotEntity`.
+        #:
+        #: The duplicated assignments are harmless and left in place;
+        #: this makes the field part of the base class rather than a
+        #: convention every subclass has to remember.
+        #: NON-OPTIONAL, because every reader is guaranteed one.
+        #:
+        #: The parameter keeps its None default: 81 subclasses call
+        #: `super().__init__(roomba, blid)` and set the field themselves
+        #: afterwards, and rewriting all of those is a separate change.
+        #:
+        #: But the ATTRIBUTE is never None where it is read. Every class
+        #: that reads `_config_entry` or `_entry` either takes it as a
+        #: required parameter and assigns it, or inherits an `__init__`
+        #: from one that does -- checked across all 131 entity classes
+        #: including inheritance chains.
+        #:
+        #: Declaring it Optional produced 214 mypy errors, one at every
+        #: read, for a condition that cannot occur. The cast is the
+        #: narrow lie; the alternative was 214 checks for the same.
+        self._config_entry: RoombaConfigEntry = config_entry  # type: ignore[assignment]
         self.vacuum_state = roomba_reported_state(roomba)
 
         if roomba is None and config_entry is not None:
@@ -193,7 +224,7 @@ class IRobotEntity(Entity):
     @property
     def mission_stats(self) -> dict[str, Any]:
         """Lifetime mission statistics (bbmssn)."""
-        return self.vacuum_state.get("bbmssn", {})
+        return dict(self.vacuum_state.get("bbmssn", {}))
 
     @property
     def nav_stats(self) -> dict[str, Any]:
@@ -208,7 +239,7 @@ class IRobotEntity(Entity):
     @property
     def battery_stats(self) -> dict[str, Any]:
         """Battery charge cycle statistics (bbchg3)."""
-        return self.vacuum_state.get("bbchg3", {})
+        return dict(self.vacuum_state.get("bbchg3", {}))
 
     @property
     def dock_stats(self) -> dict[str, Any]:
@@ -226,7 +257,7 @@ class IRobotEntity(Entity):
     @property
     def clean_mission_status(self) -> dict[str, Any]:
         """Current mission status."""
-        return self.vacuum_state.get("cleanMissionStatus", {})
+        return dict(self.vacuum_state.get("cleanMissionStatus", {}))
 
     @property
     def tank_level(self) -> int | None:
@@ -324,7 +355,7 @@ class IRobotEntity(Entity):
 
         # 1. Keep _attr_device_info in sync (used when HA re-registers)
         self._attr_device_info = DeviceInfo(
-            **{**self._attr_device_info, "name": name}
+            **{**(self._attr_device_info or {}), "name": name}
         )
 
         # 2. Patch the live DeviceRegistry entry so the UI updates immediately

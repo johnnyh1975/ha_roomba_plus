@@ -145,7 +145,7 @@ class GridStore:
         # Format: {(gx, gy): {"count": int, "times": [(weekday, hour), ...]}}
         # "times" accumulates (weekday, hour) of each stuck event for pattern detection.
         # Backward-compatible: async_load migrates plain-int v1 values to {"count": N, "times": []}.
-        self._stuck: dict[tuple[int, int], dict] = {}
+        self._stuck: dict[tuple[int, int], dict[str, Any]] = {}
         # P3: edge_coverage_ratio cache keyed by edge_depth_mm — invalidated when
         # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
         # can coexist safely if future callers use non-default parameters.
@@ -210,8 +210,8 @@ class GridStore:
         around to slowly decay out over many missions.
         """
         from homeassistant.helpers.storage import Store
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("GridStore: no persisted data for %s", entry_id)
             return
@@ -294,7 +294,7 @@ class GridStore:
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
         from homeassistant.helpers.storage import Store
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "version": PAYLOAD_VERSION,
             "cells": {f"{gx},{gy}": w for (gx, gy), w in self._cells.items()},
@@ -738,13 +738,25 @@ class GridStore:
             times = v.get("times", [])
             if not times:
                 continue  # no time data — cannot determine pattern
-            slot_counts: Counter = Counter(tuple(t) for t in times)
+            # `Counter[tuple[int, int]]`, because that is what goes in.
+            # Each `t` is a (weekday, hour) pair and this counted them
+            # under a `str` annotation -- so the value read back out was
+            # typed as a string and assigned into a dict of coordinate
+            # pairs. Two wrong types cancelling each other out.
+            slot_counts: Counter[tuple[int, ...]] = Counter(
+                tuple(t) for t in times
+            )
             (most_common_slot, most_common_count) = slot_counts.most_common(1)[0]
             # Use count (not len(times)) as denominator so seeded/migrated
             # entries with sparse time data don't inflate the percentage.
             denom = max(len(times), v["count"])
             if most_common_count / denom >= dominant_pct:
-                patterns[cell] = most_common_slot
+                # A stored slot is a (weekday, hour) pair. Anything else
+                # is a malformed record rather than a pattern, and
+                # dropping it is better than storing a tuple of the
+                # wrong shape in a dict the callers index by [0] and [1].
+                if len(most_common_slot) == 2:
+                    patterns[cell] = (most_common_slot[0], most_common_slot[1])
 
         return patterns if patterns else None
 

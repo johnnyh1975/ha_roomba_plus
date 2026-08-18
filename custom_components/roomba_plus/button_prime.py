@@ -432,17 +432,37 @@ async def async_build_prime_buttons(
     # narrower than presence -- the dock's identity or details, most
     # likely.
     #
-    # THE GATE STAYS, and this is the uncomfortable part: it is right
-    # about pad wash and pad dry, which this dock genuinely lacks, and
-    # it also withholds `prime_empty_bin` from a robot whose dock
-    # demonstrably empties. Nobody has established whether that dock
-    # accepts an `evac` command or empties on its own schedule with the
-    # robot uninvolved -- the app offers him no auto-empty control at
-    # all, which points at the second. Changing the gate on that
-    # uncertainty would trade a wrong button for a wrong absence.
+    # THE GATE IS RIGHT, AND NO LONGER ON UNCERTAIN GROUND.
     #
-    # WHAT WOULD SETTLE IT: whether the iRobot app offers him an
-    # empty-now action. One look, no run.
+    # It used to be justified as "the dock does not describe itself, so
+    # withhold". @utkjmitch settled the underlying question, which is
+    # better: there is no evidence this hardware HAS an evac command to
+    # send.
+    #
+    # He checked the app in three states rather than one -- docked and
+    # idle with a full bag, mid-mission with the robot out, and
+    # discarded a fourth taken while the robot was stranded off the
+    # dock, on the grounds that any app would hide dock controls there.
+    # No empty-now action in any of them, and no auto-empty frequency
+    # control either.
+    #
+    # And the robot's side agrees. He ran a full mission with the
+    # coordinator logging `dock` and `bin` on every change: across two
+    # dock arrivals, a mid-mission recharge and a post-mission dock,
+    # **the blocks never changed once**, and no `evac` phase ever
+    # appeared. Read live while docked mid-mission, `dock` was byte for
+    # byte what it reports at rest -- so `known: false` is not an
+    # artifact of sampling a sleeping dock.
+    #
+    # Beside that: `number_of_evacuations: 0` across 49 missions,
+    # `evac: null` across 1,293 timeline events, no evac keys in
+    # rw-settings, and a base that demonstrably empties the robot.
+    # This dock empties on its own and the robot is not party to it.
+    #
+    # WHAT WOULD OVERTURN IT: a `dock` block on some other robot
+    # carrying a `cap` object where this one carries nothing. That would
+    # mean `known: false` is about identity rather than capability, and
+    # this dock is merely mute rather than passive.
     if _dock_reports_itself(config_entry):
         for command in PRIME_DOCK_COMMANDS:
             # None means unknown, only an explicit 0 means absent -- so a

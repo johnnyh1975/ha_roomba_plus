@@ -14,6 +14,8 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import asyncio
 import logging
 from datetime import timedelta
@@ -67,13 +69,13 @@ class BlockingManager:
         # Queue metadata — set when queued, cleared by cancel_queue()
         self._queued_since: str | None = None
         self._timeout_at: str | None = None
-        self._timeout_task: asyncio.Task | None = None
+        self._timeout_task: asyncio.Task[None] | None = None
         self._queued_rooms: list[str] | None = None
         self._state_callbacks: list[Any] = []
 
     # ── Public state ──────────────────────────────────────────────────────────
 
-    def register_state_callback(self, callback_fn: Any) -> None:
+    def register_state_callback(self, callback_fn: Any) -> Callable[[], None]:
         """Register a callable invoked when queue state changes.
 
         Used by RoombaStartBlocked to receive immediate updates without
@@ -201,8 +203,10 @@ class BlockingManager:
             unsub = self._hass.bus.async_listen(
                 "state_changed",
                 _on_state_changed,
-                event_filter=lambda e, _eid=eid: (
-                    e.data.get("entity_id") == _eid
+                event_filter=(
+                    lambda e, _eid=eid: bool(  # type: ignore[misc]
+                        e.data.get("entity_id") == _eid
+                    )
                 ),
             )
             self._cancel_listeners.append(unsub)
@@ -325,10 +329,14 @@ class BlockingManager:
                 {"entity_id": entity_entry, "room_name": rooms},
                 blocking=True,
             )
-        elif data.connection_type == ConnectionType.CLOUD_ONLY:
+        elif data.prime_robot is not None:
+            # Branch on the value rather than on `connection_type`: the
+            # two agree, and only one of them narrows.
             await data.prime_robot.send_simple_command("start")
-        else:
-            await self._hass.async_add_executor_job(data.roomba.start)
+        elif data.roomba is not None:
+            await self._hass.async_add_executor_job(
+                data.roomba.send_command, "start"
+            )
         _LOGGER.info("BlockingManager: start issued")
 
     # ── Cleanup ───────────────────────────────────────────────────────────────

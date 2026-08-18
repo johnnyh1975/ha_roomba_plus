@@ -388,7 +388,7 @@ class IrobotCloudApi:
             f"{self._deployment['httpBaseAuth']}/v1/{blid}"
             f"/pmaps/{pmap_id}/versions/{version_id}/umf"
         )
-        return await self._aws_get(url, {"activeDetails": "2"})
+        return dict(await self._aws_get(url, {"activeDetails": "2"}))
 
     async def get_mission_history(
         self,
@@ -414,7 +414,7 @@ class IrobotCloudApi:
         }
         if before_ts is not None:
             params["before"] = str(before_ts)
-        return await self._aws_get(url, params)
+        return dict(await self._aws_get(url, params))
 
     async def get_favorites(self) -> list[dict[str, Any]]:
         """Return user-defined favorite cleaning routines."""
