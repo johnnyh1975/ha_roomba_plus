@@ -5,6 +5,8 @@ version 13 while the flow was at 25, and `strict-typing` said done while
 mypy had never been installed.
 """
 
+import pytest
+
 
 class TestTheQualityScaleFileIsTrue:
     def test_the_migration_comment_names_the_real_version(self):
@@ -66,6 +68,12 @@ class TestTheQualityScaleFileIsTrue:
 
         if "status: todo" in block:
             return  # honest either way
+
+        # THE TEST SUITE JOB DOES NOT INSTALL mypy — the Typing job
+        # does. Without this, the guard failed in CI on
+        # `No module named mypy` and read as a stale `done` claim,
+        # which is precisely the thing it exists to distinguish from.
+        pytest.importorskip("mypy", reason="mypy is checked by its own CI job")
 
         result = subprocess.run(
             [sys.executable, "-m", "mypy", "custom_components/roomba_plus"],
