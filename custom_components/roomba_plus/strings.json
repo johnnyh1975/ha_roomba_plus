@@ -1277,10 +1277,6 @@
     "favorite_multi_commanddefs": {
       "title": "Favorite has multiple command steps",
       "description": "The favorite \"{name}\" has {count} command steps, but only the first one is sent to the robot — the rest are ignored. This is a rare configuration that hasn't been confirmed to work correctly."
-    },
-    "segments_changed": {
-      "title": "Room list changed",
-      "description": "Your robot's map was retrained and its rooms were renumbered, so automations targeting rooms by ID may now clean the wrong room. Open the Rooms map and check your room selections."
     }
   },
   "device_automation": {

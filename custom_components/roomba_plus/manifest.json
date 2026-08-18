@@ -45,7 +45,7 @@
     "roombapy==1.9.1",
     "roombapy-prime[map]@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b8"
   ],
-  "version": "4.0.0a38",
+  "version": "4.0.0a39",
   "zeroconf": [
     {
       "name": "irobot-*",

@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "O favorito tem vários passos de comando",
       "description": "O favorito “{name}” tem {count} passos de comando, mas apenas o primeiro é enviado ao robô — os restantes são ignorados. Trata-se de uma configuração rara cujo funcionamento correto não está confirmado."
-    },
-    "segments_changed": {
-      "title": "Lista de divisões alterada",
-      "description": "O mapa do robô foi treinado de novo e as divisões foram renumeradas, pelo que as automações que indicam divisões por ID podem limpar a divisão errada. Abra o mapa de divisões e verifique as suas seleções."
     }
   },
   "device_automation": {

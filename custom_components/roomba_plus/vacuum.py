@@ -23,7 +23,6 @@ from homeassistant.components.vacuum import (
 # never sets the flag and HA never calls async_get_segments(). The try/except
 # ImportError below is defensive depth only; the hasattr guard is the primary gate.
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -164,24 +163,24 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # See that method for the full rationale.
         self._segment_mismatch_streak: int = 0
 
-        #: NEITHER OF THESE EXISTED, and `_handle_coordinator_update`
-        #: read both on every cloud refresh.
+        #: `last_seen_segments` IS HOME ASSISTANT'S, AND ASSIGNING TO IT
+        #: BROKE EVERY VACUUM ENTITY IN a38.
         #:
-        #: `last_seen_segments` and `async_create_segments_issue` come
-        #: from Home Assistant's native segment-remap flow, which
-        #: `StateVacuumEntity` does not provide -- checked directly. So
-        #: the mismatch check raised AttributeError the first time a
-        #: cloud coordinator fired, on every Classic robot with cloud
-        #: credentials.
+        #: mypy against the pinned HA (2025.1.4, the newest installable
+        #: on Python 3.12) reports it as undefined, and a38 "fixed" that
+        #: by declaring it here. On HA 2026.7 and later it is a
+        #: `@final @property` with no setter, so the assignment raised
+        #: `property has no setter` and took vacuum setup down with it --
+        #: @ScenicSystemsLLC lost all three robots on upgrade.
         #:
-        #: The tests set both names on the entity by hand before calling
-        #: the method, which is why they pass: the fixture supplied what
-        #: the class lacks. Fifth instance of that shape today.
+        #: @utkjmitch confirmed from source that it is `@final` back
+        #: through 2026.7.4, so there is no HA version where a subclass
+        #: could assign to it.
         #:
-        #: Declared as the no-op defaults the method already handles:
-        #: `None` means "never configured -- suppress the repair issue",
-        #: which is the behaviour the tests assert for the None case.
-        self.last_seen_segments: list[Any] | None = None
+        #: Same forward-compatibility shape as
+        #: `AddConfigEntryEntitiesCallback` and `StatisticMetaData`'s
+        #: `mean_type`: written against a newer HA than this environment
+        #: can install. Reading it is correct; declaring it is not.
 
     @property
     def suggested_object_id(self) -> str | None:
@@ -1346,7 +1345,15 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if not data or not data.has_cloud or data.cloud_coordinator is None:
             return
 
-        last_seen = self.last_seen_segments
+        # `type: ignore` RATHER THAN A DECLARATION. Declaring this is
+        # what broke a38: on HA 2026.7+ it is a `@final @property` with
+        # no setter, and assigning raised `property has no setter`,
+        # taking vacuum setup down on every robot.
+        #
+        # The pinned HA here (2025.1.4, newest installable on Python
+        # 3.12) does not have it, so mypy cannot see it. Suppressing the
+        # lookup is the only option that is both honest and harmless.
+        last_seen = self.last_seen_segments  # type: ignore[attr-defined]
         if last_seen is None:
             return  # never configured — suppress Repair Issue
 
@@ -1362,34 +1369,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if current_ids != {seg.id for seg in last_seen}:
             self._segment_mismatch_streak += 1
             if self._segment_mismatch_streak >= self._SEGMENT_MISMATCH_DEBOUNCE:
-                self.async_create_segments_issue()
+                # Same as above: Home Assistant's, absent from the
+                # pinned version, and not ours to define.
+                self.async_create_segments_issue()  # type: ignore[attr-defined]
         else:
             self._segment_mismatch_streak = 0
-
-    def async_create_segments_issue(self) -> None:
-        """Tell the user their room list no longer matches the robot's.
-
-        DID NOT EXIST. `_handle_coordinator_update` called this after a
-        debounced segment mismatch, and the attribute came from nowhere
-        -- not from `StateVacuumEntity`, not from this component. The
-        tests set it on the entity as a MagicMock before calling the
-        method, so the crash never surfaced.
-
-        A retrained map renumbers regions, which silently breaks any
-        automation targeting rooms by id. A repair issue is how the rest
-        of this integration reports that class of problem.
-        """
-        if self._config_entry is None:
-            return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
-            f"segments_changed_{self._config_entry.entry_id}",
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="segments_changed",
-        )
 
     def _get_two_pass(self) -> bool:
         """Read twoPass preference from live robot state.

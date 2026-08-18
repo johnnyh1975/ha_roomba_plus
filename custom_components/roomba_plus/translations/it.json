@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "Il preferito ha più passaggi di comando",
       "description": "Il preferito “{name}” ha {count} passaggi di comando, ma solo il primo viene inviato al robot — gli altri vengono ignorati. Si tratta di una configurazione rara il cui corretto funzionamento non è confermato."
-    },
-    "segments_changed": {
-      "title": "Elenco stanze modificato",
-      "description": "La mappa del robot è stata riaddestrata e le stanze rinumerate: le automazioni che indicano le stanze per ID potrebbero pulire la stanza sbagliata. Apri la mappa delle stanze e controlla le selezioni."
     }
   },
   "device_automation": {

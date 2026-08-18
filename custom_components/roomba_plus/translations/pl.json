@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "Ulubiony ma wiele kroków poleceń",
       "description": "Ulubiony „{name}” ma {count} kroków poleceń, ale do robota wysyłany jest tylko pierwszy — pozostałe są ignorowane. To rzadka konfiguracja, dla której nie potwierdzono poprawnego działania."
-    },
-    "segments_changed": {
-      "title": "Lista pokoi uległa zmianie",
-      "description": "Mapa robota została nauczona od nowa, a pokoje przenumerowane — automatyzacje wskazujące pokoje po ID mogą teraz sprzątać niewłaściwy pokój. Otwórz mapę pokoi i sprawdź swoje wybory."
     }
   },
   "device_automation": {

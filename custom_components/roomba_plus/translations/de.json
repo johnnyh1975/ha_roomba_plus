@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "Favorit hat mehrere Befehlsschritte",
       "description": "Der Favorit „{name}“ hat {count} Befehlsschritte, aber nur der erste wird an den Roboter gesendet — die übrigen werden ignoriert. Das ist eine seltene Konfiguration, für die kein korrektes Verhalten bestätigt ist."
-    },
-    "segments_changed": {
-      "title": "Raumliste geändert",
-      "description": "Die Karte deines Roboters wurde neu trainiert und die Räume neu nummeriert. Automationen, die Räume per ID ansprechen, reinigen jetzt womöglich den falschen Raum. Öffne die Raumkarte und prüfe deine Auswahl."
     }
   },
   "device_automation": {

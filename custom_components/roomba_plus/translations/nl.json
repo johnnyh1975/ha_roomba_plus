@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "Favoriet heeft meerdere opdrachtstappen",
       "description": "De favoriet “{name}” heeft {count} opdrachtstappen, maar alleen de eerste wordt naar de robot gestuurd — de rest wordt genegeerd. Dit is een zeldzame configuratie waarvan niet is bevestigd dat deze correct werkt."
-    },
-    "segments_changed": {
-      "title": "Kamerlijst gewijzigd",
-      "description": "De kaart van je robot is opnieuw getraind en de kamers zijn hernummerd, dus automatiseringen die kamers op ID aansturen maken mogelijk de verkeerde kamer schoon. Open de kamerkaart en controleer je selecties."
     }
   },
   "device_automation": {

@@ -1275,10 +1275,6 @@
     "favorite_multi_commanddefs": {
       "title": "Le favori comporte plusieurs étapes de commande",
       "description": "Le favori « {name} » comporte {count} étapes de commande, mais seule la première est envoyée au robot — les autres sont ignorées. Il s'agit d'une configuration rare dont le bon fonctionnement n'est pas confirmé."
-    },
-    "segments_changed": {
-      "title": "Liste des pièces modifiée",
-      "description": "La carte de votre robot a été réapprise et les pièces renumérotées : les automatisations ciblant les pièces par identifiant risquent de nettoyer la mauvaise pièce. Ouvrez la carte des pièces et vérifiez vos sélections."
     }
   },
   "device_automation": {
