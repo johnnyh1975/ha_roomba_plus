@@ -2377,3 +2377,178 @@ class TestOnlyARealBraavaGetsTheBraavaClass:
 
         assert not is_braava(combo)
         assert is_mop(combo)
+
+
+class TestWeDoNotAssignToHomeAssistantsProperties:
+    """a38 declared `self.last_seen_segments = None` in `__init__`,
+    on a code comment saying `StateVacuumEntity` does not provide it.
+
+    That was true of the HA pinned here (2025.1.4, the newest
+    installable on Python 3.12). On HA 2026.7 and later it is a
+    `@final @property` with no setter — so the assignment raised
+    `property has no setter` and took **vacuum setup down entirely**.
+    @ScenicSystemsLLC lost all three robots on upgrade; @utkjmitch
+    confirmed from source that it is `@final` back through 2026.7.4, so
+    no HA version would have accepted it.
+
+    The general shape: mypy against an old pinned HA reports a newer
+    HA's API as missing, and "fixing" that by declaring it locally
+    turns a type-checker complaint into a runtime crash.
+    """
+
+    #: Names that belong to Home Assistant's vacuum platform on versions
+    #: newer than the one pinned here. Reading them is correct;
+    #: declaring or assigning them is not.
+    HA_OWNED = ("last_seen_segments", "async_create_segments_issue")
+
+    def test_nothing_assigns_to_them(self):
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        tree = ast.parse(inspect.getsource(vacuum))
+        offenders = []
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for t in targets:
+                if (
+                    isinstance(t, ast.Attribute)
+                    and t.attr in self.HA_OWNED
+                    and isinstance(t.value, ast.Name)
+                    and t.value.id == "self"
+                ):
+                    offenders.append(f"{t.attr} at line {node.lineno}")
+
+        assert not offenders, (
+            f"assigning to Home Assistant's own vacuum properties: "
+            f"{offenders} -- `last_seen_segments` is @final with no "
+            f"setter on HA 2026.7+, and assignment crashes setup"
+        )
+
+    def test_nothing_defines_them_either(self):
+        """Defining a method HA owns overrides its implementation with
+        ours, silently, on the versions that have it."""
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        tree = ast.parse(inspect.getsource(vacuum))
+        offenders = [
+            n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name in self.HA_OWNED
+        ]
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's, not ours to define"
+        )
+
+    def test_the_guard_names_something_the_module_uses(self):
+        """A guard listing names nothing touches passes vacuously."""
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        source = inspect.getsource(vacuum)
+
+        assert all(name in source for name in self.HA_OWNED)
+
+
+class TestWeDoNotAssignToHomeAssistantProperties:
+    """a38 declared `self.last_seen_segments = None` in `__init__`,
+    because mypy against the pinned HA (2025.1.4 — the newest
+    installable on Python 3.12) reported the name as undefined.
+
+    On HA 2026.7 and later it is a `@final @property` with no setter.
+    The assignment raised `property has no setter` and took **vacuum
+    setup down entirely** — @ScenicSystemsLLC lost all three robots on
+    upgrade, @utkjmitch confirmed from source that it is `@final` back
+    through 2026.7.4.
+
+    The lesson is not about this one name: a symbol missing from the
+    pinned HA is not a symbol that does not exist. This integration is
+    written against a newer HA than it can install here, and three
+    other names already carry that caveat.
+    """
+
+    #: Names Home Assistant owns on the vacuum entity. Assigning to any
+    #: of these in `__init__` breaks setup on the HA versions users
+    #: actually run, whatever the pinned one reports.
+    #:
+    #: VERIFIED AGAINST THE VERSIONS USERS RUN, not against the pinned
+    #: one -- which is the check a38 skipped:
+    #:
+    #:     2025.1.4  neither name exists      <- pinned here
+    #:     2026.7.4  both exist, property is @final
+    #:     2026.8.1  both exist, property is @final
+    #:
+    #: `async_create_segments_issue` is HA's own and documented for
+    #: exactly this case: "Integrations should call this method when
+    #: the vacuum reports different segments than what was previously
+    #: mapped to areas." So reading both names is correct; only
+    #: assigning to them is not.
+    #:
+    #: Thirty seconds of
+    #: `curl raw.githubusercontent.com/home-assistant/core/<tag>/...`
+    #: would have caught this before release. `hasattr` against the
+    #: local install answers a different question.
+    HA_OWNED = ("last_seen_segments", "async_create_segments_issue")
+
+    def test_the_constructor_assigns_to_none_of_them(self):
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/vacuum.py"
+        ).read_text()
+
+        offenders = []
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                    and target.attr in self.HA_OWNED
+                ):
+                    offenders.append(f"{target.attr}:{node.lineno}")
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's own attributes on the "
+            f"vacuum entity. Assigning to them raises 'property has no "
+            f"setter' on HA 2026.7+ and fails platform setup, even "
+            f"though the pinned HA here reports them as absent."
+        )
+
+    def test_annotated_assignment_counts_too(self):
+        """`self.x: T = None` is `AnnAssign`, not `Assign` — and it is
+        exactly the form a38 used."""
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/vacuum.py"
+        ).read_text()
+
+        offenders = [
+            f"{node.target.attr}:{node.lineno}"
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Attribute)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == "self"
+            and node.target.attr in self.HA_OWNED
+        ]
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's own -- see the sibling "
+            f"test for why this fails platform setup"
+        )
