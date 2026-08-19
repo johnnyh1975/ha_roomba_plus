@@ -21,7 +21,7 @@ on both generations. If you use it, switch it back on in the integration options
 assumed.
 
 **If you have several Prime robots:** expect **fewer** favourite buttons per
-robot from v4.0.0a39 on. Favourites are an account-level list and every robot
+robot from v4.0.0a40 on. Favourites are an account-level list and every robot
 was previously shown all of them; the ones that disappear belonged to a
 different robot, and pressing them sent that robot's map regions to this one.
 
