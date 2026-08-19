@@ -30,7 +30,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .callbacks import (
@@ -1599,6 +1599,30 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     return True
 
 
+@callback
+def _async_clear_repair_issues(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry
+) -> None:
+    """Remove every repair issue this entry can raise.
+
+    See the note in `async_unload_entry`. Both forms are covered: the
+    per-entry ids that carry `entry_id`, and the two singletons that do
+    not (`smart_zones_need_naming`, `zones_need_naming`).
+    """
+    from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+
+    entry_id = config_entry.entry_id
+    for issue_id in (
+        f"smart_zones_need_naming_{entry_id}",
+        f"mqtt_watchdog_{entry_id}",
+        f"segments_changed_{entry_id}",
+        "smart_zones_need_naming",
+        "zones_need_naming",
+    ):
+        with contextlib.suppress(Exception):
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> bool:
@@ -1616,6 +1640,22 @@ async def async_unload_entry(
     does, or a pending queued start (waiting for blocking sensors to
     clear) would keep running against a config entry that's mid-unload.
     """
+    # REPAIR ISSUES OUTLIVE THE ENTRY THAT RAISED THEM.
+    #
+    # @ScenicSystemsLLC: after rolling back from a38 and reinstalling,
+    # a `smart_zones_need_naming` issue was still showing, timestamped
+    # from the failed attempt -- for zones that were already named. He
+    # had to dismiss it by hand.
+    #
+    # Home Assistant keeps issues in its own registry, so nothing about
+    # unloading or removing an integration clears them. An issue raised
+    # by a condition that no longer exists is worse than no issue: it
+    # sends someone to check something that is already fine.
+    #
+    # Cleared on unload rather than on remove, because a reload is the
+    # common case and the conditions are re-evaluated on setup anyway.
+    _async_clear_repair_issues(hass, config_entry)
+
     if config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
         from .const import PRIME_PLATFORMS
         platforms = list(PRIME_PLATFORMS)

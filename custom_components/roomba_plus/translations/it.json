@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "La selezione delle stanze richiede le credenziali cloud iRobot su questo robot. Aggiungile nelle opzioni dell'integrazione, oppure pulisci tutta la casa."
+    },
+    "calendar_room_not_found": {
+      "message": "Nessuna stanza corrisponde a \"{text}\". Indica una stanza nel titolo, nella descrizione o nel luogo — stanze note: {known}. Lascia tutti e tre senza nomi per pulire tutta la casa."
     }
   },
   "selector": {

@@ -226,7 +226,9 @@ def _redact_values(value: Any, blid: str | None) -> Any:
     return value
 
 
-def _prime_room_preferences(config_entry: RoombaConfigEntry) -> dict[str, Any]:
+def _prime_room_preferences(
+    config_entry: RoombaConfigEntry, hass: HomeAssistant
+) -> dict[str, Any]:
     """The Rooms Map's `room_preferences`, or why there are none.
 
     Read from the entity rather than recomputed, so a download reports
@@ -235,10 +237,20 @@ def _prime_room_preferences(config_entry: RoombaConfigEntry) -> dict[str, Any]:
     """
     from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
 
+    # `hass` IS A PARAMETER, NOT AN ATTRIBUTE OF THE ENTRY.
+    #
+    # This read `config_entry.hass`, which `ConfigEntry` does not
+    # define -- so every download since this block was written returned
+    # `{"note": "no hass on this entry"}` and nothing else.
+    #
+    # @chairstacker's download is what surfaced it, and it explains why
+    # `room_preferences` has sat in the tester notes as "never
+    # confirmed" for weeks: nobody could confirm it, because the block
+    # meant to show it never ran.
+    #
+    # `async_get_config_entry_diagnostics` receives hass as its first
+    # argument. Passing it down is all this needed.
     data = config_entry.runtime_data
-    hass = getattr(config_entry, "hass", None)
-    if hass is None:
-        return {"note": "no hass on this entry"}
     registry = er.async_get(hass)
     unique = f"{data.blid}_rooms_map"
     entity_id = registry.async_get_entity_id("image", DOMAIN, unique)
@@ -434,9 +446,41 @@ def _prime_store_summary(data: Any) -> dict[str, Any]:
             # TypeError, which this except turned into "unreadable" --
             # a store that was fine, reported as broken.
             records = store.query(days=3650)
+            # THE COUNT WITHOUT A RECORD ANSWERS NOTHING.
+            #
+            # @chairstacker sent a download to settle why
+            # `area_cleaned_today` and `clean_streak` both read 0, and
+            # this block told him 128 records exist without showing one
+            # -- so it could not distinguish "no records for today" from
+            # "records with no area_sqft". A second round for a field
+            # the first download should have carried.
+            #
+            # The most recent record, and the most recent that has an
+            # area at all. Those two together say whether the field is
+            # missing everywhere or only lately.
+            #
+            # Nothing here identifies a person or a home: durations,
+            # areas, a result string and region ids. Room NAMES are
+            # elsewhere in this file already.
+            latest = records[-1] if records else None
+            with_area = next(
+                (r for r in reversed(records) if r.get("area_sqft") is not None),
+                None,
+            )
             summary["mission_store"] = {
                 "record_count": len(records),
-                "latest_id": records[-1].get("id") if records else None,
+                "latest_id": latest.get("id") if latest else None,
+                "latest_record": latest,
+                "records_with_area": sum(
+                    1 for r in records if r.get("area_sqft") is not None
+                ),
+                "records_with_result": sum(
+                    1 for r in records if r.get("result") not in (None, "unknown")
+                ),
+                "latest_record_with_area": with_area,
+                "result_values": sorted(
+                    {str(r.get("result")) for r in records}
+                )[:12],
             }
         except Exception:  # noqa: BLE001
             summary["mission_store"] = "unreadable"
@@ -973,7 +1017,7 @@ async def _build_diagnostics(
             # Same fix as the favourites block, which sat in the Classic
             # path while the question was about Prime: put the
             # instrument where the question is.
-            "room_preferences": _prime_room_preferences(config_entry),
+            "room_preferences": _prime_room_preferences(config_entry, hass),
             # THE LIST THE ROBOT MARKER IS DRAWN FROM, and the one thing
             # the counters above cannot tell you.
             #

@@ -73,16 +73,72 @@ _SYNC_LOCKS: dict[str, asyncio.Lock] = {}
 #: and its consumers already use. Confirmed from field captures; an
 #: unrecognised code becomes "unknown" rather than being guessed at,
 #: because "cancelled" and "completed" drive different sensors.
+#: THIS TABLE MATCHED NONE OF THE ROBOT'S ACTUAL VALUES, TWICE.
+#:
+#: @chairstacker (#68, #69): `clean_streak` and `area_cleaned_today`
+#: both read 0 on a robot with 128 stored missions. Every one of them
+#: mapped to "unknown", which no sensor counts.
+#:
+#: FIRST VERSION -- invented. `success`, `completed`, `failed`,
+#: `aborted`: plausible English words nobody had checked against
+#: anything.
+#:
+#: SECOND VERSION -- derived, and still wrong. Aligned to
+#: `roombapy_prime.DoneCode`, whose nineteen values came from bytecode
+#: constant names lowercased by analogy with `RegionType`. Only `ok`
+#: had ever been confirmed.
+#:
+#: THIS VERSION -- read out of app 3.0.0. The wire values are
+#: **abbreviated camelCase**, and not one snake_case form appears
+#: anywhere in the APK:
+#:
+#:     isMissionHistorySuccess    {ok, busy, dndEnd, returnHomeEnd,
+#:                                 timeboxEnd}
+#:     isMissionHistoryCancelled  {cncl, usrSlp, plcDoc, usrEnd,
+#:                                 usrSpt, batcncl}
+#:
+#: WORTH KNOWING: the history endpoint takes
+#: `supportedDoneCodes=dndEnd,returnHomeEnd`, telling the server which
+#: newer codes the caller understands. These eleven are what a caller
+#: sending that parameter gets; one that omits it may see others.
+#:
+#: Anything unmatched still becomes "unknown" rather than being guessed
+#: into a bucket -- which is how this stayed invisible for two rounds.
 _DONE_CODE_TO_RESULT: dict[str, str] = {
-    "success": "completed",
-    "completed": "completed",
-    "cancelled": "cancelled",
-    "canceled": "cancelled",
-    "user_cancelled": "cancelled",
-    "failed": "error",
-    "error": "error",
-    "aborted": "error",
+    # SUCCESS, per the app's own `isMissionHistorySuccess`.
+    #
+    # `busy`, `dndEnd` and `timeboxEnd` count as completed -- a mission
+    # ended by quiet hours or a time window did its job. That is the
+    # app's judgement, not ours.
+    "ok": "completed",
+    "busy": "completed",
+    "dndEnd": "completed",
+    "returnHomeEnd": "completed",
+    "timeboxEnd": "completed",
+
+    # CANCELLED, per `isMissionHistoryCancelled`. Note `batcncl` sits
+    # here rather than under error: a robot that stopped for battery
+    # was cancelled, not broken.
+    "cncl": "cancelled",
+    "usrSlp": "cancelled",
+    "plcDoc": "cancelled",
+    "usrEnd": "cancelled",
+    "usrSpt": "cancelled",
+    "batcncl": "cancelled",
 }
+
+
+def _done_code_key(raw: Any) -> str:
+    """The table key for a done code, matching case-exactly first.
+
+    See `_DONE_CODE_TO_RESULT` -- the wire values are abbreviated
+    camelCase, so a blanket `.lower()` matched nothing.
+    """
+    value = str(raw or "")
+    if value in _DONE_CODE_TO_RESULT:
+        return value
+    folded = {k.lower(): k for k in _DONE_CODE_TO_RESULT}
+    return folded.get(value.lower(), value)
 
 
 def _as_iso(value: Any) -> str | None:
@@ -140,7 +196,15 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
         "id": f"p_{mission_id}",
         "ended_at": ended_at,
         "result": _DONE_CODE_TO_RESULT.get(
-            str(getattr(entry, "done_code", "") or "").lower(), "unknown"
+            # NOT lowercased -- the wire values are camelCase
+            # (`returnHomeEnd`, `usrSlp`, `batcncl`), and folding the
+            # case turned every one of them into "unknown". The old
+            # table was all-lowercase, so the fold was invisible.
+            #
+            # An exact match first, then a case-insensitive fallback:
+            # `ok` is confirmed lowercase and a robot sending `OK`
+            # should still count.
+            _done_code_key(getattr(entry, "done_code", None)), "unknown"
         ),
     }
 

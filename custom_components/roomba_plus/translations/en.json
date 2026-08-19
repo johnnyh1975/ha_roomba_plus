@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Room targeting needs iRobot cloud credentials on this robot. Add them in the integration options, or clean the whole house instead."
+    },
+    "calendar_room_not_found": {
+      "message": "No room matched \"{text}\". Name a room in the event's summary, description or location — known rooms: {known}. Leave all three free of room names for a whole-house clean."
     }
   },
   "selector": {

@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Wybór pokoi wymaga danych logowania do chmury iRobot na tym robocie. Dodaj je w opcjach integracji lub posprzątaj cały dom."
+    },
+    "calendar_room_not_found": {
+      "message": "Żaden pokój nie pasuje do \"{text}\". Podaj pokój w tytule, opisie lub lokalizacji — znane pokoje: {known}. Zostaw wszystkie trzy bez nazw, aby posprzątać cały dom."
     }
   },
   "selector": {

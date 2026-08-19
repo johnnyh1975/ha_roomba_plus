@@ -29,6 +29,7 @@ constant rather than an inline 1000.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 
 import logging
@@ -563,6 +564,26 @@ async def async_build_prime_floor_plan(
     runtime = getattr(config_entry, "runtime_data", None)
     if runtime is not None and names_for_others:
         existing = dict(getattr(runtime, "prime_room_names", None) or {})
+
+        # COMMAND NAMES FILL WHAT THE MAP LEAVES BLANK.
+        #
+        # Zone names live in `lastCommand.regions[].region_name`, not in
+        # the bundle -- APK 3.0.0's own resolver reads them from there.
+        # @chairstacker has eight zones with no map name and an app
+        # timeline that labels them anyway.
+        #
+        # Below the map names rather than above: a name someone typed
+        # into the map editor beats one carried along by whichever
+        # command last cleaned the region.
+        from .prime_coordinator import (  # noqa: PLC0415
+            prime_region_names_from_command,
+        )
+
+        with contextlib.suppress(Exception):
+            existing = {
+                **prime_region_names_from_command(runtime),
+                **existing,
+            }
         existing.update(names_for_others)
         runtime.prime_room_names = existing
 

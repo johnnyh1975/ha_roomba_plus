@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Seleccionar habitaciones requiere credenciales de la nube de iRobot en este robot. Añádelas en las opciones de la integración, o limpia toda la casa."
+    },
+    "calendar_room_not_found": {
+      "message": "Ninguna habitación coincide con \"{text}\". Indica una habitación en el título, la descripción o la ubicación — habitaciones conocidas: {known}. Déjalos los tres sin nombres para limpiar toda la casa."
     }
   },
   "selector": {

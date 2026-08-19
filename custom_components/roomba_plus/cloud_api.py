@@ -395,8 +395,26 @@ class IrobotCloudApi:
         blid: str,
         count: int = 100,
         before_ts: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Return mission history for a robot.
+
+        RETURNS WHATEVER THE ENDPOINT SENDS -- a list of per-mission
+        records in practice, and the caller checks for that
+        (`isinstance(raw_history, list)` in cloud_coordinator).
+
+        a39 declared `dict[str, Any]` and wrapped the result in
+        `dict()` to match. @ScenicSystemsLLC: every refresh on every
+        robot raised `dictionary update sequence element #0 has length
+        31; 2 is required` -- Python trying to read a 31-key mission
+        record as a key/value pair.
+
+        Not a display bug. The ValueError escaped the coordinator's
+        handler (which catches CloudApiError, ClientError and
+        TimeoutError, not ValueError), so the whole coroutine died
+        after favourites and pmaps had already been fetched -- and
+        Python returns nothing from a raising function. Favourite
+        buttons went unavailable and every room map went blank, on
+        three robots, every cycle.
 
         Args:
             blid:      Robot BLID.
@@ -414,7 +432,7 @@ class IrobotCloudApi:
         }
         if before_ts is not None:
             params["before"] = str(before_ts)
-        return dict(await self._aws_get(url, params))
+        return await self._aws_get(url, params)
 
     async def get_favorites(self) -> list[dict[str, Any]]:
         """Return user-defined favorite cleaning routines."""

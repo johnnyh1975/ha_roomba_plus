@@ -39,7 +39,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.device_tracker import SourceType, TrackerEntity
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
@@ -207,8 +207,29 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             coordinator = getattr(data, "prime_coordinator", None)
             if coordinator is not None:
                 self.async_on_remove(
-                    coordinator.async_add_listener(self.async_write_ha_state)
+                    coordinator.async_add_listener(self._handle_prime_update)
                 )
+
+    @callback
+    def _handle_prime_update(self) -> None:
+        """State first, and refill the name cache when it is still empty.
+
+        THE NAMES ARRIVE AFTER THE ENTITY DOES. `async_added_to_hass`
+        fetches the room list once, at setup -- and on a cold start the
+        map bundle has usually not been built yet, so the cache stays
+        empty and every room falls through to `Room {id}`.
+
+        @chairstacker (#70 follow-up): the tracker started reporting
+        rooms in a38 and reported "Room 16". The map check was the fix;
+        this is the half that gives them names.
+
+        Retried on coordinator updates rather than on a timer, and only
+        while empty -- a robot that genuinely has no named rooms should
+        not refetch the list on every message.
+        """
+        self.async_write_ha_state()
+        if not self._prime_rooms:
+            self.hass.async_create_task(self._async_refresh_prime_rooms())
 
     async def _async_refresh_prime_rooms(self) -> None:
         """Refills the room-name cache.

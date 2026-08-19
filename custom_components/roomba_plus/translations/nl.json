@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Kamers kiezen vereist iRobot-cloudgegevens op deze robot. Voeg ze toe in de integratie-opties, of maak het hele huis schoon."
+    },
+    "calendar_room_not_found": {
+      "message": "Geen kamer komt overeen met \"{text}\". Noem een kamer in de titel, beschrijving of locatie — bekende kamers: {known}. Laat alle drie leeg voor het hele huis."
     }
   },
   "selector": {

@@ -602,6 +602,27 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         # is also the useful answer for an aborted run: whatever it had
         # reached when it stopped.
         if phase not in ("run", "hmMidMsn", "evac"):
+            # A FINISHED MISSION IS 100%, NOT WHATEVER THE CLOCK SAID.
+            #
+            # @chairstacker (#72 follow-up): a favourite that completed
+            # successfully -- 4 minutes, 20 sq ft, app header "Cleaning
+            # Completed" -- froze at **34%**. The percentage is elapsed
+            # time against a per-room estimate, and the estimate was
+            # three times the real duration, so the run ended a third
+            # of the way through a clock that was simply wrong.
+            #
+            # Holding the last value (a38) was right for an aborted
+            # run and wrong for a completed one. Completion is known:
+            # the robot went home and docked.
+            #
+            # `hmPostMsn` and `charge` are the return after work.
+            # `stop` is not -- a mission stopped where it stood keeps
+            # whatever it had reached, which is the honest figure there.
+            if (
+                self._last_progress is not None
+                and phase in ("hmPostMsn", "charge")
+            ):
+                self._last_progress = 100
             return self._last_progress
         if mts is None or mts.mission_id is None:
             return self._last_progress

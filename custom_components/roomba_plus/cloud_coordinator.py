@@ -439,7 +439,45 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self._has_pmaps:
                     result["pmaps"] = await self.api.get_pmaps(self.blid)
                     result["favorites"] = await self.api.get_favorites()
-                raw_history = await self.api.get_mission_history(self.blid)
+                # ONE FAILING SUB-FETCH MUST NOT DISCARD THE REST.
+                #
+                # @ScenicSystemsLLC: a ValueError from mission history
+                # escaped the handler below (which catches
+                # CloudApiError, ClientError and TimeoutError) and
+                # killed the whole coroutine -- **after** pmaps and
+                # favourites had been fetched successfully. Python
+                # returns nothing from a raising function, so both were
+                # thrown away every cycle. Favourite buttons went
+                # unavailable and every room map went blank.
+                #
+                # The automations fetch below already had this
+                # treatment, commented "fails gracefully". History did
+                # not, and it is the one carrying more.
+                #
+                # An empty history is a real state -- a robot with no
+                # cloud records looks the same -- so the sensors that
+                # read it already handle it.
+                #
+                # NETWORK FAILURES STILL PROPAGATE. A ClientError or a
+                # timeout means the cloud is unreachable, and the
+                # handler below turns that into the grace period that
+                # keeps the last good data instead of blanking
+                # everything. Swallowing those here would have replaced
+                # a working recovery with an empty result.
+                #
+                # Only a malformed response is caught: the endpoint
+                # answered, and what it sent cannot be read.
+                try:
+                    raw_history = await self.api.get_mission_history(self.blid)
+                except (CloudApiError, aiohttp.ClientError, TimeoutError):
+                    raise
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "roomba_plus: mission history fetch failed for %s -- "
+                        "keeping pmaps and favourites from this cycle",
+                        self.blid, exc_info=True,
+                    )
+                    raw_history = []
                 # F7l — fetch automations endpoint; fails gracefully
                 try:
                     result["automations"] = await self.api.get_automations()
@@ -578,9 +616,18 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Process reversed (oldest first) so _last_nMssn advances correctly.
                 # async_delta_update skips duplicates via _archived_nmssns.
                 if self._mission_archive is not None:
+                    # `config_entry` is non-optional in this
+                    # coordinator's __init__; the base class types it
+                    # `ConfigEntry | None`. Bound once here rather than
+                    # asserted inside the loop.
+                    _entry_id = (
+                        self.config_entry.entry_id
+                        if self.config_entry is not None
+                        else ""
+                    )
                     for _r in reversed(result["mission_history_raw"]):
                         await self._mission_archive.async_delta_update(
-                            _r, self.hass, self.config_entry.entry_id
+                            _r, self.hass, _entry_id
                         )
                 # Aggregate ALL records for lifetime totals.
                 result["mission_history"] = _aggregate_history(raw_history)

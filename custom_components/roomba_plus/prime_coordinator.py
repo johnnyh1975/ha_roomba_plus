@@ -1400,6 +1400,38 @@ def prime_mission_cycle(data: Any) -> str:
     return str(getattr(status, "cycle", None) or "")
 
 
+def prime_region_names_from_command(data: Any) -> dict[str, str]:
+    """{region_id: name} from the last command's own region labels.
+
+    ZONE NAMES LIVE IN THE COMMAND, NOT THE MAP. APK 3.0.0's
+    `IrobotTimelineRegionNameResolver` reads
+    `cmd.regions[].region_name`; the timeline events carry no name of
+    their own.
+
+    @chairstacker: `--list-rooms` reports `name=None` for every one of
+    his eight zones, while his app timeline reads "Guest Access Zone"
+    and "Living Room @Wall". Both are true. The map has no names and
+    the command does.
+
+    Which is why Home Assistant showed `Zone {id}` however hard anyone
+    looked at the map bundle: the reader was correct and the data was
+    somewhere else.
+
+    Only names the command actually carries. A region cleaned without
+    a label stays unnamed rather than getting an invented one.
+    """
+    last = prime_last_command(data)
+    names: dict[str, str] = {}
+    for region in (last or {}).get("regions") or []:
+        if not isinstance(region, dict):
+            continue
+        region_id = region.get("region_id") or region.get("id")
+        label = region.get("region_name")
+        if region_id and label:
+            names[str(region_id)] = str(label)
+    return names
+
+
 def prime_last_command(data: Any) -> dict[str, Any]:
     """The robot's last command, from whichever tier reports one.
 

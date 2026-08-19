@@ -508,6 +508,18 @@ async def async_update_schedule_from_calendar(
     if room_ids:
         call_data["rooms"] = room_ids
 
+    # THE NAME WAS ACCEPTED AND NEVER SENT.
+    #
+    # @chairstacker (#71): editing a calendar entry in Home Assistant
+    # changed the time and nothing else -- not the summary, not the day.
+    # This function takes `name` as a parameter, `_reshaped_options`
+    # handles `call_data["name"]`, and the two were never connected.
+    #
+    # Only when it carries something: an edit that leaves the summary
+    # alone must not blank the schedule's name.
+    if name:
+        call_data["name"] = name
+
     # THE LOCK IS PER CONTAINER, and the container is not known until
     # the schedule has been found -- so the read that finds it has to
     # happen first, and the lock is taken around the decision and the

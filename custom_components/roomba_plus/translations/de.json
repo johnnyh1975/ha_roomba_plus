@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Für die Raumauswahl braucht dieser Roboter iRobot-Zugangsdaten. Trage sie in den Integrationsoptionen ein oder reinige stattdessen das ganze Haus."
+    },
+    "calendar_room_not_found": {
+      "message": "Kein Raum passt zu \"{text}\". Nenne einen Raum in Titel, Beschreibung oder Ort des Termins — bekannte Räume: {known}. Lasse alle drei frei von Raumnamen für eine Ganzhausreinigung."
     }
   },
   "selector": {

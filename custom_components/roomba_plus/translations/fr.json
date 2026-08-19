@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "Le ciblage des pièces nécessite des identifiants cloud iRobot sur ce robot. Ajoutez-les dans les options de l'intégration, ou nettoyez toute la maison."
+    },
+    "calendar_room_not_found": {
+      "message": "Aucune pièce ne correspond à \"{text}\". Nommez une pièce dans le titre, la description ou le lieu — pièces connues : {known}. Laissez les trois sans nom de pièce pour un nettoyage complet."
     }
   },
   "selector": {

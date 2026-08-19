@@ -1453,6 +1453,9 @@
     },
     "cloud_required": {
       "message": "A seleção de divisões requer credenciais da nuvem iRobot neste robô. Adicione-as nas opções da integração, ou limpe a casa toda."
+    },
+    "calendar_room_not_found": {
+      "message": "Nenhuma divisão corresponde a \"{text}\". Indique uma divisão no título, descrição ou localização — divisões conhecidas: {known}. Deixe os três sem nomes para limpar a casa toda."
     }
   },
   "selector": {

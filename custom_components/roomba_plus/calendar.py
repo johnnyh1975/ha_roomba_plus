@@ -485,6 +485,28 @@ _RRULE_TO_FREQUENCY: dict[str, str] = {
 }
 
 
+def _weekdays_from_rrule(rrule: Any) -> list[int] | None:
+    """Python weekday numbers from an rrule's BYDAY, or None.
+
+    None means the rule said nothing about days, which
+    `_days_for_update` treats as "keep what the schedule has".
+    """
+    if not rrule:
+        return None
+    text = str(rrule).upper()
+    for part in text.split(";"):
+        if not part.startswith("BYDAY="):
+            continue
+        order = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+        days = [
+            order[token.strip()[-2:]]
+            for token in part[len("BYDAY="):].split(",")
+            if token.strip()[-2:] in order
+        ]
+        return days or None
+    return None
+
+
 class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
     """V4/Prime's own equivalent of RoombaScheduleCalendar, reading
     get_schedules() (REST) instead of a local vacuum_state dict.
@@ -956,6 +978,34 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
                 for k in ("summary", "description", "location")
             )
             room_ids = match_rooms(text, self._room_names())
+
+            # NO MATCH IS NOT "WHATEVER THE TEMPLATE HAD".
+            #
+            # @chairstacker (#71): every calendar event he created came
+            # back as "Cleaning: Kitchen", whatever he typed. Creating a
+            # schedule with no rooms copies an arbitrary existing one as
+            # a template, and `_reshaped_options` only replaces its
+            # regions when `rooms` is in the call -- so an unmatched
+            # name silently inherited another schedule's target.
+            #
+            # A schedule that cleans the wrong room is worse than one
+            # that is refused. He typed a zone name into Location; the
+            # robot got Kitchen.
+            #
+            # Whole-house is still available by naming no room at all.
+            if text.strip() and not room_ids:
+                from .const import DOMAIN  # noqa: PLC0415
+
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="calendar_room_not_found",
+                    translation_placeholders={
+                        "text": text.strip()[:80],
+                        "known": ", ".join(
+                            sorted(self._room_names().values())
+                        )[:200] or "none",
+                    },
+                )
         except AmbiguousRoomError as err:
             raise ServiceValidationError(str(err)) from err
 
@@ -1055,6 +1105,21 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         # the iRobot app. The write succeeded; it wrote the wrong thing.
         #
         # So: no rrule on an edit means keep what the schedule has.
+        # BYDAY MATTERS ON AN EDIT, unlike on a create.
+        #
+        # @chairstacker (#71): editing a calendar entry changed the time
+        # and nothing else -- he could not move it to another weekday.
+        #
+        # `_days_for_update` keeps the schedule's existing days unless
+        # an explicit recurrence names others, which is right: editing
+        # one occurrence of a repeating schedule must not drop the rest.
+        # But nothing ever passed those explicit days, so the
+        # preservation path was the only path.
+        #
+        # On create, BYDAY is redundant -- the weekday comes from the
+        # start time. On an edit it is the only way to say "these days,
+        # not the ones stored".
+        explicit_days = _weekdays_from_rrule(event.get("rrule"))
         if event.get("rrule"):
             frequency = self._frequency_from_rrule(event.get("rrule"))
         else:
@@ -1078,6 +1143,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             self._config_entry,
             uid,
             name=summary or None,
+            explicit_days=explicit_days,
             # THE ROBOT COUNTS FROM SUNDAY, PYTHON FROM MONDAY.
             #
             # @chairstacker (#71): a Monday entry created in the HA
@@ -1178,7 +1244,28 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             self._config_entry.runtime_data, "prime_schedule_coordinator", None
         )
         names = getattr(coordinator, "room_names", None)
-        return names if isinstance(names, dict) else {}
+        merged: dict[str, str] = dict(names) if isinstance(names, dict) else {}
+
+        # ZONES TOO, NOT JUST ROOMS.
+        #
+        # @chairstacker (#71) typed a zone name -- "office" -- into a
+        # calendar event and got a schedule for Kitchen. The schedule
+        # coordinator's `room_names` is built from active map versions,
+        # which carry ROOMS. His zone was never in the list, so it could
+        # not match, and an unmatched name used to inherit another
+        # schedule's target silently.
+        #
+        # `prime_room_names` on the runtime data holds both: rooms from
+        # the map versions and zones from the bundle's `cleanZones`
+        # layer. Rooms win a name collision, because a room is what a
+        # schedule targets natively.
+        both = getattr(
+            self._config_entry.runtime_data, "prime_room_names", None
+        )
+        if isinstance(both, dict):
+            merged = {**both, **merged}
+
+        return merged
 
     def _robot_has_stopped(self) -> bool:
         """Whether the robot is demonstrably not cleaning right now.
