@@ -102,12 +102,16 @@ class TestResultMapping:
         ))["result"]
 
     def test_known_codes(self):
-        assert self._result("success") == "completed"
-        assert self._result("cancelled") == "cancelled"
-        assert self._result("failed") == "error"
+        """REAL DoneCode VALUES. This used to assert `success`,
+        `cancelled` and `failed` -- none of which a robot sends. The
+        table was invented, the tests agreed with it, and
+        @chairstacker's 128 missions all mapped to "unknown"."""
+        assert self._result("ok") == "completed"
+        assert self._result("cncl") == "cancelled"
+        assert self._result("returnHomeEnd") == "completed"
 
     def test_case_is_ignored(self):
-        assert self._result("SUCCESS") == "completed"
+        assert self._result("OK") == "completed"
 
     def test_an_unknown_code_is_not_guessed(self):
         """"completed" and "cancelled" feed different statistics.
@@ -1141,3 +1145,65 @@ class TestTheMissionErrorComesFromTheTimeline:
         source = inspect.getsource(prime_mission_sync)
 
         assert 'if target == "error_code" and value is None:' in source
+
+
+class TestTheDoneCodeTableMatchesTheRealEnum:
+    """@chairstacker (#68, #69): `clean_streak` and `area_cleaned_today`
+    both read 0 on a robot with 128 stored missions.
+
+    The table mapped eight invented keys — `success`, `completed`,
+    `failed`, `aborted` and so on. `DoneCode` in roombapy-prime carries
+    nineteen entirely different ones, and the confirmed real value is
+    `ok`, from his own mission history.
+
+    So every mission he ever ran mapped to "unknown", which no sensor
+    counts.
+    """
+
+    def test_the_confirmed_value_maps_to_completed(self):
+        from custom_components.roomba_plus.prime_mission_sync import (
+            _DONE_CODE_TO_RESULT,
+        )
+
+        assert _DONE_CODE_TO_RESULT["ok"] == "completed"
+
+    def test_every_key_exists_in_the_library_enum(self):
+        """A key the robot cannot send is dead weight, and its presence
+        suggests coverage that is not there."""
+        from roombapy_prime.models.mission_history import DoneCode
+
+        from custom_components.roomba_plus.prime_mission_sync import (
+            _DONE_CODE_TO_RESULT,
+        )
+
+        real = {str(member.value) for member in DoneCode}
+        invented = sorted(set(_DONE_CODE_TO_RESULT) - real)
+
+        assert not invented, (
+            f"{invented} are not DoneCode values -- a robot cannot send "
+            f"them, so mapping them covers nothing"
+        )
+
+    def test_most_of_the_enum_is_covered(self):
+        """Not all of it: an unmatched code still becomes 'unknown'
+        rather than being guessed into a bucket. But a table covering
+        two of nineteen is the bug this class exists for."""
+        from roombapy_prime.models.mission_history import DoneCode
+
+        from custom_components.roomba_plus.prime_mission_sync import (
+            _DONE_CODE_TO_RESULT,
+        )
+
+        # THE ELEVEN CONFIRMED ONES, not all nineteen. Eight members
+        # of DoneCode appear nowhere in app 3.0.0 -- not as written,
+        # not as the abbreviations the confirmed values predict. They
+        # are placeholders, and mapping them would claim coverage that
+        # does not exist.
+        confirmed = {
+            "ok", "busy", "dndEnd", "returnHomeEnd", "timeboxEnd",
+            "cncl", "usrSlp", "plcDoc", "usrEnd", "usrSpt", "batcncl",
+        }
+        assert confirmed <= set(_DONE_CODE_TO_RESULT), (
+            f"missing: {sorted(confirmed - set(_DONE_CODE_TO_RESULT))}"
+        )
+        assert set(_DONE_CODE_TO_RESULT) <= {str(m.value) for m in DoneCode}

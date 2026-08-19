@@ -1701,3 +1701,81 @@ class TestActivePmapvDetailsNullRegression:
         assert cc.active_pmap_id == "p2"
         result = cc.regions
         assert result and result[0]["pmap_id"] == "p2"
+
+
+class TestOneFailingSubFetchKeepsTheRest:
+    """@ScenicSystemsLLC (a39): a ValueError from mission history
+    escaped the handler — which catches CloudApiError, ClientError and
+    TimeoutError, not ValueError — and killed the coroutine **after**
+    pmaps and favourites had been fetched.
+
+    Python returns nothing from a raising function, so both were thrown
+    away every cycle. Favourite buttons went unavailable and every room
+    map went blank, on three robots.
+    """
+
+    def test_the_history_fetch_is_isolated(self):
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+        i = source.find("raw_history = await self.api.get_mission_history")
+        assert i > 0
+
+        before = source[max(0, i - 600):i]
+        assert "try:" in before, (
+            "the history fetch must be isolated -- a malformed response "
+            "there discards pmaps and favourites already fetched"
+        )
+
+    def test_network_errors_still_propagate(self):
+        """A ClientError means the cloud is unreachable, and the outer
+        handler turns that into the grace period that keeps the last
+        good data. Swallowing it here would replace a working recovery
+        with an empty result."""
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+        i = source.find("raw_history = await self.api.get_mission_history")
+        block = source[i:i + 400]
+
+        assert "raise" in block
+        assert "aiohttp.ClientError" in block
+
+
+class TestMissionHistoryIsNotWrappedInDict:
+    """a39 declared `dict[str, Any]` and wrapped the response in
+    `dict()` to match the annotation. The endpoint returns a list of
+    mission records, so every refresh raised `dictionary update
+    sequence element #0 has length 31; 2 is required`.
+
+    The caller checks `isinstance(raw_history, list)` — the shape was
+    documented in the code that reads it, and the annotation contradicted
+    it.
+    """
+
+    def test_the_response_is_returned_unwrapped(self):
+        import inspect
+
+        from custom_components.roomba_plus.cloud_api import IrobotCloudApi
+
+        source = inspect.getsource(IrobotCloudApi.get_mission_history)
+
+        assert "dict(await" not in source, (
+            "the endpoint returns a list of records; dict() reads each "
+            "one as a key/value pair and raises"
+        )
+
+    def test_the_consumer_expects_a_list(self):
+        """If this ever stops being true, the annotation above is wrong
+        rather than the wrapper."""
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+
+        assert "isinstance(raw_history, list)" in source

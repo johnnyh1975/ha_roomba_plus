@@ -582,3 +582,66 @@ class TestPrimePushFeedsTheFreshnessSignal:
         entry = self._entry()
 
         assert entry.runtime_data.last_mqtt_message_ts == 0.0
+
+
+class TestZoneNamesComeFromTheCommand:
+    """APK 3.0.0: `IrobotTimelineRegionNameResolver` reads
+    `cmd.regions[].region_name`. The timeline events carry no name of
+    their own — `RobotTimelineZone` has only `zid`.
+
+    @chairstacker's `--list-rooms` reports `name=None` for all eight of
+    his zones while his app timeline reads "Guest Access Zone" and
+    "Living Room @Wall". Both true: the map has no names, the command
+    does. Home Assistant showed `Zone {id}` because it read the map,
+    correctly, and the data was elsewhere.
+    """
+
+    @staticmethod
+    def _data(regions):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            roomba_reported_state=lambda: {
+                "lastCommand": {"regions": regions}
+            }
+        )
+
+    def test_labels_are_collected(self):
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_region_names_from_command,
+        )
+
+        names = prime_region_names_from_command(
+            self._data([
+                {"region_id": "100", "region_name": "Guest Access Zone"},
+                {"region_id": "16", "region_name": "Living Room @Wall"},
+            ])
+        )
+
+        assert names == {
+            "100": "Guest Access Zone",
+            "16": "Living Room @Wall",
+        }
+
+    def test_an_unlabelled_region_stays_unnamed(self):
+        """No invented names. A region cleaned without a label has
+        none, and `Zone {id}` is the honest answer there."""
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_region_names_from_command,
+        )
+
+        names = prime_region_names_from_command(
+            self._data([
+                {"region_id": "100"},
+                {"region_id": "101", "region_name": ""},
+            ])
+        )
+
+        assert names == {}
+
+    def test_a_command_with_no_regions_is_harmless(self):
+        from custom_components.roomba_plus.prime_coordinator import (
+            prime_region_names_from_command,
+        )
+
+        assert prime_region_names_from_command(self._data([])) == {}

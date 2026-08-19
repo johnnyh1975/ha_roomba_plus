@@ -1472,3 +1472,137 @@ class TestTheWeekdayBasisMatchesTheWire:
         assert sunday.weekday() == 6
 
         assert (sunday.weekday() + 1) % 7 == _WEEKDAYS["sun"]
+
+
+class TestZonesCanBeNamedInACalendarEvent:
+    """@chairstacker (#71) typed a zone name — "office" — and got a
+    schedule for Kitchen.
+
+    `room_names` on the schedule coordinator is built from active map
+    versions, which carry rooms. Zones live in the bundle's
+    `cleanZones` layer and reach `prime_room_names` on the runtime
+    data. The calendar read only the first, so a zone name could never
+    match — and an unmatched name used to inherit another schedule's
+    target silently.
+    """
+
+    @staticmethod
+    def _entity(coordinator_rooms, runtime_names):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.calendar import (
+            PrimeScheduleCalendar,
+        )
+
+        entity = PrimeScheduleCalendar.__new__(PrimeScheduleCalendar)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_schedule_coordinator=SimpleNamespace(
+                room_names=coordinator_rooms
+            ),
+            prime_room_names=runtime_names,
+        )
+        entity._config_entry = entry
+        return entity
+
+    def test_a_zone_is_in_the_name_list(self):
+        entity = self._entity({"16": "Kitchen"}, {"z4": "Office"})
+
+        assert entity._room_names() == {"16": "Kitchen", "z4": "Office"}
+
+    def test_a_room_wins_a_name_collision(self):
+        """A schedule targets rooms natively, so on a shared name the
+        room is the safer answer."""
+        entity = self._entity({"16": "Den"}, {"16": "Something else"})
+
+        assert entity._room_names()["16"] == "Den"
+
+    def test_missing_runtime_names_are_harmless(self):
+        entity = self._entity({"16": "Kitchen"}, None)
+
+        assert entity._room_names() == {"16": "Kitchen"}
+
+
+class TestEditingChangesMoreThanTheTime:
+    """@chairstacker (#71): editing a calendar entry in Home Assistant
+    changed the time and nothing else — not the summary, not the day.
+
+    Two separate causes, both "the value was accepted and never sent".
+    """
+
+    def test_the_name_reaches_the_payload(self):
+        import inspect
+
+        from custom_components.roomba_plus import prime_schedule_services
+
+        source = inspect.getsource(
+            prime_schedule_services.async_update_schedule_from_calendar
+        )
+
+        assert 'call_data["name"] = name' in source, (
+            "the function takes `name` and _reshaped_options handles "
+            "call_data['name'] -- the two were never connected"
+        )
+
+    def test_an_empty_summary_does_not_blank_the_name(self):
+        """An edit that leaves the summary alone must not wipe the
+        schedule's name."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_schedule_services
+
+        source = inspect.getsource(
+            prime_schedule_services.async_update_schedule_from_calendar
+        )
+        i = source.find('call_data["name"] = name')
+
+        assert "if name:" in source[max(0, i - 200):i]
+
+
+class TestBydayIsReadOnAnEdit:
+    """`_days_for_update` keeps the schedule's existing days unless an
+    explicit recurrence names others — right, because editing one
+    occurrence of a repeating schedule must not drop the rest.
+
+    But nothing ever passed those explicit days, so the preservation
+    path was the only path and the weekday could not be changed.
+    """
+
+    def test_byday_becomes_python_weekdays(self):
+        from custom_components.roomba_plus.calendar import (
+            _weekdays_from_rrule,
+        )
+
+        assert _weekdays_from_rrule("FREQ=WEEKLY;BYDAY=MO,WE") == [0, 2]
+        assert _weekdays_from_rrule("FREQ=WEEKLY;BYDAY=SU") == [6]
+
+    def test_no_byday_means_keep_what_is_stored(self):
+        """None, not an empty list — an empty list would replace the
+        schedule's days with nothing."""
+        from custom_components.roomba_plus.calendar import (
+            _weekdays_from_rrule,
+        )
+
+        assert _weekdays_from_rrule("FREQ=WEEKLY") is None
+        assert _weekdays_from_rrule(None) is None
+
+    def test_a_prefixed_byday_still_parses(self):
+        """`BYDAY=2TU` is the second Tuesday. The frequency check
+        refuses those separately; this must not crash on one."""
+        from custom_components.roomba_plus.calendar import (
+            _weekdays_from_rrule,
+        )
+
+        assert _weekdays_from_rrule("FREQ=MONTHLY;BYDAY=2TU") == [1]
+
+    def test_the_edit_path_passes_them_on(self):
+        import inspect
+
+        from custom_components.roomba_plus.calendar import (
+            PrimeScheduleCalendar,
+        )
+
+        source = inspect.getsource(PrimeScheduleCalendar.async_update_event)
+
+        assert "explicit_days=explicit_days" in source

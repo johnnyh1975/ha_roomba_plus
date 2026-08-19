@@ -286,3 +286,46 @@ class TestPrimeReadsItsPhaseFromTheShadow:
         tracker = self._tracker("charge")
 
         assert tracker.location_name == "Docked"
+
+
+class TestTheRoomNameCacheRefillsWhenEmpty:
+    """@chairstacker (#70 follow-up): the tracker reported rooms in a38
+    and reported "Room 16" — the number, not the name.
+
+    `async_added_to_hass` fetches the room list once, at setup. On a
+    cold start the map bundle has usually not been built yet, so the
+    cache stays empty and every room falls through to `Room {id}`
+    forever.
+    """
+
+    @staticmethod
+    def _tracker(cached):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = dict(cached)
+        tracker.hass = MagicMock()
+        tracker.async_write_ha_state = MagicMock()
+        return tracker
+
+    def test_an_empty_cache_triggers_a_refetch(self):
+        tracker = self._tracker({})
+
+        tracker._handle_prime_update()
+
+        tracker.async_write_ha_state.assert_called_once()
+        tracker.hass.async_create_task.assert_called_once()
+
+    def test_a_filled_cache_does_not(self):
+        """A robot with named rooms must not refetch the list on every
+        coordinator message."""
+        tracker = self._tracker({"Kitchen": "MAP-1/16"})
+
+        tracker._handle_prime_update()
+
+        tracker.async_write_ha_state.assert_called_once()
+        tracker.hass.async_create_task.assert_not_called()

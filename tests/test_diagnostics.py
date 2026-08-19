@@ -992,3 +992,83 @@ class TestTheTimelineShapeIsReported:
         from custom_components.roomba_plus import diagnostics
 
         assert '"mission_data_shape"' in inspect.getsource(diagnostics)
+
+
+class TestTheMissionStoreBlockShowsARecord:
+    """@chairstacker sent a diagnostics download to settle why
+    `area_cleaned_today` and `clean_streak` both read 0. The block
+    reported 128 records and showed none of them — so it could not
+    distinguish "no records for today" from "records carrying no
+    area_sqft", and cost him a second round.
+
+    A count without a sample answers nothing.
+    """
+
+    def test_it_carries_the_fields_the_zero_question_needs(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        block = source[source.find('summary["mission_store"] = {'):]
+        block = block[:block.find("except")]
+
+        for field in (
+            "latest_record",
+            "records_with_area",
+            "records_with_result",
+            "result_values",
+        ):
+            assert field in block, (
+                f"the mission_store block must carry {field} -- a count "
+                f"alone cannot tell an empty store from a mapping gap"
+            )
+
+    def test_result_values_are_capped(self):
+        """A robot with hundreds of missions must not turn this into a
+        wall of strings."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert "[:12]" in source
+
+
+class TestNothingReadsHassOffTheConfigEntry:
+    """`ConfigEntry` does not define `hass`. `_prime_room_preferences`
+    read `config_entry.hass`, got None, and returned
+    `{"note": "no hass on this entry"}` from every download ever taken.
+
+    That is why `room_preferences` sat in the tester notes as "never
+    confirmed" for weeks — the block meant to show it never ran.
+    Surfaced by @chairstacker's download, not by a report about it.
+    """
+
+    def test_the_attribute_really_is_absent(self):
+        """If Home Assistant ever adds it, this guard is wrong rather
+        than the call sites."""
+        from homeassistant.config_entries import ConfigEntry
+
+        assert not hasattr(ConfigEntry, "hass")
+
+    def test_no_module_reaches_for_it(self):
+        import ast
+        import pathlib
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "hass"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in ("config_entry", "entry")
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+
+        assert not offenders, (
+            f"{offenders} read hass off a config entry, which has no "
+            f"such attribute -- it is passed in, not carried"
+        )

@@ -79,3 +79,48 @@ class TestUnknownSkuIsReportedAfterSetup:
         assert parsed.scheme == "https"
         assert ISSUE_TRACKER_URL.startswith(f"https://{parsed.netloc}")
         assert parsed.path.endswith("/issues/new")
+
+
+class TestRepairIssuesAreClearedOnUnload:
+    """@ScenicSystemsLLC: after rolling back from a38 and reinstalling,
+    a `smart_zones_need_naming` issue was still showing — timestamped
+    from the failed attempt, for zones that were already named.
+
+    Home Assistant keeps issues in its own registry, so nothing about
+    unloading or removing an integration clears them. An issue raised
+    by a condition that no longer exists sends someone to check
+    something that is already fine.
+    """
+
+    def test_unload_clears_them(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import (
+            _async_clear_repair_issues,
+        )
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "abc123"
+
+        with patch(
+            "homeassistant.helpers.issue_registry.async_delete_issue"
+        ) as deleter:
+            _async_clear_repair_issues(hass, entry)
+
+        cleared = {call.args[2] for call in deleter.call_args_list}
+        assert "smart_zones_need_naming_abc123" in cleared
+        assert "smart_zones_need_naming" in cleared, (
+            "the singleton form has no entry_id and is the one that "
+            "actually survived his reinstall"
+        )
+
+    def test_unload_actually_calls_it(self):
+        """A helper nothing calls clears nothing."""
+        import inspect
+
+        from custom_components.roomba_plus import async_unload_entry
+
+        assert "_async_clear_repair_issues" in inspect.getsource(
+            async_unload_entry
+        )
