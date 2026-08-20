@@ -500,3 +500,40 @@ class TestOneWeekdayNumberingOnly:
         from custom_components.roomba_plus import calendar as cal
 
         assert "(local.weekday() + 1) % 7" in inspect.getsource(cal)
+
+
+class TestASingleDayScheduleMovesWithTheEdit:
+    """@chairstacker (#71, twice): he still could not change a weekday
+    in a40.
+
+    The preservation rule is right for a Mon/Wed/Fri series — editing
+    one occurrence must not drop the others. But Home Assistant sends
+    no BYDAY when you simply move an entry to another day, so the
+    stored days won every time and the move was discarded.
+
+    With exactly one stored day there is no series to protect.
+    """
+
+    @staticmethod
+    def _days(existing, weekday, explicit=None):
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _days_for_update,
+        )
+
+        return _days_for_update(existing, weekday, explicit)
+
+    def test_one_stored_day_follows_the_edit(self):
+        #  takes a Sunday-based wire index, matching
+        # what the calendar passes after its own conversion.
+        # Stored Monday (1), edited to Wednesday (3).
+        assert self._days([1], 3) == ["wed"]
+
+    def test_a_series_is_still_preserved(self):
+        """Mon/Wed/Fri stays Mon/Wed/Fri when one occurrence moves."""
+        assert set(self._days([1, 3, 5], 3)) == {"mon", "wed", "fri"}
+
+    def test_an_explicit_recurrence_still_wins(self):
+        assert self._days([1, 3, 5], 3, explicit=[0]) == ["sun"]
+
+    def test_no_stored_days_falls_back_to_the_edit(self):
+        assert self._days([], 3) == ["wed"]

@@ -4958,7 +4958,7 @@ class TestConsumablePartsAppearWhenDiscovered:
         )
         entry = MagicMock()
 
-        _add_discovered_parts(data, entry, lambda gen: added.extend(gen))
+        _add_discovered_parts(MagicMock(), data, entry, lambda gen: added.extend(gen))
         return data, added, listeners
 
     def test_parts_present_at_setup_get_sensors_immediately(self):
@@ -5012,7 +5012,7 @@ class TestConsumablePartsAppearWhenDiscovered:
         data = MagicMock()
         data.prime_parts_coordinator = None
 
-        _add_discovered_parts(data, MagicMock(), lambda gen: list(gen))
+        _add_discovered_parts(MagicMock(), data, MagicMock(), lambda gen: list(gen))
 
 
 class TestBraavaVersusMoppingRobots:

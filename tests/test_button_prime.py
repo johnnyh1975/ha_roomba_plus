@@ -816,3 +816,81 @@ class TestFavouritesBelongToOneRobot:
 
         assert "asset_id" in source
         assert "pmap" not in source.lower() or "region-id" in source
+
+
+class TestBothFavouritePathsFilterByRobot:
+    """@scenicsystemsllc (#80): the same favourites showed live on
+    every robot in his household, including "Vacuum Everywhere" on a
+    mop-only Braava.
+
+    `_favorite_is_for` existed and was correct \u2014 wired into the
+    favourites *attribute* only. The buttons were built for every
+    favourite the account has, and nothing in the filter's own tests
+    covered the path that creates entities.
+    """
+
+    FOREIGN = "OTHER_ROBOT_BLID"
+    MINE = "MY_BLID"
+
+    @staticmethod
+    def _raw(robot_id):
+        return {
+            "id": "fav1",
+            "name": "Vacuum Everywhere",
+            "commanddefs": [{"robot_id": robot_id, "command": "start"}],
+        }
+
+    def test_another_robots_favourite_gets_no_button(self):
+        from custom_components.roomba_plus.button_prime import (
+            _raw_favorite_is_for,
+        )
+
+        assert not _raw_favorite_is_for(self._raw(self.FOREIGN), self.MINE)
+
+    def test_my_own_favourite_does(self):
+        from custom_components.roomba_plus.button_prime import (
+            _raw_favorite_is_for,
+        )
+
+        assert _raw_favorite_is_for(self._raw(self.MINE), self.MINE)
+
+    def test_an_unattributed_favourite_is_kept(self):
+        """Fail-open, matching the parsed path: only an explicit
+        non-matching id excludes."""
+        from custom_components.roomba_plus.button_prime import (
+            _raw_favorite_is_for,
+        )
+
+        assert _raw_favorite_is_for({"id": "x", "commanddefs": []}, self.MINE)
+
+    def test_the_button_builder_actually_calls_it(self):
+        """A filter nothing calls filters nothing \u2014 which is the whole
+        bug."""
+        import inspect
+
+        from custom_components.roomba_plus.button_prime import (
+            build_prime_favorite_buttons,
+        )
+
+        source = inspect.getsource(build_prime_favorite_buttons)
+
+        assert "_raw_favorite_is_for" in source
+
+    def test_both_paths_agree_on_the_same_favourite(self):
+        """One behaviour, two shapes. If these drift, a favourite can
+        show as a button and not in the attribute, or the reverse."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.button_prime import (
+            _favorite_is_for,
+            _raw_favorite_is_for,
+        )
+
+        raw = self._raw(self.FOREIGN)
+        parsed = SimpleNamespace(
+            command_defs=[SimpleNamespace(asset_id=self.FOREIGN)]
+        )
+
+        assert _raw_favorite_is_for(raw, self.MINE) == _favorite_is_for(
+            parsed, self.MINE
+        )

@@ -43,3 +43,40 @@ class TestAreaSensorsCanBeConverted:
         ]
 
         assert len(found) >= 2
+
+
+class TestCountsAreNotMeasurements:
+    """@chairstacker's graph showed `9.89725` for `clean_streak` — a
+    count of days.
+
+    `MEASUREMENT` tells Home Assistant the value is continuous, so it
+    interpolates between samples when drawing. Every point on that line
+    is a number the sensor never reported, and it makes a working
+    counter look broken.
+    """
+
+    COUNTS = ("clean_streak", "consecutive_clean_skips")
+
+    def test_they_are_not_measurements(self):
+        from homeassistant.components.sensor import SensorStateClass
+
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        offenders = [
+            d.key for d in SENSORS
+            if d.key in self.COUNTS
+            and d.state_class is SensorStateClass.MEASUREMENT
+        ]
+
+        assert not offenders, (
+            f"{offenders} count things -- MEASUREMENT makes Home "
+            f"Assistant draw a line between samples and invent values "
+            f"in between"
+        )
+
+    def test_they_exist_to_be_checked(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        keys = {d.key for d in SENSORS}
+
+        assert set(self.COUNTS) <= keys

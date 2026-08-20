@@ -228,3 +228,43 @@ class TestDockButtonAvailability:
         assert self._button(
             "prime_wash_pad", dock={"error": None, "pw_state": FakeState.PAD_WASH_OKAY}
         ) is True
+
+
+class TestClassicFavouritesAreFilteredToo:
+    """@scenicsystemsllc (#80) has **three Classic robots** and saw the
+    same favourites on all of them, including "Vacuum Everywhere" on a
+    mop-only Braava.
+
+    `/user/favorites` is an ACCOUNT endpoint — it returns every
+    favourite in the household. The Classic setup built a button for
+    each one on every robot.
+
+    #80 was fixed once, in the Prime path. This one was never touched,
+    so a fix that read as complete covered neither of the two paths
+    that create his entities.
+    """
+
+    def test_the_classic_builder_filters(self):
+        import inspect
+
+        from custom_components.roomba_plus import button
+
+        source = inspect.getsource(button.async_setup_entry)
+
+        assert "_raw_favorite_is_for" in source, (
+            "the Classic favourite loop must filter by robot -- "
+            "/user/favorites is account-wide"
+        )
+
+    def test_both_builders_use_the_same_check(self):
+        """One rule, two platforms. Two separate implementations is how
+        #80 came to be fixed in one place and not the other."""
+        import inspect
+
+        from custom_components.roomba_plus import button, button_prime
+
+        classic = inspect.getsource(button.async_setup_entry)
+        prime = inspect.getsource(button_prime.build_prime_favorite_buttons)
+
+        assert "_raw_favorite_is_for" in classic
+        assert "_raw_favorite_is_for" in prime
