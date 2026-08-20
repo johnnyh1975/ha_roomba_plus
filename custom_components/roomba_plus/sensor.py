@@ -58,6 +58,7 @@ from homeassistant.helpers import issue_registry as ir  # noqa: F401 — SENSOR-
 from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 
 from . import roomba_reported_state
+from .entity_cleanup import async_remove_stale_entities
 from .const import CONF_CORRELATION_ENTITIES
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_prime import (
@@ -351,7 +352,7 @@ async def async_setup_entry(
         # The listener also covers a part appearing later for a real
         # reason: a dirt bag showing up after someone attaches a
         # self-emptying base.
-        _add_discovered_parts(data, config_entry, async_add_entities)
+        _add_discovered_parts(hass, data, config_entry, async_add_entities)
         _add_prime_mission_sensors(data, config_entry, async_add_entities)
         return
 
@@ -585,7 +586,10 @@ def _add_prime_mission_sensors(
 
 
 def _add_discovered_parts(
-    data: Any, config_entry: RoombaConfigEntry, async_add_entities: Callable[..., None]
+    hass: HomeAssistant,
+    data: Any,
+    config_entry: RoombaConfigEntry,
+    async_add_entities: Callable[..., None],
 ) -> None:
     """Creates a sensor for each consumable part, now and as they appear.
 
@@ -609,6 +613,21 @@ def _add_discovered_parts(
         known.update(new)
         async_add_entities(
             PrimeConsumablePartSensor(data.blid, pid, config_entry) for pid in new
+        )
+
+        # A part the robot stopped reporting leaves a registry row
+        # behind forever. Scoped to `_prime_part_`, and skipped
+        # entirely when the coordinator returned nothing -- see
+        # entity_cleanup for why an empty list must not sweep.
+
+        robot_uid = f"roomba_plus_{data.blid}"
+        async_remove_stale_entities(
+            hass,
+            config_entry,
+            prefix="_prime_part_",
+            live_unique_ids={
+                f"{robot_uid}_prime_part_{pid}" for pid in parts
+            },
         )
 
     _add_new()

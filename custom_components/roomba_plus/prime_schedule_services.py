@@ -430,6 +430,22 @@ def _days_for_update(
     """
     if explicit:
         return [_WEEKDAY_TO_WIRE[d] for d in explicit]
+
+    # A SINGLE-DAY SCHEDULE MOVES WITH THE EDIT.
+    #
+    # @chairstacker (#71, twice): he still could not change a weekday
+    # in a40. The preservation rule below is right for a Mon/Wed/Fri
+    # series -- editing one occurrence must not drop the others -- but
+    # Home Assistant sends no BYDAY when you simply drag an entry to
+    # another day, so `existing` won every time and the move was
+    # silently discarded.
+    #
+    # With exactly one stored day there is no series to protect. The
+    # edited occurrence's weekday IS the schedule's weekday, and
+    # keeping the old one means the edit did nothing.
+    if existing and len([d for d in existing if isinstance(d, int)]) == 1:
+        return [_WEEKDAY_TO_WIRE[weekday]]
+
     if existing:
         # The schedule stores integers; `call_data` wants the wire
         # abbreviations. A day outside 0-6 is dropped rather than

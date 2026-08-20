@@ -966,7 +966,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="clean_streak",
         translation_key="clean_streak",
         name="Missions – Clean streak",
-        state_class=SensorStateClass.MEASUREMENT,
+        # A COUNT, NOT A MEASUREMENT.
+        #
+        # @chairstacker's graph showed `9.89725` for a streak of days.
+        # `MEASUREMENT` tells Home Assistant the value is continuous, so
+        # it draws a line between samples and every point on that line
+        # is a value nothing ever reported.
+        #
+        # `TOTAL` states the value stands until it changes.
+        state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,  # PRIMARY-SLIM (v3.1.0): pure statistic, not daily-use
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
     ),
@@ -1423,7 +1431,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="consecutive_clean_skips",
         translation_key="consecutive_clean_skips",
         name="Performance – Consecutive clean skips",
-        state_class=SensorStateClass.MEASUREMENT,
+        # A COUNT, NOT A MEASUREMENT.
+        #
+        # @chairstacker's graph showed `9.89725` for a streak of days.
+        # `MEASUREMENT` tells Home Assistant the value is continuous, so
+        # it draws a line between samples and every point on that line
+        # is a value nothing ever reported.
+        #
+        # `TOTAL` states the value stands until it changes.
+        state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda e: (

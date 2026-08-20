@@ -33,6 +33,7 @@ import contextlib
 import dataclasses
 
 import logging
+from .prime_coordinator import prime_region_names_from_command
 from .structural_failures import record_failure, record_success
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -575,10 +576,6 @@ async def async_build_prime_floor_plan(
         # Below the map names rather than above: a name someone typed
         # into the map editor beats one carried along by whichever
         # command last cleaned the region.
-        from .prime_coordinator import (  # noqa: PLC0415
-            prime_region_names_from_command,
-        )
-
         with contextlib.suppress(Exception):
             existing = {
                 **prime_region_names_from_command(runtime),

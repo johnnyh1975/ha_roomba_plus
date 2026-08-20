@@ -813,6 +813,18 @@ def _prime_mission_status(config_entry: RoombaConfigEntry) -> dict[str, Any] | N
     }
 
 
+def _safe_region_names_from_command(data: Any) -> dict[str, str]:
+    """Region names the last command carried, or {} if unreadable."""
+    try:
+        from .prime_coordinator import (  # noqa: PLC0415
+            prime_region_names_from_command,
+        )
+
+        return prime_region_names_from_command(data)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
@@ -997,6 +1009,23 @@ async def _build_diagnostics(
             "stores": _prime_store_summary(data),
             "consumable_parts": _parts_report(data),
             "live_map": data.live_map_stats,
+
+            # WHICH REGION NAMES EXIST, AND FROM WHERE.
+            #
+            # @chairstacker: rooms picked up names after he renamed
+            # them; his eight zones stayed `None` in `--list-rooms`.
+            # That tool reads map metadata, which carries room names
+            # only -- so its output says nothing about zones either way.
+            #
+            # Three sources feed the name store: map metadata (rooms),
+            # the bundle's `cleanZones` layer (zones), and the last
+            # command's `region_name`. A download that shows the merged
+            # result answers in one look which of them produced
+            # anything, instead of prompting another round.
+            "region_names": {
+                "merged": dict(getattr(data, "prime_room_names", None) or {}),
+                "from_last_command": _safe_region_names_from_command(data),
+            },
 
             # PER-ROOM PREFERENCES, WHICH NOTHING HAS EVER CONFIRMED.
             #

@@ -500,6 +500,28 @@ async def async_build_prime_buttons(
     return entities
 
 
+def _raw_favorite_is_for(favorite: dict[str, Any], blid: str) -> bool:
+    """Whether a raw favourite dict belongs to this robot.
+
+    Same contract as `_favorite_is_for`, reading the wire keys: a
+    favourite whose command defs carry no `robot_id` at all is kept,
+    because only an explicit non-matching id excludes.
+
+    Held to the same rule deliberately -- one behaviour, two shapes,
+    and the parsed path is what the attribute uses.
+    """
+    attributed = [
+        str(command.get("robot_id") or "")
+        for command in (favorite.get("commanddefs")
+                        or favorite.get("command_defs") or [])
+        if isinstance(command, dict)
+    ]
+    attributed = [value for value in attributed if value]
+    if not attributed:
+        return True
+    return blid in attributed
+
+
 def build_prime_favorite_buttons(
     config_entry: RoombaConfigEntry,
 ) -> list[PrimeFavoriteButton]:
@@ -517,6 +539,23 @@ def build_prime_favorite_buttons(
     data = config_entry.runtime_data
     buttons: list[PrimeFavoriteButton] = []
     for favorite in getattr(data, "prime_favorites", None) or []:
+        # THE FILTER NEVER REACHED THIS PATH.
+        #
+        # @scenicsystemsllc (#80): the same favourites appear live on
+        # every robot in a household. `_favorite_is_for` was written
+        # for exactly this and wired into the favourites *attribute*
+        # only -- the buttons themselves were built for every
+        # favourite the account has.
+        #
+        # His clearest case: a Braava jet m6 offering "Vacuum
+        # Everywhere". No map or region argument makes that right.
+        #
+        # `prime_favorites` here is raw dicts, not parsed objects, so
+        # the check reads `commanddefs` directly rather than
+        # `command_defs`.
+        if not _raw_favorite_is_for(favorite, data.blid):
+            continue
+
         favorite_id = favorite.get("id")
         if not favorite_id:
             # An entry without an id cannot be run and cannot be

@@ -43,6 +43,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from .entity_cleanup import async_remove_stale_entities
 from .const import MAP_UPDATING_NOT_READY
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
@@ -213,6 +214,25 @@ async def async_setup_entry(
                 known.update(str(b.unique_id) for b in new)
                 async_add_entities(new)
 
+            # A favourite deleted in the iRobot app leaves its entity
+            # behind forever -- @ScenicSystemsLLC found five stale ones
+            # on each of three robots, needing manual removal.
+            #
+            # `wanted` is what the cloud just reported. Nothing is
+            # removed when it is empty: a robot with no favourites and
+            # a failed fetch look identical from here.
+
+            removed = async_remove_stale_entities(
+                hass,
+                config_entry,
+                prefix="_favorite_",
+                live_unique_ids=set(wanted),
+            )
+            if removed:
+                known.difference_update(
+                    uid for uid in list(known) if uid not in wanted
+                )
+
             # REMOVAL ONLY AFTER A READ THAT SUCCEEDED. A refresh that
             # failed leaves the previous list standing, so nothing would
             # vanish in practice -- but tying deletion to a flag that
@@ -287,6 +307,28 @@ async def async_setup_entry(
     if data.has_cloud:
         favorites = data.cloud_coordinator.data.get("favorites", [])  # type: ignore[union-attr]
         for fav in favorites:
+            # PER ROBOT, NOT PER ACCOUNT.
+            #
+            # @scenicsystemsllc (#80) has three Classic robots and saw
+            # the same favourites on all of them -- including "Vacuum
+            # Everywhere" on a mop-only Braava.
+            #
+            # `/user/favorites` is an ACCOUNT endpoint: it returns
+            # every favourite in the household, and this loop built a
+            # button for each one on every robot.
+            #
+            # #80 was fixed once, in the Prime path, and this one was
+            # never touched -- so a fix that looked complete covered
+            # neither of the two paths that create his entities.
+            #
+            # Fails open on a favourite with no attribution at all,
+            # matching the Prime rule: only an explicit non-matching
+            # id excludes.
+            from .button_prime import _raw_favorite_is_for  # noqa: PLC0415
+
+            if not _raw_favorite_is_for(fav, data.blid):
+                continue
+
             entities.append(FavoriteButton(data.roomba, data.blid, config_entry, fav))
             from .repairs import async_check_favorite_multi_command
 

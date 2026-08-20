@@ -33,6 +33,7 @@ house" entry) also keep the plain summary, for the same reason.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -47,7 +48,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
 
+from .prime_coordinator import prime_region_names_from_command
 from .calendar_modes import match_mode
+from .const import DOMAIN
 from .structural_failures import record_failure, record_success
 from .classic_schedule_write import (
     ScheduleFormatError,
@@ -994,8 +997,6 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             #
             # Whole-house is still available by naming no room at all.
             if text.strip() and not room_ids:
-                from .const import DOMAIN  # noqa: PLC0415
-
                 raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="calendar_room_not_found",
@@ -1264,6 +1265,24 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         )
         if isinstance(both, dict):
             merged = {**both, **merged}
+
+        # AND THE COMMAND NAMES DIRECTLY, not only via the map image.
+        #
+        # @chairstacker (#71, a40): zone schedules still could not be
+        # created. `prime_room_names` is filled when a floor plan is
+        # BUILT -- so a user who has not opened the map view has an
+        # empty store, and the zone names that live in the last
+        # command never reach the calendar at all.
+        #
+        # Reading them here as well makes the calendar independent of
+        # whether anything drew a map this session.
+        with contextlib.suppress(Exception):
+            merged = {
+                **prime_region_names_from_command(
+                    self._config_entry.runtime_data
+                ),
+                **merged,
+            }
 
         return merged
 
