@@ -974,8 +974,28 @@ class MissionStore:
                 dt = dt_util.parse_datetime(r.get("started_at", ""))
                 if dt:
                     completed_dates.add(dt_util.as_local(dt).date())
+        # THE STREAK MUST NOT RESET AT MIDNIGHT.
+        #
+        # @chairstacker: 0 just after midnight on a robot with a long
+        # history. The old loop started at `today`, so a day with no
+        # mission yet -- every day, until the robot runs -- put the
+        # first step out of the set and returned 0 immediately. It
+        # threw away the whole run the moment one empty day appeared,
+        # including the ordinary gap between last night and now.
+        #
+        # "Clean streak" means the current unbroken run. Not having
+        # cleaned *yet today* does not break it; a whole day missed
+        # does. So the streak is allowed to end either today or
+        # yesterday, and only a gap before that stops the count.
+        if not completed_dates:
+            return 0
+
+        day = today if today in completed_dates else today - timedelta(days=1)
+        if day not in completed_dates:
+            # Nothing today or yesterday -- the run is genuinely broken.
+            return 0
+
         streak = 0
-        day = today
         while day in completed_dates:
             streak += 1
             day -= timedelta(days=1)

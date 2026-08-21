@@ -1376,6 +1376,20 @@
           "description": "Eén moment in plaats van een dagelijks venster."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Zone reinigen",
+      "description": "Stuurt een Prime-robot op verzoek naar een of meer schoonmaakzones, op naam of numeriek id.",
+      "fields": {
+        "zone_name": {
+          "name": "Zonenaam",
+          "description": "Een of meer zonenamen, precies zoals op de kaart. Gebruik dit of zone-id."
+        },
+        "zone_id": {
+          "name": "Zone-id",
+          "description": "Een of meer numerieke zone-ids. Gebruik dit of zonenaam."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "Geen kamer komt overeen met \"{text}\". Noem een kamer in de titel, beschrijving of locatie — bekende kamers: {known}. Laat alle drie leeg voor het hele huis."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Geef zone_name of zone_id op, niet beide."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Geef zone_name of zone_id op."
+    },
+    "zone_name_not_found": {
+      "message": "Een of meer zonenamen zijn niet op de kaart gevonden."
     }
   },
   "selector": {

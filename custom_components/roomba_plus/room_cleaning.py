@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Marks a ZONE inside a region-id list. Rooms carry a bare id.
+#: Both backends read this: Classic since v2.7.0, Prime since the
+#: clean_zone service exposed zones to callers.
+ZID_PREFIX = "zid_"
+
 
 def match_room_names(
     available: dict[str, str], requested: list[str]
@@ -693,8 +698,27 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             ordered=1 if ordered else 0,
             regions=[
                 Region(
-                    region_id=rid,
-                    region_type=RegionType.RID,
+                    region_id=(
+                        rid[len(ZID_PREFIX):] if rid.startswith(ZID_PREFIX) else rid
+                    ),
+                    # ZONES ARE MARKED BY PREFIX, NOT BY A SEPARATE
+                    # ARGUMENT.
+                    #
+                    # The Classic backend has split rooms from zones on
+                    # a `zid_` prefix in this same list since v2.7.0.
+                    # Prime hardcoded RID, so a zone id arriving here
+                    # was sent as a room -- which the robot answers by
+                    # cleaning nothing, or the wrong region if a room
+                    # happens to carry that number.
+                    #
+                    # Found when wiring the clean_zone service for
+                    # @chairstacker, whose robot is Prime: the service
+                    # would have looked correct and done nothing.
+                    region_type=(
+                        RegionType.ZID
+                        if rid.startswith(ZID_PREFIX)
+                        else RegionType.RID
+                    ),
                     # Omitted entirely when the caller has no opinion,
                     # rather than sent as False. The confirmed field
                     # payload only ever carried params the app itself
@@ -709,7 +733,21 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             ],
         )
         await self._robot.send_routine_command_via_cmd_topic(command)
-        self._note_mission_plan(p2map_id, room_ids)
+
+        # THE PLAN GETS THE IDS THE ROBOT WILL REPORT.
+        #
+        # `room_ids` still carries our `zid_` markers here. The mission
+        # timer matches planned regions against what the robot reports
+        # as it cleans, and the robot reports a bare `100` -- so a
+        # prefixed plan would never match, and a zone mission would show
+        # every region as unvisited for its whole run.
+        self._note_mission_plan(
+            p2map_id,
+            [
+                rid[len(ZID_PREFIX):] if rid.startswith(ZID_PREFIX) else rid
+                for rid in room_ids
+            ],
+        )
 
     def _note_mission_plan(self, p2map_id: str, room_ids: list[str]) -> None:
         """Tells MissionTimerStore which rooms this mission will visit.
@@ -1186,7 +1224,9 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
         # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping
         # in async_get_segments().  Rooms are plain integers (e.g. "19").
-        _ZONE_PREFIX = "zid_"
+        # Was a local literal; now the module constant, so Classic and
+        # Prime cannot drift apart on what marks a zone.
+        _ZONE_PREFIX = ZID_PREFIX
         raw_zone_ids = [r for r in region_ids if r.startswith(_ZONE_PREFIX)]
         raw_room_ids = [r for r in region_ids if not r.startswith(_ZONE_PREFIX)]
         # Extract the bare zone_id (strip "zid_" prefix)

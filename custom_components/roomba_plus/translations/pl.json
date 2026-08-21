@@ -1376,6 +1376,20 @@
           "description": "Pojedynczy moment zamiast okna dziennego."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Sprzątanie strefy",
+      "description": "Wysyła robota Prime do jednej lub kilku stref sprzątania na żądanie, według nazwy lub numerycznego id.",
+      "fields": {
+        "zone_name": {
+          "name": "Nazwa strefy",
+          "description": "Jedna lub więcej nazw stref, dokładnie jak na mapie. Użyj tego albo id strefy."
+        },
+        "zone_id": {
+          "name": "ID strefy",
+          "description": "Jeden lub więcej numerycznych id stref. Użyj tego albo nazwy strefy."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "Żaden pokój nie pasuje do \"{text}\". Podaj pokój w tytule, opisie lub lokalizacji — znane pokoje: {known}. Zostaw wszystkie trzy bez nazw, aby posprzątać cały dom."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Podaj zone_name albo zone_id, nie oba."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Podaj zone_name albo zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "Nie znaleziono jednej lub więcej nazw stref na mapie."
     }
   },
   "selector": {

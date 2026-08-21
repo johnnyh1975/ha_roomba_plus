@@ -1376,6 +1376,20 @@
           "description": "Ein einzelner Zeitpunkt statt eines täglichen Fensters."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Zone reinigen",
+      "description": "Schickt einen Prime-Roboter auf Anforderung zu einer oder mehreren Reinigungszonen, per Name oder numerischer ID.",
+      "fields": {
+        "zone_name": {
+          "name": "Zonenname",
+          "description": "Ein oder mehrere Zonennamen, genau wie auf der Karte angezeigt. Entweder dies oder Zonen-ID."
+        },
+        "zone_id": {
+          "name": "Zonen-ID",
+          "description": "Eine oder mehrere numerische Zonen-IDs. Entweder dies oder Zonenname."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "Kein Raum passt zu \"{text}\". Nenne einen Raum in Titel, Beschreibung oder Ort des Termins — bekannte Räume: {known}. Lasse alle drei frei von Raumnamen für eine Ganzhausreinigung."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Gib entweder zone_name oder zone_id an, nicht beides."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Gib entweder zone_name oder zone_id an."
+    },
+    "zone_name_not_found": {
+      "message": "Ein oder mehrere Zonennamen wurden auf der Karte nicht gefunden."
     }
   },
   "selector": {

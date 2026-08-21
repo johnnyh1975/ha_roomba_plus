@@ -607,3 +607,34 @@ set_quiet_hours:
       example: "2026-08-15 07:00:00"
       selector:
         datetime:
+clean_zone:
+  name: Clean zone
+  description: >
+    Start a targeted clean of one or more clean zones on a Prime robot.
+    The app no longer lets you save a zone as a favourite, so this is
+    how you send the robot to a zone on demand. Identify a zone by its
+    name (as shown in the Roomba+ map) or by its numeric id. Provide
+    either zone_name or zone_id, not both.
+  target:
+    entity:
+      integration: roomba_plus
+      domain: vacuum
+  fields:
+    zone_name:
+      name: Zone name
+      description: >
+        One or more zone names, exactly as they appear on the map. Case
+        sensitive. Use this or zone_id.
+      example: '["Clean Kitchen", "Under Table"]'
+      selector:
+        text:
+          multiple: true
+    zone_id:
+      name: Zone ID
+      description: >
+        One or more numeric zone ids (e.g. from --list-rooms). Use this
+        or zone_name.
+      example: '["100", "101"]'
+      selector:
+        text:
+          multiple: true

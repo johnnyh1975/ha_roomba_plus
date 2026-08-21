@@ -1376,6 +1376,20 @@
           "description": "A single moment to stay quiet until, instead of a daily window."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Clean zone",
+      "description": "Send a Prime robot to one or more clean zones on demand, by name or by numeric id.",
+      "fields": {
+        "zone_name": {
+          "name": "Zone name",
+          "description": "One or more zone names exactly as they appear on the map. Use this or zone id."
+        },
+        "zone_id": {
+          "name": "Zone ID",
+          "description": "One or more numeric zone ids. Use this or zone name."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "No room matched \"{text}\". Name a room in the event's summary, description or location — known rooms: {known}. Leave all three free of room names for a whole-house clean."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Provide either zone_name or zone_id, not both."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Provide either zone_name or zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "One or more zone names were not found on the map."
     }
   },
   "selector": {

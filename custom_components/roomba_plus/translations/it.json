@@ -1376,6 +1376,20 @@
           "description": "Un singolo momento invece di una finestra giornaliera."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Pulisci zona",
+      "description": "Invia un robot Prime a una o più zone di pulizia su richiesta, per nome o per id numerico.",
+      "fields": {
+        "zone_name": {
+          "name": "Nome zona",
+          "description": "Uno o più nomi di zona, esattamente come appaiono sulla mappa. Usa questo o l'id zona."
+        },
+        "zone_id": {
+          "name": "ID zona",
+          "description": "Uno o più id numerici di zona. Usa questo o il nome zona."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "Nessuna stanza corrisponde a \"{text}\". Indica una stanza nel titolo, nella descrizione o nel luogo — stanze note: {known}. Lascia tutti e tre senza nomi per pulire tutta la casa."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Indica zone_name o zone_id, non entrambi."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Indica zone_name o zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "Uno o più nomi di zona non sono stati trovati sulla mappa."
     }
   },
   "selector": {

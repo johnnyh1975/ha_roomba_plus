@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
+from .const import EVENT_MISSION_COMPLETED
 from .structural_failures import record_failure, record_success
 
 _LOGGER = logging.getLogger(__name__)
@@ -475,6 +476,29 @@ async def _async_sync_locked(
     if added:
         _LOGGER.debug("roomba_plus: added %d mission record(s) from Prime history", added)
         await _async_update_profile(config_entry, store)
+
+        # TELL THE SENSORS TO RE-READ.
+        #
+        # @chairstacker: clean_streak and area_cleaned_today were
+        # correct only after a reload, never when the mission actually
+        # ended. The sync updates the store, saves it, and backfills
+        # statistics -- but the mission sensors read the store live and
+        # nothing told them to look again. Home Assistant kept showing
+        # the value from the last time they happened to write.
+        #
+        # A reload rebuilt the entities, which is why it "fixed" itself
+        # and why the fix looked non-deterministic -- it depended on
+        # when he next reloaded, not on the mission.
+        #
+        # The MQTT path already fires EVENT_MISSION_COMPLETED after its
+        # store write, and the mission sensors listen for it. The Prime
+        # cloud sync writes the same store and never fired it. Firing
+        # the same event closes the gap through the path that already
+        # works, rather than adding a parallel one.
+        _hass_of(config_entry).bus.async_fire(
+            EVENT_MISSION_COMPLETED,
+            {"entry_id": config_entry.entry_id},
+        )
     return added
 
 

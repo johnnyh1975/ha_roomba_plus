@@ -16,6 +16,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import json
+import contextlib
 import logging
 import zipfile
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ from .const import (
     DOMAIN,
     EVENT_MAINTENANCE_RESET,
     SERVICE_CLEAN_ROOM,
+    SERVICE_CLEAN_ZONE,
     SERVICE_CLEAN_OVERDUE_ROOMS,
     SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
     CONF_ROOM_SCHEDULE,
@@ -61,7 +63,8 @@ from .const import (
 # one round as dead copies -- the same pattern that cost this project
 # two minor versions elsewhere, so they are gone rather than kept "just
 # in case".
-from .room_cleaning import async_get_room_cleaning_backend
+from .prime_coordinator import prime_region_names_from_command
+from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 
@@ -272,6 +275,115 @@ async def _async_clean_rooms_via_backend(
         # one-element list across the whole call.
         operating_mode=[caller_mode] if caller_mode is not None else None,
     )
+
+
+async def async_handle_clean_zone(call: ServiceCall) -> None:
+    """Send a Prime robot to one or more clean zones on demand.
+
+    WHY THIS EXISTS. @chairstacker: the app stopped letting you save a
+    zone as a favourite -- rooms only. This is how you send the robot
+    to a zone from Home Assistant, which is where he wanted the trigger
+    anyway. A calendar workaround was the alternative, and it should
+    not have to be.
+
+    Zones travel through `clean_rooms` in the same list as rooms,
+    marked by the `zid_` prefix. Classic has read that marker since
+    v2.7.0; the Prime backend hardcoded RID until this service was
+    wired, and was fixed alongside it -- so "the backend already
+    handled zones" was true of one generation and not the other.
+
+    Zones are identified by name (as shown on the map) or by numeric id.
+    Exactly one of the two, matching the room service's shape.
+    """
+    hass = call.hass
+    entity_ids: list[str] = call.data["entity_id"]
+
+    raw_names: list[str] | None = call.data.get("zone_name")
+    raw_ids: list[str] | None = call.data.get("zone_id")
+
+    if raw_names and raw_ids:
+        raise ServiceValidationError(
+            "Provide either zone_name or zone_id, not both.",
+            translation_domain=DOMAIN,
+            translation_key="zone_name_and_zone_id_conflict",
+        )
+    if not raw_names and not raw_ids:
+        raise ServiceValidationError(
+            "Provide either zone_name or zone_id.",
+            translation_domain=DOMAIN,
+            translation_key="zone_name_or_zone_id_required",
+        )
+
+    ent_reg = er.async_get(hass)
+    for entity_id in entity_ids:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None:
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
+            entry.config_entry_id or ""
+        )
+        if config_entry is None or config_entry.runtime_data is None:
+            continue
+
+        if raw_ids:
+            zone_ids = [str(z) for z in raw_ids]
+        else:
+            # NAME -> ID against the same command the calendar reads, so
+            # a name that shows on the map resolves here too. An unknown
+            # name is refused rather than silently dropped: a partial
+            # clean looks like success.
+            # NAMES COME FROM THE BUNDLE FIRST.
+            #
+            # `prime_room_names` is filled from the map bundle whenever a
+            # floor plan is built -- the `cleanZones` layer, which is
+            # where @chairstacker's zone names turned out to live after
+            # five rounds of looking.
+            #
+            # `prime_region_names_from_command` only knows regions that
+            # appeared in the LAST command, so a zone never yet cleaned
+            # has no name there. It fills gaps rather than leading, the
+            # same precedence prime_room_map.py uses: a name someone
+            # typed into the map editor beats one carried along by
+            # whichever command last ran.
+            names_by_id: dict[str, str] = {}
+            with contextlib.suppress(Exception):
+                names_by_id.update(
+                    prime_region_names_from_command(config_entry.runtime_data)
+                )
+            names_by_id.update(config_entry.runtime_data.prime_room_names or {})
+
+            names_to_ids = {name: zid for zid, name in names_by_id.items()}
+            zone_ids = []
+            missing = []
+            for name in raw_names or []:
+                zid = names_to_ids.get(name)
+                if zid is None:
+                    missing.append(name)
+                else:
+                    zone_ids.append(zid)
+            if missing:
+                known = ", ".join(sorted(names_to_ids)) or "(none on this map)"
+                raise ServiceValidationError(
+                    f"Zone name(s) not found: {missing}. Known zones: {known}.",
+                    translation_domain=DOMAIN,
+                    translation_key="zone_name_not_found",
+                )
+
+        backend = async_get_room_cleaning_backend(config_entry, hass)
+        if backend is None:
+            continue
+
+        prefixed = [f"{ZID_PREFIX}{zid}" for zid in zone_ids]
+        _LOGGER.info(
+            "clean_zone: %s -> zones=%s (via %s)",
+            entity_id, zone_ids, type(backend).__name__,
+        )
+        await backend.clean_rooms(prefixed)
 
 
 async def async_handle_clean_room(call: ServiceCall) -> None:
@@ -1213,6 +1325,21 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
 
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ZONE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAN_ZONE,
+            async_handle_clean_zone,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                # Exactly one of the two is enforced in the handler so
+                # the error can name which was missing or doubled.
+                vol.Optional("zone_name"): vol.All(cv.ensure_list, [cv.string]),
+                vol.Optional("zone_id"): vol.All(cv.ensure_list, [cv.string]),
+            }),
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ZONE)
+
     if not hass.services.has_service(DOMAIN, SERVICE_SET_QUIET_HOURS):
         hass.services.async_register(
             DOMAIN,
@@ -1793,6 +1920,7 @@ def async_remove_services(hass: HomeAssistant) -> None:
         "update_schedule",
         "delete_schedule",
         SERVICE_CLEAN_ROOM,
+        SERVICE_CLEAN_ZONE,
         SERVICE_SET_QUIET_HOURS,
         SERVICE_SMART_START,
         SERVICE_CLEAN_OVERDUE_ROOMS,

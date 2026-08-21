@@ -295,6 +295,7 @@ ROOMBA_SESSION: Final = "roomba_session"
 
 # ── clean_room action ─────────────────────────────────────────────────────────
 SERVICE_CLEAN_ROOM: Final = "clean_room"
+SERVICE_CLEAN_ZONE: Final = "clean_zone"
 ATTR_ROOM_NAME: Final = "room_name"
 ATTR_ORDERED: Final = "ordered"
 ATTR_TWO_PASS: Final = "two_pass"

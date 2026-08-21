@@ -43,9 +43,9 @@
   "quality_scale": "gold",
   "requirements": [
     "roombapy==1.9.1",
-    "roombapy-prime[map]@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b10"
+    "roombapy-prime[map]@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b11"
   ],
-  "version": "4.0.0a41",
+  "version": "4.0.0a42",
   "zeroconf": [
     {
       "name": "irobot-*",

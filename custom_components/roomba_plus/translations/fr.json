@@ -1376,6 +1376,20 @@
           "description": "Un moment unique au lieu d'une plage quotidienne."
         }
       }
+    },
+    "clean_zone": {
+      "name": "Nettoyer une zone",
+      "description": "Envoie un robot Prime vers une ou plusieurs zones de nettoyage à la demande, par nom ou par identifiant numérique.",
+      "fields": {
+        "zone_name": {
+          "name": "Nom de zone",
+          "description": "Un ou plusieurs noms de zone, tels qu'affichés sur la carte. Utilisez ceci ou l'identifiant de zone."
+        },
+        "zone_id": {
+          "name": "Identifiant de zone",
+          "description": "Un ou plusieurs identifiants numériques de zone. Utilisez ceci ou le nom de zone."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1456,6 +1470,15 @@
     },
     "calendar_room_not_found": {
       "message": "Aucune pièce ne correspond à \"{text}\". Nommez une pièce dans le titre, la description ou le lieu — pièces connues : {known}. Laissez les trois sans nom de pièce pour un nettoyage complet."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Indiquez soit zone_name soit zone_id, pas les deux."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Indiquez soit zone_name soit zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "Un ou plusieurs noms de zone sont introuvables sur la carte."
     }
   },
   "selector": {

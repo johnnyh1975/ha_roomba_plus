@@ -705,6 +705,54 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+    def _schedule_mission_history_sync(self) -> None:
+        """Fetch the mission history now that a mission has ended.
+
+        Fire-and-forget: this runs inside shadow processing, and a slow
+        or failing REST call must not hold up the state update that
+        every entity is waiting on.
+
+        Guarded against overlap -- `charge` can arrive more than once
+        for one mission (a robot that settles, or a shadow resend), and
+        two syncs racing would double-count nothing but would waste a
+        round trip each time.
+        """
+        if getattr(self, "_history_sync_running", False):
+            return
+        if self.config_entry is None:
+            return
+        if getattr(self.config_entry, "runtime_data", None) is None:
+            return
+
+        # Bound outside the closure: mypy cannot carry the None checks
+        # above into a nested function, and neither can a reader.
+        entry = self.config_entry
+
+        async def _run() -> None:
+            self._history_sync_running = True
+            try:
+                from .prime_mission_sync import (  # noqa: PLC0415
+                    async_sync_prime_missions,
+                )
+
+                added = await async_sync_prime_missions(entry)
+                _LOGGER.debug(
+                    "roomba_plus: mission-end history sync added %s record(s)",
+                    added,
+                )
+            except Exception:  # noqa: BLE001
+                # Not fatal: the six-hourly sync and the next mission end
+                # both try again. Logged rather than raised so a cloud
+                # blip does not surface as a broken mission.
+                _LOGGER.debug(
+                    "roomba_plus: mission-end history sync failed",
+                    exc_info=True,
+                )
+            finally:
+                self._history_sync_running = False
+
+        self.hass.async_create_task(_run())
+
     def _note_dock_position(self) -> None:
         """Records where the robot is while charging, as the dock.
 
@@ -776,6 +824,31 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             # way to it.
             if phase == "charge":
                 self._note_dock_position()
+
+                # SYNC THE HISTORY WHEN A MISSION ENDS.
+                #
+                # @chairstacker: `area_cleaned_today` read 0.0 after a
+                # successful mission, and `clean_streak` was right only
+                # after a reload.
+                #
+                # Mission records for Prime robots come from ONE place:
+                # the cloud history sync. Everything that writes a
+                # record from MQTT hangs off the Classic `roomba`
+                # object's callback chain, which a Prime robot never
+                # feeds.
+                #
+                # And that sync ran at setup and then on this
+                # coordinator's own interval -- SIX HOURS. So a mission
+                # finishing at 07:00 was invisible to every mission
+                # sensor until the next six-hourly tick or the next
+                # reload, whichever came first. That is exactly the
+                # "correct after yet another reload" he described, and
+                # why it looked non-deterministic.
+                #
+                # `charge` is the right trigger: the mission is over,
+                # the robot is on the dock, and the cloud has had the
+                # travel-home time to record it.
+                self._schedule_mission_history_sync()
 
             # THE TRAIL IS CLEARED ON A NEW MISSION NUMBER, WHATEVER
             # THE PHASE. It used to sit inside the `phase == "run"`
