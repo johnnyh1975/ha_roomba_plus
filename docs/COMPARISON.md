@@ -41,7 +41,7 @@ does not apply to those robots at all.
 | 🎮 [Control](#controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#intelligence--scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
 | 📊 [Monitoring](#sensors--monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#ha-integration-quality) | Gold, 3,863 tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#ha-integration-quality) | Gold, 5,590+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 

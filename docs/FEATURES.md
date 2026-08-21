@@ -76,6 +76,7 @@ marked in their own headings.
 |---|---|---|
 | `roomba_plus.smart_start` | All | Start with blocking-sensor gate; optionally targets rooms on SMART robots |
 | `roomba_plus.clean_room` | SMART | Clean one or more named rooms — no HA 2026.3+ required |
+| `roomba_plus.clean_zone` | PRIME | Clean one or more zones on demand, by name or numeric id |
 | `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) |
 | `roomba_plus.reset_filter` | All | Record filter replacement |
 | `roomba_plus.reset_brush` | All | Record brush / pad replacement |

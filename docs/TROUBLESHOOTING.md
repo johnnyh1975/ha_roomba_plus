@@ -86,6 +86,27 @@ Go to Settings → Roomba+ → Configure → iRobot cloud credentials, re-save y
 
 ## Zones & rooms
 
+**I want to clean one zone on demand, and the app no longer lets me**
+
+The iRobot app dropped zone favourites — rooms only. Use
+`roomba_plus.clean_zone` instead (4.0.0a42 and later):
+
+```yaml
+action: roomba_plus.clean_zone
+target:
+  entity_id: vacuum.your_robot
+data:
+  zone_name: ["Clean Kitchen"]      # or zone_id: ["100"]
+```
+
+Names come from the map bundle's `cleanZones` layer — the same names the
+map card shows. If a zone has no name there, use its numeric id.
+
+An unknown name raises an error listing the ones that exist, rather than
+skipping it silently: a partial clean looks like a successful one.
+
+---
+
 **Before you send a diagnostics download**
 
 Credentials and your BLID are removed automatically. Room names, zone names,
@@ -143,6 +164,39 @@ The left column is populated from the iRobot cloud, so an empty list means the i
 **Mission progress gets stuck reporting a completed room as still in progress**
 
 On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-cleaning phase between rooms that can confuse the progress sensor. As of v2.8.0, Roomba+ detects these transitions automatically using your robot's real per-room cloud time estimates, so this should self-correct within the next room change. If it doesn't, call `roomba_plus.advance_room` to manually move to the next room — it's a no-op if the robot is actively cleaning or already at the last planned room, so it's safe to call speculatively.
+
+---
+
+## Mission sensors on Prime robots
+
+**`clean_streak` or `area_cleaned_today` only updates after a reload**
+
+Fixed in 4.0.0a42. Mission records for Prime robots come from the cloud
+history sync, and that sync used to run at setup and then every six
+hours — so a mission finishing at 07:00 was invisible to these sensors
+until the next tick or the next reload.
+
+It now syncs the moment the robot reaches `charge` on the dock. If you
+still see a delay after a mission ends, that is worth reporting.
+
+---
+
+**`clean_streak` drops to 0 after midnight**
+
+Also fixed in 4.0.0a42. The count was tied to "today", so an unbroken run
+of any length read 0 every night until the day's first mission.
+
+A streak may now end today **or** yesterday: not having cleaned yet today
+does not break it, but a whole missed day does.
+
+---
+
+**`clean_streak` shows a decimal like 9.89725**
+
+Fixed in 4.0.0a41 — the sensor was declared as a measurement, so history
+graphs interpolated between whole numbers. If you still see decimals,
+the old statistics remain in the database; they will age out, or you can
+clear them under Developer tools > Statistics.
 
 ---
 

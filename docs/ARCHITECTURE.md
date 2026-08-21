@@ -237,7 +237,35 @@ Recorded because a review that stays in one person's head is not a review.
 
 ## Testing
 
-5,529 tests, ~70 seconds. More test code than production code.
+5,593 tests, ~85 seconds. More test code than production code.
+
+### Test files follow source modules
+
+Reorganised August 2026. Sensor tests had accumulated in one
+`test_sensors.py` regardless of which module they exercised — it reached
+5,351 lines while `test_sensor_rooms.py` had 51 for a 1,481-line module.
+
+Finding them took three passes, each catching what the last missed:
+
+| pass | looks for | example it found |
+|---|---|---|
+| imports | `from ...sensor_cloud import` | six `CloudSmartZoneSelect` classes |
+| class names | `CloudHistorySensor` | the `Mh*` classes, which reached it via the facade |
+| function names | `_mop_tank_status` | eleven classes, 72 tests, in `sensor_helpers` |
+
+The third pass was the largest, and it existed only because
+`sensor_helpers.py` is almost entirely functions — a class-name search
+cannot see it.
+
+What remains in `test_sensors.py` is what belongs there: tests of the
+sensor list as a whole — that every description uses its helpers, that
+no `value_fn` raises on absent data, that translation keys stay
+consistent.
+
+**One thing the move surfaced.** Two files each defined a `_select`
+helper for different entities. Merging them would have let the second
+definition win silently, leaving one group of tests exercising the wrong
+entity and still passing.
 
 ### mypy: run it against an installed roombapy-prime
 

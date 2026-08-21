@@ -182,6 +182,47 @@ automation:
 
 ---
 
+## Zone cleaning on demand (Prime)
+
+The iRobot app no longer lets you save a zone as a favourite — only
+rooms. `roomba_plus.clean_zone` is how you send the robot to a zone from
+Home Assistant instead.
+
+```yaml
+# A dashboard button that cleans one zone
+script:
+  clean_the_kitchen_zone:
+    alias: Clean kitchen zone
+    sequence:
+      - action: roomba_plus.clean_zone
+        target:
+          entity_id: vacuum.house_bot
+        data:
+          zone_name: ["Clean Kitchen"]
+```
+
+Zones can be given by name, exactly as they appear on the map, or by
+numeric id:
+
+```yaml
+      - action: roomba_plus.clean_zone
+        target:
+          entity_id: vacuum.house_bot
+        data:
+          zone_id: ["100", "101"]
+```
+
+Provide **either** `zone_name` or `zone_id`, not both. Several zones in
+one call are cleaned in one mission.
+
+A name that does not exist on the map raises an error listing the names
+that do — rather than skipping it, because a partial clean looks like a
+successful one.
+
+**Where do the names come from?** The map bundle's `cleanZones` layer,
+which is what the map card shows. If a zone has no name there, use its
+id.
+
 ## Prime robots: what changed for automations
 
 Until v4.0.0a31 a Prime robot had **no `phase` sensor**, and every device trigger that watches

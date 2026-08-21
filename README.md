@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a41-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a42-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -33,7 +33,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale** — 5,400+ tests, 8 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 5,590+ tests, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -213,6 +213,9 @@ Everything else listed below works.
 - **Room cleaning by name** — `roomba_plus.clean_room` and the services built on it. Accent-
   tolerant matching ("kuche" finds "Küche"), two-pass and suction level per room, and rooms from
   every saved map so an automation works whether or not the robot is parked on that floor
+- **Zone cleaning on demand** — `roomba_plus.clean_zone`, by zone name or numeric id. The iRobot
+  app stopped allowing zone favourites; this is how you send the robot to a zone from Home
+  Assistant instead
 - **Consumable parts** — filter, brushes, mop pads and dirt disposal bag, with the app's own
   units: hours, routines, evacuations
 - Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
