@@ -1207,3 +1207,41 @@ class TestTheDoneCodeTableMatchesTheRealEnum:
             f"missing: {sorted(confirmed - set(_DONE_CODE_TO_RESULT))}"
         )
         assert set(_DONE_CODE_TO_RESULT) <= {str(m.value) for m in DoneCode}
+
+
+class TestSensorsRefreshAfterSync:
+    """@chairstacker: clean_streak and area_cleaned_today were correct
+    only after a reload, never when the mission ended.
+
+    The sync writes the store; the mission sensors read it live and
+    listen for EVENT_MISSION_COMPLETED to know when to re-read. The
+    MQTT path fires it. The Prime cloud sync wrote the same store and
+    never fired it, so the value sat stale until something else rebuilt
+    the entities.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_sync_fires_mission_completed(self):
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+        from custom_components.roomba_plus.const import EVENT_MISSION_COMPLETED
+
+        source = inspect.getsource(prime_mission_sync)
+
+        assert "EVENT_MISSION_COMPLETED" in source
+        assert "async_fire" in source
+        # The same event the MQTT path uses, not a parallel signal.
+        assert EVENT_MISSION_COMPLETED == "roomba_plus_mission_completed"
+
+    @pytest.mark.asyncio
+    async def test_it_carries_the_entry_id(self):
+        """One household can hold several robots; a mission on one must
+        not refresh another's counters."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_mission_sync
+
+        source = inspect.getsource(prime_mission_sync)
+
+        assert '"entry_id": config_entry.entry_id' in source

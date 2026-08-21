@@ -1517,3 +1517,72 @@ class TestAnEmptyMapIdIsRefusedRatherThanSent:
         source = self._source()
 
         assert source.index("if not pmap_id:") < source.index('"regions":')
+
+
+class TestPrimeSendsZonesAsZid:
+    """Zones are marked by a `zid_` prefix inside the same region-id
+    list as rooms. Classic has split on it since v2.7.0; Prime
+    hardcoded RID.
+
+    Found while wiring the clean_zone service for @chairstacker, whose
+    robot is Prime — the service would have looked correct and cleaned
+    nothing, or the wrong region if a room happened to carry that
+    number.
+    """
+
+    def test_a_prefixed_id_becomes_a_zid_region(self):
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        source = inspect.getsource(room_cleaning.PrimeRoomCleaning)
+
+        assert "RegionType.ZID" in source
+        assert "ZID_PREFIX" in source
+
+    def test_the_prefix_is_stripped_before_sending(self):
+        """The wire carries a bare `100`, not `zid_100` — the prefix is
+        our marker, not the robot's."""
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        source = inspect.getsource(room_cleaning.PrimeRoomCleaning)
+
+        assert "rid[len(ZID_PREFIX):]" in source
+
+    def test_both_backends_share_one_constant(self):
+        """A second literal is how the two would drift apart."""
+        from custom_components.roomba_plus.room_cleaning import ZID_PREFIX
+
+        assert ZID_PREFIX == "zid_"
+
+    def test_an_unprefixed_id_is_still_a_room(self):
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        source = inspect.getsource(room_cleaning.PrimeRoomCleaning)
+
+        assert "else RegionType.RID" in source
+
+
+class TestTheMissionPlanGetsBareIds:
+    """The mission timer matches planned regions against what the robot
+    reports as it cleans, and the robot reports a bare `100`.
+
+    A plan carrying our `zid_` marker would never match, so a zone
+    mission would show every region as unvisited for its whole run —
+    a failure that looks like the robot ignoring the command.
+    """
+
+    def test_the_prefix_is_stripped_for_the_plan(self):
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        source = inspect.getsource(room_cleaning.PrimeRoomCleaning)
+        after_send = source.split("send_routine_command_via_cmd_topic")[1]
+
+        assert "ZID_PREFIX" in after_send
+        assert "_note_mission_plan" in after_send

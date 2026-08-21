@@ -791,10 +791,29 @@ class TestCleanStreak:
         assert store.clean_streak() == 0
 
     @pytest.mark.asyncio
-    async def test_streak_zero_when_no_today(self):
+    async def test_yesterday_still_counts_before_today_runs(self):
+        """@chairstacker: 0 just after midnight on a robot with history.
+
+        A mission yesterday and none yet today is not a broken streak --
+        it is the ordinary state of every morning. Tying the count to
+        `today` reset it to 0 at midnight and threw the run away."""
         store = MissionStore()
         await store.async_append(_make_record(days_ago=1, result="completed"))
+        assert store.clean_streak() == 1
+
+    async def test_a_full_day_missed_does_break_it(self):
+        """Yesterday empty and nothing today: the run is genuinely
+        broken, and the streak is 0."""
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=2, result="completed"))
         assert store.clean_streak() == 0
+
+    async def test_today_and_yesterday_chain(self):
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result="completed"))
+        await store.async_append(_make_record(days_ago=1, result="completed"))
+        await store.async_append(_make_record(days_ago=2, result="completed"))
+        assert store.clean_streak() == 3
 
 
 class TestPresenceWindows:

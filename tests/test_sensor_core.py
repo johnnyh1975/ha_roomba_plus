@@ -1,4 +1,17 @@
+"""`sensor_core.py` -- the RoombaSensor entity and the mission-store
+sensors built on it.
 
+Started as a regression file for @chairstacker's imperial-units bug
+(#69); five classes moved in from test_sensors.py in August 2026, where
+they had been testing this module all along under the facade's name.
+
+`pytest` is imported at module level because `@pytest.mark.asyncio` is a
+decorator and cannot be imported inside a method.
+"""
+
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+
+import pytest
 
 class TestAreaSensorsCanBeConverted:
     """@chairstacker (#69): his Home Assistant is on imperial and his
@@ -80,3 +93,344 @@ class TestCountsAreNotMeasurements:
         keys = {d.key for d in SENSORS}
 
         assert set(self.COUNTS) <= keys
+
+
+# ============================================================================
+# MISSION-STORE SENSORS
+#
+# Moved here from test_sensors.py (August 2026). Both classes import
+# `RoombaSensor` from sensor_core directly -- they test this module, not
+# the sensor.py facade, and neither used any of test_sensors.py's
+# module-level helpers.
+# ============================================================================
+
+
+class TestMissionStoreSensorsRefreshOnTheStore:
+    """@scenicsystemsllc: sensors do not refresh across rapid
+    back-to-back missions. He flagged it as a hypothesis — source
+    consistent, no captured payload — and proposed that a fast second
+    mission could arrive on a delta omitting `cleanMissionStatus`.
+
+    There is a second source-consistent mechanism: these sensors read
+    from `mission_store`, while `new_state_filter` gates them on the
+    delta. Mission-end processing is debounced (two consecutive signals
+    plus a minimum hold on ambiguous phases), so the delta that triggers
+    a recompute can arrive before the record exists. With a gap the next
+    delta cleans it up; back to back, the next delta belongs to the next
+    mission.
+
+    Telling the two apart needs a captured payload. Listening for
+    `EVENT_MISSION_COMPLETED` — fired *after* the store write — makes
+    both moot, because the refresh trigger and the value source finally
+    agree.
+    """
+
+    def test_the_store_backed_sensors_are_listed(self):
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+        )
+
+        assert "last_mission_result" in _MISSION_STORE_SENSORS
+        assert "area_cleaned_today" in _MISSION_STORE_SENSORS
+        assert "clean_streak" in _MISSION_STORE_SENSORS
+
+    def test_a_delta_only_sensor_is_not_listed(self):
+        """`battery` reads the delta it is woken by. Subscribing it to
+        mission-end would be a wasted state write per mission."""
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+        )
+
+        assert "battery" not in _MISSION_STORE_SENSORS
+        assert "phase" not in _MISSION_STORE_SENSORS
+
+    def test_the_handler_filters_by_entry(self):
+        """One household can hold several robots, and a mission ending
+        on one says nothing about the others' counters."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        source = inspect.getsource(RoombaSensor._async_mission_completed)
+
+        assert "entry_id" in source
+        assert "return" in source
+
+    def test_it_forces_a_recompute(self):
+        """A plain state write would re-publish the cached value — the
+        point is to read the store again."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        source = inspect.getsource(RoombaSensor._async_mission_completed)
+
+        assert "force_refresh=True" in source
+
+
+class TestTheMissionStoreKeysExist:
+    """`_MISSION_STORE_SENSORS` is a hand-written list of keys, and a
+    typo in it fails silently: the listener simply never fires for that
+    sensor, and nothing goes red.
+
+    That failure mode has turned up repeatedly in this project — a
+    hand-kept list drifting from the thing it names. This makes it loud.
+    """
+
+    def test_every_key_names_a_real_sensor(self):
+        from custom_components.roomba_plus.sensor_core import (
+            _MISSION_STORE_SENSORS,
+            SENSORS,
+        )
+
+        invented = _MISSION_STORE_SENSORS - {d.key for d in SENSORS}
+
+        assert not invented, (
+            f"keys that name no sensor: {sorted(invented)} -- the "
+            "mission-end listener would never fire for these"
+        )
+
+
+# ============================================================================
+# THE RoombaSensor ENTITY ITSELF -- value, availability, countdown tick.
+#
+# Moved here from test_sensors.py (August 2026). All three import
+# `RoombaSensor` from sensor_core and carry their own per-class helpers
+# (`self._sensor`, `self._available`, `self._async_tick`), so nothing
+# came with them.
+#
+# They were never facade tests. They test this module's entity class,
+# and sat in the file named for the facade purely because that is where
+# sensor tests had always gone.
+# ============================================================================
+
+
+class TestRoombaSensorNativeValue:
+    """`RoombaSensor` is the base class most Classic sensors inherit
+    from, and it sat at ~32% coverage -- the lowest in the integration.
+
+    The consumable branches below are the ones users act on: a wrong
+    "filter remaining" number sends someone to buy a part they do not
+    need, or lets a worn one keep running. They also carry a fallback
+    that is easy to get backwards, because the maintenance store is
+    optional and the arithmetic differs between the two paths."""
+
+    def _sensor(self, key, *, run_stats=None, options=None, store=None):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        sensor = object.__new__(RoombaSensor)
+        entry = MagicMock()
+        entry.options = options or {}
+        entry.runtime_data.maintenance_store = store
+        sensor._config_entry = entry
+        sensor.entity_description = MagicMock(key=key)
+        type(sensor).run_stats = PropertyMock(return_value=run_stats or {})
+        return sensor
+
+    def test_filter_hours_fall_back_to_plain_arithmetic_without_a_store(self):
+        sensor = self._sensor(
+            "filter_remaining_hours", run_stats={"hr": 30}, options={"filter_threshold_hours": 100}
+        )
+
+        assert sensor.native_value == 70
+
+    def test_filter_hours_never_go_negative(self):
+        """A robot past its threshold must read zero, not a negative
+        number -- the sensor is 'remaining', and negative remaining is
+        not a thing a user can act on."""
+        sensor = self._sensor(
+            "filter_remaining_hours", run_stats={"hr": 250}, options={"filter_threshold_hours": 100}
+        )
+
+        assert sensor.native_value == 0
+
+    def test_the_maintenance_store_takes_precedence_when_present(self):
+        """The store knows about resets after a part was replaced; raw
+        arithmetic does not. Preferring the store is the whole reason it
+        exists."""
+        store = MagicMock()
+        store.filter_remaining.return_value = 42
+
+        sensor = self._sensor(
+            "filter_remaining_hours", run_stats={"hr": 30},
+            options={"filter_threshold_hours": 100}, store=store,
+        )
+
+        assert sensor.native_value == 42
+        store.filter_remaining.assert_called_once_with(30, 100)
+
+    def test_brush_hours_use_their_own_threshold_and_store_method(self):
+        """Filter and brush wear at different rates and are replaced
+        independently -- crossing the two would be silently wrong."""
+        store = MagicMock()
+        store.brush_remaining.return_value = 11
+
+        sensor = self._sensor(
+            "brush_remaining_hours", run_stats={"hr": 60},
+            options={"brush_threshold_hours": 200}, store=store,
+        )
+
+        assert sensor.native_value == 11
+        store.brush_remaining.assert_called_once_with(60, 200)
+        store.filter_remaining.assert_not_called()
+
+    def test_missing_runtime_hours_are_treated_as_zero(self):
+        """A freshly connected robot has no 'hr' yet; the sensor must
+        show the full threshold rather than crashing."""
+        sensor = self._sensor(
+            "filter_remaining_hours", run_stats={}, options={"filter_threshold_hours": 100}
+        )
+
+        assert sensor.native_value == 100
+
+
+class TestRoombaSensorCountdownTick:
+    """The 60-second tick for the recharge/expire countdown sensors.
+
+    Why it exists at all: the firmware sends `rechrgTm`/`expireTm` ONCE
+    when recharging starts and pushes nothing further while charging.
+    Without a tick the sensor freezes at its first reading, which looks
+    like a broken sensor rather than a quiet robot.
+
+    Two details here are easy to undo by accident, and both are
+    recorded in the code:
+
+    - it must use `schedule_update_ha_state(force_refresh=True)`, not
+      `async_write_ha_state()` -- the latter is a no-op when Home
+      Assistant believes the value has not changed, which is exactly
+      the case a countdown needs to break out of;
+    - the interval must be cancelled on removal, or it keeps firing
+      against a dead entity for the lifetime of the process."""
+
+    def _sensor(self, key):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        sensor = object.__new__(RoombaSensor)
+        sensor.entity_description = MagicMock(key=key)
+        sensor._unsub_tick = None
+        sensor.hass = MagicMock()
+        return sensor
+
+    def test_only_the_countdown_sensors_are_ticked(self):
+        """Every Classic sensor inherits this class. Ticking all of them
+        every minute would be pointless load."""
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        assert RoombaSensor._TICK_SENSORS == {
+            "mission_recharge_minutes", "mission_expire_minutes",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_countdown_sensor_registers_an_interval(self):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        sensor = self._sensor("mission_recharge_minutes")
+
+        with patch.object(RoombaSensor.__bases__[0], "async_added_to_hass", AsyncMock()), \
+             patch("custom_components.roomba_plus.sensor_core.async_track_time_interval") as track:
+            await sensor.async_added_to_hass()
+
+        track.assert_called_once()
+        assert track.call_args.args[2].total_seconds() == 60
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_sensor_registers_nothing(self):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        sensor = self._sensor("battery")
+
+        with patch.object(RoombaSensor.__bases__[0], "async_added_to_hass", AsyncMock()), \
+             patch("custom_components.roomba_plus.sensor_core.async_track_time_interval") as track:
+            await sensor.async_added_to_hass()
+
+        track.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_removal_cancels_the_interval(self):
+        sensor = self._sensor("mission_recharge_minutes")
+        unsub = MagicMock()
+        sensor._unsub_tick = unsub
+
+        await sensor.async_will_remove_from_hass()
+
+        unsub.assert_called_once()
+        assert sensor._unsub_tick is None
+
+    @pytest.mark.asyncio
+    async def test_removing_a_sensor_that_never_ticked_is_safe(self):
+        sensor = self._sensor("battery")
+
+        await sensor.async_will_remove_from_hass()
+
+        assert sensor._unsub_tick is None
+
+    def test_the_tick_forces_a_refresh_rather_than_writing_state(self):
+        """THE detail that makes the countdown work. async_write_ha_state()
+        is deduplicated by HA when the value looks unchanged -- which is
+        precisely the situation a countdown has to break out of."""
+        sensor = self._sensor("mission_recharge_minutes")
+        sensor.schedule_update_ha_state = MagicMock()
+        sensor.async_write_ha_state = MagicMock()
+
+        sensor._async_tick(None)
+
+        sensor.schedule_update_ha_state.assert_called_once_with(force_refresh=True)
+        sensor.async_write_ha_state.assert_not_called()
+
+
+class TestRoombaSensorAvailability:
+    """`available_fn` lets a description declare "not applicable right
+    now" -- a bin-full sensor on a robot with no bin fitted, say.
+
+    Worth testing because the fallback direction is easy to invert: an
+    entity wrongly reported unavailable disappears from dashboards and
+    breaks automations that reference it, and the cause is far from
+    obvious to whoever finds it.
+
+    Uses a subclass rather than patching: `available` is defined on
+    Home Assistant's own Entity via a cached-property mechanism that
+    does not tolerate being patched, and fighting that would test the
+    mock rather than the code."""
+
+    def _available(self, available_fn, parent_available=True):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        class _Probe(RoombaSensor):
+            @property
+            def available(self):
+                # Same logic path, with a parent whose answer we control.
+                if self.entity_description.available_fn is not None:
+                    if not self.entity_description.available_fn(self):
+                        return False
+                return parent_available
+
+        sensor = object.__new__(_Probe)
+        sensor.entity_description = MagicMock(available_fn=available_fn)
+        return sensor.available
+
+    def test_no_available_fn_defers_entirely_to_the_parent(self):
+        assert self._available(None, parent_available=True) is True
+        assert self._available(None, parent_available=False) is False
+
+    def test_available_fn_returning_false_wins_over_a_healthy_parent(self):
+        """This is the whole point: the connection can be fine while a
+        particular sensor still has nothing meaningful to report."""
+        assert self._available(lambda _self: False, parent_available=True) is False
+
+    def test_available_fn_returning_true_still_defers_to_the_parent(self):
+        """It can veto, not override -- a disconnected robot must not be
+        reported as available just because one description says so."""
+        assert self._available(lambda _self: True, parent_available=False) is False
+
+    def test_the_real_property_has_the_same_shape(self):
+        """Guards the probe above from drifting away from the code it
+        stands in for."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        source = inspect.getsource(RoombaSensor.available.fget)
+        assert "available_fn" in source
+        assert "return super().available" in source
+
+

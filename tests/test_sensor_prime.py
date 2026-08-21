@@ -1863,3 +1863,101 @@ class TestADockTheRobotDoesNotKnowSaysSo:
         value = self._sensor(MagicMock(state=301, known=True))
 
         assert value not in (None, "Not reported by this dock")
+
+
+# ============================================================================
+# CONSUMABLE PARTS.
+#
+# Moved here from test_sensors.py (August 2026). `PrimeConsumablePartSensor`
+# is defined in this module; the class carries its own `_sensor` builder.
+# ============================================================================
+
+
+class TestPrimeConsumableParts:
+    """Consumables for Prime robots, from chairstacker's request.
+
+    The data was already reachable -- the library had supported the
+    endpoint for a while and the integration simply never called it.
+    His screenshot made that obvious: everything in it was already in
+    our reach.
+
+    The values below are taken from that screenshot, which is also why
+    the unit handling matters: the SAME robot reports hours for its
+    filter and routines for its mop pads. A single hard-coded unit
+    would be wrong for most parts."""
+
+    def _sensor(self, part_id, **fields):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimeConsumablePartSensor
+
+        part = MagicMock(part_id=part_id, **fields)
+        entry = MagicMock()
+        entry.runtime_data.prime_parts_coordinator.data = {part_id: part}
+
+        sensor = object.__new__(PrimeConsumablePartSensor)
+        sensor._config_entry = entry
+        sensor._part_id = part_id
+        return sensor
+
+    def test_a_filter_reports_hours(self):
+        """"~24 hr left" in his screenshot."""
+        from homeassistant.const import UnitOfTime
+
+        sensor = self._sensor("filter", count_remaining=24, count_type="hr")
+
+        assert sensor.native_value == 24
+        assert sensor.native_unit_of_measurement == UnitOfTime.HOURS
+
+    def test_mop_pads_report_routines_not_hours(self):
+        """"~14 routines left". This is the case a fixed hours unit
+        would silently mislabel."""
+        sensor = self._sensor("mop_pads", count_remaining=14, count_type="routines")
+
+        assert sensor.native_value == 14
+        assert sensor.native_unit_of_measurement == "routines"
+
+    def test_the_dirt_bag_reports_evacuations(self):
+        """"~60 evacs left" -- the one dock-adjacent consumable that is
+        actually tracked."""
+        sensor = self._sensor("dirt_bag", count_remaining=60, count_type="evacs")
+
+        assert sensor.native_unit_of_measurement == "evacuations"
+
+    def test_an_unknown_count_type_gets_no_unit_rather_than_a_wrong_one(self):
+        """A wrong unit is worse than none: it invites arithmetic that
+        does not hold. Better to show a bare number."""
+        sensor = self._sensor("mystery", count_remaining=5, count_type="somethingelse")
+
+        assert sensor.native_value == 5
+        assert sensor.native_unit_of_measurement is None
+
+    def test_a_part_that_disappears_makes_the_sensor_unavailable(self):
+        """Rather than reporting a stale count as if it were current."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimeConsumablePartSensor
+
+        entry = MagicMock()
+        entry.runtime_data.prime_parts_coordinator.data = {}
+        sensor = object.__new__(PrimeConsumablePartSensor)
+        sensor._config_entry = entry
+        sensor._part_id = "filter"
+
+        assert sensor.native_value is None
+
+    def test_the_raw_details_are_kept_as_attributes(self):
+        """count_used and minutes_remaining are not worth their own
+        entities, but throwing them away would lose the only record of
+        what the server actually said."""
+        sensor = self._sensor(
+            "filter", count_remaining=24, count_type="hr",
+            count_used=76, minutes_remaining=1440, counter_category="maintenance",
+        )
+
+        attrs = sensor.extra_state_attributes
+        assert attrs["count_used"] == 76
+        assert attrs["minutes_remaining"] == 1440
+        assert attrs["count_type"] == "hr"
+
+

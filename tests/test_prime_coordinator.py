@@ -645,3 +645,60 @@ class TestZoneNamesComeFromTheCommand:
         )
 
         assert prime_region_names_from_command(self._data([])) == {}
+
+
+class TestMissionHistorySyncsAtMissionEnd:
+    """@chairstacker: `area_cleaned_today` read 0.0 after a successful
+    mission, and `clean_streak` was right only after a reload.
+
+    Mission records for Prime robots come from one place — the cloud
+    history sync. Everything that writes a record from MQTT hangs off
+    the Classic `roomba` callback chain, which a Prime robot never
+    feeds.
+
+    That sync ran at setup and then on the coordinator's own interval:
+    six hours. A mission finishing at 07:00 was invisible to every
+    mission sensor until the next tick or the next reload — which is
+    why it looked non-deterministic.
+    """
+
+    def test_charge_triggers_a_sync(self):
+        import inspect
+
+        from custom_components.roomba_plus import prime_coordinator
+
+        source = inspect.getsource(prime_coordinator)
+
+        assert "_schedule_mission_history_sync" in source
+        assert 'if phase == "charge":' in source
+
+    def test_overlapping_syncs_are_guarded(self):
+        """`charge` can arrive more than once for one mission — a robot
+        that settles, or a shadow resend."""
+        import inspect
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        source = inspect.getsource(
+            PrimeStatusCoordinator._schedule_mission_history_sync
+        )
+
+        assert "_history_sync_running" in source
+        assert "finally" in source
+
+    def test_a_failed_sync_is_not_fatal(self):
+        """A cloud blip must not surface as a broken mission: the
+        six-hourly sync and the next mission end both try again."""
+        import inspect
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        source = inspect.getsource(
+            PrimeStatusCoordinator._schedule_mission_history_sync
+        )
+
+        assert "except Exception" in source

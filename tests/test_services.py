@@ -66,6 +66,9 @@ class TestServicesRegistration:
 
         expected = {
             (DOMAIN, "clean_room"),
+            # @chairstacker: zone-on-demand, replacing the zone
+            # favourites the app removed.
+            (DOMAIN, "clean_zone"),
             (DOMAIN, "set_quiet_hours"),
             (DOMAIN, "smart_start"),
             (DOMAIN, "clean_sequence"),
@@ -111,7 +114,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 22
+        assert len(registered) == 23
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -123,7 +126,7 @@ class TestServicesRegistration:
         hass, registered = self._make_hass()
         async_register_services(hass)
         # 18 + the three Prime schedule write services (#49).
-        assert len(registered) == 22
+        assert len(registered) == 23
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -2109,3 +2112,108 @@ class TestEveryHandlerMatchesWhatHomeAssistantCalls:
         ]
 
         assert len(found) >= 10
+
+
+class TestCleanZoneService:
+    """@chairstacker: the app stopped allowing zone favourites, leaving
+    no way to send the robot to a zone on demand. He was about to build
+    a calendar workaround for it.
+
+    The backend has sent zones since v2.7.0 -- `clean_rooms` recognises
+    the `zid_` prefix. Nothing exposed it.
+    """
+
+    def _setup(self, zone_names=None):
+        """A hass/entry pair wired the way the handler walks it."""
+        backend = MagicMock()
+        backend.clean_rooms = AsyncMock()
+
+        runtime = MagicMock()
+        runtime.prime_room_names = zone_names or {}
+
+        config_entry = MagicMock()
+        config_entry.runtime_data = runtime
+
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, backend
+
+    def _call(self, hass, **data):
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.x"], **data}
+        return call
+
+    @pytest.mark.asyncio
+    async def test_zone_ids_are_prefixed_for_the_backend(self):
+        """`clean_rooms` splits rooms from zones on the `zid_` prefix.
+        A bare id would clean the ROOM with that number instead."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup()
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, zone_id=["100", "101"]))
+
+        assert backend.clean_rooms.await_args.args[0] == ["zid_100", "zid_101"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_resolves_to_its_id(self):
+        """Names come from the bundle's cleanZones layer -- where
+        @chairstacker's turned out to live after five rounds."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup({"100": "Clean Kitchen"})
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, zone_name=["Clean Kitchen"]))
+
+        assert backend.clean_rooms.await_args.args[0] == ["zid_100"]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_refuses_rather_than_dropping_it(self):
+        """A partial clean looks like success. Silently skipping a
+        misspelled zone is worse than refusing the call."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup({"100": "Clean Kitchen"})
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"), pytest.raises(
+            Exception
+        ) as exc_info:
+            await async_handle_clean_zone(self._call(hass, zone_name=["Kitchen"]))
+
+        assert "zone_name_not_found" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
+        backend.clean_rooms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_both_arguments_is_an_error(self):
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, _ = self._setup()
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_zone(
+                self._call(hass, zone_name=["A"], zone_id=["100"])
+            )
+        assert "zone_name_and_zone_id_conflict" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
+
+    @pytest.mark.asyncio
+    async def test_neither_argument_is_an_error(self):
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, _ = self._setup()
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_zone(self._call(hass))
+        assert "zone_name_or_zone_id_required" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
