@@ -79,7 +79,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b10"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b11"
 
       - name: Run full test suite with coverage
         run: |
@@ -151,7 +151,7 @@ jobs:
       # Same --no-deps reasoning as the test suite job above.
       - name: Install roombapy-prime (--no-deps)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b10"
+          pip install --no-deps --no-cache-dir "roombapy-prime@git+https://github.com/johnnyh1975/roombapy-prime.git@v0.3.0b11"
 
       # mypy.ini runs --strict with no disabled error codes. The two
       # per-module exemptions are for Home Assistant itself and are
