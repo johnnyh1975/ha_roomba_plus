@@ -1,6 +1,6 @@
 acme==3.0.1
 aiodhcpwatcher==1.2.7
-aiodiscover==2.7.1
+aiodiscover==3.3.2
 aiodns==3.2.0
 aiohappyeyeballs==2.7.1
 aiohasupervisor==0.2.2b5
