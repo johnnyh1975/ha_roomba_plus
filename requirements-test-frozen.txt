@@ -35,7 +35,7 @@ charset-normalizer==3.5.0
 ciso8601==2.3.2
 coverage==7.6.8
 cronsim==2.6
-cryptography==44.0.0
+cryptography==50.0.0
 dbus-fast==5.0.22
 envs==1.4
 execnet==2.1.2
