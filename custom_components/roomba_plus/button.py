@@ -44,7 +44,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .entity_cleanup import async_remove_stale_entities
-from .const import MAP_UPDATING_NOT_READY
+from .const import (
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
+    MAP_UPDATING_NOT_READY,
+)
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -137,6 +141,27 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
 
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
+
+
+def _cloud_part_reset_buttons(
+    roomba: Any, blid: str, config_entry: RoombaConfigEntry
+) -> list[ButtonEntity]:
+    """Reset buttons for consumables that only exist cloud-side.
+
+    Gated on the account actually reporting the part, so a robot without a
+    Clean Base gets no bag button and a Braava gets no side-brush button —
+    rather than a button that silently does nothing when pressed.
+    """
+    store = config_entry.runtime_data.maintenance_store
+    if store is None or config_entry.runtime_data.cloud_coordinator is None:
+        return []
+    buttons: list[ButtonEntity] = []
+    if store.cloud_part_by_role(IROBOT_PART_ROLE_SIDE_BRUSH) is not None:
+        buttons.append(SideBrushResetButton(roomba, blid, config_entry))
+    if store.cloud_part_by_role(IROBOT_PART_ROLE_CLEAN_BASE_BAG) is not None:
+        buttons.append(CleanBaseBagResetButton(roomba, blid, config_entry))
+    return buttons
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -278,6 +303,7 @@ async def async_setup_entry(
         FilterResetButton(roomba, blid, config_entry),
         BrushResetButton(roomba, blid, config_entry),
         BatteryResetButton(roomba, blid, config_entry),
+        *_cloud_part_reset_buttons(roomba, blid, config_entry),
     ])
 
     # v3.2.1 REMOVED — ZoneCleanButton used to be created for EPHEMERAL
@@ -428,8 +454,14 @@ class FilterResetButton(_MaintenanceResetButton):
         if store:
             store.reset_filter(hr)
             await self._save()
-            from .services import _fire_maintenance_reset_event
+            from .services import (
+                _async_push_part_reset_to_cloud,
+                _fire_maintenance_reset_event,
+            )
             _fire_maintenance_reset_event(self.hass, self._config_entry, "filter", hr)
+            await _async_push_part_reset_to_cloud(
+                self._config_entry, self._config_entry.runtime_data, "filter"
+            )
 
 
 class BrushResetButton(_MaintenanceResetButton):
@@ -448,8 +480,81 @@ class BrushResetButton(_MaintenanceResetButton):
         if store:
             store.reset_brush(hr)
             await self._save()
-            from .services import _fire_maintenance_reset_event
+            from .services import (
+                _async_push_part_reset_to_cloud,
+                _fire_maintenance_reset_event,
+            )
             _fire_maintenance_reset_event(self.hass, self._config_entry, "brush", hr)
+            await _async_push_part_reset_to_cloud(
+                self._config_entry, self._config_entry.runtime_data, "brush"
+            )
+
+
+class _CloudPartResetButton(_MaintenanceResetButton):
+    """Base for consumables that exist only as an iRobot cloud counter.
+
+    The filter and main brushes have local MaintenanceStore slots; the side
+    brush and Clean Base bag do not, so there is nothing local to reset and
+    the cloud counter IS the state. Created only when the account actually
+    reports the part — see async_setup_entry.
+    """
+
+    _cloud_role: str = ""
+
+    async def async_press(self) -> None:
+        data = self._config_entry.runtime_data
+        store = self._maintenance_store()
+        cc = data.cloud_coordinator
+        if store is None or cc is None:
+            return
+        record = store.cloud_part_by_role(self._cloud_role)
+        if record is None:
+            return
+        part_id = record.get("part_id")
+        if not part_id:
+            return
+        try:
+            result = await cc.api.set_robot_part_counter(data.blid, str(part_id), 0)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s: could not record replacement with iRobot for part %s",
+                type(self).__name__, part_id, exc_info=True,
+            )
+            return
+        if not result.get("num_parts"):
+            _LOGGER.warning(
+                "%s: iRobot accepted the call but applied no part (part_id=%s)",
+                type(self).__name__, part_id,
+            )
+            return
+        _LOGGER.info(
+            "%s: recorded replacement with iRobot (part_id=%s)",
+            type(self).__name__, part_id,
+        )
+        await cc.async_request_refresh()
+        self.schedule_update_ha_state()
+
+
+class SideBrushResetButton(_CloudPartResetButton):
+    """Button: mark the side brush as replaced, cloud-side."""
+
+    _attr_translation_key = "reset_side_brush"
+    _cloud_role = IROBOT_PART_ROLE_SIDE_BRUSH
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_side_brush"
+
+
+class CleanBaseBagResetButton(_CloudPartResetButton):
+    """Button: mark the Clean Base bag as replaced, cloud-side."""
+
+    _attr_translation_key = "reset_clean_base_bag"
+    _cloud_role = IROBOT_PART_ROLE_CLEAN_BASE_BAG
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_clean_base_bag"
 
 
 class BatteryResetButton(_MaintenanceResetButton):

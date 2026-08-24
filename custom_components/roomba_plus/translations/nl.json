@@ -819,20 +819,11 @@
       "region_last_cleaned": {
         "name": "{region} – laatst schoongemaakt"
       },
-      "part_filter": {
-        "name": "Onderhoud – Filter (cloud)"
+      "part_edge_brush": {
+        "name": "Onderhoud – Zijborstel"
       },
-      "part_side_brush": {
-        "name": "Onderhoud – Zijborstel (cloud)"
-      },
-      "part_main_brush": {
-        "name": "Onderhoud – Hoofdborstels (cloud)"
-      },
-      "part_clean_base_bag": {
-        "name": "Onderhoud – Clean Base-zak (cloud)"
-      },
-      "part_generic": {
-        "name": "Onderhoud – Onderdeel {part_id} (cloud)"
+      "part_dirt_bag": {
+        "name": "Onderhoud – Stofzak"
       }
     },
     "binary_sensor": {
@@ -980,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Drogen starten"
+      },
+      "reset_side_brush": {
+        "name": "Zijborstel resetten"
+      },
+      "reset_clean_base_bag": {
+        "name": "Clean Base-zak resetten"
       }
     },
     "switch": {

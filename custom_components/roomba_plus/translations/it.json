@@ -819,20 +819,11 @@
       "region_last_cleaned": {
         "name": "{region} – ultima pulizia"
       },
-      "part_filter": {
-        "name": "Manutenzione – Filtro (cloud)"
+      "part_edge_brush": {
+        "name": "Manutenzione – Spazzola laterale"
       },
-      "part_side_brush": {
-        "name": "Manutenzione – Spazzola laterale (cloud)"
-      },
-      "part_main_brush": {
-        "name": "Manutenzione – Spazzole principali (cloud)"
-      },
-      "part_clean_base_bag": {
-        "name": "Manutenzione – Sacchetto Clean Base (cloud)"
-      },
-      "part_generic": {
-        "name": "Manutenzione – Componente {part_id} (cloud)"
+      "part_dirt_bag": {
+        "name": "Manutenzione – Sacchetto della polvere"
       }
     },
     "binary_sensor": {
@@ -980,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Avviare l'asciugatura"
+      },
+      "reset_side_brush": {
+        "name": "Azzera spazzola laterale"
+      },
+      "reset_clean_base_bag": {
+        "name": "Azzera sacchetto Clean Base"
       }
     },
     "switch": {

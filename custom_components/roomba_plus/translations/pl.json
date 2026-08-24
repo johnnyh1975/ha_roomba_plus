@@ -819,20 +819,11 @@
       "region_last_cleaned": {
         "name": "{region} – ostatnio sprzątano"
       },
-      "part_filter": {
-        "name": "Konserwacja – Filtr (chmura)"
+      "part_edge_brush": {
+        "name": "Konserwacja – Szczotka boczna"
       },
-      "part_side_brush": {
-        "name": "Konserwacja – Szczotka boczna (chmura)"
-      },
-      "part_main_brush": {
-        "name": "Konserwacja – Szczotki główne (chmura)"
-      },
-      "part_clean_base_bag": {
-        "name": "Konserwacja – Worek stacji Clean Base (chmura)"
-      },
-      "part_generic": {
-        "name": "Konserwacja – Część {part_id} (chmura)"
+      "part_dirt_bag": {
+        "name": "Konserwacja – Worek na kurz"
       }
     },
     "binary_sensor": {
@@ -980,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Rozpocznij suszenie"
+      },
+      "reset_side_brush": {
+        "name": "Zeruj szczotkę boczną"
+      },
+      "reset_clean_base_bag": {
+        "name": "Zeruj worek stacji Clean Base"
       }
     },
     "switch": {

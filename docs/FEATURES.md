@@ -370,39 +370,50 @@ data:
 
 **First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate. **With cloud credentials configured this assumption is replaced by the real thing** — see cloud consumable counters below.
 
-#### Cloud consumable counters ☁️
+#### Cloud-synced consumables ☁️
 
-> ☁️ Requires cloud credentials. Present only for robots whose account serves the consumables endpoint.
+> ☁️ Requires cloud credentials. Applies to whichever consumables your robot's account reports.
 
-`sensor.{name}_cloud_part_*` — one sensor per consumable **iRobot itself tracks**, showing the same
-remaining-hours figure the official app's maintenance tiles show, because it is the same source:
-iRobot's cloud counts robot runtime minutes per part and this reads that counter directly.
+iRobot's cloud tracks each consumable itself, in robot runtime minutes, and that is what the
+official app's maintenance tiles show. Where a Roomba+ sensor already exists for a part, it now
+reads that counter instead of estimating locally:
 
-The set isn't fixed and there is no per-model list anywhere in the integration: one entity is
-created per part your robot's account actually reports, so a robot with a dock gets an entity for
-the dock bag and one without simply doesn't. For example: a vacuum with a Clean Base typically
-reports four — filter, side brush, main brushes, and the Clean Base bag — while a Braava reports
-its own pad-related set instead.
+| Sensor | Source when cloud is available |
+|---|---|
+| Filter remaining hours | iRobot's own filter counter |
+| Brush remaining hours | iRobot's own **main** brush counter |
 
-Each sensor carries the raw counters as attributes: `part_id`, `role`, `minutes_used`,
-`minutes_remaining`, `percent_used`, `budget_hours`, `last_replaced`, and `reset_by`.
+Robots or accounts that don't report parts keep the previous behaviour exactly — the local
+threshold estimate, hydrated baseline included — so nothing regresses for them.
 
-**About `role` and `part_id`:** iRobot's endpoint returns a numeric `part_id` and no name — the
-official app resolves names from a per-SKU catalog it does not serve. The id→name mapping here is
-therefore *inferred* (see `IROBOT_PART_ROLES` in `const.py` for the reasoning), and every sensor
-reports `role_source: inferred` alongside its `part_id` so you can check it against the app in one
-glance. An id this integration doesn't recognise still gets a working sensor, named
-"Maintenance – Part {id}" with `role_source: unmapped` — unfamiliar hardware degrades to
-"unnamed but correct", never to nothing.
+Consumables with no local wear signal get their own sensors, created only when the account
+actually reports that part (so a Braava gets no edge-brush sensor, and a robot without a Clean
+Base gets no bag sensor):
 
-**Migrating from the official app:** these counters also fix the *local* maintenance sensors. A
-part's cloud counter includes resets you performed in iRobot's own app, so the runtime-hours
-reading at which each part was last replaced is recoverable, and Roomba+ adopts it as its baseline
-on the first cloud refresh. That replaces the install-time assumption described above with your
-robot's real service history — so on a robot that has been in use for months, the remaining-hours
-and `*_days_until_due` sensors start out correct instead of drifting for a full replacement cycle.
-Your own confirmed resets keep building the self-calibrating history from there; the hydrated
-baseline is not treated as a replacement event and does not skew the learned interval.
+| Sensor | Notes |
+|---|---|
+| Edge sweeping brush | The side brush. Wears on its own schedule, so it is not averaged into the main brush sensor |
+| Dust Bag | The Clean Base bag |
+
+**Migrating from the official app:** a part's cloud counter includes replacements you confirmed
+in iRobot's app, so the runtime-hours reading at each replacement is recoverable, and Roomba+
+adopts it as its baseline on the first cloud refresh. That replaces the install-time "assume
+everything is fresh" assumption with your robot's real service history, which is also what gives
+the `*_days_until_due` sensors something real to extrapolate from. Your own confirmed resets keep
+building the self-calibrating history from there; a hydrated baseline is not counted as a
+replacement event and does not skew the learned interval.
+
+**Resets go both ways.** Pressing a reset button or calling `roomba_plus.reset_filter` /
+`reset_brush` now also records the replacement with iRobot, so the app and Home Assistant agree
+about a part you just changed. This is best-effort: the local reset is saved first, and a cloud
+failure is logged without failing the action. The edge brush and bag have their own reset buttons,
+which write to the cloud counter directly since they have no local slot.
+
+**About part identification:** the endpoint returns a numeric `part_id` and no name — the app
+resolves names from a per-SKU catalog it does not serve, and the id space is not the same across
+robot families. `IROBOT_PART_ROLES` in `const.py` records the mapping and the evidence for each
+entry; an id this integration doesn't recognise is left unmapped rather than given an invented
+name, following the same reasoning as the Prime path's `_KNOWN_PARTS`.
 
 #### Clean Base / dock status
 

@@ -819,20 +819,11 @@
       "region_last_cleaned": {
         "name": "{region} – dernier nettoyage"
       },
-      "part_filter": {
-        "name": "Entretien – Filtre (cloud)"
+      "part_edge_brush": {
+        "name": "Maintenance – Brosse latérale"
       },
-      "part_side_brush": {
-        "name": "Entretien – Brosse latérale (cloud)"
-      },
-      "part_main_brush": {
-        "name": "Entretien – Brosses principales (cloud)"
-      },
-      "part_clean_base_bag": {
-        "name": "Entretien – Sac de la Clean Base (cloud)"
-      },
-      "part_generic": {
-        "name": "Entretien – Pièce {part_id} (cloud)"
+      "part_dirt_bag": {
+        "name": "Maintenance – Sac à poussière"
       }
     },
     "binary_sensor": {
@@ -980,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Démarrer le séchage"
+      },
+      "reset_side_brush": {
+        "name": "Réinitialiser la brosse latérale"
+      },
+      "reset_clean_base_bag": {
+        "name": "Réinitialiser le sac de la Clean Base"
       }
     },
     "switch": {

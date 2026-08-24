@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import urllib.parse
 import uuid
@@ -162,8 +163,16 @@ class _AWSSignatureV4:
         host: str,
         path: str,
         query_params: dict[str, Any] | None = None,
+        payload: str = "",
     ) -> dict[str, str]:
-        """Return a dict of headers with AWS SigV4 Authorization included."""
+        """Return a dict of headers with AWS SigV4 Authorization included.
+
+        `payload` is the exact request body that will be sent, byte for
+        byte. SigV4 signs a hash of it, so the caller MUST transmit the
+        same string it passed here — re-serialising the same dict can
+        reorder keys and invalidate the signature. Empty string (the
+        default) is correct for GET.
+        """
         now = datetime.now(tz=UTC)
         amz_date = now.strftime("%Y%m%dT%H%M%SZ")
         date_stamp = now.strftime("%Y%m%d")
@@ -187,7 +196,7 @@ class _AWSSignatureV4:
         canonical_headers = "".join(f"{k}:{base_headers[k]}\n" for k in sorted_keys)
         signed_hdrs = ";".join(sorted_keys)
 
-        payload_hash = self._sha256_hex("")
+        payload_hash = self._sha256_hex(payload)
         canonical_req = "\n".join([
             method.upper(), canonical_uri, canonical_qs,
             canonical_headers, signed_hdrs, payload_hash,
@@ -370,6 +379,55 @@ class IrobotCloudApi:
         except aiohttp.ClientSSLError as exc:
             _raise_clear_ssl_error(exc)
 
+    async def _aws_post(
+        self, url: str, body: dict[str, Any], *, _retry: bool = True
+    ) -> Any:
+        """POST a JSON body to url with AWS SigV4 signing.
+
+        The body is serialised ONCE and both signed and sent, because
+        SigV4 hashes the exact bytes transmitted — re-serialising between
+        signing and sending can reorder keys and invalidate the signature.
+        """
+        if not self._credentials:
+            raise AuthenticationError("Not authenticated — call authenticate() first")
+
+        payload = json.dumps(body, separators=(",", ":"))
+        region = self._credentials["CognitoId"].split(":")[0]
+        parsed = urllib.parse.urlparse(url)
+        signer = _AWSSignatureV4(
+            self._credentials["AccessKeyId"],
+            self._credentials["SecretKey"],
+            self._credentials["SessionToken"],
+        )
+        headers = signer.signed_headers(
+            method="POST",
+            service="execute-api",
+            region=region,
+            host=parsed.netloc,
+            path=parsed.path,
+            payload=payload,
+        )
+
+        try:
+            async with self._session.post(
+                url, headers=headers, data=payload
+            ) as resp:
+                if resp.status == 403 and _retry:
+                    _LOGGER.debug("iRobot cloud: 403 — reauthenticating")
+                    await self.authenticate()
+                    return await self._aws_post(url, body, _retry=False)
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise CloudApiError(
+                        f"Cloud request failed ({resp.status}): {url} — {text[:200]}"
+                    )
+                try:
+                    return await resp.json()
+                except aiohttp.ContentTypeError as exc:
+                    raise CloudApiError(f"Non-JSON cloud response: {url}") from exc
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
+
     # ── Public data endpoints ─────────────────────────────────────────────────
 
     async def get_pmaps(self, blid: str) -> list[dict[str, Any]]:
@@ -479,6 +537,44 @@ class IrobotCloudApi:
         """
         url = f"{self._deployment['httpBaseAuth']}/v1/robots/{blid}/parts"
         result = await self._aws_get(url)
+        return result if isinstance(result, dict) else {}
+
+    async def set_robot_part_counter(
+        self, blid: str, part_id: str, counter: int = 0
+    ) -> dict[str, Any]:
+        """Set a consumable's wear counter, iRobot-cloud-side.
+
+        `counter` is PERCENT USED, the same field GET returns, so 0 means
+        "this part is brand new" — i.e. what the official app writes when
+        you confirm a replacement. Defaults to 0 because recording a
+        replacement is the only reason this integration calls it.
+
+        WIRE FORMAT CONFIRMED AGAINST THE LIVE API, not inferred. Static
+        analysis of the app suggested `PUT` with a flat
+        `{"part_id": "35"}` body; both are wrong and fail in ways that
+        look like something else:
+
+          * PUT and PATCH are not routed — API Gateway answers 403 with
+            an IAM "not authorized to perform: execute-api:Invoke"
+            message, which reads like an auth or credential problem
+            rather than a wrong verb.
+          * The flat body is accepted with 200 and silently ignored:
+            the response reports `num_parts: 0` and nothing changes. A
+            no-op that looks like success.
+
+        What actually works is POST with the parts ARRAY form, one entry
+        per part. Omitting `counter` returns
+        `400 {"errorType": "AspenError.InvalidEvent",
+        "errorMessage": "Missing parameters: ['counter']"}`.
+
+        Returns the response, which echoes the parts it accepted —
+        `num_parts` is the count actually applied, so 0 means the call
+        matched nothing and the caller should treat it as a failure
+        rather than a success.
+        """
+        url = f"{self._deployment['httpBaseAuth']}/v1/robots/{blid}/parts"
+        body = {"parts": [{"part_id": str(part_id), "counter": int(counter)}]}
+        result = await self._aws_post(url, body)
         return result if isinstance(result, dict) else {}
 
     async def get_favorites(self) -> list[dict[str, Any]]:

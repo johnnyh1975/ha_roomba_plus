@@ -298,6 +298,12 @@ DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
 #     is taken as the main (multi-surface) brushes and the shorter as the
 #     edge-sweeping side brush, which wears faster.
 #
+# 36 = SIDE BRUSH IS FIELD-CONFIRMED, not inferred: @mdarocha replaced the
+# side brush on an i3+ and confirmed the reset in iRobot's app, and 36 is
+# the id whose counter went to 0 (observed live in the same session). The
+# remaining three keep the reasoning above until someone confirms them the
+# same way.
+#
 # A wrong guess here is visible and cheap to correct: every part sensor
 # carries its raw `part_id` and counters as attributes, so comparing one
 # screen of the official app against the entity attributes settles it.

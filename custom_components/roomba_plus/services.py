@@ -35,6 +35,8 @@ from homeassistant.helpers.storage import Store
 from .const import (
     cleaning_modes_for,
     ATTR_ORDERED,
+    IROBOT_PART_ROLE_FILTER,
+    IROBOT_PART_ROLE_MAIN_BRUSH,
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
     ATTR_ROOM_PASSES,
@@ -922,6 +924,66 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
         )
 
 
+# Local reset slot -> the cloud consumable role it corresponds to. Only
+# parts iRobot actually tracks appear here: "battery" has no cloud
+# counter, and "pad" is a Braava consumable the parts endpoint does not
+# report, so both reset locally only.
+_RESET_PART_TO_CLOUD_ROLE: dict[str, str] = {
+    "filter": IROBOT_PART_ROLE_FILTER,
+    "brush":  IROBOT_PART_ROLE_MAIN_BRUSH,
+}
+
+
+async def _async_push_part_reset_to_cloud(
+    config_entry: Any, data: "RoombaData", part: str
+) -> None:
+    """Record a replacement in iRobot's cloud as well as locally.
+
+    Deliberately best-effort and silent on failure: the local reset has
+    already been saved by the caller, and a cloud outage must not turn a
+    successful user action into a service error. Failures are logged at
+    debug because "this account has no cloud parts" is the ordinary case,
+    not a fault.
+
+    `counter` is percent-used, so 0 is "this part is new" — the same
+    write the official app performs when you confirm a replacement.
+    """
+    role = _RESET_PART_TO_CLOUD_ROLE.get(part)
+    if role is None:
+        return
+    cc = data.cloud_coordinator
+    store = data.maintenance_store
+    if cc is None or store is None:
+        return
+    record = store.cloud_part_by_role(role)
+    if record is None:
+        return
+    part_id = record.get("part_id")
+    if not part_id:
+        return
+    try:
+        result = await cc.api.set_robot_part_counter(data.blid, str(part_id), 0)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "reset_%s: could not push reset to iRobot cloud for part %s",
+            part, part_id, exc_info=True,
+        )
+        return
+    # num_parts is what the API actually applied; 0 means the call was
+    # accepted but matched nothing, which is a failure wearing a 200.
+    if not result.get("num_parts"):
+        _LOGGER.debug(
+            "reset_%s: iRobot cloud accepted the call but applied no part "
+            "(part_id=%s, response=%s)",
+            part, part_id, result,
+        )
+        return
+    _LOGGER.info(
+        "reset_%s: recorded in iRobot cloud (part_id=%s)", part, part_id
+    )
+    await cc.async_request_refresh()
+
+
 async def _handle_reset_service(
     hass: HomeAssistant, call: ServiceCall, part: str
 ) -> None:
@@ -971,6 +1033,14 @@ async def _handle_reset_service(
         getattr(data.maintenance_store, f"reset_{part}")(current_hr)
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
         _fire_maintenance_reset_event(hass, config_entry, part, current_hr)
+
+        # PUSH THE RESET TO IROBOT TOO, so the app and this integration
+        # do not disagree about a part the user just replaced. Best
+        # effort by design: the local reset above is already recorded and
+        # persisted, so a cloud failure must not undo it or fail the
+        # service call. Robots whose account does not serve the parts
+        # endpoint simply have no role mapping and skip this entirely.
+        await _async_push_part_reset_to_cloud(config_entry, data, part)
         _async_signal_entities(hass, config_entry.entry_id, [
             "filter_last_replaced",
             "brush_last_replaced",

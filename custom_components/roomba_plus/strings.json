@@ -821,20 +821,11 @@
       "region_last_cleaned": {
         "name": "{region} – last cleaned"
       },
-      "part_filter": {
-        "name": "Maintenance – Filter (cloud)"
+      "part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
       },
-      "part_side_brush": {
-        "name": "Maintenance – Side brush (cloud)"
-      },
-      "part_main_brush": {
-        "name": "Maintenance – Main brushes (cloud)"
-      },
-      "part_clean_base_bag": {
-        "name": "Maintenance – Clean Base bag (cloud)"
-      },
-      "part_generic": {
-        "name": "Maintenance – Part {part_id} (cloud)"
+      "part_dirt_bag": {
+        "name": "Maintenance – Dirt disposal bag"
       }
     },
     "device_tracker": {
@@ -987,6 +978,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Start pad drying"
+      },
+      "reset_side_brush": {
+        "name": "Reset side brush"
+      },
+      "reset_clean_base_bag": {
+        "name": "Reset Clean Base bag"
       }
     },
     "switch": {

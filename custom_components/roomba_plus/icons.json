@@ -154,21 +154,6 @@
       "pad_wear_rate": {
         "default": "mdi:square-rounded-outline"
       },
-      "part_clean_base_bag": {
-        "default": "mdi:trash-can-outline"
-      },
-      "part_filter": {
-        "default": "mdi:air-filter"
-      },
-      "part_generic": {
-        "default": "mdi:wrench-clock"
-      },
-      "part_main_brush": {
-        "default": "mdi:brush"
-      },
-      "part_side_brush": {
-        "default": "mdi:broom"
-      },
       "phase": {
         "default": "mdi:robot-vacuum"
       },
@@ -279,6 +264,12 @@
       },
       "recent_time_30d": {
         "default": "mdi:clock-time-five-outline"
+      },
+      "part_edge_brush": {
+        "default": "mdi:broom"
+      },
+      "part_dirt_bag": {
+        "default": "mdi:trash-can-outline"
       }
     },
     "button": {
@@ -323,6 +314,12 @@
       },
       "favorite": {
         "default": "mdi:star-outline"
+      },
+      "reset_side_brush": {
+        "default": "mdi:broom"
+      },
+      "reset_clean_base_bag": {
+        "default": "mdi:trash-can-outline"
       }
     },
     "select": {

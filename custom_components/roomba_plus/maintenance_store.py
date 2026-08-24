@@ -235,6 +235,42 @@ class MaintenanceStore:
         self.brush_reset_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
 
+    # ── Cloud reads ───────────────────────────────────────────────────────────
+
+    def cloud_part_by_role(self, role: str) -> dict[str, Any] | None:
+        """Return the hydrated cloud record for a consumable role, or None.
+
+        None means "no cloud truth for this part": the account does not
+        serve the parts endpoint, the robot does not report this part, or
+        nothing has been hydrated yet. Callers fall back to the local
+        runtime-hours estimate in that case.
+        """
+        for record in self.cloud_parts.values():
+            if record.get("role") == role:
+                return record
+        return None
+
+    def cloud_remaining_hours(self, role: str) -> int | None:
+        """Return hours left on a consumable per iRobot's own counter.
+
+        This is the figure the official app shows, converted from the
+        runtime minutes the cloud reports. None when there is no cloud
+        record for the role, or when the counter is not minute-based —
+        a non-minute counter cannot be divided by 60 into hours.
+        """
+        record = self.cloud_part_by_role(role)
+        if record is None or record.get("count_type") != "minutes":
+            return None
+        remaining = record.get("count_remaining")
+        if remaining is None:
+            remaining = record.get("minutes_remaining")
+        if remaining is None:
+            return None
+        try:
+            return int(int(remaining) // 60)
+        except (TypeError, ValueError):
+            return None
+
     # ── Cloud hydration ───────────────────────────────────────────────────────
 
     def hydrate_from_cloud_parts(
