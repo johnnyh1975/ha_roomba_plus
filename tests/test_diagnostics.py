@@ -1072,3 +1072,106 @@ class TestNothingReadsHassOffTheConfigEntry:
             f"{offenders} read hass off a config entry, which has no "
             f"such attribute -- it is passed in, not carried"
         )
+
+
+class TestFavouritesReportTheTierInUse:
+    """The block used to read the Prime list unconditionally.
+
+    On @pk-1966's i7+ it reported 0 favourites while
+    `cloud.favorite_count` said 6 in the same download. Nothing was
+    wrong with his buttons -- the diagnostics were looking at
+    `prime_favorites`, which a Classic robot never fills, and the
+    number that would have told him so sat in a different section.
+    """
+
+    @pytest.mark.asyncio
+    async def test_classic_reports_the_cloud_coordinator(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        favourites = [
+            {"name": "Kitchen", "commanddefs": [{"robot_id": "MYBLID"}]},
+            {"name": "Someone else's", "commanddefs": [{"robot_id": "OTHER"}]},
+            {"name": "Unattributed"},
+        ]
+        data = SimpleNamespace(
+            prime_robot=None,
+            blid="MYBLID",
+            cloud_coordinator=SimpleNamespace(data={"favorites": favourites}),
+        )
+        entry = SimpleNamespace(options={})
+
+        result = await _favourites_diagnostics(data, entry)
+
+        assert result["source"] == "cloud_coordinator (Classic)"
+        assert result["count_for_account"] == 3
+        # Own blid plus the unattributed one; the other robot's is not ours.
+        assert result["count"] == 2
+        assert result["filtered_out_for_other_robots"] == 1
+
+    @pytest.mark.asyncio
+    async def test_prime_reports_the_prime_list(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        robot = SimpleNamespace(get_favorites_raw=AsyncMock(return_value={"favorites": []}))
+        data = SimpleNamespace(
+            prime_robot=robot,
+            prime_favorites=[{"name": "a"}, {"name": "b"}],
+            blid="MYBLID",
+        )
+        entry = SimpleNamespace(options={})
+
+        result = await _favourites_diagnostics(data, entry)
+
+        assert result["source"] == "prime_robot.get_favorites()"
+        assert result["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_raw_fetch_failure_does_not_break_the_download(self):
+        """A section that reports why it failed beats a download that
+        fails because one section did."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        robot = SimpleNamespace(
+            get_favorites_raw=AsyncMock(side_effect=RuntimeError("cloud down"))
+        )
+        data = SimpleNamespace(prime_robot=robot, prime_favorites=[], blid="B")
+
+        result = await _favourites_diagnostics(data, SimpleNamespace(options={}))
+
+        assert "cloud down" in result["raw"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_neither_tier_available_says_so(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        data = SimpleNamespace(prime_robot=None, blid="B", cloud_coordinator=None)
+
+        result = await _favourites_diagnostics(data, SimpleNamespace(options={}))
+
+        assert result["count"] == 0
+        assert "no prime robot" in result["source"]
+
+    @pytest.mark.asyncio
+    async def test_no_runtime_data_at_all_does_not_crash(self):
+        """The Classic branch passes `getattr(entry, "runtime_data",
+        None)`, which is None on an entry that failed to set up -- and
+        a diagnostics download is exactly what someone takes when
+        setup failed."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        result = await _favourites_diagnostics(None, SimpleNamespace(options={}))
+
+        assert result["count"] == 0
+        assert "no prime robot" in result["source"]

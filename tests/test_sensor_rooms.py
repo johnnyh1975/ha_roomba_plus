@@ -761,3 +761,77 @@ class TestDirtCorrelationSensor:
         assert s.extra_state_attributes["strongest_entity"] is None
 
 
+
+
+class TestPrimeRoomsOverdueSensor:
+    """Prime had no overdue sensor -- the Classic one sits behind a
+    `map_capability` check in a branch CLOUD_ONLY entries never reach.
+
+    It matters more here than on Classic: Prime robots have zones as
+    well as rooms (@chairstacker: seven rooms, twelve zones), so there
+    is more to fall behind, and watching for that is his stated use for
+    the integration.
+    """
+
+    @staticmethod
+    def _sensor(merged):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.sensor_rooms import (
+            PrimeRoomsOverdueSensor,
+        )
+
+        entry = MagicMock()
+        with patch.object(
+            PrimeRoomsOverdueSensor, "robot_unique_id", "BLID1"
+        ), patch(
+            "custom_components.roomba_plus.sensor_rooms.IRobotEntity.__init__",
+            return_value=None,
+        ):
+            sensor = PrimeRoomsOverdueSensor("BLID1", entry)
+        sensor._config_entry = entry
+        sensor._merged = lambda: merged
+        return sensor
+
+    def test_it_counts_only_the_overdue_ones(self):
+        sensor = self._sensor({
+            "Kitchen": {"status": "overdue"},
+            "Hall": {"status": "ok"},
+            "Sofa corner": {"status": "overdue"},
+        })
+
+        assert sensor.native_value == 2
+
+    def test_nothing_overdue_is_zero_not_unknown(self):
+        """Zero is a real answer and a useful one; unknown reads as a
+        broken sensor."""
+        sensor = self._sensor({"Kitchen": {"status": "ok"}})
+
+        assert sensor.native_value == 0
+
+    def test_its_unique_id_is_distinct_from_the_classic_one(self):
+        sensor = self._sensor({})
+
+        assert sensor._attr_unique_id == "BLID1_prime_rooms_overdue"
+
+    def test_it_subscribes_so_the_count_moves(self):
+        """The Classic sensor is refreshed by the local state push.
+        Prime has none -- without a subscription the count would be
+        read once at start-up and never move."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        sensor = self._sensor({})
+        coordinator = sensor._config_entry.runtime_data.prime_status_coordinator
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+        sensor.async_on_remove = MagicMock()
+
+        import asyncio
+
+        with patch(
+            "custom_components.roomba_plus.sensor_rooms.RoombaRoomsOverdueSensor"
+            ".async_added_to_hass",
+            AsyncMock(),
+        ):
+            asyncio.run(sensor.async_added_to_hass())
+
+        coordinator.async_add_listener.assert_called_once()

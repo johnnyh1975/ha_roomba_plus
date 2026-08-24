@@ -1740,6 +1740,18 @@ class TestMigrationsLiveInTheirOwnModule:
 # migrating lived here. Splitting a topic across a plural and a singular
 # filename costs a search every time somebody looks for it.
 
+# A byte-for-byte copy of the class below sat in a second file,
+# `test_migrations.py` -- the same name in the plural, holding nothing
+# else. Its four tests ran twice, in two files, proving the same thing
+# each time.
+#
+# Removed August 2026. The surviving file keeps the singular name even
+# though the module is `migrations.py`: renaming it would be the tidier
+# choice, but it is 1,814 lines that nineteen classes and a lot of git
+# history point at, and the plural name is now free rather than
+# confusing.
+
+
 class TestEarlyVersionsAreSkipped:
     """Versions 3 to 9 jump straight to 10.
 

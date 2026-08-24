@@ -262,24 +262,66 @@ class TestFavouritesAreReportedInDiagnostics:
         }
         return entry, diag
 
-    def test_the_count_distinguishes_empty_from_disabled(self):
-        entry, _diag = self._diag([{"id": "F1"}, {"id": "F2"}])
+    # THESE USED TO ASSERT ON THE FIXTURE AND ON SOURCE TEXT, so none
+    # of them called the code they were named after. That is how the
+    # Classic branch got away with reading `prime_favorites` -- a
+    # structural zero on every Classic robot, which @pk-1966's i7+
+    # download reported next to a cloud section saying six. A source
+    # check passes whether the block is right or wrong; these call it.
 
-        assert len(entry.runtime_data.prime_favorites) == 2
+    @staticmethod
+    def _run(data, options=None):
+        import asyncio
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        return asyncio.run(
+            _favourites_diagnostics(data, SimpleNamespace(options=options or {}))
+        )
+
+    def test_the_count_distinguishes_empty_from_disabled(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        robot = SimpleNamespace(get_favorites_raw=AsyncMock(return_value={}))
+        data = SimpleNamespace(
+            prime_robot=robot,
+            prime_favorites=[{"id": "F1"}, {"id": "F2"}],
+            blid="B",
+        )
+
+        result = self._run(data, {"prime_favorite_buttons": False})
+
+        # Two arrived; the buttons are off. Two separate facts, and a
+        # report that shows only one cannot tell them apart.
+        assert result["count"] == 2
+        assert result["buttons_enabled"] is False
 
     def test_an_empty_list_is_reported_as_zero_not_absent(self):
         """Zero favourites and no favourites block look the same to a
         reader; zero is the one that means something."""
-        entry, _ = self._diag([])
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
 
-        assert entry.runtime_data.prime_favorites == []
+        robot = SimpleNamespace(get_favorites_raw=AsyncMock(return_value={}))
+        data = SimpleNamespace(prime_robot=robot, prime_favorites=[], blid="B")
+
+        assert self._run(data)["count"] == 0
 
     def test_the_block_names_both_halves(self):
-        import inspect
+        """Count and buttons_enabled, whichever tier answered."""
+        from types import SimpleNamespace
 
-        from custom_components.roomba_plus import diagnostics
+        data = SimpleNamespace(
+            prime_robot=None,
+            blid="B",
+            cloud_coordinator=SimpleNamespace(data={"favorites": [{"n": 1}]}),
+        )
 
-        source = inspect.getsource(diagnostics)
+        result = self._run(data)
 
-        assert '"favourites": {' in source
-        assert '"buttons_enabled"' in source
+        assert "count" in result
+        assert "buttons_enabled" in result
+        # And which half it came from, which neither test asked before.
+        assert result["source"] == "cloud_coordinator (Classic)"

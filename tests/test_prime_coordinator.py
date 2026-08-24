@@ -678,7 +678,7 @@ class TestMissionHistorySyncsAtMissionEnd:
         import inspect
 
         from custom_components.roomba_plus.prime_coordinator import (
-            PrimeStatusCoordinator,
+            PrimeCoordinator,
         )
 
         source = inspect.getsource(
@@ -694,7 +694,7 @@ class TestMissionHistorySyncsAtMissionEnd:
         import inspect
 
         from custom_components.roomba_plus.prime_coordinator import (
-            PrimeStatusCoordinator,
+            PrimeCoordinator,
         )
 
         source = inspect.getsource(
@@ -702,3 +702,92 @@ class TestMissionHistorySyncsAtMissionEnd:
         )
 
         assert "except Exception" in source
+
+
+class TestPrimeFiresRoomCompleted:
+    """Classic has fired `roomba_plus_room_completed` all along; Prime
+    never did, because it comes from callbacks.py and that is a
+    Classic-only path -- the same shape as the `last_mqtt_message_ts`
+    gap @DaRealGuGu found.
+
+    Prime users had the per-room state but no trigger to hang an
+    automation on: "tell me when the kitchen is done" had nothing to
+    fire on.
+    """
+
+    @staticmethod
+    def _coordinator():
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeCoordinator,
+        )
+
+        c = PrimeCoordinator.__new__(PrimeCoordinator)
+        c.hass = MagicMock()
+        c.entry = MagicMock(entry_id="E1", title="Robot")
+        c.entry.runtime_data.cloud_coordinator.regions_by_pmap = {
+            "MAP-A": {"10": "Kitchen", "11": "Hall"}
+        }
+        c._last_room_id = None
+        return c
+
+    @staticmethod
+    def _report(region_id, mission_id="M1"):
+        from unittest.mock import MagicMock
+
+        report = MagicMock(mission_id=mission_id)
+        if region_id is None:
+            report.event = []
+        else:
+            event = MagicMock()
+            event.room = MagicMock(region_id=region_id)
+            report.event = [event]
+        return report
+
+    def test_leaving_a_room_fires_the_event(self):
+        c = self._coordinator()
+
+        c._fire_room_completed_if_changed(self._report("10"))
+        c.hass.bus.async_fire.assert_not_called()  # first report: nothing done yet
+
+        c._fire_room_completed_if_changed(self._report("11"))
+
+        c.hass.bus.async_fire.assert_called_once()
+        name, payload = c.hass.bus.async_fire.call_args[0]
+        assert name == "roomba_plus_room_completed"
+        # The room that FINISHED, not the one now being cleaned.
+        assert payload["room_id"] == "10"
+        assert payload["room_name"] == "Kitchen"
+
+    def test_the_same_room_repeated_does_not_re_fire(self):
+        """The timeline repeats the current room on every update.
+        Re-firing would make the event useless as a trigger."""
+        c = self._coordinator()
+        c._fire_room_completed_if_changed(self._report("10"))
+        c._fire_room_completed_if_changed(self._report("11"))
+        c.hass.bus.async_fire.reset_mock()
+
+        c._fire_room_completed_if_changed(self._report("11"))
+
+        c.hass.bus.async_fire.assert_not_called()
+
+    def test_an_unknown_id_still_fires_with_no_name(self):
+        """A region the cloud has no name for is still a room that was
+        cleaned -- dropping the event would lose real information."""
+        c = self._coordinator()
+        c._fire_room_completed_if_changed(self._report("99"))
+        c._fire_room_completed_if_changed(self._report("10"))
+
+        payload = c.hass.bus.async_fire.call_args[0][1]
+        assert payload["room_id"] == "99"
+        assert payload["room_name"] is None
+
+    def test_the_end_of_a_mission_fires_for_the_last_room(self):
+        """The robot leaves the last room for no room at all."""
+        c = self._coordinator()
+        c._fire_room_completed_if_changed(self._report("10"))
+        c._fire_room_completed_if_changed(self._report(None))
+
+        payload = c.hass.bus.async_fire.call_args[0][1]
+        assert payload["room_id"] == "10"

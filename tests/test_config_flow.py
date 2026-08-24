@@ -838,3 +838,75 @@ class TestLinkStep:
             await flow.async_step_link({})
 
         validate.assert_not_awaited()
+
+
+class TestBlockingSensorPickerOffersHelperDomains:
+    """The picker and the manager must agree on which domains count.
+
+    @chairstacker could not select `input_boolean.vacation_mode` as a
+    blocker even though the manager would have handled it: the check
+    reads `state.state` and never cared about the domain, but the
+    picker was pinned to `binary_sensor`. A picker that offers less
+    than the manager accepts is an artificial limit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_picker_accepts_more_than_binary_sensor(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_BLOCKING_SENSORS
+
+        flow = _make_options_flow()
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_blocking_sensors(None)
+
+        selector_config = next(
+            value.config
+            for key, value in result["data_schema"].schema.items()
+            if CONF_BLOCKING_SENSORS in str(key)
+        )
+        domains = selector_config["domain"]
+
+        assert "binary_sensor" in domains
+        assert "input_boolean" in domains, (
+            "a house-state toggle is the case this was widened for"
+        )
+
+
+class TestRegionSensorsOptionIsOfferedOnBothTiers:
+    """The per-region entities are opt-in, and the opt-in has to exist
+    on both generations.
+
+    Giving Prime users a switch and Classic users none -- for identical
+    data, from the same store -- is the split this project keeps having
+    to unpick later. Checked by asking both schemas, because a source
+    check passes whether or not the field is in the form.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_settings_forms_offer_it(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_REGION_SENSORS
+        from custom_components.roomba_plus.models import ConnectionType
+
+        for connection_type in (ConnectionType.CLOUD_ONLY, ConnectionType.LOCAL_PUSH):
+            flow = _make_options_flow()
+            flow.config_entry.runtime_data.connection_type = connection_type
+            flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+            result = await flow.async_step_settings(None)
+            keys = {str(k) for k in result["data_schema"].schema}
+
+            assert any(CONF_REGION_SENSORS in k for k in keys), (
+                f"{connection_type} settings form does not offer "
+                f"{CONF_REGION_SENSORS}"
+            )
+
+    def test_it_defaults_to_off(self):
+        """@dduff617's four maps would otherwise mean dozens of
+        entities nobody asked for."""
+        from custom_components.roomba_plus.const import DEFAULT_REGION_SENSORS
+
+        assert DEFAULT_REGION_SENSORS is False

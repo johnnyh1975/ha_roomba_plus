@@ -3355,3 +3355,54 @@ class TestRecordsIsAPropertyNotAMethod:
         from custom_components.roomba_plus.mission_store import MissionStore
 
         assert isinstance(MissionStore.records, property)
+
+
+class TestPropertiesAreNotCalledAsMethods:
+    """Guard against a whole class of bug a MagicMock cannot catch.
+
+    Reported by @liblit against v3.5.2 with a full root cause: one
+    call site wrote `ms.records()` where `records` is a property, so
+    the GS-SMART-COVERAGE backfill raised TypeError on its first line
+    every time the cloud coordinator refreshed. Four other call sites
+    read it correctly.
+
+    It was fixed before the report arrived, but the interesting part
+    is why it survived as long as it did. The tests for that very
+    function assert `ms.records.assert_not_called()` -- treating
+    `records` as callable, because a MagicMock allows both forms
+    silently. The tests could not have caught it, and neither could
+    any test built the same way.
+
+    So this checks the source text instead of behaviour: no MagicMock
+    involved, nothing to be lenient.
+    """
+
+    def test_no_call_site_invokes_records_as_a_method(self):
+        from pathlib import Path
+
+        component = Path("custom_components/roomba_plus")
+        offenders = []
+        for path in sorted(component.glob("*.py")):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if ".records()" in line:
+                    offenders.append(f"{path.name}:{number}: {stripped}")
+
+        assert not offenders, (
+            "`MissionStore.records` is a property, not a method. "
+            "Calling it raises TypeError at runtime:\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_records_really_is_a_property(self):
+        """If it ever becomes a method, the guard above must be
+        retired rather than left asserting the opposite."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        assert isinstance(
+            type(MissionStore).__dict__.get("records")
+            or MissionStore.__dict__.get("records"),
+            property,
+        )

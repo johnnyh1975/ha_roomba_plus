@@ -2552,3 +2552,101 @@ class TestWeDoNotAssignToHomeAssistantProperties:
             f"{offenders} are Home Assistant's own -- see the sibling "
             f"test for why this fails platform setup"
         )
+
+
+class TestPrimeMissionPhases:
+    """Phase names from the firmware 3.8.126 `cleanMissionStatus.phase`
+    enum, mapped to activities.
+
+    The list came from a firmware image, not from watching a robot --
+    an external source, so it is trusted the way this project trusts
+    external sources: cross-checked where it can be. `room`, `zone` and
+    `refill` were already confirmed from real data before the enum
+    existed, which is the evidence that the rest name real phases and
+    not a decoder's invention.
+    """
+
+    def test_cleaning_sub_phases_all_read_as_cleaning(self):
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+        from homeassistant.components.vacuum import VacuumActivity
+
+        for phase in ("oClean", "room", "zone", "polygon", "explore",
+                      "disc", "travel", "traversal", "plan", "reloc"):
+            assert PHASE_TO_ACTIVITY[phase] == VacuumActivity.CLEANING, phase
+
+    def test_the_error_phases_are_not_cleaning(self):
+        """tankEmpty and binFull mean the robot has stopped and needs a
+        person; mapping them to CLEANING would hide that."""
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+        from homeassistant.components.vacuum import VacuumActivity
+
+        for phase in ("tankEmpty", "binFull", "kidnap", "error"):
+            assert PHASE_TO_ACTIVITY[phase] == VacuumActivity.ERROR, phase
+
+    def test_unmodelled_phases_are_left_out_on_purpose(self):
+        """`virtual` and `cmd` are in the firmware enum but not mapped:
+        their activity is unclear from the name, and falling through
+        safely beats guessing. This test documents that the omission is
+        deliberate, so nobody 'completes' the map from the enum alone."""
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+
+        assert "virtual" not in PHASE_TO_ACTIVITY
+        assert "cmd" not in PHASE_TO_ACTIVITY
+
+    def test_every_mapped_phase_has_a_label(self):
+        """A phase the vacuum entity understands but the phase sensor
+        cannot name would show a raw wire string like 'traversal'."""
+        from custom_components.roomba_plus.const import (
+            PHASE_LABELS,
+            PHASE_TO_ACTIVITY,
+        )
+
+        # The home/stop/pause housekeeping phases have their own labels
+        # elsewhere; this checks the Prime cleaning enum specifically.
+        prime_phases = {
+            "oClean", "room", "zone", "polygon", "explore", "disc",
+            "travel", "traversal", "plan", "reloc", "tankEmpty",
+            "binFull", "kidnap", "refill",
+        }
+        missing = {p for p in prime_phases if p not in PHASE_LABELS}
+        assert not missing, f"phases with no readable label: {missing}"
+
+
+class TestPhaseEvidenceIsLabelled:
+    """Comments must distinguish measured from assumed.
+
+    Three Prime phases were seen in real data; the other eleven come
+    from a firmware image and no robot in this project has been
+    observed reporting them. Both are mapped, and that is fine -- but a
+    reader who cannot tell which is which has no way to know where to
+    start when one behaves oddly.
+    """
+
+    @staticmethod
+    def _phase_block() -> str:
+        from pathlib import Path
+
+        source = Path("custom_components/roomba_plus/const.py").read_text()
+        start = source.index("PHASE_TO_ACTIVITY")
+        return source[start:source.index("\n}", start)]
+
+    def test_the_observed_three_are_labelled_as_such(self):
+        block = self._phase_block()
+        for phase in ("room", "zone", "refill"):
+            line = next(
+                line for line in block.splitlines() if f'"{phase}"' in line
+            )
+            assert "OBSERVED" in line, f"{phase} was seen in real data; say so"
+
+    def test_the_firmware_only_ones_are_labelled_assumed(self):
+        """If one of these is ever confirmed on a real robot, move it
+        to the OBSERVED group -- do not just delete the tag."""
+        block = self._phase_block()
+        for phase in ("oClean", "polygon", "traversal", "reloc", "kidnap"):
+            line = next(
+                line for line in block.splitlines() if f'"{phase}"' in line
+            )
+            assert "ASSUMED" in line, (
+                f"{phase} comes from the firmware enum only -- an unlabelled "
+                "entry reads as though somebody watched a robot do it"
+            )

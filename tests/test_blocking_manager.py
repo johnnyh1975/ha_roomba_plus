@@ -432,3 +432,61 @@ class TestDoStartConnectionTypeBranching:
         assert not any(
             call for call in hass._fired_events
         )  # nothing fired; no exception raised is the main assertion here
+
+
+class TestNonBinarySensorBlockers:
+    """@chairstacker blocks missions on "house state" -- vacation or
+    guest mode -- which in Home Assistant is an `input_boolean`, not a
+    sensor.
+
+    The check reads `state.state` against {"on", "home", "true"} and
+    never cared which domain produced it; only the config picker was
+    limited to `binary_sensor`. These pin that the manager side works
+    for the domains the picker now offers, so the two cannot drift
+    apart.
+    """
+
+    def test_an_input_boolean_blocks(self):
+        hass = _FakeHass({"input_boolean.vacation_mode": "on"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert "input_boolean.vacation_mode" in bm.blocking_entities
+
+    def test_an_input_boolean_off_does_not_block(self):
+        hass = _FakeHass({"input_boolean.vacation_mode": "off"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == []
+
+    def test_a_person_at_home_blocks(self):
+        """"home" is already in the active set -- "do not run while I
+        am in" is the same question as "do not run while this is on"."""
+        hass = _FakeHass({"person.chairstacker": "home"})
+        entry = _make_entry(["person.chairstacker"])
+        bm = BlockingManager(hass, entry)
+        assert "person.chairstacker" in bm.blocking_entities
+
+    def test_a_schedule_helper_blocks_while_on(self):
+        hass = _FakeHass({"schedule.quiet_hours": "on"})
+        entry = _make_entry(["schedule.quiet_hours"])
+        bm = BlockingManager(hass, entry)
+        assert "schedule.quiet_hours" in bm.blocking_entities
+
+    def test_mixed_domains_work_together(self):
+        """A real setup is not one domain: a door sensor and a mode
+        toggle in the same list."""
+        hass = _FakeHass({
+            "binary_sensor.door": "off",
+            "input_boolean.guest_mode": "on",
+        })
+        entry = _make_entry(["binary_sensor.door", "input_boolean.guest_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == ["input_boolean.guest_mode"]
+
+    def test_an_unavailable_helper_does_not_block(self):
+        """Same rule as for sensors: an unusable entity must not wedge
+        the robot -- it would be blocked with nothing to point at."""
+        hass = _FakeHass({"input_boolean.vacation_mode": "unavailable"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == []

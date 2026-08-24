@@ -3625,3 +3625,311 @@ class TestPmapsInfoMerge:
         assert store._records[-1]["pmaps_info"] == [
             {"pmap_id": "P1", "pmapv_id": "V7"}
         ]
+
+
+class TestHistoryResolvesAgainstTheMissionsOwnMap:
+    """@dduff617 (S9+, four Smart Maps) saw historical rooms rendered
+    as raw region ids -- `"2"` and `"5"` -- beside correctly named ones.
+
+    `cloud_coordinator.regions` deliberately holds ONLY the active
+    map's regions, so a room COMMAND cannot go to the wrong floor (#8).
+    That filter is right. But every historical record was resolved
+    against it too, so a mission run on a different map had no entry
+    and its ids survived unresolved. The iRobot app shows those
+    missions correctly -- the account has the context; we were looking
+    at one map's dictionary.
+    """
+
+    BY_PMAP = {
+        "MAP-UPSTAIRS": {"2": "Guest room", "5": "Landing"},
+        "MAP-DOWNSTAIRS": {"1": "Kitchen"},
+    }
+
+    @staticmethod
+    def _record(pmap_id, rids):
+        """A cloud-enriched record: rooms come from timeline.finEvents."""
+        return {
+            "id": "M1",
+            "pmaps_info": [{"pmap_id": pmap_id, "pmapv_id": "V1"}],
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": rid, "status": 0}}
+                    for rid in rids
+                ]
+            },
+        }
+
+    def _store(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        return MissionStore.__new__(MissionStore)
+
+    def test_rooms_from_another_map_resolve(self):
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2", "5"])
+
+        # The ACTIVE map is downstairs and knows neither id.
+        names = store._record_room_names(
+            rec, {"1": "Kitchen"}, self.BY_PMAP
+        )
+
+        assert names == ["Guest room", "Landing"], (
+            "a mission on another Smart Map must resolve against that map"
+        )
+
+    def test_the_active_map_is_still_the_fallback(self):
+        """A record with no map recorded -- older entries, EPHEMERAL
+        tier -- keeps the behaviour that was there before."""
+        store = self._store()
+        rec = {
+            "id": "M2",
+            "timeline": {
+                "finEvents": [{"type": "room", "room": {"rid": "1", "status": 0}}]
+            },
+        }
+
+        names = store._record_room_names(rec, {"1": "Kitchen"}, self.BY_PMAP)
+
+        assert names == ["Kitchen"]
+
+    def test_an_unknown_id_is_still_returned_raw(self):
+        """Data is never silently dropped -- an id nobody can name
+        stays visible rather than vanishing from the history."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["99"])
+
+        names = store._record_room_names(rec, {}, self.BY_PMAP)
+
+        assert names == ["99"]
+
+    def test_the_record_map_wins_over_the_active_one(self):
+        """Duplicate ids across floors: id 2 exists on both. The
+        mission's own map decides, which is the whole point -- users
+        who reuse room names across maps would otherwise collide."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2"])
+
+        names = store._record_room_names(
+            rec, {"2": "Wrong floor's room"}, self.BY_PMAP
+        )
+
+        assert names == ["Guest room"]
+
+    def test_no_by_pmap_at_all_behaves_as_before(self):
+        """Cloud disabled: nothing changes for anyone not affected."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2"])
+
+        assert store._record_room_names(rec, {"2": "Old behaviour"}, None) == [
+            "Old behaviour"
+        ]
+
+
+class TestRegionLastCleaned:
+    """The id-keyed history behind the per-region "last cleaned"
+    sensors (@chairstacker's request).
+
+    Keyed by map AND region because ids repeat across maps -- merging
+    them would attribute one floor's clean to another floor's room.
+    """
+
+    @staticmethod
+    def _rec(rec_id, pmap_id, rids, ended_at):
+        return {
+            "id": rec_id,
+            "ended_at": ended_at,
+            "pmaps_info": [{"pmap_id": pmap_id}] if pmap_id else None,
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}} for r in rids
+                ]
+            },
+        }
+
+    def _store(self, records):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = records
+        return store
+
+    def test_ids_are_qualified_by_map(self):
+        store = self._store([self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00")])
+
+        assert store.region_last_cleaned() == {
+            "MAP-A/2": "2026-08-21T10:00:00+00:00"
+        }
+
+    def test_the_same_id_on_two_maps_stays_separate(self):
+        """The whole reason for the compound key."""
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("M2", "MAP-B", ["2"], "2026-08-20T10:00:00+00:00"),
+        ])
+
+        result = store.region_last_cleaned()
+
+        assert result["MAP-A/2"] == "2026-08-21T10:00:00+00:00"
+        assert result["MAP-B/2"] == "2026-08-20T10:00:00+00:00"
+
+    def test_newest_wins_per_region(self):
+        """Records are scanned newest-first; the first hit stands."""
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("M2", "MAP-A", ["2"], "2026-08-01T10:00:00+00:00"),
+        ])
+
+        assert store.region_last_cleaned()["MAP-A/2"] == "2026-08-21T10:00:00+00:00"
+
+    def test_a_multi_room_mission_records_every_room(self):
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2", "5", "7"], "2026-08-21T10:00:00+00:00")
+        ])
+
+        assert set(store.region_last_cleaned()) == {"MAP-A/2", "MAP-A/5", "MAP-A/7"}
+
+    def test_a_record_with_no_map_falls_back_to_the_bare_id(self):
+        """Older entries and EPHEMERAL tier carry no pmaps_info; their
+        data is still worth having."""
+        store = self._store([self._rec("M1", None, ["2"], "2026-08-21T10:00:00+00:00")])
+
+        assert store.region_last_cleaned() == {"2": "2026-08-21T10:00:00+00:00"}
+
+    def test_records_without_an_end_time_are_skipped(self):
+        """A mission still running has nothing to report yet."""
+        store = self._store([self._rec("M1", "MAP-A", ["2"], None)])
+
+        assert store.region_last_cleaned() == {}
+
+    def test_ids_survive_a_rename(self):
+        """The point of keying on ids: `record_region_ids` never looks
+        at names, so renaming a room in the app cannot orphan its
+        history."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = self._rec("M1", "MAP-A", ["2", "5"], "2026-08-21T10:00:00+00:00")
+
+        assert MissionStore.record_region_ids(rec) == ["2", "5"]
+
+
+class TestPrimeRecordsAreADifferentShape:
+    """Prime stores no `timeline`. `prime_mission_sync` walks the
+    library's timeline objects (attributes, and the field is
+    `region_id`, not `rid`) and keeps `room_durations_sec` --
+    `{region_id: seconds}`.
+
+    Reading only the Classic shape returned [] for every Prime mission,
+    so the per-region sensors would all have sat at "unknown" forever,
+    looking like a robot that had never cleaned anything.
+    """
+
+    def test_a_prime_record_yields_its_regions(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "id": "M1",
+            "ended_at": "2026-08-21T10:00:00+00:00",
+            "room_durations_sec": {"10": 120.0, "101": 60.0},
+        }
+
+        assert MissionStore.record_region_ids(rec) == ["10", "101"]
+
+    def test_a_classic_record_still_uses_finEvents(self):
+        """Both shapes, one method -- the Classic path must not have
+        been traded away for the Prime one."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "timeline": {
+                "finEvents": [{"type": "room", "room": {"rid": "2", "status": 0}}]
+            }
+        }
+
+        assert MissionStore.record_region_ids(rec) == ["2"]
+
+    def test_prime_regions_reach_the_last_cleaned_history(self):
+        """End to end: a Prime record produces a dated entry."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{
+            "id": "M1",
+            "ended_at": "2026-08-21T10:00:00+00:00",
+            "pmaps_info": [{"pmap_id": "MAP-A"}],
+            "room_durations_sec": {"101": 60.0},
+        }]
+
+        assert store.region_last_cleaned() == {
+            "MAP-A/101": "2026-08-21T10:00:00+00:00"
+        }
+
+
+class TestOverdueAndCountsResolvePerMap:
+    """Same fault as the history sensor, two functions further on.
+
+    @dduff617's report named `room_cleaning_history`, but
+    `room_coverage_health` and `room_visit_counts` share the resolver.
+    An unresolved raw id counts as its own room there: never cleaned,
+    so permanently overdue, and one real room's visits split across two
+    entries. Fixed together because they are one bug in one place.
+    """
+
+    BY_PMAP = {"MAP-UPSTAIRS": {"2": "Guest room"}}
+
+    @staticmethod
+    def _rec(pmap_id, rids, ended_at):
+        return {
+            "id": "M1",
+            "ended_at": ended_at,
+            "started_at": ended_at,
+            "pmaps_info": [{"pmap_id": pmap_id}],
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}} for r in rids
+                ]
+            },
+        }
+
+    def _store(self, records):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = records
+        return store
+
+    def test_visit_counts_name_rooms_from_their_own_map(self):
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-14T10:00:00+00:00"),
+        ])
+
+        counts = store.room_visit_counts({}, None, self.BY_PMAP)
+
+        assert counts == {"Guest room": 2}, (
+            "without per-map resolution these arrive as raw id '2'"
+        )
+
+    def test_without_the_map_the_raw_id_shows_the_old_behaviour(self):
+        """The contrast, so the test proves the fix rather than the
+        fixture."""
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+        ])
+
+        assert store.room_visit_counts({}, None, None) == {"2": 1}
+
+    def test_coverage_health_uses_the_records_own_map(self):
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-14T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-07T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-07-31T10:00:00+00:00"),
+        ])
+
+        health = store.room_coverage_health(
+            "2026-08-22T10:00:00+00:00",
+            region_map={}, umf_regions=None, regions_by_pmap=self.BY_PMAP,
+        )
+
+        assert "Guest room" in health
+        assert "2" not in health

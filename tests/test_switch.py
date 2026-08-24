@@ -791,3 +791,82 @@ class TestSettingSwitchesFollowKeyPresenceToo:
         idx = source.find("PrimeQuietHoursSwitch(data.blid")
         assert idx > 0
         assert "NOT CAPABILITY-GATED" in source[max(0, idx - 400):idx]
+
+
+class TestPrimePadDrySwitch:
+    """@chairstacker: the start/stop pad-dry buttons only ever appear
+    together, and a switch is "one activity/log entry" he can show as a
+    single colour-coded tile.
+
+    The condition that usually blocks turning a button pair into a
+    switch is met here: the dock reports PAD_DRY_IN_PROGRESS, so the
+    switch shows what the dock is DOING rather than remembering what
+    was last pressed.
+    """
+
+    @staticmethod
+    def _switch(dock_state=None, has_dock=True):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        entry = MagicMock()
+        coordinator = entry.runtime_data.prime_status_coordinator
+        if has_dock:
+            coordinator.data = {
+                "ro-currentstate": {"dock": {"state": dock_state}}
+            }
+        else:
+            coordinator.data = {"ro-currentstate": {}}
+        coordinator.async_request_refresh = AsyncMock()
+        entry.runtime_data.prime_robot.send_simple_command = AsyncMock()
+
+        with patch.object(
+            PrimePadDrySwitch, "robot_unique_id", "BLID1"
+        ), patch(
+            "custom_components.roomba_plus.switch.IRobotEntity.__init__",
+            return_value=None,
+        ):
+            sw = PrimePadDrySwitch("BLID1", entry)
+        sw._config_entry = entry
+        return sw
+
+    def test_it_is_on_while_the_dock_is_drying(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw = self._switch(dock_state=int(DockState.PAD_DRY_IN_PROGRESS))
+
+        assert sw.is_on is True
+
+    def test_it_is_off_in_another_dock_state(self):
+        sw = self._switch(dock_state=301)  # an ordinary docked state
+
+        assert sw.is_on is False
+
+    def test_no_dock_report_is_unknown_not_off(self):
+        """"Off" for a dock that might be running is a lie; unknown is
+        the honest answer."""
+        sw = self._switch(has_dock=False)
+
+        assert sw.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turning_on_sends_drypad(self):
+        sw = self._switch()
+
+        await sw.async_turn_on()
+
+        robot = sw._config_entry.runtime_data.prime_robot
+        robot.send_simple_command.assert_awaited_once_with("drypad")
+
+    @pytest.mark.asyncio
+    async def test_turning_off_sends_stoppaddry(self):
+        """The iRobot app greys out dock controls once a task begins,
+        so it cannot stop a drying cycle. That divergence predates this
+        switch and is deliberate."""
+        sw = self._switch()
+
+        await sw.async_turn_off()
+
+        robot = sw._config_entry.runtime_data.prime_robot
+        robot.send_simple_command.assert_awaited_once_with("stoppaddry")

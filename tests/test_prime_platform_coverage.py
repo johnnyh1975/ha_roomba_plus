@@ -317,3 +317,73 @@ class TestEveryPrimeEntityBelongsToTheRobotDevice:
             "serial come only from config_entry -- pass it to "
             "IRobotEntity.__init__."
         )
+
+
+class TestRegionSensorsGrowWithTheMap:
+    """@chairstacker adds and renames zones regularly -- he went from
+    eight to twelve between two reports. A list frozen at setup leaves
+    every new zone without an entity until he reloads the integration,
+    which is the manual step this feature exists to remove.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_zone_added_later_gets_its_sensor(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import async_setup_entry
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        coordinator = entry.runtime_data.cloud_coordinator
+        coordinator.regions_by_pmap = {"MAP-A": {"10": "Kitchen"}}
+
+        listeners: list = []
+        coordinator.async_add_listener = lambda cb: listeners.append(cb) or (
+            lambda: None
+        )
+
+        created: list = []
+        await async_setup_entry(MagicMock(), entry, created.extend)
+
+        before = sum(
+            1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"
+        )
+
+        # A new zone appears in the cloud, and the coordinator fires.
+        coordinator.regions_by_pmap = {
+            "MAP-A": {"10": "Kitchen", "101": "Sofa corner"}
+        }
+        for callback in listeners:
+            callback()
+
+        after = sum(
+            1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"
+        )
+
+        assert after == before + 1, "a zone added after setup must get an entity"
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_map_adds_nothing(self):
+        """The listener fires on every cloud refresh; it must not
+        create duplicates of what already exists."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import async_setup_entry
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        coordinator = entry.runtime_data.cloud_coordinator
+        coordinator.regions_by_pmap = {"MAP-A": {"10": "Kitchen"}}
+        listeners: list = []
+        coordinator.async_add_listener = lambda cb: listeners.append(cb) or (
+            lambda: None
+        )
+
+        created: list = []
+        await async_setup_entry(MagicMock(), entry, created.extend)
+        before = len(created)
+
+        for callback in listeners:
+            callback()
+
+        assert len(created) == before

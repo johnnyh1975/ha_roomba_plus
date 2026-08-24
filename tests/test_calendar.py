@@ -1606,3 +1606,140 @@ class TestBydayIsReadOnAnEdit:
         source = inspect.getsource(PrimeScheduleCalendar.async_update_event)
 
         assert "explicit_days=explicit_days" in source
+
+
+class TestEventsCarryARecurrenceRule:
+    """@chairstacker could not change a schedule's weekday from the HA
+    calendar across three releases.
+
+    The day-handling code was correct throughout: `_days_for_update`
+    moves a single-day schedule, and BYDAY is read on an edit. The
+    events themselves carried no `rrule`, so Home Assistant treated
+    each occurrence as a one-off, showed no recurrence fields, and
+    never sent a day back. Two correct fixes to the day logic changed
+    nothing he could see, because his edits never reached it.
+    """
+
+    @staticmethod
+    def _event_on(year, month, day):
+        import datetime as dt
+
+        from custom_components.roomba_plus.calendar import _to_calendar_event
+
+        start = dt.datetime(year, month, day, 9, 30, tzinfo=dt.UTC)
+        return _to_calendar_event(start, start + dt.timedelta(hours=1), [], uid="S1")
+
+    def test_an_event_states_its_weekday(self):
+        # 2026-08-04 is a Tuesday.
+        event = self._event_on(2026, 8, 4)
+
+        assert event.rrule is not None
+        assert "BYDAY=TU" in event.rrule
+        assert "FREQ=WEEKLY" in event.rrule
+
+    def test_the_rule_survives_a_round_trip_through_the_reader(self):
+        """The write table and the read table are separate; if they
+        disagree, a day written here comes back as a different day --
+        which is how this project's weekday conversions have gone
+        wrong three times before."""
+        import datetime as dt
+
+        from custom_components.roomba_plus.calendar import _weekdays_from_rrule
+
+        # Every weekday, not just one: an off-by-one shows up only at
+        # the ends of the table.
+        for offset in range(7):
+            start = dt.date(2026, 8, 3) + dt.timedelta(days=offset)  # Mon..Sun
+            event = self._event_on(start.year, start.month, start.day)
+            assert _weekdays_from_rrule(event.rrule) == [start.weekday()], start
+
+    def test_the_two_day_tables_are_mirrors(self):
+        """Guards the pair directly, so a change to one that is not
+        made to the other fails here rather than in a user's calendar."""
+        import inspect
+
+        from custom_components.roomba_plus import calendar as cal
+
+        assert cal._RRULE_DAYS == ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+        # The reader builds its table inline; confirm it by using it.
+        for index, abbrev in enumerate(cal._RRULE_DAYS):
+            assert cal._weekdays_from_rrule(f"FREQ=WEEKLY;BYDAY={abbrev}") == [index]
+        del inspect
+
+
+class TestClassicReadsBydayToo:
+    """Events now carry an rrule on BOTH tiers, so Home Assistant shows
+    a "repeat on" control for Classic robots as well.
+
+    Changing that control sends a new BYDAY while `dtstart` stays put.
+    The Classic edit path read only `dtstart`, so the same action that
+    works on Prime would have been silently ignored here -- the exact
+    asymmetry the rrule change would have introduced.
+    """
+
+    @staticmethod
+    def _event(dtstart, rrule):
+        return {"dtstart": dtstart, "rrule": rrule, "summary": "Clean"}
+
+    async def _written_weekday(self, dtstart, rrule):
+        """The weekday that reaches the schedule writer."""
+        import datetime as dt
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus import calendar as cal_mod
+
+        cal = _make_calendar({"cleanSchedule": {"cycle": ["none"] * 7}})
+        cal._async_write = AsyncMock()
+
+        captured = {}
+
+        def _record(current, *, weekday, hour, minute):
+            captured["weekday"] = weekday
+            return current
+
+        with patch.object(cal_mod, "legacy_with_entry", _record), \
+             patch.object(cal_mod, "legacy_without_day", lambda c, d: c), \
+             patch.object(cal_mod, "reject_unsupported", lambda **kw: None):
+            await cal.async_update_event(
+                "weekday-2", self._event(dtstart, rrule)
+            )
+        del dt
+        return captured.get("weekday")
+
+    @pytest.mark.asyncio
+    async def test_byday_wins_over_an_unchanged_dtstart(self):
+        """The user changed 'repeat on' to Friday; dtstart still says
+        Tuesday. Friday is what they asked for."""
+        import datetime as dt
+
+        tuesday = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+
+        weekday = await self._written_weekday(tuesday, "FREQ=WEEKLY;BYDAY=FR")
+
+        # Robot numbering counts from Sunday: Friday = 5.
+        assert weekday == 5
+
+    @pytest.mark.asyncio
+    async def test_dtstart_still_works_when_the_event_is_dragged(self):
+        """Dragging an entry to another day moves dtstart, and the
+        rrule that comes back names the new day too -- both agree."""
+        import datetime as dt
+
+        thursday = dt.datetime(2026, 8, 6, 9, 30, tzinfo=dt.UTC)
+
+        weekday = await self._written_weekday(thursday, "FREQ=WEEKLY;BYDAY=TH")
+
+        assert weekday == 4  # Sunday-based: Thursday = 4
+
+    @pytest.mark.asyncio
+    async def test_several_days_fall_back_to_dtstart(self):
+        """`legacy_with_entry` sets one day. A multi-day rule is a real
+        thing for the Classic format but not something this call site
+        can express -- falling back beats picking one arbitrarily."""
+        import datetime as dt
+
+        tuesday = dt.datetime(2026, 8, 4, 9, 30, tzinfo=dt.UTC)
+
+        weekday = await self._written_weekday(tuesday, "FREQ=WEEKLY;BYDAY=MO,WE")
+
+        assert weekday == 2  # dtstart's Tuesday, Sunday-based (Sun=0)

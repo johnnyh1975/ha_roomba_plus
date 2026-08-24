@@ -1465,3 +1465,128 @@ class TestStoreEncapGridAccessors:
         assert gs.stuck_count((2, 2)) == 7
         assert gs.stuck_count((3, 3)) == 0
         assert gs.stuck_count((9, 9)) == 0
+
+
+class TestStampingAlongThePath:
+    """v3.2.2 — disks are placed along each step, not only where poses
+    landed.
+
+    On a real 980 poses arrive ~1.8 s apart, so up to 542 mm at full
+    speed. Against a 170 mm footprint radius that leaves ~200 mm of
+    floor between consecutive disks which the robot demonstrably drove
+    over and the grid recorded as never visited.
+
+    Those holes concentrate on long straight runs -- including
+    thresholds, where a gap reads as a wall and splits a room that is
+    not split.
+    """
+
+    def test_a_long_step_no_longer_leaves_a_hole(self):
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        from custom_components.roomba_plus.grid_store import CELL_SIZE_MM, _mm_to_cell
+
+        far = _disk_filled_cells([(0.0, 0.0), (540.0, 0.0)], 170.0)
+
+        # THE MIDPOINT IS THE TEST. Two disks of radius 170 mm placed
+        # 540 mm apart reach 170 mm from each end, leaving the middle
+        # ~200 mm uncovered. Asserting on a cell count would pass
+        # either way -- ten cells from two disks clears any loose
+        # threshold. The gap has to be named.
+        gap_cells = {
+            _mm_to_cell(x, 0.0)
+            for x in range(200, 341, int(CELL_SIZE_MM))
+        }
+        missing = gap_cells - far
+
+        assert not missing, f"floor the robot drove over, unrecorded: {missing}"
+
+        # And the band is continuous: no hole anywhere along the run.
+        row = sorted(cx for cx, cy in far if cy == _mm_to_cell(0.0, 0.0)[1])
+        assert row == list(range(row[0], row[-1] + 1)), "gap inside the swept band"
+
+    def test_a_short_step_is_unchanged(self):
+        """Densifying must not alter what already worked."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        near = _disk_filled_cells([(0.0, 0.0), (100.0, 0.0)], 170.0)
+        single = _disk_filled_cells([(0.0, 0.0)], 170.0)
+
+        assert near >= single
+
+    def test_a_discontinuity_is_not_filled_in(self):
+        """A jump means the robot was somewhere else, not that it drove
+        the line between. Painting a corridor across the home would be
+        an invention -- a hole is the conservative answer."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        jumped = _disk_filled_cells([(0.0, 0.0), (9000.0, 0.0)], 170.0)
+        two_ends = (
+            _disk_filled_cells([(0.0, 0.0)], 170.0)
+            | _disk_filled_cells([(9000.0, 0.0)], 170.0)
+        )
+
+        assert jumped == two_ends, "nothing between the two ends"
+
+    def test_a_single_pose_still_stamps_its_disk(self):
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        assert _disk_filled_cells([(0.0, 0.0)], 170.0)
+
+
+class TestBreaksDecideWhatGetsFilled:
+    """v3.2.2 — the grid learns where continuity broke.
+
+    Without them the stamp fell back to a plain distance rule (1200 mm),
+    which cannot separate fast driving at a slow message rate from a
+    small relocalisation: on a real 980 poses arrive ~1.8 s apart, so
+    542 mm of honest travel and a metre-scale jump sit uncomfortably
+    close together. The renderer's threshold calibrates itself against
+    this robot's own stream, so its verdict is worth more than any
+    constant here.
+    """
+
+    def test_a_marked_step_is_not_filled_even_when_short(self):
+        """Distance alone would have connected these two -- the break
+        is the only thing that says otherwise."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (600.0, 0.0)]
+        joined = _disk_filled_cells(pts, 170.0, breaks=None)
+        split = _disk_filled_cells(pts, 170.0, breaks={1})
+
+        assert len(split) < len(joined)
+
+    def test_an_unmarked_long_step_is_filled(self):
+        """The mirror image: distance alone would have refused this one,
+        and the break information says it was real travel."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (2000.0, 0.0)]
+        by_distance = _disk_filled_cells(pts, 170.0, breaks=None)
+        by_breaks = _disk_filled_cells(pts, 170.0, breaks=set())
+
+        assert len(by_breaks) > len(by_distance)
+
+    def test_the_index_is_the_second_point_of_the_pair(self):
+        """A robot revisits positions constantly. Looking the index up
+        by value would find the first occurrence and misplace every
+        break after the first repeat."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        # Returns to the origin, then makes a long step that IS marked.
+        pts = [(0.0, 0.0), (300.0, 0.0), (0.0, 0.0), (2000.0, 0.0)]
+        marked = _disk_filled_cells(pts, 170.0, breaks={3})
+        unmarked = _disk_filled_cells(pts, 170.0, breaks=set())
+
+        assert len(marked) < len(unmarked), "break at index 3 must not be filled"
+
+    def test_no_breaks_argument_keeps_the_old_behaviour(self):
+        """Callers that do not have the information must not change."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (500.0, 0.0)]
+
+        assert _disk_filled_cells(pts, 170.0) == _disk_filled_cells(
+            pts, 170.0, breaks=None
+        )

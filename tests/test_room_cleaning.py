@@ -1586,3 +1586,152 @@ class TestTheMissionPlanGetsBareIds:
 
         assert "ZID_PREFIX" in after_send
         assert "_note_mission_plan" in after_send
+
+
+class TestCleanZoneOnATwoMapRobot:
+    """@chairstacker's clean_zone failed on a two-map robot with "not
+    currently reporting which map", even mid-mission. _current_map_id
+    reads `cleanMissionStatus.p2mapId`, which his robot did not fill --
+    but a zone id belongs to exactly one map, and that map was already
+    recorded. The command should derive the map from the zone rather
+    than refuse.
+    """
+
+    @staticmethod
+    def _room(room_id, name):
+        room = MagicMock(room_id=room_id)
+        room.name = name
+        return room
+
+    def _backend(self):
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        robot = MagicMock()
+        # Two maps, and the robot reports neither as current -- exactly
+        # the state that produced the refusal.
+        robot.get_active_map_versions = AsyncMock(
+            return_value=[{"p2map_id": "MAP-A"}, {"p2map_id": "MAP-B"}]
+        )
+
+        # Zone 101 lives on MAP-A, with no name (as @chairstacker's did).
+        # get_map_metadata is called per map id; return the right rooms
+        # for each.
+        map_a = MagicMock()
+        map_a.rooms_metadata = [self._room("101", None)]
+        map_b = MagicMock()
+        map_b.rooms_metadata = [self._room("202", None)]
+
+        async def _metadata(p2map_id):
+            return map_a if p2map_id == "MAP-A" else map_b
+
+        robot.get_map_metadata = AsyncMock(side_effect=_metadata)
+        robot.send_routine_command_via_cmd_topic = AsyncMock()
+
+        data = MagicMock(blid="BLID123", prime_robot=robot)
+        data.prime_status_coordinator.data = {}  # no current map reported
+        return PrimeRoomCleaning(data), robot
+
+    @pytest.mark.asyncio
+    async def test_zone_command_derives_the_map_from_the_zone(self):
+        backend, robot = self._backend()
+
+        # Must NOT raise "not currently reporting which map".
+        await backend.clean_rooms(["101"])
+
+        robot.send_routine_command_via_cmd_topic.assert_called_once()
+        sent = robot.send_routine_command_via_cmd_topic.call_args
+        # The map the zone belongs to, not a guess and not a refusal.
+        assert "MAP-A" in str(sent)
+
+    @pytest.mark.asyncio
+    async def test_zones_spanning_two_maps_still_refuse(self):
+        """Deriving the map only works when the zones agree on one. A
+        request mixing maps has no single answer and must still be
+        refused rather than silently picking one."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        backend, _robot = self._backend()
+
+        with pytest.raises(HomeAssistantError):
+            await backend.clean_rooms(["101", "202"])
+
+
+class TestClassicMopParamsMatchTheCapture:
+    """@ia74 asked how to start mopping and could not find a way.
+
+    His capture of the iRobot app's own outbound command is what makes
+    these shapes safe rather than guessed:
+
+        vacuum          operatingMode 2
+        vacuum + mop    operatingMode 6, padWetness {disposable, reusable}
+        smart scrub     swScrub 1 (the app control was labelled)
+        wetness         1 light, 2 standard, 3 hard
+
+    These build the real payload rather than reading the source. Two
+    earlier drafts of this class asserted on `inspect.getsource` -- the
+    antipattern this project spent a day removing, written by the same
+    hand that removed it.
+    """
+
+    @staticmethod
+    def _params(**kwargs):
+        """The `params` a Classic region clean actually sends."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._config_entry = MagicMock()
+        backend._config_entry.options = {}
+        backend._hass = MagicMock()
+        backend._roomba = MagicMock()
+        backend._pmap_by_region = {"2": "MAP-A"}
+
+        captured = {}
+
+        def _executor(fn, name, params):
+            captured["name"] = name
+            captured["params"] = params
+
+        backend._hass.async_add_executor_job = AsyncMock(side_effect=_executor)
+
+        with patch.object(
+            ClassicRoomCleaning, "available_rooms", AsyncMock(return_value={"K": "2"})
+        ), patch.object(
+            ClassicRoomCleaning, "_raise_if_map_updating", MagicMock()
+        ), patch.object(
+            ClassicRoomCleaning, "_current_pmap_ids",
+            MagicMock(return_value=("MAP-A", "V1")), create=True,
+        ):
+            asyncio.run(backend.clean_rooms(["2"], **kwargs))
+
+        regions = (captured.get("params") or {}).get("regions") or [{}]
+        return regions[0].get("params", {})
+
+    def test_pad_wetness_sets_both_pad_types(self):
+        """Classic's shape is `{disposable, reusable}`; Prime's is
+        `{padPlate}`. Same field name, different structure."""
+        params = self._params(pad_wetness=[2])
+
+        assert params["padWetness"] == {"disposable": 2, "reusable": 2}
+
+    def test_smart_scrub_goes_out_as_an_int(self):
+        """The wire carries 0/1. `True` is not `1` to a JSON encoder
+        that writes `true`."""
+        on = self._params(smart_scrub=[True])
+        off = self._params(smart_scrub=[False])
+
+        assert on["swScrub"] == 1
+        assert off["swScrub"] == 0
+        assert not isinstance(on["swScrub"], bool)
+
+    def test_both_are_omitted_when_not_asked_for(self):
+        """The pad-wetness selects are device settings. A per-region
+        value would silently override what somebody set there."""
+        params = self._params()
+
+        assert "padWetness" not in params
+        assert "swScrub" not in params

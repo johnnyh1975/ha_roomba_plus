@@ -2689,3 +2689,221 @@ class TestRepairIssuesComeFromTheHelper:
 
         assert hasattr(issue_registry, "async_create_issue")
         assert not hasattr(repairs, "async_create_issue")
+
+
+class TestPickupIsNotDrift:
+    """v3.2.2 — a carried robot gets a constant offset, not a ramp.
+
+    The dock-anchor ramp assumes error compounds gradually, which is
+    true for odometry and vSLAM error and false for a robot that was
+    lifted. Set one down two metres away and EVERY pose afterwards is
+    off by the same two metres — the first as much as the last. A ramp
+    then under-corrects the start of the segment and drags points that
+    were still accurate away from where the robot actually was.
+
+    `bbrun.nPicks` is already read, stored per mission and documented in
+    callbacks.py as "the robot was physically picked up during this
+    mission". The map never asked; the code comment deferred this
+    "pending real field validation that simple linear interpolation
+    isn't enough".
+    """
+
+    @staticmethod
+    def _segment():
+        return [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (300.0, 0.0)]
+
+    def test_a_ramp_barely_moves_the_first_point(self):
+        """The existing behaviour, stated so the difference is visible."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=False
+        )
+
+        assert out[0][0] == 0.0, "weight 0 at the first buffered point"
+        assert out[-1][0] == 300.0 + 900.0, "full correction at the last"
+
+    def test_a_pickup_shifts_every_point_equally(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=True
+        )
+        original = self._segment()
+
+        shifts = [a[0] - b[0] for a, b in zip(out, original, strict=False)]
+        assert shifts == [900.0] * 4
+
+    def test_the_default_is_unchanged_behaviour(self):
+        """Callers that do not know must keep the ramp."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        assert _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0
+        ) == _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=False
+        )
+
+
+class TestSeveralPickupsInOneMission:
+    """A mission can break more than once, and the correction has to
+    say which stretch the dock measurement actually covers.
+
+    The first version of the pickup branch shifted the entire buffered
+    stretch by one offset. That is right for one lift and wrong for two:
+    the second stretch has its own independent offset, so a single shift
+    is as wrong for it as the linear ramp it replaced was for the first.
+
+    What the dock verifies is the position of the LAST segment — the one
+    that ends at the dock. Earlier segments are unverified by that
+    measurement and are left alone rather than corrected on evidence
+    that does not cover them.
+    """
+
+    @staticmethod
+    def _segment():
+        return [(float(i * 100), 0.0) for i in range(10)]
+
+    def test_only_the_stretch_after_the_last_break_moves(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks={6}
+        )
+        original = self._segment()
+
+        assert out[:6] == original[:6], "before the break: untouched"
+        for a, b in zip(out[6:], original[6:], strict=False):
+            assert a[0] - b[0] == 500.0
+
+    def test_the_last_break_wins_when_there_are_several(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks={3, 7}
+        )
+        original = self._segment()
+
+        assert out[:7] == original[:7]
+        assert out[7][0] - original[7][0] == 500.0
+
+    def test_without_breaks_the_whole_stretch_shifts(self):
+        """One lift, one segment — the case that already worked."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks=set()
+        )
+        original = self._segment()
+
+        assert all(
+            a[0] - b[0] == 500.0 for a, b in zip(out, original, strict=False)
+        )
+
+    def test_a_ramp_is_unaffected_by_breaks(self):
+        """Drift without a pickup still ramps across the whole stretch:
+        breaks describe where the FRAME changed, and gradual error
+        accumulates regardless."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        assert _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=False, breaks={5}
+        ) == _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=False
+        )
+
+
+class TestAnchoringBeforeTheGrid:
+    """v3.2.2 — pre-break segments are placed, or left out.
+
+    They were being stamped into the accumulated grid at unverified
+    positions all along: `_mission_points` holds every pose, including
+    those before a discontinuity, and the dock correction deliberately
+    does not touch them. So this is not a new risk over the status quo
+    — it replaces "stamp at an arbitrary wrong offset" with "stamp at a
+    checked offset, or not at all".
+    """
+
+    @staticmethod
+    def _distinctive(ox=0.0, oy=0.0, cell=150.0):
+        """An L-shaped run. A filled rectangle cannot locate itself —
+        shifted a few cells it overlaps almost as well — so a test built
+        on one would measure the single case the method cannot do."""
+        pts = []
+        for row in range(5):
+            for col in range(14):
+                pts.append((ox + col * cell, oy + row * cell))
+        for row in range(14):
+            for col in range(5):
+                pts.append((ox + col * cell, oy + row * cell))
+        return pts
+
+    @staticmethod
+    def _store(cells=None):
+        from unittest.mock import MagicMock
+
+        store = MagicMock()
+        store.cells = cells or {}
+        return store
+
+    def test_a_single_segment_passes_through_untouched(self):
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        pts = self._distinctive()
+
+        assert _anchored_mission_points(pts, set(), self._store()) == pts
+
+    def test_a_displaced_segment_is_moved_back(self):
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        displaced = self._distinctive(ox=450.0, oy=300.0)
+        combined = displaced + anchored
+
+        out = _anchored_mission_points(
+            combined, {len(displaced)}, self._store()
+        )
+
+        # The dock-verified tail is untouched, and the head came back.
+        assert out[-len(anchored):] == anchored
+        assert out[0] == (0.0, 0.0)
+
+    def test_an_unplaceable_segment_is_dropped(self):
+        """Losing a segment's cells costs coverage the next mission
+        re-drives. Writing it at the wrong offset costs data nothing
+        repairs."""
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        # Two points cannot carry a pattern.
+        combined = [(9e5, 9e5), (9e5 + 10, 9e5)] + anchored
+
+        out = _anchored_mission_points(combined, {2}, self._store())
+
+        assert out == anchored
+
+    def test_the_dock_verified_tail_is_always_kept(self):
+        """Whatever happens to the rest, the segment the dock measured
+        must reach the grid."""
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        combined = [(9e5, 9e5), (9e5 + 10, 9e5)] + anchored
+
+        out = _anchored_mission_points(combined, {2}, self._store())
+
+        assert out[-len(anchored):] == anchored

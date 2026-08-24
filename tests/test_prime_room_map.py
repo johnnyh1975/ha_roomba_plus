@@ -721,18 +721,38 @@ class TestRoomLabelsApplyToBothGenerations:
 
         assert "CONF_MAP_ROOM_LABELS" in source
 
-    def test_both_options_forms_offer_it(self):
+    @pytest.mark.asyncio
+    async def test_both_options_forms_offer_it(self):
         """The Prime and Classic branches of the settings step are
         separate schemas -- adding it to one and not the other would
-        leave half the users unable to reach it."""
-        import inspect
+        leave half the users unable to reach it.
 
-        from custom_components.roomba_plus import config_flow
+        WAS A SOURCE-TEXT COUNT (`source.count(...) >= 3`), which is
+        not the same question. Verified by deleting the option from
+        the Classic branch entirely and leaving a comment that
+        mentioned the constant: this test passed, and so did the other
+        5,595. Half the users would have lost the option with nothing
+        failing. It asks the schema now.
+        """
+        from unittest.mock import MagicMock
 
-        source = inspect.getsource(config_flow)
+        from custom_components.roomba_plus.const import CONF_MAP_ROOM_LABELS
+        from custom_components.roomba_plus.models import ConnectionType
 
-        # Once in the imports, once per form.
-        assert source.count("CONF_MAP_ROOM_LABELS") >= 3
+        from .test_config_flow import _make_options_flow
+
+        for connection_type in (ConnectionType.CLOUD_ONLY, ConnectionType.LOCAL_PUSH):
+            flow = _make_options_flow()
+            flow.config_entry.runtime_data.connection_type = connection_type
+            flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+            result = await flow.async_step_settings(None)
+            schema_keys = {str(k) for k in result["data_schema"].schema}
+
+            assert any(CONF_MAP_ROOM_LABELS in k for k in schema_keys), (
+                f"{connection_type} settings form does not offer "
+                f"{CONF_MAP_ROOM_LABELS}"
+            )
 
     def test_the_key_is_generation_neutral(self):
         """It controls both maps, so it should not name one of them."""
@@ -2430,3 +2450,73 @@ class TestTheRobotIsDrawnOnlyOnItsOwnMap:
         idx = source.find("_live_position_belongs_here()")
         assert idx > 0
         assert "prime_positions" in source[max(0, idx - 400):idx]
+
+
+class TestZoneNamesReachTheRenderedMap:
+    """@chairstacker (#64): zone names appeared in his calendar entries
+    and not on the map.
+
+    The builder merges three sources -- the bundle's rooms layer, its
+    `cleanZones` layer, and `lastCommand.regions[].region_name` -- into
+    `runtime.prime_room_names`. The renderer was then handed the rooms
+    layer ALONE, so every zone name the merge had just resolved was
+    dropped between the merge and the picture. The calendar reads the
+    merged store, which is why the same names showed up there.
+    """
+
+    @staticmethod
+    def _plan(*, rooms_layer, stored_names):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.prime_room_map import (
+            async_build_prime_floor_plan,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = stored_names
+        robot = entry.runtime_data.prime_robot
+        robot.get_map_geojson_link = AsyncMock(return_value={"map_url": "https://x"})
+        robot.download_map_bundle = AsyncMock(return_value=b"tgz")
+
+        parsed = {"rooms": rooms_layer}
+        with patch(
+            "roombapy_prime.models.map_bundle.parse_map_bundle", return_value=parsed
+        ):
+            return asyncio.get_event_loop().run_until_complete(
+                async_build_prime_floor_plan(entry, "MAP-1", "V1")
+            )
+
+    def test_a_zone_name_the_rooms_layer_lacks_still_reaches_the_plan(self):
+        """Zone 101's name lives in the merged store, not in `rooms`.
+        Before the fix it never left the builder."""
+        plan = self._plan(
+            rooms_layer={"features": []},
+            stored_names={"101": "Sofa corner"},
+        )
+
+        assert plan.room_names.get("101") == "Sofa corner"
+
+    def test_the_rooms_layer_still_wins_a_collision(self):
+        """A name typed into the map editor beats one carried along by
+        whichever command last cleaned the region -- the same ranking
+        the merge above already applies."""
+        plan = self._plan(
+            rooms_layer={
+                "features": [
+                    {
+                        "properties": {"id": "10", "name": "Kitchen"},
+                        "geometry": {"type": "Polygon", "coordinates": [[]]},
+                    }
+                ]
+            },
+            stored_names={"10": "Stale name from a command"},
+        )
+
+        assert plan.room_names.get("10") == "Kitchen"
+
+    def test_no_stored_names_is_not_an_error(self):
+        """A first build, before anything has been merged."""
+        plan = self._plan(rooms_layer={"features": []}, stored_names=None)
+
+        assert plan.room_names == {}

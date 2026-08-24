@@ -190,6 +190,21 @@ def cloud_only_config_entry() -> MagicMock:
     data.prime_parts_coordinator = MagicMock()
     data.prime_parts_coordinator.data = dict(PARTS)
 
+    # CLOUD REGIONS, because a realistic Prime account has them and
+    # because the per-region "last cleaned" sensors are BUILT from this
+    # list -- a fixture without it would let a platform that creates no
+    # entities pass the coverage guard.
+    #
+    # Two maps with an overlapping region id, which is the case that
+    # matters: ids repeat across maps (@dduff617's four-map account),
+    # so anything keyed on the id alone merges two floors' rooms.
+    data.has_cloud = True
+    data.cloud_coordinator = MagicMock()
+    data.cloud_coordinator.regions_by_pmap = {
+        "MAP-A": {"10": "Kitchen", "101": "Sofa corner"},
+        "MAP-B": {"10": "Upstairs hall"},
+    }
+
     # The schedule switches read their state from here and, since the
     # entity list follows the schedule list, are also BUILT from it.
     data.prime_schedule_coordinator = MagicMock()

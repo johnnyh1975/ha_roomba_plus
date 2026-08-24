@@ -1253,3 +1253,65 @@ class TestAFailedLoadKeepsTheTuning:
 
         assert store.last_cell_count == 0
         assert store.rooms == {}
+
+
+class TestRoomsWaitForEnoughCoverage:
+    """v3.2.2 — segmentation no longer runs after a single mission.
+
+    The growth gate that existed does nothing on the first run:
+    `self.rooms` is empty, so the condition short-circuits and rooms
+    were derived from the sparsest map the robot will ever produce.
+
+    That is the worst moment for this algorithm family. An unvisited
+    threshold is indistinguishable from a wall, so a room gets split
+    that is not split; more missions cross the threshold and the false
+    split disappears.
+
+    Observed on a real 980's own archives: 7 rooms after one mission,
+    6 after four, 5 once coverage settled. A user saw seven rooms
+    appear as entities and two later vanish.
+    """
+
+    @staticmethod
+    def _cells(n=400):
+        return {(i % 20, i // 20): 1.0 for i in range(n)}
+
+    def test_one_mission_is_not_enough(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(self._cells(), missions_seen=1) is False
+        assert not store.rooms
+
+    def test_enough_missions_lets_it_run(self):
+        from custom_components.roomba_plus.room_seg_store import (
+            MIN_MISSIONS_BEFORE_SEGMENTING,
+            RoomSegStore,
+        )
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(
+            self._cells(), missions_seen=MIN_MISSIONS_BEFORE_SEGMENTING
+        ) is True
+
+    def test_the_gate_only_applies_before_rooms_exist(self):
+        """Once rooms are known, a later recompute must not be blocked
+        by a mission count -- the growth gate governs from then on."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+        store.maybe_recompute(self._cells(), missions_seen=5)
+        assert store.rooms
+        store.last_cell_count = 0
+
+        assert store.maybe_recompute(self._cells(800), missions_seen=1) is True
+
+    def test_an_unknown_count_keeps_the_old_behaviour(self):
+        """A caller that cannot count must not be blocked forever."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(self._cells(), missions_seen=None) is True

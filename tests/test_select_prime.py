@@ -1080,12 +1080,27 @@ class TestTheServiceFieldOutranksTheSelect:
         assert [self._mode_for(None, i) for i in range(3)] == [2, 2, 2]
 
     def test_the_service_translates_the_name_to_a_wire_value(self):
-        import inspect
+        """A caller names a mode; the robot needs a number.
 
-        from custom_components.roomba_plus import services
+        WAS A SOURCE-TEXT CHECK for one exact call expression, which
+        broke the moment that lookup became tier-aware -- at a rename,
+        not at a fault. It never verified a translation happened, only
+        that a particular line was written. This calls the resolver.
+        """
+        from unittest.mock import MagicMock
 
-        source = inspect.getsource(services)
-        assert "PrimeCleaningModeSelect.MODES.get(caller_mode_name)" in source
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        backend = MagicMock()
+        backend._data.connection_type = ConnectionType.CLOUD_ONLY
+
+        modes = _modes_for_backend(backend)
+
+        assert modes["vacuum"] == 2
+        assert modes["mop"] == 4
+        # A name nobody offers must not resolve to a number.
+        assert modes.get("scrub") is None
 
     def test_the_field_is_documented_with_its_fallback(self):
         """A field whose description promises "leave empty to use the

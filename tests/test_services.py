@@ -2217,3 +2217,138 @@ class TestCleanZoneService:
         assert "zone_name_or_zone_id_required" in str(
             getattr(exc_info.value, "translation_key", "")
         )
+
+
+class TestCleanZoneCleaningMode:
+    """@chairstacker asked for vac-only / mop-only / vac & mop /
+    vac-then-mop on a zone, so he can build the few ad-hoc scripts he
+    wants instead of getting a button per zone per mode.
+
+    Every piece already existed: `clean_rooms` takes `operating_mode`
+    and `clean_room` has passed it for a long time. `clean_zone` simply
+    never did.
+    """
+
+    @staticmethod
+    def _setup(names=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        backend = MagicMock()
+        backend.clean_rooms = AsyncMock()
+        backend.available_zones = AsyncMock(return_value=names or {})
+        # EXPLICIT TIER. The mode table differs by generation, so a
+        # test that leaves it to a MagicMock is asserting whichever
+        # branch the mock happens to fall into.
+        backend._data.connection_type = ConnectionType.CLOUD_ONLY
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_room_names = names or {}
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, backend
+
+    @staticmethod
+    def _call(hass, **data):
+        from unittest.mock import MagicMock
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": "vacuum.robot", **data}
+        return call
+
+    async def _run(self, **data):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup()
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, **data))
+        return backend
+
+    @pytest.mark.asyncio
+    async def test_each_mode_reaches_the_backend(self):
+        """The four values are confirmed twice: observed in captures
+        (2=vacuum, 4=mop) and recorded from the robot's own answer
+        before the select shipped (32 -> status 6, 512 -> status 4)."""
+        for name, value in (
+            ("vacuum", 2), ("mop", 4),
+            ("vacuum_and_mop", 32), ("vacuum_then_mop", 512),
+        ):
+            backend = await self._run(zone_id=["100"], cleaning_mode=name)
+            assert backend.clean_rooms.await_args.kwargs["operating_mode"] == [value], name
+
+    @pytest.mark.asyncio
+    async def test_no_mode_leaves_the_selector_in_charge(self):
+        """Omitting the field must not override the everyday default --
+        that is the whole point of it being optional."""
+        backend = await self._run(zone_id=["100"])
+
+        assert backend.clean_rooms.await_args.kwargs["operating_mode"] is None
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_mode_name_is_ignored_not_guessed(self):
+        """A typo must not become a mode. Falling back to the selector
+        beats sending a number nobody asked for."""
+        backend = await self._run(zone_id=["100"], cleaning_mode="scrub")
+
+        assert backend.clean_rooms.await_args.kwargs["operating_mode"] is None
+
+
+class TestCleaningModeIsTierAware:
+    """"Vacuum and mop" is 32 on Prime and 6 on Classic.
+
+    32 is field-verified on Prime -- the robot answered `command 32 ->
+    status 6`. 6 is what the iRobot app itself sends on a mopping
+    Classic robot (@ia74's capture, `operatingMode: 6` alongside
+    `padWetness`). Resolving against the wrong table would send a value
+    that generation has never been seen to accept, on the field that
+    decides whether water goes on the floor.
+    """
+
+    @staticmethod
+    def _backend(cloud_only: bool):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        backend = MagicMock()
+        backend._data.connection_type = (
+            ConnectionType.CLOUD_ONLY if cloud_only else ConnectionType.LOCAL_PUSH
+        )
+        return backend
+
+    def test_prime_uses_32_for_vacuum_and_mop(self):
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert _modes_for_backend(self._backend(True))["vacuum_and_mop"] == 32
+
+    def test_classic_uses_6_for_vacuum_and_mop(self):
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert _modes_for_backend(self._backend(False))["vacuum_and_mop"] == 6
+
+    def test_the_other_three_agree(self):
+        """Only the combined mode differs; treating the tables as
+        wholly separate would invite them drifting apart."""
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        prime = _modes_for_backend(self._backend(True))
+        classic = _modes_for_backend(self._backend(False))
+
+        for name in ("vacuum", "mop", "vacuum_then_mop"):
+            assert prime[name] == classic[name], name
+
+    def test_both_offer_the_same_four_names(self):
+        """A mode a user can pick on one generation and not the other
+        would be a worse surprise than a value difference they never
+        see."""
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert set(_modes_for_backend(self._backend(True))) == set(
+            _modes_for_backend(self._backend(False))
+        )

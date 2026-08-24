@@ -712,3 +712,118 @@ class TestLocalesAreActuallyTranslated:
         spec.loader.exec_module(module)
 
         assert module.UNTRANSLATED_MIN_LENGTH <= 26
+
+
+def _is_tier_pair(keys: list[str]) -> bool:
+    """`x` and `prime_x` may share a name, and should.
+
+    They are the Classic and Prime forms of one concept, and a robot
+    only ever has one of them -- so a user sees a single "Firmware
+    version" either way. Giving them different names would be the bug.
+
+    This is deliberately narrow: it collapses the `prime_` prefix and
+    nothing else, so two genuinely different entities that happen to
+    collide still fail. That is how the Spanish bin/tank pair was
+    found -- `bin_present` and `mop_tank_present_direct` both read
+    "Depósito presente", on Combo robots that carry both.
+    """
+    stripped = {k.removeprefix("prime_") for k in keys}
+    return len(stripped) == 1
+
+
+class TestEntityNamesAreDistinctWithinAPlatform:
+    """Two entities on one platform must not share a display name.
+
+    `image.map` and `image.cleaning_map` were BOTH called "Cleaning
+    map" -- in seven of the eight locales. @pk-1966 reported that "the
+    cleaning map just shows a dot in a blank white space" and was
+    right to call it that: it is the name the interface gave him. He
+    then spent a round trying to work out how it differed from the
+    coverage map, which is a question the names made unanswerable.
+
+    A duplicate name is worse than a bad name. A bad one teaches you
+    something once; a duplicate makes two things indistinguishable in
+    every dropdown, automation picker and dashboard editor.
+    """
+
+    def test_no_platform_has_two_entities_with_the_same_name(self):
+        offenders = []
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            entities = json.loads(path.read_text(encoding="utf-8")).get("entity", {})
+            for platform, keys in entities.items():
+                names: dict[str, list[str]] = {}
+                for key, value in keys.items():
+                    name = value.get("name") if isinstance(value, dict) else None
+                    if name:
+                        names.setdefault(name, []).append(key)
+                for name, sharing in names.items():
+                    if len(sharing) > 1 and not _is_tier_pair(sharing):
+                        offenders.append(
+                            f"{path.stem}/{platform}: {sharing} all called {name!r}"
+                        )
+
+        assert not offenders, "Duplicate entity names:\n  " + "\n  ".join(offenders)
+
+    def test_every_locale_names_the_same_image_entities(self):
+        """A locale missing one is how a duplicate hides: the entity
+        falls back to its key and looks distinct in English only."""
+        reference = set(
+            json.loads((_ROOT / "translations" / "en.json").read_text(encoding="utf-8"))
+            ["entity"]["image"]
+        )
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            keys = set(
+                json.loads(path.read_text(encoding="utf-8"))["entity"]["image"]
+            )
+            assert keys == reference, f"{path.stem} image keys differ from en"
+
+
+class TestImageNamesMatchWhatEachTierGets:
+    """The five image keys are not evenly split between the tiers, and
+    a name has to be honest for every tier that uses it.
+
+    Prime (CLOUD_ONLY):  raw_map, rooms_map, cleaning_map
+    Classic:             map, coverage_map, rooms_map
+
+    Only `rooms_map` is shared -- and it does NOT behave the same on
+    both. Classic's is a static room-polygon image; Prime's carries
+    the live coverage/trajectory layers too, because the map card
+    takes one raster source rather than a stack of entities. So it was
+    briefly called "Room layout", which promised a staticness only one
+    tier has.
+    """
+
+    @staticmethod
+    def _names(locale: str = "en") -> dict[str, str]:
+        path = _ROOT / "translations" / f"{locale}.json"
+        return {
+            key: value["name"]
+            for key, value in json.loads(path.read_text(encoding="utf-8"))
+            ["entity"]["image"].items()
+        }
+
+    def test_the_shared_key_does_not_promise_static(self):
+        """`rooms_map` renders on both tiers and is live on one."""
+        for locale in ("en", "de"):
+            name = self._names(locale)["rooms_map"].lower()
+            for promise in ("layout", "static", "aufteilung", "statisch"):
+                assert promise not in name, (
+                    f"{locale}: rooms_map is called {name!r}, which claims a "
+                    "staticness Prime's version does not have"
+                )
+
+    def test_coverage_says_what_it_measures(self):
+        """"Coverage map" read as "which rooms are done". It is a
+        heatmap of driven-over cells -- traffic, not completion --
+        which is what @pk-1966 could not reconcile against the room
+        map. The word has to be in the name."""
+        for locale, word in (("en", "heatmap"), ("de", "heatmap")):
+            assert word in self._names(locale)["coverage_map"].lower()
+
+    def test_the_two_live_images_are_not_called_the_same_thing(self):
+        """`map` (Classic) and `cleaning_map` (Prime) were both
+        "Cleaning map" in seven of eight locales. No robot has both,
+        but every document, dashboard and support answer had to."""
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            names = self._names(path.stem)
+            assert names["map"] != names["cleaning_map"], path.stem

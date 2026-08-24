@@ -895,12 +895,32 @@ class TestThePrimeDiagnosticsBranchLosesNothingItNeeds:
 
     def test_the_favourites_block_carries_the_raw_response(self):
         """The count alone cannot separate "option off" from "list
-        arrived empty" from "one entry failed to parse"."""
-        import inspect
+        arrived empty" from "one entry failed to parse".
 
-        from custom_components.roomba_plus import diagnostics
+        Was a name check for `_prime_favorites_raw`, which the
+        favourites rework folded into `_favourites_diagnostics` -- the
+        old function reported only the Prime tier, and a Classic robot
+        came back as zero favourites while the cloud section in the
+        same download said six. Checked by calling it now, since a
+        name check passes whether or not the raw response is there.
+        """
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
 
-        assert "_prime_favorites_raw" in inspect.getsource(diagnostics)
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        robot = SimpleNamespace(
+            get_favorites_raw=AsyncMock(return_value={"favorites": [{"n": 1}]})
+        )
+        result = asyncio.run(
+            _favourites_diagnostics(
+                SimpleNamespace(prime_robot=robot, prime_favorites=[], blid="B"),
+                SimpleNamespace(options={}),
+            )
+        )
+
+        assert result["raw"] == {"favorites": [{"n": 1}]}
 
     def test_the_raw_fetch_never_breaks_the_download(self):
         """A diagnostics download that fails because one section failed
@@ -909,14 +929,19 @@ class TestThePrimeDiagnosticsBranchLosesNothingItNeeds:
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
 
-        from custom_components.roomba_plus.diagnostics import _prime_favorites_raw
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
 
         robot = SimpleNamespace(
             get_favorites_raw=AsyncMock(side_effect=RuntimeError("boom"))
         )
-        result = asyncio.run(_prime_favorites_raw(SimpleNamespace(prime_robot=robot)))
+        result = asyncio.run(
+            _favourites_diagnostics(
+                SimpleNamespace(prime_robot=robot, prime_favorites=[], blid="B"),
+                SimpleNamespace(options={}),
+            )
+        )
 
-        assert "RuntimeError" in result["error"]
+        assert "RuntimeError" in result["raw"]["error"]
 
     def test_no_prime_entry_reaches_the_classic_block(self):
         """The guard this whole class rests on. If the early return ever

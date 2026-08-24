@@ -257,10 +257,18 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # `cleanMissionStatus.initiator` exactly as Classic does and had
         # no sensor for it, so the 19 labels added to the shared table
         # were readable on one generation only.
-        assert len(created) == 35, (
-            "phase and readiness were added: the most basic state sensor "
-            "there is plus the only place a Prime robot says why it will "
-            "not start"
+        # 36 since the overdue sensor. The Classic one sat behind a
+        # `map_capability` check in a branch CLOUD_ONLY never reaches,
+        # so Prime had none -- on a generation that has zones as well
+        # as rooms and therefore more to fall behind.
+        # 37 since the room-cleaning history sensor: the single-entity,
+        # attribute-carrying form Classic has always shipped, which
+        # Prime had no equivalent of. The per-region entities are NOT
+        # counted here -- they are opt-in on both tiers.
+        assert len(created) == 37, (
+            "rooms-overdue was added for Prime: it reads the mission "
+            "store and cloud regions, both of which Prime has, and it "
+            "was missing only because of the order things were built in"
         )
         assert any(isinstance(e, PrimeMissionEventSensor) for e in created)
         assert any(isinstance(e, PrimeConnectionHealthSensor) for e in created)
@@ -351,8 +359,13 @@ class TestAsyncSetupEntryCapabilityGating:
             MagicMock(), self._entry_with_cap(None),
             lambda e, **kw: created.extend(e),
         )
+        # Not every Prime sensor carries an entity_description -- the
+        # room-cleaning history names itself with _attr_translation_key,
+        # like its Classic parent. Reaching straight for the attribute
+        # raised AttributeError the moment one such sensor appeared.
         keys = {
-            getattr(e.entity_description, "key", "") for e in created
+            getattr(getattr(e, "entity_description", None), "key", "")
+            for e in created
         }
 
         assert "prime_detected_pad" in keys
@@ -1961,3 +1974,105 @@ class TestPrimeConsumableParts:
         assert attrs["count_type"] == "hr"
 
 
+
+
+class TestPrimeRegionLastCleanedSensor:
+    """One entity per room and zone, per @chairstacker's request:
+    "a date/time entity ... for each room and cleaning zone
+    automatically and I don't have to build helpers for each"."""
+
+    @staticmethod
+    def _sensor(history, pmap_id="MAP-A", region_id="2", name="Guest room"):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeRegionLastCleanedSensor,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.mission_store.region_last_cleaned.return_value = history
+
+        with patch.object(
+            PrimeRegionLastCleanedSensor, "robot_unique_id", "BLID1"
+        ), patch(
+            "custom_components.roomba_plus.sensor_prime.IRobotEntity.__init__",
+            return_value=None,
+        ):
+            sensor = PrimeRegionLastCleanedSensor(
+                "BLID1", entry, pmap_id, region_id, name
+            )
+        sensor._config_entry = entry
+        return sensor
+
+    def test_it_reports_the_completion_time(self):
+        sensor = self._sensor({"MAP-A/2": "2026-08-21T10:00:00+00:00"})
+
+        assert sensor.native_value is not None
+        assert sensor.native_value.year == 2026
+
+    def test_it_reads_its_own_map_not_another(self):
+        """A clean of region 2 on a DIFFERENT floor must not show up
+        here -- the fault @dduff617 found in the history sensor."""
+        sensor = self._sensor({"MAP-B/2": "2026-08-21T10:00:00+00:00"})
+
+        assert sensor.native_value is None
+
+    def test_an_unqualified_record_still_counts(self):
+        """Older entries carry no map; their data is still this
+        region's."""
+        sensor = self._sensor({"2": "2026-08-21T10:00:00+00:00"})
+
+        assert sensor.native_value is not None
+
+    def test_a_never_cleaned_region_is_unknown_not_an_error(self):
+        sensor = self._sensor({})
+
+        assert sensor.native_value is None
+
+    def test_the_unique_id_carries_map_and_region_not_the_name(self):
+        """A rename in the iRobot app must not orphan the entity and
+        lose its recorded history."""
+        sensor = self._sensor({}, region_id="101", name="Sofa corner")
+
+        assert "101" in sensor._attr_unique_id
+        assert "MAP-A" in sensor._attr_unique_id
+        assert "Sofa" not in sensor._attr_unique_id
+
+    def test_the_map_is_exposed_as_an_attribute(self):
+        """So two rooms sharing a name on different floors can be told
+        apart in the UI."""
+        sensor = self._sensor({})
+
+        assert sensor.extra_state_attributes["pmap_id"] == "MAP-A"
+        assert sensor.extra_state_attributes["region_id"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_it_subscribes_so_the_value_moves(self):
+        """A sensor with no coordinator of its own reads once at
+        start-up and never again. It looks correct in the UI right up
+        until a mission finishes and the state should have changed."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        sensor = self._sensor({})
+        coordinator = sensor._config_entry.runtime_data.prime_status_coordinator
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+        sensor.async_on_remove = MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.sensor_prime.IRobotEntity"
+            ".async_added_to_hass",
+            AsyncMock(),
+        ):
+            await sensor.async_added_to_hass()
+
+        coordinator.async_add_listener.assert_called_once()
+
+    def test_the_name_is_translated_not_an_english_suffix(self):
+        """The room name comes from the user's own iRobot account, so
+        it is already in their language. Hard-coding "last cleaned"
+        beside it produced "Küche last cleaned" for everyone else."""
+        sensor = self._sensor({}, name="Küche")
+
+        assert sensor._attr_translation_key == "region_last_cleaned"
+        assert sensor._attr_translation_placeholders == {"region": "Küche"}
+        assert not hasattr(sensor, "_attr_name") or sensor._attr_name is None
