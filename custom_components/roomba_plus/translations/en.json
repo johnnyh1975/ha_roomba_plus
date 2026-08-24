@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – last cleaned"
+      },
+      "part_filter": {
+        "name": "Maintenance – Filter (cloud)"
+      },
+      "part_side_brush": {
+        "name": "Maintenance – Side brush (cloud)"
+      },
+      "part_main_brush": {
+        "name": "Maintenance – Main brushes (cloud)"
+      },
+      "part_clean_base_bag": {
+        "name": "Maintenance – Clean Base bag (cloud)"
+      },
+      "part_generic": {
+        "name": "Maintenance – Part {part_id} (cloud)"
       }
     },
     "binary_sensor": {

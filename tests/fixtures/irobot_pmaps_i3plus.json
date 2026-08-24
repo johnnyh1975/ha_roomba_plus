@@ -1,0 +1,81 @@
+[
+  {
+    "pmap_id": "D8MepS5KRD6DTWlG-g5IEw",
+    "create_time": 1767026905,
+    "robot_pmapv_id": "260105T122811",
+    "user_pmapv_id": "251229T165154",
+    "state": "active",
+    "merged_pmap_ids": [],
+    "active_pmapv_id": "251229T165154",
+    "visible": true,
+    "shared": 0,
+    "last_pmapv_ts": 1767616114,
+    "sku": "i355640",
+    "robot_id": "9A37307A20804F0CABE9B6011B82DDBE",
+    "robot_ids": [
+      "9A37307A20804F0CABE9B6011B82DDBE"
+    ],
+    "active_pmapv_details": {
+      "active_pmapv": {
+        "pmap_id": "D8MepS5KRD6DTWlG-g5IEw",
+        "pmapv_id": "251229T165154",
+        "create_time": 1767027115,
+        "proc_state": "OK_Processed",
+        "creator": "user",
+        "learning_percentage": 100,
+        "last_user_pmapv_id": "251229T165154",
+        "last_user_ts": 1767027114,
+        "shareability": 5
+      },
+      "map_header": {
+        "id": "D8MepS5KRD6DTWlG-g5IEw",
+        "version": "251229T165154",
+        "name": "Dom",
+        "learning_percentage": 100,
+        "create_time": 1767027115,
+        "resolution": 0.1049,
+        "user_orientation_rad": 3.2012,
+        "robot_orientation_rad": 3.2012,
+        "area": 25.2783
+      },
+      "regions": [
+        {
+          "id": "1",
+          "name": "Salon",
+          "region_type": "living_room",
+          "policies": {
+            "odoa_mode": 0,
+            "odoa_feats": {},
+            "disabled_operating_modes": 0,
+            "override_operating_modes": 0
+          }
+        },
+        {
+          "id": "4",
+          "name": "Kuchnia",
+          "region_type": "kitchen",
+          "policies": {
+            "odoa_mode": 0,
+            "odoa_feats": {},
+            "disabled_operating_modes": 0,
+            "override_operating_modes": 0
+          }
+        },
+        {
+          "id": "5",
+          "name": "Hol",
+          "region_type": "foyer",
+          "policies": {
+            "odoa_mode": 0,
+            "odoa_feats": {},
+            "disabled_operating_modes": 0,
+            "override_operating_modes": 0
+          }
+        }
+      ],
+      "zones": [],
+      "keepoutzones": [],
+      "observed_zones": []
+    }
+  }
+]

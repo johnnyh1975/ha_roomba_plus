@@ -138,6 +138,8 @@ from .sensor_cloud import (
     CloudHistorySensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
     CloudRawSensor,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
     CloudRawSensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    CloudPartSensor,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    build_cloud_part_sensors,
     RoombaCleaningAnalytics30dSensor,
     RoombaCleaningPerformanceSensor,
     RoombaEventCounts30dSensor,
@@ -457,6 +459,21 @@ async def async_setup_entry(
         # deactivated. Consolidated replacements: cleaning_performance,
         # cleaning_analytics_30d, wifi_health, event_counts_30d.
         pass
+
+        # Consumable counters, one entity per part the cloud reports.
+        # No capability gate: the endpoint is per-robot and a robot that
+        # does not serve it yields an empty list, so this creates nothing
+        # rather than creating placeholders. Parts that stop being
+        # reported are swept below.
+        part_sensors = build_cloud_part_sensors(roomba, blid, cc)
+        if part_sensors:
+            entities.extend(part_sensors)
+            async_remove_stale_entities(
+                hass,
+                config_entry,
+                prefix="_cloud_part_",
+                live_unique_ids={s.unique_id for s in part_sensors if s.unique_id},
+            )
 
     # F12d — recent_edge_coverage_ratio (map-capable robots with GridStore)
     if data.grid_store is not None and data.map_capability.value != "none":

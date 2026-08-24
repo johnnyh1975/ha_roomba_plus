@@ -674,6 +674,24 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                                 "observed_zones for %s",
                                 seeded, config_entry.data[CONF_BLID],
                             )
+
+            # Adopt iRobot's own consumable counters as the maintenance
+            # baseline. This runs AFTER the cold-start seed in _phase_data(),
+            # and is meant to: that seed can only assume every part is fresh
+            # as of install time, which is wrong for any robot that saw
+            # service before this integration existed. Hydration replaces
+            # the assumption with the real per-part usage iRobot's own app
+            # recorded, so a migrating user starts out correct instead of
+            # drifting for a full replacement cycle.
+            if ctx.maintenance_store is not None:
+                _parts = cloud_coordinator.parts
+                _hr = int((ctx.state.get("bbrun") or {}).get("hr", 0) or 0)
+                if _parts and ctx.maintenance_store.hydrate_from_cloud_parts(
+                    _parts, _hr
+                ):
+                    await ctx.maintenance_store.async_save(
+                        hass, config_entry.entry_id
+                    )
         except exceptions.ConfigEntryAuthFailed:
             _LOGGER.warning(
                 "Roomba+ cloud: authentication failed for %s — "

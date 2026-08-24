@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – última limpieza"
+      },
+      "part_filter": {
+        "name": "Mantenimiento – Filtro (nube)"
+      },
+      "part_side_brush": {
+        "name": "Mantenimiento – Cepillo lateral (nube)"
+      },
+      "part_main_brush": {
+        "name": "Mantenimiento – Cepillos principales (nube)"
+      },
+      "part_clean_base_bag": {
+        "name": "Mantenimiento – Bolsa de la Clean Base (nube)"
+      },
+      "part_generic": {
+        "name": "Mantenimiento – Pieza {part_id} (nube)"
       }
     },
     "binary_sensor": {

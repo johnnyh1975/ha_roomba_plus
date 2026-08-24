@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – ultima pulizia"
+      },
+      "part_filter": {
+        "name": "Manutenzione – Filtro (cloud)"
+      },
+      "part_side_brush": {
+        "name": "Manutenzione – Spazzola laterale (cloud)"
+      },
+      "part_main_brush": {
+        "name": "Manutenzione – Spazzole principali (cloud)"
+      },
+      "part_clean_base_bag": {
+        "name": "Manutenzione – Sacchetto Clean Base (cloud)"
+      },
+      "part_generic": {
+        "name": "Manutenzione – Componente {part_id} (cloud)"
       }
     },
     "binary_sensor": {

@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – dernier nettoyage"
+      },
+      "part_filter": {
+        "name": "Entretien – Filtre (cloud)"
+      },
+      "part_side_brush": {
+        "name": "Entretien – Brosse latérale (cloud)"
+      },
+      "part_main_brush": {
+        "name": "Entretien – Brosses principales (cloud)"
+      },
+      "part_clean_base_bag": {
+        "name": "Entretien – Sac de la Clean Base (cloud)"
+      },
+      "part_generic": {
+        "name": "Entretien – Pièce {part_id} (cloud)"
       }
     },
     "binary_sensor": {

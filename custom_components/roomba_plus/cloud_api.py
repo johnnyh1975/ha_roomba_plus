@@ -434,6 +434,53 @@ class IrobotCloudApi:
             params["before"] = str(before_ts)
         return await self._aws_get(url, params)
 
+    async def get_robot_parts(self, blid: str) -> dict[str, Any]:
+        """Return the consumable-part counters iRobot's own app displays.
+
+        Endpoint recovered by reverse engineering the official Android app
+        (`com.irobot.home` 7.18.0): the native core registers this call as
+        `core::protocol::GetRobotPartsAwsDeserializer` against the literal
+        path template `/v1/robots/%s/parts`, and the response is what fills
+        the app's four maintenance tiles.
+
+        NOTE THE PATH SHAPE. Every other authenticated endpoint in this
+        class is `/v1/{blid}/...`; this one is `/v1/robots/{blid}/parts`.
+        Dropping the `robots/` segment returns a 403 from API Gateway
+        ("not authorized to perform: execute-api:Invoke"), not a 404 —
+        i.e. a wrong path here looks like an auth failure, which is why
+        the segment is called out rather than left to look like a typo.
+
+        Response shape (confirmed live against an i3+, sku i355640,
+        firmware daredevil+2.6.0):
+
+            {"robot_id": "<blid>", "num_parts": 4, "parts": [
+                {"part_id": "35", "counter": 43, "count_type": "minutes",
+                 "count_used": 1344, "count_remaining": 1800,
+                 "minutes_remaining": 1800, "last_updated_ts": 1780665041,
+                 "counter_category": "replacement", "reset_by": "user"},
+                ...]}
+
+        `count_used` is robot RUNTIME MINUTES on the currently-installed
+        part since it was last reset — including resets performed in
+        iRobot's own app, which is what makes this endpoint the migration
+        path for a robot that has been in service before this integration
+        was installed. `count_remaining` / `minutes_remaining` is the
+        budget left before the app flags a replacement; `counter` is
+        percent used (verified: count_used 17662, count_remaining 1080,
+        counter 94 — 17662/(17662+1080) = 94%).
+
+        The endpoint does NOT return part names. iRobot's app resolves
+        those client-side from a per-SKU catalog that is not served here;
+        see `const.IROBOT_PART_ROLES` for how this integration maps the
+        numeric ids.
+
+        Returns `{}` on any failure so a robot or account without this
+        endpoint cannot break a coordinator refresh.
+        """
+        url = f"{self._deployment['httpBaseAuth']}/v1/robots/{blid}/parts"
+        result = await self._aws_get(url)
+        return result if isinstance(result, dict) else {}
+
     async def get_favorites(self) -> list[dict[str, Any]]:
         """Return user-defined favorite cleaning routines."""
         url = f"{self._deployment['httpBaseAuth']}/v1/user/favorites"

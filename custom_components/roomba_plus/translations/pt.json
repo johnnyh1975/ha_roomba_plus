@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – última limpeza"
+      },
+      "part_filter": {
+        "name": "Manutenção – Filtro (nuvem)"
+      },
+      "part_side_brush": {
+        "name": "Manutenção – Escova lateral (nuvem)"
+      },
+      "part_main_brush": {
+        "name": "Manutenção – Escovas principais (nuvem)"
+      },
+      "part_clean_base_bag": {
+        "name": "Manutenção – Saco da Clean Base (nuvem)"
+      },
+      "part_generic": {
+        "name": "Manutenção – Peça {part_id} (nuvem)"
       }
     },
     "binary_sensor": {

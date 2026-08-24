@@ -28,7 +28,9 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
+    IROBOT_PART_ROLE_TO_STORE_SLOT,
     is_mop,
+    part_role,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -37,6 +39,25 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_maintenance"
 STORAGE_VERSION    = 1
+
+
+def _iso_from_epoch(ts: Any) -> str | None:
+    """Convert an epoch-seconds reset timestamp to a local ISO-8601 string.
+
+    iRobot's parts endpoint reports `last_updated_ts` in epoch seconds, and
+    omits it entirely for a part that has never been reset. Returns None for
+    that case and for any unparseable value, so a missing timestamp leaves
+    the store's existing value untouched instead of blanking it.
+    """
+    if ts is None:
+        return None
+    try:
+        epoch = int(ts)
+    except (TypeError, ValueError):
+        return None
+    if epoch <= 0:
+        return None
+    return dt_util.utc_from_timestamp(epoch).astimezone(dt_util.DEFAULT_TIME_ZONE).isoformat()
 
 
 @dataclass
@@ -83,6 +104,14 @@ class MaintenanceStore:
     filter_baseline_seeded: bool = False
     brush_baseline_seeded: bool = False
 
+    # Cloud consumable state, keyed by iRobot `part_id`. Written by
+    # hydrate_from_cloud_parts() from /v1/robots/{blid}/parts and read by
+    # the per-part cloud sensors. Held here rather than only in the
+    # coordinator so the last known values survive a cloud outage and an
+    # HA restart, matching how every other maintenance figure behaves.
+    cloud_parts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    cloud_parts_hydrated_at: str | None = None
+
     # IA74-MAINT (v2.6.0) — clean/inspect timestamps (calendar-based, no bbrun.hr)
     wheel_cleaned_at: str | None = None
     contact_cleaned_at: str | None = None
@@ -121,6 +150,15 @@ class MaintenanceStore:
             # and no seeding could have happened yet).
             self.filter_baseline_seeded = bool(data.get("filter_baseline_seeded", False))
             self.brush_baseline_seeded  = bool(data.get("brush_baseline_seeded",  False))
+            # Cloud consumable state — absent on installs that predate
+            # cloud parts hydration, and absent for robots whose account
+            # does not serve the endpoint. Both are "no cloud truth yet".
+            raw_cloud_parts = data.get("cloud_parts")
+            self.cloud_parts = (
+                {str(k): dict(v) for k, v in raw_cloud_parts.items() if isinstance(v, Mapping)}
+                if isinstance(raw_cloud_parts, Mapping) else {}
+            )
+            self.cloud_parts_hydrated_at = data.get("cloud_parts_hydrated_at")
             # IA74-MAINT: calendar-based inspect timestamps
             self.wheel_cleaned_at   = data.get("wheel_cleaned_at")
             self.contact_cleaned_at = data.get("contact_cleaned_at")
@@ -148,6 +186,8 @@ class MaintenanceStore:
             "brush_reset_history":  self.brush_reset_history,   # L2
             "filter_baseline_seeded": self.filter_baseline_seeded,  # v3.4.1
             "brush_baseline_seeded":  self.brush_baseline_seeded,   # v3.4.1
+            "cloud_parts": self.cloud_parts,
+            "cloud_parts_hydrated_at": self.cloud_parts_hydrated_at,
             # IA74-MAINT
             "wheel_cleaned_at":   self.wheel_cleaned_at,
             "contact_cleaned_at": self.contact_cleaned_at,
@@ -194,6 +234,111 @@ class MaintenanceStore:
         self.brush_reset_hr = current_hr
         self.brush_reset_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
+
+    # ── Cloud hydration ───────────────────────────────────────────────────────
+
+    def hydrate_from_cloud_parts(
+        self, parts: list[dict[str, Any]], current_hr: int
+    ) -> bool:
+        """Adopt iRobot's own consumable counters as this store's baseline.
+
+        THE POINT OF THIS METHOD IS MIGRATION. Without it, a robot that has
+        been in service for months before this integration was installed
+        gets its maintenance baseline from the cold-start seed, which
+        assumes every consumable is fresh as of install time. That is
+        wrong for exactly the users most likely to install this — and it
+        is why the remaining-hours sensors can read a full budget on a
+        robot whose filter is nearly due, and why the days-until-due
+        sensors sit at "unknown" with no wear history to extrapolate from.
+
+        The cloud knows better, because the official app writes to it: a
+        part's `count_used` is robot runtime minutes since that part was
+        last reset, including resets the user performed in the app. So the
+        bbrun.hr reading at the moment of that reset is recoverable:
+
+            reset_hr = current_hr - count_used / 60
+
+        Every part is recorded in `cloud_parts` verbatim, keyed by id, with
+        no interpretation — the per-part sensors read that and therefore
+        never depend on the id->role guess. Only the two roles the legacy
+        filter/brush slots model are additionally mapped onto those slots,
+        and only when the role is known; an unrecognised id updates
+        `cloud_parts` and nothing else, so a mis-mapped id can never write
+        a wrong baseline into the store.
+
+        `*_reset_history` is deliberately NOT appended to. That list feeds
+        the learned-lifespan median and means "a replacement the user
+        confirmed"; the cloud exposes only the most recent reset per part,
+        so appending would invent a single synthetic interval and bias the
+        learned figure. Hydration sets the baseline; real resets keep
+        building the history from there.
+
+        Returns True when anything changed, so the caller knows whether a
+        save is needed.
+        """
+        changed = False
+        for entry in parts:
+            part_id = entry.get("part_id")
+            if part_id is None:
+                continue
+            key = str(part_id).strip()
+
+            snapshot = {
+                "part_id": key,
+                "count_used": entry.get("count_used"),
+                "count_remaining": entry.get("count_remaining"),
+                "minutes_remaining": entry.get("minutes_remaining"),
+                "counter": entry.get("counter"),
+                "count_type": entry.get("count_type"),
+                "counter_category": entry.get("counter_category"),
+                "last_updated_ts": entry.get("last_updated_ts"),
+                "reset_by": entry.get("reset_by"),
+                "role": part_role(key),
+            }
+            if self.cloud_parts.get(key) != snapshot:
+                self.cloud_parts[key] = snapshot
+                changed = True
+
+            slot = IROBOT_PART_ROLE_TO_STORE_SLOT.get(snapshot["role"] or "")
+            if slot is None:
+                continue
+
+            # Only minute-denominated counters are convertible to the
+            # bbrun.hr domain the legacy slots live in. Anything else
+            # (a hypothetical mission-count or fill-count counter) is
+            # left alone rather than silently misread as minutes.
+            if entry.get("count_type") != "minutes":
+                continue
+            try:
+                used_hr = int(int(entry["count_used"]) // 60)
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            reset_hr = max(0, int(current_hr) - used_hr)
+            reset_at = _iso_from_epoch(entry.get("last_updated_ts"))
+
+            if getattr(self, f"{slot}_reset_hr") != reset_hr:
+                setattr(self, f"{slot}_reset_hr", reset_hr)
+                changed = True
+            # A part that has never been reset carries no timestamp; keep
+            # whatever the store already had rather than blanking it.
+            if reset_at is not None and getattr(self, f"{slot}_reset_at") != reset_at:
+                setattr(self, f"{slot}_reset_at", reset_at)
+                changed = True
+            # The cold-start seed must not later overwrite a real cloud
+            # baseline with the install-time assumption.
+            if not getattr(self, f"{slot}_baseline_seeded"):
+                setattr(self, f"{slot}_baseline_seeded", True)
+                changed = True
+
+        if changed:
+            self.cloud_parts_hydrated_at = dt_util.now().isoformat()
+            _LOGGER.info(
+                "MaintenanceStore: hydrated %d cloud part(s) at %dh runtime "
+                "(filter_reset=%dh brush_reset=%dh)",
+                len(parts), current_hr, self.filter_reset_hr, self.brush_reset_hr,
+            )
+        return changed
 
     # ── IA74-MAINT (v2.7.0) — calendar-based inspect resets ──────────────────
     # These components have no bbrun.hr lifecycle — they are cleaned on a

@@ -431,6 +431,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "favorites": [],
             "automations": {},           # v2.1 F7l: iRobot Genius rules (shape TBD)
             "umf": {},                   # v2.2 F9: UMF floor plan data (SMART robots)
+            "parts": {},                 # consumable counters from /v1/robots/{blid}/parts
         }
         try:
             async with asyncio.timeout(30):
@@ -491,6 +492,22 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self.blid,
                     )
                     result["automations"] = {}
+                # Consumable counters; fails gracefully, same reasoning as
+                # automations above. Gated on nothing: the endpoint is
+                # per-robot rather than per-capability, and a robot that
+                # does not serve it simply answers with an error, which
+                # leaves `parts` empty and creates no entities. Gating on
+                # a cap flag instead would need a flag that iRobot does
+                # not publish for this feature.
+                try:
+                    result["parts"] = await self.api.get_robot_parts(self.blid)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "iRobot cloud: parts endpoint unavailable for %s "
+                        "(robot may not report consumable counters)",
+                        self.blid,
+                    )
+                    result["parts"] = {}
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
                 f"iRobot cloud authentication failed: {exc}",
@@ -767,6 +784,29 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.data:
             return []
         return list(self.data.get("mission_history_raw", []))
+
+    @property
+    def parts(self) -> list[dict[str, Any]]:
+        """Return the consumable-part counters from the last /parts fetch.
+
+        One entry per part the robot tracks, each carrying `part_id`,
+        `count_used` / `count_remaining` (robot runtime minutes) and
+        `last_updated_ts` (epoch seconds of the last reset, including
+        resets performed in iRobot's own app).
+
+        Returns an empty list when the robot does not serve the endpoint,
+        when the fetch failed, or before the first refresh — callers treat
+        all three the same way and create no entities.
+        """
+        if not self.data:
+            return []
+        payload = self.data.get("parts") or {}
+        if not isinstance(payload, dict):
+            return []
+        parts = payload.get("parts")
+        if not isinstance(parts, list):
+            return []
+        return [p for p in parts if isinstance(p, dict) and p.get("part_id") is not None]
 
     @property
     def active_pmap_id(self) -> str | None:

@@ -154,6 +154,21 @@
       "pad_wear_rate": {
         "default": "mdi:square-rounded-outline"
       },
+      "part_clean_base_bag": {
+        "default": "mdi:trash-can-outline"
+      },
+      "part_filter": {
+        "default": "mdi:air-filter"
+      },
+      "part_generic": {
+        "default": "mdi:wrench-clock"
+      },
+      "part_main_brush": {
+        "default": "mdi:brush"
+      },
+      "part_side_brush": {
+        "default": "mdi:broom"
+      },
       "phase": {
         "default": "mdi:robot-vacuum"
       },

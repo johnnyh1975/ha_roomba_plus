@@ -818,6 +818,21 @@
       },
       "region_last_cleaned": {
         "name": "{region} – zuletzt gereinigt"
+      },
+      "part_filter": {
+        "name": "Wartung – Filter (Cloud)"
+      },
+      "part_side_brush": {
+        "name": "Wartung – Seitenbürste (Cloud)"
+      },
+      "part_main_brush": {
+        "name": "Wartung – Hauptbürsten (Cloud)"
+      },
+      "part_clean_base_bag": {
+        "name": "Wartung – Clean Base Beutel (Cloud)"
+      },
+      "part_generic": {
+        "name": "Wartung – Teil {part_id} (Cloud)"
       }
     },
     "binary_sensor": {
