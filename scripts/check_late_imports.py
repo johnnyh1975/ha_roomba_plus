@@ -104,6 +104,17 @@ NON_CYCLE_REASONS: dict[str, str] = {
     ),
     "select -> select_prime": "Prime-only entities",
     "select -> prime_coordinator": "capability flags, read only on the Prime branch",
+    "switch -> prime_coordinator": "as select -> prime_coordinator",
+    "services -> sensor_rooms": (
+        "a cycle this checker cannot see: sensor_rooms imports entity, "
+        "entity imports the package __init__, and __init__ registers "
+        "services. The pair-wise comparison misses it because the loop "
+        "closes through the package root"
+    ),
+    "diagnostics -> button_prime": (
+        "Prime-only entity names, read only when a Prime entry is being "
+        "diagnosed"
+    ),
     "diagnostics -> prime_coordinator": "Prime-only diagnostics section",
     "services -> button_prime": "run_favorite is a Prime-only action",
     "services -> room_cleaning": (
