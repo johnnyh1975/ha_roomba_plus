@@ -646,12 +646,27 @@ class TestPrimeErrorSensor:
 
     def test_exposes_readiness_fields_as_attributes(self):
         """A readiness-based START REFUSAL leaves `error` at 0 and puts
-        the reasons in cond_not_ready -- see the class docstring."""
-        sensor = self._entity(cycle="none", phase="charge", error=0, notReady=8, condNotReady=["binFull"])
+        the reasons in cond_not_ready -- see the class docstring.
+
+        THE CODES ARE INTEGERS. This fixture used `["binFull"]`, a phase
+        name borrowed as a plausible-looking refuse reason, and nothing
+        rejected it because the field was typed `list[Any]`.
+
+        A real robot showed `notReady: 0` beside `condNotReady: [234]`,
+        and the app-side deserializer declares `List<Integer>`. The
+        library now types it accordingly and drops non-integers rather
+        than passing through whatever arrives, so an invented string no
+        longer survives to the attribute.
+
+        The meanings of the codes are still unknown -- 234 is the only
+        one anyone has seen. Naming them would be the same mistake this
+        fixture made.
+        """
+        sensor = self._entity(cycle="none", phase="charge", error=0, notReady=8, condNotReady=[234])
 
         attrs = sensor.extra_state_attributes
         assert attrs["not_ready"] == 8
-        assert attrs["cond_not_ready"] == ["binFull"]
+        assert attrs["cond_not_ready"] == [234]
 
     def test_none_when_no_coordinator_data_yet(self):
         from custom_components.roomba_plus.sensor_prime import PrimeErrorSensor
