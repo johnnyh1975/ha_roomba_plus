@@ -225,6 +225,10 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 
 Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
 
+**Rooms are not derived until three missions have completed** *(v4.0.0a43)*. This technique is measurably unstable on incomplete coverage: a threshold the robot has not yet crossed is indistinguishable from a wall, so it splits a room that is not split, and the split disappears once a later mission drives through. On one real archive that showed as 7 rooms after one mission, 6 after four, and 5 once coverage settled — two of the seven were never rooms. Only *completed* missions count, because a run that ended early has no perimeter pass and its mask edges sit further from the real walls.
+
+**What this can and cannot give you.** A room here is the set of cells the robot drove over, so its shape follows coverage rather than walls: furniture leaves holes, edges sit about one robot radius short of the wall, and boundaries fall at narrow points in the coverage rather than at doorways. More missions fix the *count*; they do not fix the shape, because the sofa is in the same place every time. Wall-accurate outlines would need obstacle data the 900-series does not export.
+
 If you're updating from an earlier version and had already named zones, those names are carried over automatically the first time this version starts up — no action needed.
 
 #### Room type suggestion (v3.2.0, SMART-tier)

@@ -101,6 +101,49 @@ not arbitrary.
 | `trajectory_store` | no | Derived from pose data |
 | `freeze_snapshot_store` | no | Exists solely to back up the pose-derived stores against a firmware change that stops pose delivery. For a robot that never delivered poses it has nothing to protect. |
 
+## The pose pipeline (900-series)
+
+A 900-series robot keeps no map of its own: it reports a position stream
+and forgets everything at the end of each mission. Everything spatial
+Roomba+ offers on these robots is derived from that stream, in one
+chain, and each step depends on the one before it being sound.
+
+```
+MQTT pose
+  └─ image.py::_handle_pose        axis swap, cm→mm
+       ├─ MapRenderer.add_pose      marks discontinuities  →  live view
+       └─ _mission_points           →  anchoring  →  grid  →  outline
+                                                          →  room segmentation
+```
+
+**Discontinuities are marked, never dropped** *(v4.0.0a43)*. A pose that
+could not plausibly follow the previous one is kept, and the index is
+recorded as a break; only the drawn *line* is split there. Discarding it
+used to leave the previous pose as the comparison anchor, so every later
+real position measured against a stale point — a cascade confirmed in
+the field.
+
+**The plausibility threshold measures itself.** `_allowed_step_mm`
+combines the median of recent message intervals with a high percentile of
+observed step speeds. Both are robust statistics on purpose: an average
+would be pulled upward by the very stalls and jumps the check exists to
+catch. The constants that remain are fallbacks for the first few poses of
+a mission, not the operating values.
+
+**Segments are the unit of trust.** `trajectory_segments` splits a
+mission at its breaks. Within a segment the frame is consistent, so
+interpolating between poses and stamping along the path are meaningful;
+across segments neither is, until the two frames have been related.
+
+**Anchoring decides what reaches the grid.** The dock verifies the
+position of the segment that ends there. Earlier segments are matched
+against known coverage by `segment_anchoring`, which slides and turns
+the pattern and returns `None` unless one placement clearly wins. A
+refused segment is left out of the stored grid — it still draws in the
+live view. This asymmetry is deliberate: a missing segment costs
+coverage the next mission re-drives, a misplaced one corrupts an
+accumulated map that nothing repairs.
+
 All four Prime stores were left at `None` from v4.0.0a0 until v4.0.0a14 — around 30 sensor lookups
 read from nothing while the data was available. **Creating a store was only half of each fix**: the
 Prime branch of `sensor.async_setup_entry` returns before the mission sensors are built, so a filled

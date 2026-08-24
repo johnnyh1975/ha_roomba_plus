@@ -361,6 +361,44 @@ wording as attributes, so an automation can say what went wrong rather than quot
 48 reads "An obstacle blocked the entrance to a room" — on one tester's robot that single code
 accounted for 93 of 111 timeline errors and every incomplete mission in the archive.
 
+## The live map does not match the room
+
+Two things behave differently since v4.0.0a43, and both are deliberate.
+
+**Gaps in the trail.** The path now breaks where the robot's reported
+position jumped further than it could have driven — a relocalisation, or
+someone picking it up. Previously the line was drawn straight through,
+which asserted travel that did not happen. A gap is the honest picture
+of "the robot was here, then it was there, and nothing connects them".
+
+Frequent gaps during ordinary cleaning are worth reporting: the
+threshold measures itself from the robot's own message rate, so it
+should only trigger on genuine discontinuities.
+
+**Coverage after a pickup may be missing.** If the robot is moved
+mid-mission, the stretch before the move sits in an unknown position.
+Roomba+ tries to place it by matching its coverage pattern against area
+it already knows, and leaves it out of the stored map when the match is
+not clear. It still appears in the live view for that mission. Losing a
+stretch costs coverage the next mission re-drives; storing it at the
+wrong offset would corrupt the map permanently.
+
+## Rooms are wrong, or fewer than expected
+
+**Rooms need three completed missions.** Nothing appears before that,
+and this is on purpose — see [Room detection](FEATURES.md#room-detection--900-series-v2100)
+for why an early map produces rooms that later disappear.
+
+**The shape follows coverage, not walls.** Room outlines are built from
+where the robot drove, so furniture leaves holes and edges fall short of
+the wall by roughly the robot's radius. Boundaries land at narrow points
+in the coverage, which usually but not always means a doorway. More
+missions improve the count; they do not change the shape.
+
+If a room is split that should be one, check whether the doorway between
+them has actually been driven through — an uncrossed threshold reads as
+a wall. Merging is available in the Options Flow.
+
 ## Cloud & history
 
 **Mission history export**

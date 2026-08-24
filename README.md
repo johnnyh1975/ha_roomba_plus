@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0a42-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0a43-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -303,6 +303,7 @@ protocol: [Release notes →](release-notes/)
 
 ## Known limitations
 
+- **Room shapes on 900-series follow coverage, not walls** — a room is built from where the robot drove, so furniture leaves holes, edges stop about one robot radius short of the wall, and boundaries land at narrow points in the coverage rather than at doorways. More missions settle the room *count*; they do not change the shape, because the furniture is in the same place every time. Wall-accurate outlines would need obstacle data these robots do not report. Rooms are not derived at all until three missions have completed — see [Troubleshooting →](docs/TROUBLESHOOTING.md#rooms-are-wrong-or-fewer-than-expected).
 - **600-series is untested** — should work (same local MQTT protocol), but no field confirmation yet. See the capability matrix above for what it does and doesn't support by design.
 - **i-series (lewis firmware) mission cleaning maps confirmed** (July 2026, field-confirmed by Thonno on an i7) — previously confirmed on Braava jet m6 (sapphire firmware) only. See [Upgrade notes →](docs/UPGRADING.md).
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
