@@ -45,6 +45,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CLEANING_MODES_PRIME, cleaning_modes_for
+from .models import ConnectionType
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 
@@ -1030,8 +1031,6 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         # on a mopping Classic robot (@ia74's capture). Sending the
         # wrong one decides whether water goes on the floor, so the
         # tier picks rather than a single table guessing.
-        from .models import ConnectionType  # noqa: PLC0415
-
         self.MODES = cleaning_modes_for(
             getattr(config_entry.runtime_data, "connection_type", None)
             is ConnectionType.CLOUD_ONLY

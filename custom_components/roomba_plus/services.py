@@ -33,6 +33,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    cleaning_modes_for,
     ATTR_ORDERED,
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
@@ -188,9 +189,6 @@ def _modes_for_backend(backend: Any) -> dict[str, int]:
     generation has never been seen to accept -- on a field that decides
     whether water goes on the floor.
     """
-    from .const import cleaning_modes_for  # noqa: PLC0415
-    from .models import ConnectionType  # noqa: PLC0415
-
     data = getattr(backend, "_data", None)
     return cleaning_modes_for(
         getattr(data, "connection_type", None) is ConnectionType.CLOUD_ONLY
@@ -434,7 +432,13 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
         # device settings, and sending a per-region value would
         # silently override what somebody set there.
         scrub = call.data.get(ATTR_SMART_SCRUB)
-        wetness = call.data.get(ATTR_RUN_PAD_WETNESS)
+        # STRING IN, INT OUT. A `select` selector's options must declare
+        # string values -- hassfest rejects integers outright -- so the
+        # service receives "2" and the robot expects 2. Converting here
+        # rather than at the payload keeps the wire shape honest: the
+        # capture that established this field shows integers.
+        _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
+        wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
 
         await backend.clean_rooms(
             prefixed,
@@ -859,6 +863,14 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             # Per-map resolution, same as the sensors: on a multi-map
             # account a room cleaned on another floor arrives as a raw
             # id and is counted as a separate, never-visited room.
+            # LATE, AND IT HAS TO BE. sensor_rooms imports entity, which
+            # imports the package `__init__`, which registers services --
+            # so a top-level import here is a cycle through the package
+            # root. The late-import checker does not see it, because it
+            # compares module pairs and this one closes via `__init__`.
+            #
+            # Found by moving it up and watching 36 tests fail on
+            # "partially initialized module".
             from .sensor_rooms import _regions_by_pmap_for  # noqa: PLC0415
 
             visit_counts = ms.room_visit_counts(

@@ -662,11 +662,11 @@ clean_zone:
         select:
           options:
             - label: Light
-              value: 1
+              value: "1"
             - label: Standard
-              value: 2
+              value: "2"
             - label: Hard
-              value: 3
+              value: "3"
     zone_id:
       name: Zone ID
       description: >

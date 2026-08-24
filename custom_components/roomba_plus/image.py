@@ -74,6 +74,8 @@ from .const import (
     ROOM_TRANSITION_CANDIDATE_PHASES,
 )
 from .entity import IRobotEntity
+from .segment_anchoring import anchor_segment
+from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
@@ -351,9 +353,6 @@ def _anchored_mission_points(
     renderer, where an unanchored segment still shows with its line
     broken, which is the honest picture of "here, position uncertain".
     """
-    from .segment_anchoring import anchor_segment  # noqa: PLC0415
-    from .trajectory_segments import split_into_segments  # noqa: PLC0415
-
     segments = split_into_segments(points, breaks)
     if len(segments) < 2:
         return points
@@ -393,8 +392,6 @@ def _anchored_mission_points(
 def _cells_of_points(
     points: list[tuple[float, float]],
 ) -> set[tuple[int, int]]:
-    from .segment_anchoring import CELL_SIZE_MM  # noqa: PLC0415
-
     return {
         (int(x // CELL_SIZE_MM), int(y // CELL_SIZE_MM)) for x, y in points
     }
