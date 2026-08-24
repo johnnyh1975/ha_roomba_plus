@@ -150,10 +150,10 @@ SUGGEST_DASH       = (6, 4)  # px on/off for dashed suggestion outlines
 # ── Storage version — bump when dump_state() format changes ──────────────────
 _STATE_VERSION  = 1
 
-# v3.2.1 LANDMARK-LOG — a sustained pose jump accepted after
-# _MAX_CONSECUTIVE_REJECTED_JUMPS rejections corresponds, per the 980's
-# documented vSLAM sensor-fusion pipeline, to either a genuine move or a
-# camera-landmark relocalisation correction. Logging WHERE these land
+# v3.2.1 LANDMARK-LOG — a recorded discontinuity corresponds, per the
+# 980's documented vSLAM sensor-fusion pipeline, to either a genuine
+# move or a camera-landmark relocalisation correction. Logging WHERE
+# these land
 # (not just counting them, as before) is data-collection scaffolding for
 # a future "landmark cluster" structural signal — never consumed
 # anywhere yet. Capped, not unbounded: this is meant to reveal spatial
@@ -201,6 +201,27 @@ class MapRenderer:
         self._geometry_store = geometry_store
         self._room_seg_store = room_seg_store
         self._points: list[tuple[int, int]] = []      # pixel coordinates
+        #: MILLIMETRES FOR THE SAME POINTS, index-aligned with _points.
+        #:
+        #: The jump check used to recover the previous position by
+        #: converting _points[-1] back from pixels. The millimetres were
+        #: right there in the caller and got thrown away, so the check
+        #: measured on a quantity that had been through the canvas
+        #: transform. Kept here so the comparison is on the physical
+        #: value.
+        self._points_mm: list[tuple[float, float]] = []
+        #: Indices into _points where continuity BREAKS -- the point at
+        #: this index does not connect to the one before it.
+        #:
+        #: Replaces rejection. A dropped point left _points[-1] as a
+        #: stale anchor, so every later real position measured against
+        #: it too: the field-confirmed cascade (1413 points stranded in
+        #: a 0.7 m pocket in a 106 m2 home). Recording the break instead
+        #: keeps the anchor current, and a wrongly-marked break costs a
+        #: gap in the drawing rather than a lost point.
+        self._breaks: set[int] = set()
+        #: Receipt time per point, for the time-scaled jump threshold.
+        self._point_ts: list[float] = []
         self._stuck_px: list[tuple[int, int]] = []    # pixel coordinates
         self._robot_px: tuple[int, int] | None = None # current robot position
         self._theta: float = 0.0                      # current heading (degrees)
@@ -212,7 +233,6 @@ class MapRenderer:
         # v2.9.0 — see _MAX_POSE_JUMP_MM rationale below. Counts consecutive
         # rejected jumps so a real, sustained move isn't permanently stranded
         # behind one stale anchor point.
-        self._consecutive_rejected_jumps: int = 0
         # v3.2.1 LANDMARK-LOG — deliberately NOT cleared in reset(): the
         # whole point is cross-mission accumulation, unlike self._points
         # which is intentionally wiped every mission (see reset()).
@@ -229,10 +249,14 @@ class MapRenderer:
     def reset(self) -> None:
         """Clear all points for a new mission."""
         self._points.clear()
+        # Index-aligned with _points -- clearing one without the others
+        # would leave breaks pointing at positions from the last mission.
+        self._points_mm.clear()
+        self._point_ts.clear()
+        self._breaks.clear()
         self._stuck_px.clear()
         self._robot_px = None
         self._theta = 0.0
-        self._consecutive_rejected_jumps = 0
         if not self._cfg.persist:
             self._last_png = None
         _LOGGER.debug("MapRenderer: mission reset")
@@ -244,26 +268,128 @@ class MapRenderer:
     # and would draw a line across the entire map if not rejected.
     # Derived from NickWaterton/Roomba980-Python max_distance = 500.
     _MAX_POSE_JUMP_MM: float = 500.0
+    #: Fallback speed until enough steps have been seen to measure one
+    #: (see _observed_speed_mm_s). Published figure for the chassis is
+    #: ~300 mm/s; the margin here is for the bootstrap phase only.
+    _MAX_SPEED_MM_S: float = 350.0
+    #: How many recent steps the measured speed is taken from.
+    _SPEED_WINDOW: int = 40
+    #: Percentile of observed step speeds taken as the ceiling. High
+    #: enough to cover genuine fast driving, low enough that a minority
+    #: of discontinuities cannot drag it upward -- the same robustness
+    #: argument as the median for dt.
+    _SPEED_PERCENTILE: float = 0.90
+    #: Fallback floor for dt until enough intervals have been seen to
+    #: measure one (see _typical_dt_s). Deliberately generous: a floor
+    #: that is too high costs a missed break, one that is too low costs
+    #: an invented one -- and only the second kind is visible as a
+    #: wrong gap in the drawing.
+    _MIN_STEP_DT_S: float = 2.5
+    #: How many recent intervals the measured floor is taken from.
+    _DT_WINDOW: int = 20
+    #: Past this, continuity is gone whatever the elapsed time.
+    _MAX_STEP_CEILING_MM: float = 3000.0
 
-    # v2.9.0 — CASCADING REJECTION BUG (confirmed from real field data,
-    # 2026-06-19): rejecting a jump returns without appending the new point,
-    # so self._points[-1] stays the same OLD anchor for the *next* call too.
-    # If the robot genuinely moved away (long hallway traverse, relocalising
-    # after a charge/stuck recovery, a sparse MQTT update gap), every
-    # subsequent real position also reads as "too far from that stale
-    # anchor" — rejection cascades and never recovers on its own. A real
-    # 980 OG checkpoint mid-mission showed exactly this: 1413 points all
-    # stranded within a ~0.7m x 0.7m pocket despite a 106 m² home, because
-    # one early rejected jump froze the anchor and every later legitimate
-    # pose got compared against it forever.
-    #
-    # Fix: track consecutive rejections. A single rejected jump still gets
-    # filtered (catches the momentary firmware glitches this guard was
-    # built for). But once jumps keep being "too large" several times in a
-    # row, that's not a glitch — it is the robot, accept the move and
-    # re-anchor. This bounds the worst case to a short gap in the path
-    # instead of an indefinite, often mission-long, rejection cascade.
-    _MAX_CONSECUTIVE_REJECTED_JUMPS: int = 2
+
+    def _allowed_step_mm(self, dt_s: float) -> float:
+        """How far the robot could plausibly have moved in `dt_s`.
+
+        REPLACES A BORROWED CONSTANT. `_MAX_POSE_JUMP_MM = 500` was
+        taken from another project, and the comment justifying it
+        refutes itself: it cites ~300 mm/s and updates every 1-5 s,
+        which is up to 1500 mm. Measured on a real 980 (coverage
+        counters over four missions): one pose every 1.8 s, so up to
+        542 mm at full speed -- against a 500 mm limit. Normal
+        straight-line driving sat just over the threshold, which is
+        what the cascade was made of.
+
+        LOWER BOUND, because the pose carries no timestamp of its own.
+        Only local receipt time is available, so queued messages can
+        arrive with dt near zero; without the floor this would be
+        STRICTER than today and reject correct poses during exactly the
+        network hiccups that cause the queueing. The floor pins the
+        old behaviour as the minimum -- this can only ever be more
+        permissive.
+
+        UPPER BOUND, because beyond a long gap (an HA restart mid
+        mission) continuity is gone regardless. Allowing 9 m after 30 s
+        would wave through anything; the caller marks a break instead.
+        """
+        return min(
+            self._MAX_STEP_CEILING_MM,
+            self._observed_speed_mm_s() * max(dt_s, self._typical_dt_s()),
+        )
+
+    def _observed_speed_mm_s(self) -> float:
+        """How fast this robot actually moves, from its own steps.
+
+        THE LAST SET NUMBER IN THE FORMULA, and it had no more claim to
+        be here than the borrowed 500 it replaced. A published ~300 mm/s
+        plus an invented margin plus a separate tolerance term is two
+        safety factors stacked on a figure nobody measured for this
+        chassis, this firmware or this floor.
+
+        The apparent circularity -- needing a speed limit to know which
+        steps are real -- dissolves the same way it did for dt:
+        discontinuities are a MINORITY. A high percentile of observed
+        step speeds is barely moved by a few outliers, so the ceiling
+        tracks genuine driving without being dragged up by the very
+        jumps it exists to catch.
+
+        The tolerance term is gone with it: a speed measured from real
+        steps already contains pose noise and acceleration. Adding
+        slack on top would be a second margin on a value that is
+        already one.
+        """
+        if len(self._points_mm) < 10:
+            return self._MAX_SPEED_MM_S
+        pts = self._points_mm[-(self._SPEED_WINDOW + 1):]
+        ts = self._point_ts[-(self._SPEED_WINDOW + 1):]
+        speeds = sorted(
+            math.hypot(b[0] - a[0], b[1] - a[1]) / (tb - ta)
+            for a, b, ta, tb in zip(pts, pts[1:], ts, ts[1:], strict=False)
+            if tb > ta
+        )
+        if not speeds:
+            return self._MAX_SPEED_MM_S
+        idx = min(len(speeds) - 1, int(len(speeds) * self._SPEED_PERCENTILE))
+        # Never below the fallback: an idle stretch of near-zero steps
+        # would otherwise collapse the ceiling and make the check
+        # stricter than it has ever been.
+        return max(speeds[idx], self._MAX_SPEED_MM_S)
+
+    def _typical_dt_s(self) -> float:
+        """The robot's own message interval, measured from its own stream.
+
+        THE FLOOR HAS TO BE MEASURED TOO, or it is the borrowed constant
+        again in a new place. A hardcoded 1.8 s came from averaging four
+        missions of one robot; another install, another firmware, or a
+        busier network has a different rate, and every one of them
+        deserves a threshold that fits.
+
+        MEDIAN, NOT MEAN, and that is the whole point. A mean is dragged
+        upward by exactly the gaps this is meant to catch -- one long
+        stall would raise the allowance and wave the next real jump
+        through. The median of a window ignores a minority of outliers
+        completely, so the floor tracks ordinary operation and stays put
+        when something goes wrong.
+
+        Falls back to the conservative default until the window has
+        filled: with too few samples a median is not robust either.
+        """
+        if len(self._point_ts) < 5:
+            return self._MIN_STEP_DT_S
+        recent = self._point_ts[-(self._DT_WINDOW + 1):]
+        gaps = sorted(
+            b - a for a, b in zip(recent, recent[1:], strict=False) if b > a
+        )
+        if not gaps:
+            return self._MIN_STEP_DT_S
+        median = gaps[len(gaps) // 2]
+        # Never below the fallback: a burst of queued messages would
+        # otherwise pull the floor towards zero and make the check
+        # stricter than it has ever been.
+        return max(median, self._MIN_STEP_DT_S)
 
     def add_pose(self, x_mm: float, y_mm: float, theta_deg: float) -> bool:
         """Record a new pose point from the MQTT state update.
@@ -279,8 +405,8 @@ class MapRenderer:
         Rejects jumps > _MAX_POSE_JUMP_MM from the previous point — these
         indicate stuck-recovery relocalisation or firmware bogus updates and
         would otherwise draw a line across the entire map. See
-        _MAX_CONSECUTIVE_REJECTED_JUMPS above: this rejection self-heals
-        after a short streak instead of cascading indefinitely.
+        the discontinuity marking above: the point is kept and only the
+        LINE breaks, so no anchor can go stale and no cascade can form.
 
         Returns True if THIS call was an accepted sustained jump (added to
         accepted_jump_log) — v3.2.1 DOCK-ANCHOR: callers use this to mark
@@ -297,37 +423,37 @@ class MapRenderer:
         # using them here caused the inverse to produce wildly wrong mm values
         # after auto-fit activated, rejecting up to 99% of legitimate poses.
         was_accepted_jump = False
-        if self._points:
-            prev_px, prev_py = self._points[-1]
-            orig_cx = orig_cy = self._cfg.size_px // 2
-            prev_x_mm = (prev_px - orig_cx) * self._cfg.scale
-            prev_y_mm = (orig_cy - prev_py) * self._cfg.scale
+        now_ts = _time_mod.time()
+        if self._points_mm:
+            prev_x_mm, prev_y_mm = self._points_mm[-1]
             jump_mm = math.hypot(x_mm - prev_x_mm, y_mm - prev_y_mm)
-            if (
-                jump_mm > self._MAX_POSE_JUMP_MM
-                and self._consecutive_rejected_jumps < self._MAX_CONSECUTIVE_REJECTED_JUMPS
-            ):
-                self._consecutive_rejected_jumps += 1
+            dt_s = now_ts - self._point_ts[-1] if self._point_ts else 0.0
+            allowed = self._allowed_step_mm(dt_s)
+            if jump_mm > allowed:
+                # MARKED, NOT DROPPED. The point is kept either way --
+                # only the LINE is broken. Dropping it left _points[-1]
+                # as a stale anchor, so every later real position
+                # measured against it too and the rejection cascaded
+                # (field-confirmed: 1413 points stranded in a 0.7 m
+                # pocket in a 106 m2 home).
+                #
+                # Consequence of a wrong call is now asymmetric in our
+                # favour: a false break draws a gap, a missed break
+                # draws one wrong line that the next point corrects.
+                # Neither loses data.
+                self._breaks.add(len(self._points))
                 _LOGGER.debug(
-                    "MapRenderer: rejecting bogus pose jump %.0f mm "
-                    "(%.0f, %.0f) -> (%.0f, %.0f) [streak=%d]",
-                    jump_mm, prev_x_mm, prev_y_mm, x_mm, y_mm,
-                    self._consecutive_rejected_jumps,
+                    "MapRenderer: discontinuity %.0f mm in %.1f s "
+                    "(allowed %.0f mm) -- line breaks, point kept",
+                    jump_mm, dt_s, allowed,
                 )
-                return False
-            if jump_mm > self._MAX_POSE_JUMP_MM:
-                _LOGGER.info(
-                    "MapRenderer: accepting sustained pose jump %.0f mm "
-                    "after %d consecutive rejections — treating as a real "
-                    "move/relocalisation, not a glitch",
-                    jump_mm, self._consecutive_rejected_jumps,
-                )
-                self._accepted_jump_log.append((x_mm, y_mm, theta_deg, _time_mod.time()))
+                self._accepted_jump_log.append((x_mm, y_mm, theta_deg, now_ts))
                 if len(self._accepted_jump_log) > MAX_ACCEPTED_JUMP_LOG:
                     self._accepted_jump_log = self._accepted_jump_log[-MAX_ACCEPTED_JUMP_LOG:]
                 was_accepted_jump = True
 
-        self._consecutive_rejected_jumps = 0
+        self._points_mm.append((x_mm, y_mm))
+        self._point_ts.append(now_ts)
         px, py = self._mm_to_px(x_mm, y_mm)
         self._points.append((px, py))
         self._robot_px = (px, py)
@@ -365,6 +491,18 @@ class MapRenderer:
             return
         new_px_points = [self._mm_to_px(x, y) for x, y in corrected_points_mm]
         self._points = self._points[:start_index] + new_px_points
+        # The parallel lists have to follow, or _breaks and _points_mm
+        # would still describe the uncorrected segment. Timestamps are
+        # kept as-is where they exist -- the correction moves positions,
+        # not when they were received.
+        self._points_mm = self._points_mm[:start_index] + list(corrected_points_mm)
+        self._point_ts = self._point_ts[:start_index + len(new_px_points)]
+        while len(self._point_ts) < len(self._points):
+            self._point_ts.append(self._point_ts[-1] if self._point_ts else 0.0)
+        # A break INSIDE the replaced range described the old geometry;
+        # the correction is a fresh, continuous segment. Breaks before
+        # start_index still stand.
+        self._breaks = {i for i in self._breaks if i < start_index}
         if new_px_points:
             self._robot_px = new_px_points[-1]
         self._last_png = None  # force re-render; the cache reflects stale data
@@ -413,6 +551,35 @@ class MapRenderer:
         all_px.extend(self._stuck_px)
         if self._robot_px:
             all_px.append(self._robot_px)
+
+        # ROOM OUTLINES BELONG IN THE FIT, and leaving them out silently
+        # cropped them off the canvas.
+        #
+        # The fit scaled to the pose trail alone, but a room outline is
+        # drawn with `wall_offset_mm` OUTSIDE its cells -- it is meant to
+        # suggest where the wall is, so it lies beyond the floor the
+        # robot actually covered. It therefore fell outside the fitted
+        # canvas essentially always. A dashed rectangle draws only its
+        # edges, so nothing of it survived: a real room produced a frame
+        # byte-identical to no room at all.
+        #
+        # Converted with the fixed transform, matching how _points are
+        # stored -- _mm_to_px_fit would be circular here, since the fit
+        # is what is being computed.
+        if self._room_seg_store is not None and not (
+            self._geometry_store is not None
+            and self._geometry_store.has_user_geometry
+        ):
+            offset = (
+                self._geometry_store.wall_offset_mm
+                if self._geometry_store else 200
+            )
+            for room in self._room_seg_store.rooms.values():
+                if room.hidden:
+                    continue
+                x_min, x_max, y_min, y_max = room.bbox
+                all_px.append(self._mm_to_px(x_min - offset, y_max + offset))
+                all_px.append(self._mm_to_px(x_max + offset, y_min - offset))
 
         xs = [p[0] for p in all_px]
         ys = [p[1] for p in all_px]
@@ -1092,7 +1259,25 @@ class MapRenderer:
             (max(0, min(size - 1, px)), max(0, min(size - 1, py)))
             for px, py in (fit_px(px, py) for px, py in self._points)
         ]
-        draw.line(clipped, fill=PATH_COLOUR, width=width_px)
+
+        # ONE POLYLINE PER CONTINUOUS RUN, not one across everything.
+        #
+        # An index in _breaks means the point does not connect to the
+        # one before it. Drawing through a break asserts travel that
+        # did not happen -- the straight line across the room that
+        # rejection used to hide by dropping the point instead. A gap
+        # is the honest picture, and it makes the discontinuity
+        # visible rather than plausible.
+        #
+        # Same shape PrimeRoomsImage already uses for its own trail;
+        # this brings the Classic renderer in line with it.
+        start = 0
+        for end in sorted(i for i in self._breaks if 0 < i < len(clipped)):
+            if end - start >= 2:
+                draw.line(clipped[start:end], fill=PATH_COLOUR, width=width_px)
+            start = end
+        if len(clipped) - start >= 2:
+            draw.line(clipped[start:], fill=PATH_COLOUR, width=width_px)
 
     @staticmethod
     def _interpolated(

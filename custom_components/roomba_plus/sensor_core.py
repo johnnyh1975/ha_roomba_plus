@@ -24,7 +24,10 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.typing import StateType
 import datetime as dt_stdlib
 
@@ -1500,6 +1503,47 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
     _TICK_SENSORS = frozenset({"mission_recharge_minutes", "mission_expire_minutes"})
 
+    #: Sensors whose value depends on what day it is, and therefore go
+    #: stale at midnight without anything happening to the robot.
+    #:
+    #: @chairstacker (#78): "Area cleaned today" kept yesterday's figure
+    #: past midnight, and a reload cleared it. That pairing is the whole
+    #: diagnosis -- the calculation was always right, because it reads
+    #: today's date on every call. Nothing called it. The value comes
+    #: from `mission_store`, which is written at mission end, so between
+    #: the last run of one day and the first of the next there is no
+    #: event to recompute on. A reload recomputes everything, which is
+    #: why that worked.
+    #:
+    #: A 60-second tick like _TICK_SENSORS would also fix it, and would
+    #: mean 1,440 recomputations a day to catch one moment. A single
+    #: scheduled callback at 00:00 local is the same result for the work
+    #: of one.
+    #:
+    #: THREE SENSORS, NOT ONE. `area_cleaned_today` was the reported
+    #: symptom; the other two share the mechanism and nobody had noticed
+    #: because their failure is quieter still:
+    #:
+    #:   clean_streak      After 13 days of daily missions and one day
+    #:                     off, this stays at 13 instead of dropping to
+    #:                     0 -- and then jumps to 1 the moment the next
+    #:                     mission ends, so the break is never visible.
+    #:                     @chairstacker again, and he had to run the
+    #:                     experiment to find it.
+    #:   battery_age_days  Wrong by one from every midnight until the
+    #:                     next unrelated state write. Nobody would ever
+    #:                     report this; it is simply quietly stale.
+    #:
+    #: The pattern is worth naming: a value derived from TODAY'S DATE has
+    #: no event of its own. Everything else here recomputes because
+    #: something happened to the robot. These change because time passed,
+    #: which is not something the robot reports.
+    _MIDNIGHT_SENSORS = frozenset({
+        "area_cleaned_today",
+        "clean_streak",
+        "battery_age_days",
+    })
+
     async def async_added_to_hass(self) -> None:
         """Register MQTT callback and start the 60-second countdown tick."""
         await super().async_added_to_hass()
@@ -1539,6 +1583,21 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                 dt_stdlib.timedelta(seconds=60),
             )
 
+        if self.entity_description.key in self._MIDNIGHT_SENSORS:
+            # LOCAL midnight, which is what `dt_util.now().date()` in the
+            # value function rolls over on. Tracking UTC would fire at
+            # the wrong moment for everyone outside it -- and the tester
+            # who found this is on UTC-7.
+            self.async_on_remove(
+                async_track_time_change(
+                    self.hass,
+                    self._async_day_rolled_over,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                )
+            )
+
     @callback
     def _async_mission_completed(self, event: Any) -> None:
         """Recompute when the mission store gains a record.
@@ -1557,6 +1616,11 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         if self._unsub_tick is not None:
             self._unsub_tick()
             self._unsub_tick = None
+
+    @callback
+    def _async_day_rolled_over(self, _now: dt_stdlib.datetime) -> None:
+        """Recompute a day-scoped sensor when the date changes."""
+        self.async_write_ha_state()
 
     @callback
     def _async_tick(self, _now: dt_stdlib.datetime) -> None:

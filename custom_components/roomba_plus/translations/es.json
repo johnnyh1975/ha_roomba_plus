@@ -173,7 +173,8 @@
           "map_clean_zones": "Dibujar zonas de limpieza",
           "map_keepout_zones": "Dibujar zonas prohibidas",
           "map_nomop_zones": "Dibujar zonas sin fregado",
-          "enable_maintenance_list": "Mostrar el mantenimiento como lista de tareas"
+          "enable_maintenance_list": "Mostrar el mantenimiento como lista de tareas",
+          "region_sensors": "Sensor propio por habitación y zona"
         },
         "data_description": {
           "continuous": "Mantener una conexión MQTT persistente con el robot. Recomendado.",
@@ -814,6 +815,9 @@
           "mopping": "Fregando",
           "vacuuming_and_mopping": "Aspirando y fregando"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – última limpieza"
       }
     },
     "binary_sensor": {
@@ -824,7 +828,7 @@
         "name": "Conectado"
       },
       "bin_present": {
-        "name": "Depósito presente"
+        "name": "Depósito de polvo presente"
       },
       "mop_ready": {
         "name": "Problema de fregona"
@@ -871,7 +875,7 @@
         "name": "Tapa abierta"
       },
       "mop_tank_present_direct": {
-        "name": "Depósito presente"
+        "name": "Depósito de agua presente"
       },
       "mid_mission_recharge": {
         "name": "Recarga intermedia activa"
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Lavado de mopa permitido"
+      },
+      "prime_pad_dry": {
+        "name": "Secar mopa ahora"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Mapa de limpieza"
+        "name": "Recorrido de limpieza"
       },
       "coverage_map": {
-        "name": "Mapa de cobertura"
+        "name": "Mapa de calor de cobertura"
       },
       "rooms_map": {
         "name": "Mapa de habitaciones"
       },
       "cleaning_map": {
-        "name": "Mapa de limpieza"
+        "name": "Mapa de limpieza en directo"
       },
       "raw_map": {
         "name": "Mapa en directo sin procesar"

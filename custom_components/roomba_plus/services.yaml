@@ -629,6 +629,44 @@ clean_zone:
       selector:
         text:
           multiple: true
+    cleaning_mode:
+      name: Cleaning mode
+      description: >-
+        Vacuum, mop, or both, for this run only. Leave empty to use whatever
+        the Cleaning mode selector shows. Prime robots only.
+      selector:
+        select:
+          options:
+            - label: Vacuum
+              value: vacuum
+            - label: Mop
+              value: mop
+            - label: Vacuum and mop
+              value: vacuum_and_mop
+            - label: Vacuum, then mop
+              value: vacuum_then_mop
+    smart_scrub:
+      name: Smart scrub
+      description: >-
+        Extra scrubbing motion for this run only. Classic mopping robots
+        only; leave empty to keep whatever the robot would have done.
+      selector:
+        boolean:
+    pad_wetness:
+      name: Pad wetness
+      description: >-
+        How wet the pad is for this run only. Leave empty to keep the
+        Pad wetness settings on the device — a value here overrides them
+        for this run and nothing else. Classic mopping robots only.
+      selector:
+        select:
+          options:
+            - label: Light
+              value: 1
+            - label: Standard
+              value: 2
+            - label: Hard
+              value: 3
     zone_id:
       name: Zone ID
       description: >

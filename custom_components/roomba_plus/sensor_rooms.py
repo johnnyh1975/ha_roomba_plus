@@ -892,6 +892,7 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
         return ms.rooms_overdue_merged(
             config, dt_util.now().isoformat(),
             region_map=region_map, umf_regions=umf_regions,
+            regions_by_pmap=_regions_by_pmap_for(data),
         )
 
     @property
@@ -1184,7 +1185,16 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         # v3.3.0 ROOM-SCHED foundation fix — pass the name-resolution
         # maps: live records derive rooms from timeline.finEvents now.
         region_map, umf_regions = _region_maps_for(self._entry.runtime_data)
-        return store.room_cleaning_history(region_map, umf_regions)
+        # AND THE PER-MAP VIEW, so a mission run on another Smart Map
+        # resolves against ITS map. @dduff617 (S9+, four maps) saw rooms
+        # from other floors rendered as raw ids -- `"2"`, `"5"` -- next
+        # to correctly named ones, because every record was resolved
+        # against whichever map is active now.
+        data = self._entry.runtime_data
+        by_pmap: dict[str, dict[str, str]] | None = None
+        if data.has_cloud and data.cloud_coordinator is not None:
+            by_pmap = data.cloud_coordinator.regions_by_pmap
+        return store.room_cleaning_history(region_map, umf_regions, by_pmap)
 
     @property
     def native_value(self) -> int:
@@ -1195,6 +1205,25 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, str]:
         """Dict mapping room display name → ISO timestamp of last clean."""
         return self._history
+
+
+def _regions_by_pmap_for(runtime_data: Any) -> dict[str, dict[str, str]] | None:
+    """{pmap_id: {region_id: name}} for every map, or None.
+
+    The per-map companion to `_region_maps_for`, which returns the
+    ACTIVE map only. @dduff617 (S9+, four Smart Maps) showed that
+    resolving history against the active map alone leaves rooms from
+    other floors as raw ids -- and a raw id then counts as its own
+    never-cleaned "room", inflating every overdue and visit-count
+    figure on a multi-map account.
+    """
+    if runtime_data.has_cloud and runtime_data.cloud_coordinator is not None:
+        by_pmap = runtime_data.cloud_coordinator.regions_by_pmap
+        # Checked rather than cast: runtime_data is untyped here, and a
+        # cast would let a future shape change through silently.
+        if isinstance(by_pmap, dict):
+            return by_pmap
+    return None
 
 
 def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] | None]:
@@ -1479,3 +1508,94 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
             "recent_window": list(rps.recent_relocs),
             "percentile_rank": rps.reloc_percentile_rank(),
         }
+
+
+class PrimeRoomsOverdueSensor(RoombaRoomsOverdueSensor):
+    """The overdue-rooms count for V4/Prime robots.
+
+    A SUBCLASS RATHER THAN A COPY. Everything the Classic sensor does
+    here is tier-neutral already: `_merged()` reads `mission_store` and
+    `runtime_data`, never the local robot object, and
+    `new_state_filter` returns False because room data only ever
+    arrives through cloud enrichment. Only two things differ, and both
+    are below.
+
+    IT MATTERS MORE ON PRIME, not less. Prime robots have zones as well
+    as rooms -- @chairstacker has seven rooms and twelve zones -- so
+    there is more to fall behind, and his stated use for the
+    integration is exactly this: watch, and notify when something has
+    not been cleaned.
+    """
+
+    def __init__(self, blid: str, config_entry: Any) -> None:
+        # No local robot object exists on a CLOUD_ONLY entry; every
+        # Prime entity passes None here.
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        # A DISTINCT unique_id, so a robot that somehow had both would
+        # not collide -- and so this one is recognisable in a registry.
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_rooms_overdue"
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator that drives the history sync.
+
+        The Classic sensor is refreshed by the local state push. Prime
+        has none, so without this the count would be read once at
+        start-up and never move -- the same omission that would have
+        frozen the per-region "last cleaned" sensors.
+        """
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )
+
+
+class PrimeRoomCleaningHistorySensor(RoombaRoomCleaningHistorySensor):
+    """Per-room last-clean timestamps for V4/Prime robots.
+
+    THE SAME SHAPE CLASSIC HAS ALWAYS SHIPPED: one entity, with
+    `{region_name: timestamp}` as attributes. Prime had none of this at
+    all -- not a decision, just the order things were built in.
+
+    Built as the DEFAULT after counting what the alternative costs: a
+    per-region entity for @chairstacker's seven rooms and twelve zones
+    is twenty new entities for data Classic delivers in one. Whoever
+    wants the entities can turn on CONF_REGION_SENSORS, on either tier.
+
+    `_history` is already tier-neutral -- it reads the mission store
+    and the cloud coordinator, never the local robot object -- so only
+    the two Prime differences are below.
+    """
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        # NOT super().__init__(): the Classic parent calls
+        # `IRobotEntity.__init__(roomba, blid)` WITHOUT the config
+        # entry, which is fine there -- model and serial come off the
+        # local robot object. A Prime entry has no such object, so
+        # those fields come only from the config entry, and going
+        # through the parent produced `model=None` on the device.
+        # Caught by the device-info guard, which exists for this.
+        IRobotEntity.__init__(self, None, blid, config_entry)
+        self._entry = config_entry
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_room_cleaning_history"
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator that drives the history sync.
+
+        Classic is refreshed by the local state push; Prime has none.
+        Without this the attributes would be read once at start-up and
+        never move.
+        """
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )

@@ -39,6 +39,8 @@ from .const import (
     ATTR_ROOM_PASSES,
     ATTR_ROOMS,
     ATTR_CLEANING_MODE,
+    ATTR_RUN_PAD_WETNESS,
+    ATTR_SMART_SCRUB,
     ATTR_TWO_PASS,
     DOMAIN,
     EVENT_MAINTENANCE_RESET,
@@ -177,6 +179,24 @@ def _fire_maintenance_reset_event(
 
 # ── Service handlers ──────────────────────────────────────────────────────────
 
+def _modes_for_backend(backend: Any) -> dict[str, int]:
+    """The cleaning-mode table for whichever generation `backend` serves.
+
+    "Vacuum and mop" is 32 on Prime (field-verified) and 6 on Classic
+    (captured from the iRobot app's own command by @ia74). Resolving a
+    caller's mode name against the wrong table would send a value that
+    generation has never been seen to accept -- on a field that decides
+    whether water goes on the floor.
+    """
+    from .const import cleaning_modes_for  # noqa: PLC0415
+    from .models import ConnectionType  # noqa: PLC0415
+
+    data = getattr(backend, "_data", None)
+    return cleaning_modes_for(
+        getattr(data, "connection_type", None) is ConnectionType.CLOUD_ONLY
+    )
+
+
 async def _async_clean_rooms_via_backend(
     backend: Any,
     entity_id: str,
@@ -238,11 +258,10 @@ async def _async_clean_rooms_via_backend(
     # different mode per region, and nobody has asked for that -- a
     # service field that mixes vacuum and mop across rooms would be
     # harder to explain than it is useful.
-    from .select_prime import PrimeCleaningModeSelect  # noqa: PLC0415
 
     caller_mode_name: str | None = call.data.get(ATTR_CLEANING_MODE)
     caller_mode: int | None = (
-        PrimeCleaningModeSelect.MODES.get(caller_mode_name)
+        _modes_for_backend(backend).get(caller_mode_name)
         if caller_mode_name else None
     )
     def _two_pass_for(index: int) -> bool | None:
@@ -379,11 +398,52 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
             continue
 
         prefixed = [f"{ZID_PREFIX}{zid}" for zid in zone_ids]
-        _LOGGER.info(
-            "clean_zone: %s -> zones=%s (via %s)",
-            entity_id, zone_ids, type(backend).__name__,
+
+        # THE SAME MODE OPTION clean_room HAS HAD ALL ALONG.
+        #
+        # @chairstacker asked for vac-only / mop-only / vac & mop /
+        # vac-then-mop on a zone so he can build the few ad-hoc scripts
+        # he actually wants, rather than getting a button per zone per
+        # mode. Every piece already existed -- `clean_rooms` takes
+        # `operating_mode`, and the four values are the ones the
+        # cleaning-mode select ships with -- this call simply never
+        # passed it on.
+        #
+        # The values are confirmed twice over: observed in four
+        # captures (2=vacuum, 4=mop, 6=both) and, for 32 and 512,
+        # recorded from the robot's own answer before the select
+        # shipped (`command 32 -> status 6`, `command 512 -> status
+        # 4`). So the robot accepts 32 even though the vendor app
+        # sends 6 for a combo -- which is why MODES is the source here
+        # rather than a fresh mapping off the enum.
+
+        mode_name: str | None = call.data.get(ATTR_CLEANING_MODE)
+        caller_mode: int | None = (
+            _modes_for_backend(backend).get(mode_name) if mode_name else None
         )
-        await backend.clean_rooms(prefixed)
+
+        _LOGGER.info(
+            "clean_zone: %s -> zones=%s mode=%s (via %s)",
+            entity_id, zone_ids, mode_name or "unset", type(backend).__name__,
+        )
+        # SMART SCRUB AND PAD WETNESS, both for this run only.
+        #
+        # Shapes from @ia74's Classic capture, where the app sends them
+        # inside the region's own params alongside operatingMode. Both
+        # omitted when unset: the pad-wetness selects already exist as
+        # device settings, and sending a per-region value would
+        # silently override what somebody set there.
+        scrub = call.data.get(ATTR_SMART_SCRUB)
+        wetness = call.data.get(ATTR_RUN_PAD_WETNESS)
+
+        await backend.clean_rooms(
+            prefixed,
+            # One value spread across every requested zone, same as
+            # clean_room does.
+            operating_mode=[caller_mode] if caller_mode is not None else None,
+            smart_scrub=[scrub] if scrub is not None else None,
+            pad_wetness=[wetness] if wetness is not None else None,
+        )
 
 
 async def async_handle_clean_room(call: ServiceCall) -> None:
@@ -796,7 +856,14 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
 
         candidates: list[str] = []
         if ms is not None and rps is not None:
-            visit_counts = ms.room_visit_counts(region_map)
+            # Per-map resolution, same as the sensors: on a multi-map
+            # account a room cleaned on another floor arrives as a raw
+            # id and is counted as a separate, never-visited room.
+            from .sensor_rooms import _regions_by_pmap_for  # noqa: PLC0415
+
+            visit_counts = ms.room_visit_counts(
+                region_map, None, _regions_by_pmap_for(data)
+            )
             relative = rps.room_dirt_relative()          # rid-keyed
             index = dict(rps.room_dirt_index)            # rid-keyed
             qualifying = []

@@ -173,7 +173,8 @@
           "map_clean_zones": "Draw clean zones",
           "map_keepout_zones": "Draw keep-out zones",
           "map_nomop_zones": "Draw no-mop zones",
-          "enable_maintenance_list": "Show maintenance as a to-do list"
+          "enable_maintenance_list": "Show maintenance as a to-do list",
+          "region_sensors": "Separate sensor per room and zone"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -816,6 +817,9 @@
           "mopping": "Mopping",
           "vacuuming_and_mopping": "Vacuuming and mopping"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – last cleaned"
       }
     },
     "device_tracker": {
@@ -1015,6 +1019,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Pad washing allowed"
+      },
+      "prime_pad_dry": {
+        "name": "Dry pad now"
       }
     },
     "select": {

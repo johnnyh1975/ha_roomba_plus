@@ -603,7 +603,28 @@ async def async_build_prime_floor_plan(
             for name in ("cleanZones", "adHocCleanZones", "policyZones")
             if parsed.get(name)
         },
-        room_names=_room_names_from_bundle(parsed.get("rooms")),
+        # THE MERGED NAMES, NOT JUST THE ROOMS LAYER.
+        #
+        # @chairstacker (#64): zone names appeared in his calendar
+        # entries and not on the map. Everything above merges three
+        # sources -- the bundle's rooms layer, its `cleanZones` layer,
+        # and `lastCommand.regions[].region_name` -- and writes the
+        # result to `runtime.prime_room_names`. The renderer was then
+        # handed `_room_names_from_bundle(parsed["rooms"])`, the rooms
+        # layer ALONE, so every zone name the merge had just resolved
+        # was dropped on the way to the picture.
+        #
+        # The calendar reads the merged store, which is why the same
+        # names showed up there. Nothing was missing from the data; it
+        # was not being passed on.
+        #
+        # Rooms-layer names still win: they are what the merge already
+        # ranks highest, and re-applying them here keeps this call
+        # independent of whether the merge above ran at all.
+        room_names={
+            **(getattr(runtime, "prime_room_names", None) or {}),
+            **_room_names_from_bundle(parsed.get("rooms")),
+        },
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),
         floor_plan=lines_mm(parsed.get("floorPlan")),
         borders=rings_mm(parsed.get("borders")),

@@ -53,7 +53,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
+from .const import DOMAIN, EVENT_ROOM_COMPLETED
 
 from roombapy_prime import (
     PrimeRobot,
@@ -96,6 +96,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         #: and rewrote the reads in all of them. A test caught it
         #: immediately. Three classes, three declarations.
         self.entry: ConfigEntry = config_entry
+        #: The region the last timeline report said was current.
+        #: A room completes when the next one starts, so this is
+        #: what the room-completed event announces.
+        self._last_room_id: str | None = None
         super().__init__(
             hass,
             _LOGGER,
@@ -289,6 +293,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                         )
                         continue
                     report = MissionTimelineReport.from_json(delta.payload)
+                    self._fire_room_completed_if_changed(report)
                     self.async_set_updated_data(report)
                     self._request_parts_refresh_on_mission_end(report)
                     backoff = 5.0  # a live update means things are healthy again
@@ -316,6 +321,67 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 self.async_set_update_error(exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300.0)
+    def _fire_room_completed_if_changed(self, report: Any) -> None:
+        """Fire roomba_plus_room_completed when the robot leaves a room.
+
+        CLASSIC HAS HAD THIS EVENT ALL ALONG; Prime never got it,
+        because it is fired from callbacks.py and that is a Classic-only
+        path -- the same shape as the `last_mqtt_message_ts` gap
+        @DaRealGuGu found. Prime users had the per-room state but no
+        trigger to hang an automation on.
+
+        A ROOM IS DONE WHEN THE NEXT ONE STARTS. The timeline reports
+        which room is current, not which just finished, so the previous
+        id is what completes. Firing here rather than from a sensor
+        property, because properties are read at unpredictable times and
+        an event must fire exactly once per transition.
+
+        Deliberately silent when the id has not changed: the timeline
+        repeats the current room on every update, and re-firing would
+        make the event useless as a trigger.
+        """
+        current_id: str | None = None
+        events = getattr(report, "event", None) or []
+        if events:
+            room = getattr(events[0], "room", None) or getattr(
+                events[0], "travel", None
+            )
+            region_id = getattr(room, "region_id", None) if room else None
+            current_id = str(region_id) if region_id is not None else None
+
+        previous = self._last_room_id
+        self._last_room_id = current_id
+        # Nothing to announce on the first report of a mission, or when
+        # the robot is between rooms with nothing finished behind it.
+        if previous is None or previous == current_id:
+            return
+
+        self.hass.bus.async_fire(
+            EVENT_ROOM_COMPLETED,
+            {
+                "entry_id": self.entry.entry_id,
+                "name": self.entry.title,
+                # Both, because an automation keyed on the name breaks
+                # when somebody renames a room in the iRobot app, and
+                # one keyed on the id is unreadable in a trace.
+                "room_id": previous,
+                "room_name": self._room_name(previous),
+                "mission_id": getattr(report, "mission_id", None),
+            },
+        )
+
+    def _room_name(self, region_id: str) -> str | None:
+        """The display name for a region id, if the cloud knows one."""
+        data = getattr(self.entry, "runtime_data", None)
+        coordinator = getattr(data, "cloud_coordinator", None)
+        by_pmap = getattr(coordinator, "regions_by_pmap", None)
+        if not isinstance(by_pmap, dict):
+            return None
+        for names in by_pmap.values():
+            if region_id in names:
+                return str(names[region_id])
+        return None
+
     def _request_parts_refresh_on_mission_end(self, report: Any) -> None:
         """Refreshes the consumable parts once a mission finishes.
 

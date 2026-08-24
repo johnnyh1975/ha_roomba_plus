@@ -102,6 +102,17 @@ _NEXT_EVENT_LOOKAHEAD = dt_stdlib.timedelta(weeks=2)
 # doesn't support (same reasoning as the ENERGY feature being cut for
 # false precision).
 _EVENT_SUMMARY = "Cleaning"
+#: RFC 5545 weekday abbreviations, indexed by Python's `weekday()`
+#: (Mon=0..Sun=6). THE EXACT MIRROR of the `order` table in
+#: `_weekdays_from_rrule`, which reads these back on an edit -- the
+#: two must agree or a day written here returns as a different day.
+#:
+#: Deliberately NOT the robot's own table: the wire format counts from
+#: Sunday, and conflating the two bases has gone wrong three times in
+#: this project. This one is calendar-side only; the conversion to the
+#: robot's numbering happens at the single call site that sends it.
+_RRULE_DAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+
 _EVENT_DESCRIPTION = (
     "Estimated start time from the robot's cleaning schedule. Duration "
     "is a placeholder — actual cleaning time varies by mission."
@@ -168,12 +179,45 @@ def _to_calendar_event(
 
     Prime uses the schedule id. Classic uses the weekday, because in a
     format with one entry per day there is nothing else to identify.
+
+    THE RRULE IS WHAT MAKES THE WEEKDAY EDITABLE.
+
+    @chairstacker could not change a schedule's weekday from the Home
+    Assistant calendar across three releases. The handling code was
+    right the whole time -- `_days_for_update` moves a single-day
+    schedule correctly, and BYDAY is read on an edit. The problem was
+    one layer up: these events carried no `rrule`, so Home Assistant
+    saw an ordinary one-off entry, showed no recurrence fields, and
+    never sent a BYDAY back. There was nothing wrong with how we
+    processed the weekday; there was no way for the user to state one.
+
+    That is why two fixes to the day logic changed nothing he could
+    see. Each was a real correction to a path his edits never took.
+
+    Occurrences are still expanded per week (the schedule is the unit
+    the robot stores, and the view wants dates), so every occurrence
+    of one schedule carries the same rule -- weekly, on the weekday it
+    falls on. Editing any of them states a weekday, which is exactly
+    what `_weekdays_from_rrule` already knows how to read.
     """
     return CalendarEvent(
         start=start, end=end,
         summary=_event_summary(zone_labels, mode), description=_EVENT_DESCRIPTION,
         uid=uid,
+        rrule=_weekly_rrule(start),
     )
+
+
+def _weekly_rrule(start: dt_stdlib.datetime) -> str:
+    """`FREQ=WEEKLY;BYDAY=xx` for the weekday `start` falls on.
+
+    BYDAY is not redundant beside dtstart here: it is the field Home
+    Assistant's edit dialog exposes as "repeat on", and the one it
+    sends back when a user changes the day. Without it the dialog has
+    no day to offer.
+    """
+    # RFC 5545 abbreviations, indexed by Python's Mon=0..Sun=6.
+    return f"FREQ=WEEKLY;BYDAY={_RRULE_DAYS[start.weekday()]}"
 
 
 def _mode_of(occurrence: tuple[Any, ...]) -> str | None:
@@ -349,6 +393,29 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
                 name=event.get("summary"),
             )
             weekday, hour, minute = self._weekday_of(event)
+
+            # BYDAY OVERRIDES dtstart, THE SAME WAY IT DOES FOR PRIME.
+            #
+            # Events now carry `FREQ=WEEKLY;BYDAY=xx`, so Home Assistant
+            # offers a "repeat on" control. Changing it sends a new
+            # BYDAY while `dtstart` stays where it was -- and this path
+            # read only `dtstart`, so a day changed through that control
+            # would have been silently ignored on Classic while working
+            # on Prime.
+            #
+            # Only when BYDAY names exactly one day. The Classic format
+            # holds one entry per weekday, so a multi-day rule is a
+            # real thing to support, but not one anybody has asked for
+            # or that this call site can express -- `legacy_with_entry`
+            # sets a single day. Several days fall through to `dtstart`
+            # rather than picking one of them arbitrarily.
+            explicit = _weekdays_from_rrule(event.get("rrule"))
+            if explicit and len(explicit) == 1:
+                # `_weekdays_from_rrule` returns Python weekdays
+                # (Mon=0..Sun=6); the robot counts from Sunday. Same
+                # conversion `_weekday_of` applies to `dtstart`.
+                weekday = (explicit[0] + 1) % 7
+
             previous = _weekday_from_uid(uid)
             if previous is not None and previous != weekday:
                 current = legacy_without_day(current, previous)

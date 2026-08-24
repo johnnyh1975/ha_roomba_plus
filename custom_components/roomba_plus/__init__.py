@@ -442,6 +442,18 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
 
         if not room_seg_store.migrated_from_zonestore:
             if grid_store is not None and grid_store.cell_count > 0 and not room_seg_store.rooms:
+                # missions_seen deliberately omitted: `ctx.mission_store`
+                # is only populated later in setup (see _phase_history),
+                # so it is None here and passing it would gate on a
+                # count of zero and block this path forever.
+                #
+                # Harmless in practice -- this branch only runs for an
+                # install that already has grid cells and no rooms yet,
+                # i.e. one migrating from a version that predates room
+                # segmentation. Such a grid is accumulated, not the
+                # single-mission mask the gate exists to reject. The
+                # live path in image.py, which runs after every mission,
+                # does pass the count.
                 room_seg_store.maybe_recompute(grid_store.cells)
             from .legacy_zone_migration import async_load_legacy_zones
             legacy_zones = await async_load_legacy_zones(hass, config_entry.entry_id)

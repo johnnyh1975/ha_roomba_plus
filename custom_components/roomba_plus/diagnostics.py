@@ -271,19 +271,73 @@ def _prime_room_preferences(
     return dict(prefs)
 
 
-async def _prime_favorites_raw(data: Any) -> Any:
-    """The unparsed favourites response, for a diagnostics download.
+async def _favourites_diagnostics(data: Any, config_entry: Any) -> dict[str, Any]:
+    """Favourites as the running robot actually sees them.
 
-    Never raises: a diagnostics download that fails because one of its
-    sections failed is worse than a section that reports why. The error
-    text is the finding when the call cannot be made at all."""
+    THERE ARE TWO SOURCES AND THIS USED TO REPORT ONLY ONE. Prime
+    robots load favourites through `prime_robot.get_favorites()` into
+    `runtime_data.prime_favorites`. Classic robots never have a
+    `prime_robot`, so that list is permanently empty for them -- their
+    buttons come from the cloud coordinator instead (see
+    `button.py::_async_setup_favorite_buttons`).
+
+    The old block read the Prime list unconditionally. On @pk-1966's
+    i7+ it reported 0 favourites while `cloud.favorite_count` said 6
+    in the same download, which reads as a favourites bug and is not
+    one: the buttons were fine, the diagnostics were looking in the
+    wrong place.
+
+    `source` names which path this entry actually uses, so the two
+    numbers can never be compared across tiers again.
+    """
+    result: dict[str, Any] = {
+        "buttons_enabled": config_entry.options.get(
+            CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
+        ),
+    }
+
     robot = getattr(data, "prime_robot", None)
-    if robot is None:
-        return {"note": "no prime robot on this entry"}
+    if robot is not None:
+        result["source"] = "prime_robot.get_favorites()"
+        result["count"] = len(getattr(data, "prime_favorites", None) or [])
+        # THE COUNT ALONE CANNOT DISTINGUISH the causes that produce an
+        # empty list, so the raw response goes in beside it.
+        try:
+            result["raw"] = await robot.get_favorites_raw()
+        except Exception as err:  # noqa: BLE001
+            # Never raises: a diagnostics download that fails because
+            # one section failed is worse than a section reporting why.
+            result["raw"] = {"error": f"{type(err).__name__}: {err}"}
+        return result
+
+    coordinator = getattr(data, "cloud_coordinator", None)
+    coordinator_data = getattr(coordinator, "data", None)
+    if not isinstance(coordinator_data, dict):
+        result["source"] = "none -- no prime robot and no cloud coordinator"
+        result["count"] = 0
+        return result
+
+    # The same read button.py makes, so this number is what the buttons
+    # were built from rather than a parallel count that can drift.
+    favourites = coordinator_data.get("favorites") or []
+    result["source"] = "cloud_coordinator (Classic)"
+    result["count_for_account"] = len(favourites)
+
+    # PER ROBOT, NOT PER ACCOUNT -- the endpoint is account-wide, and
+    # this entry only builds buttons for its own blid. Reporting the
+    # account total alone made a three-robot account look wrong.
     try:
-        return await robot.get_favorites_raw()
+        from .button_prime import _raw_favorite_is_for  # noqa: PLC0415
+
+        blid = getattr(data, "blid", None) or ""
+        matched = [f for f in favourites if _raw_favorite_is_for(f, blid)]
+        result["count"] = len(matched)
+        result["filtered_out_for_other_robots"] = len(favourites) - len(matched)
     except Exception as err:  # noqa: BLE001
-        return {"error": f"{type(err).__name__}: {err}"}
+        result["count"] = len(favourites)
+        result["filter_error"] = f"{type(err).__name__}: {err}"
+
+    return result
 
 
 async def _prime_schedule_summary(data: Any) -> Any:
@@ -1134,19 +1188,7 @@ async def _build_diagnostics(
             # That is the same shape twice over: `get_favorites_raw()`
             # carried the unwrapping bug it was built to reveal, and this
             # block was placed where the tier it describes cannot see it.
-            "favourites": {
-                "count": len(getattr(data, "prime_favorites", None) or []),
-                "buttons_enabled": config_entry.options.get(
-                    CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
-                ),
-                # THE COUNT ALONE CANNOT DISTINGUISH the three causes
-                # that produce an empty list, so the raw response goes in
-                # beside it. `get_favorites_raw()` now unwraps a wrapped
-                # payload and hands back the whole object when there is
-                # no `favorites` key -- the outer keys being exactly what
-                # is worth seeing.
-                "raw": await _prime_favorites_raw(data),
-            },
+            "favourites": await _favourites_diagnostics(data, config_entry),
             "mission_coordinator": {
                 "started": mission_coordinator is not None,
                 "last_update_success": getattr(mission_coordinator, "last_update_success", None),
@@ -1403,19 +1445,16 @@ async def _build_diagnostics(
         # entities is wired correctly, so the answer is either "the
         # option is off" or "the list arrived empty" -- and a report had
         # no way to tell those apart.
-        "favourites": {
-            "count": len(
-                getattr(
-                    getattr(config_entry, "runtime_data", None),
-                    "prime_favorites",
-                    None,
-                )
-                or []
-            ),
-            "buttons_enabled": config_entry.options.get(
-                CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
-            ),
-        },
+        # THIS BLOCK USED TO READ `prime_favorites` -- IN THE CLASSIC
+        # BRANCH, where it is permanently empty because the loader
+        # behind it returns [] with no prime_robot. So it answered the
+        # question above with a structural zero: @pk-1966's i7+
+        # reported 0 favourites while `cloud` in the same download said
+        # 6, which reads as a favourites bug and was a diagnostics one.
+        # Now shared with the Prime branch, and it names its source.
+        "favourites": await _favourites_diagnostics(
+            getattr(config_entry, "runtime_data", None), config_entry
+        ),
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),

@@ -173,7 +173,8 @@
           "map_clean_zones": "Pokaż strefy sprzątania",
           "map_keepout_zones": "Pokaż strefy zakazane",
           "map_nomop_zones": "Pokaż strefy bez mopowania",
-          "enable_maintenance_list": "Pokaż konserwację jako listę zadań"
+          "enable_maintenance_list": "Pokaż konserwację jako listę zadań",
+          "region_sensors": "Osobny czujnik dla każdego pomieszczenia i strefy"
         },
         "data_description": {
           "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
@@ -814,6 +815,9 @@
           "mopping": "Mycie",
           "vacuuming_and_mopping": "Odkurzanie i mycie"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – ostatnio sprzątano"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Mycie mopa dozwolone"
+      },
+      "prime_pad_dry": {
+        "name": "Susz mopa teraz"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Mapa sprzątania"
+        "name": "Trasa sprzątania"
       },
       "coverage_map": {
-        "name": "Mapa pokrycia"
+        "name": "Mapa cieplna pokrycia"
       },
       "rooms_map": {
         "name": "Mapa pomieszczeń"
       },
       "cleaning_map": {
-        "name": "Mapa sprzątania"
+        "name": "Mapa sprzątania na żywo"
       },
       "raw_map": {
         "name": "Surowa mapa na żywo"

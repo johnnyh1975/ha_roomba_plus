@@ -252,6 +252,26 @@ async def async_setup_entry(
         entities.append(DisposablePadWetnessSelect(roomba, blid))
         entities.append(ReusablePadWetnessSelect(roomba, blid))
 
+        # AND THE CLEANING MODE, which Classic never had.
+        #
+        # @ia74 asked how to start mopping and could not find a way.
+        # The send path was already there -- ClassicRoomCleaning puts
+        # `operatingMode` in a region command's params when a caller
+        # names one -- but the select that names one sat in the
+        # CLOUD_ONLY branch, so a Classic user had nowhere to say it.
+        # The wire was connected at one end.
+        #
+        # Gated on the same signal as the wetness selects above: a
+        # robot that reports `padWetness` is a robot that mops. Better
+        # than a capability flag we would have to guess at, and it is
+        # the gate this file already trusts for exactly this question.
+        #
+        # His own capture is what makes the values safe: the iRobot app
+        # sends `operatingMode: 6` with `padWetness` for vacuum-and-mop
+        # on a Classic robot -- not the 32 that is field-verified on
+        # Prime. `cleaning_modes_for()` keeps the two apart.
+        entities.append(PrimeCleaningModeSelect(blid, config_entry))
+
     async_add_entities(entities)
 
 

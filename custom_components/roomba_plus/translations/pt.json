@@ -173,7 +173,8 @@
           "map_clean_zones": "Mostrar zonas de limpeza",
           "map_keepout_zones": "Mostrar zonas proibidas",
           "map_nomop_zones": "Mostrar zonas sem esfregar",
-          "enable_maintenance_list": "Mostrar manutenção como lista de tarefas"
+          "enable_maintenance_list": "Mostrar manutenção como lista de tarefas",
+          "region_sensors": "Sensor separado por divisão e zona"
         },
         "data_description": {
           "continuous": "Manter uma ligação MQTT persistente com o robô. Recomendado.",
@@ -814,6 +815,9 @@
           "mopping": "A lavar",
           "vacuuming_and_mopping": "A aspirar e lavar"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – última limpeza"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Lavagem da mopa permitida"
+      },
+      "prime_pad_dry": {
+        "name": "Secar mopa agora"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Mapa de limpeza"
+        "name": "Percurso de limpeza"
       },
       "coverage_map": {
-        "name": "Mapa de cobertura"
+        "name": "Mapa de calor de cobertura"
       },
       "rooms_map": {
         "name": "Mapa de divisões"
       },
       "cleaning_map": {
-        "name": "Mapa de limpeza"
+        "name": "Mapa de limpeza em direto"
       },
       "raw_map": {
         "name": "Mapa em direto em bruto"

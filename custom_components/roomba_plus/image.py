@@ -329,9 +329,82 @@ def _apply_dock_correction(
     return (x + dx, y + dy)
 
 
+def _anchored_mission_points(
+    points: list[tuple[float, float]],
+    breaks: set[int],
+    grid_store: Any,
+) -> list[tuple[float, float]]:
+    """Mission points with pre-break segments placed against known coverage.
+
+    THE LAST SEGMENT IS ALREADY RIGHT. It ends at the dock and the
+    dock-anchor correction verified it, so it is both kept as-is and
+    used as part of the reference an earlier segment is matched against.
+
+    A REFUSED SEGMENT IS DROPPED, and that is the deliberate half of
+    this. Its coverage is real but its position is not established;
+    stamping it anyway is what the accumulated grid has been doing all
+    along, invisibly, and is how a grid smears. Losing one segment's
+    cells costs a little coverage that the next mission re-drives.
+    Writing it at the wrong offset costs data no later mission repairs.
+
+    The live view is unaffected either way -- it draws from the
+    renderer, where an unanchored segment still shows with its line
+    broken, which is the honest picture of "here, position uncertain".
+    """
+    from .segment_anchoring import anchor_segment  # noqa: PLC0415
+    from .trajectory_segments import split_into_segments  # noqa: PLC0415
+
+    segments = split_into_segments(points, breaks)
+    if len(segments) < 2:
+        return points
+
+    known: set[tuple[int, int]] = set(getattr(grid_store, "cells", {}) or {})
+    # The final segment is dock-verified, so it joins the reference
+    # before anything is matched against it -- an earlier segment
+    # adjoining it can then anchor even on a grid that is still sparse.
+    known |= _cells_of_points(segments[-1].points)
+
+    out: list[tuple[float, float]] = []
+    for seg in segments[:-1]:
+        placement = anchor_segment(seg.points, known)
+        if placement is None:
+            _LOGGER.debug(
+                "GridStore: dropping unanchored segment of %d points "
+                "(%.1f m travelled) — position not established",
+                seg.length, seg.path_mm / 1000,
+            )
+            continue
+        moved = [
+            (x + placement.dx_mm, y + placement.dy_mm) for x, y in seg.points
+        ]
+        _LOGGER.info(
+            "GridStore: anchored a %d-point segment at (%.0f, %.0f) mm, "
+            "%d cells overlap, margin %.2f",
+            seg.length, placement.dx_mm, placement.dy_mm,
+            placement.overlap_cells, placement.margin,
+        )
+        out.extend(moved)
+        known |= _cells_of_points(moved)
+
+    out.extend(segments[-1].points)
+    return out
+
+
+def _cells_of_points(
+    points: list[tuple[float, float]],
+) -> set[tuple[int, int]]:
+    from .segment_anchoring import CELL_SIZE_MM  # noqa: PLC0415
+
+    return {
+        (int(x // CELL_SIZE_MM), int(y // CELL_SIZE_MM)) for x, y in points
+    }
+
+
 def _interpolate_and_correct_segment(
     points: list[tuple[float, float]],
     dx: float, dy: float, rotation_rad: float,
+    picked_up: bool = False,
+    breaks: set[int] | None = None,
 ) -> list[tuple[float, float]]:
     """v3.2.1 DOCK-ANCHOR (4c) — distribute a dock-verified correction
     proportionally across a buffered segment instead of applying it
@@ -358,6 +431,50 @@ def _interpolate_and_correct_segment(
     if n == 1:
         return [_apply_dock_correction(points[0], dx, dy, rotation_rad)]
     out = []
+    # A PICKUP IS NOT DRIFT, and spreading it like drift damages points
+    # that were right.
+    #
+    # The ramp above assumes error compounds gradually -- true for
+    # odometry and vSLAM error, false for a robot that was carried. Set
+    # a robot down two metres away and EVERY pose afterwards is off by
+    # the same two metres; the first one as much as the last. A linear
+    # ramp then under-corrects the start of the segment and drags points
+    # near the beginning, which were still accurate, away from where the
+    # robot actually was.
+    #
+    # `bbrun.nPicks` says which case this is. It is already read, stored
+    # per mission and documented in callbacks.py as "the robot was
+    # physically picked up during this mission" -- the map simply never
+    # asked. The code comment here used to defer this "pending real
+    # field validation that simple linear interpolation isn't enough";
+    # that validation is the whole reason this branch exists.
+    if picked_up:
+        # ONE OFFSET PER SEGMENT, and a mission can have several.
+        #
+        # An earlier version shifted the whole buffered stretch by a
+        # single amount, which is right for one lift and wrong for two:
+        # the second stretch has its own independent offset, and one
+        # shift is as wrong for it as the ramp was for the first.
+        #
+        # What the dock actually verifies is the position of the LAST
+        # segment, the one that ends at the dock. Everything before a
+        # break is unverified by this measurement, so applying the
+        # correction there would be spreading evidence across data it
+        # does not cover. Earlier segments keep their positions and are
+        # left for anchoring that has its own evidence.
+        if breaks:
+            last_break = max(i for i in breaks if 0 < i < len(points))
+            return [
+                *points[:last_break],
+                *(
+                    _apply_dock_correction(p, dx, dy, rotation_rad)
+                    for p in points[last_break:]
+                ),
+            ]
+        return [
+            _apply_dock_correction(p, dx, dy, rotation_rad) for p in points
+        ]
+
     for i, p in enumerate(points):
         weight = i / (n - 1)
         out.append(_apply_dock_correction(p, dx * weight, dy * weight, rotation_rad * weight))
@@ -1042,6 +1159,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # Mission tracking
         self._last_phase: str = ""
         self._last_stuck_count: int = 0
+        #: Lifetime `bbrun.nPicks` at mission start, and whether it has
+        #: risen since. The DELTA is what matters -- the lifetime counter
+        #: is non-zero on any robot that has ever been moved, so reading
+        #: it directly would mark every mission as a pickup. Same
+        #: reasoning callbacks.py already applies to nStuck.
+        self._npicks_at_start: int | None = None
+        self._picked_up_this_mission: bool = False
         self._mission_points: list[tuple[float, float]] = []
         # v3.2.1 — parallel theta list, same index alignment as
         # self._mission_points (mission_thetas[i] is the heading for
@@ -1412,6 +1536,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._mission_points = []
                     self._mission_thetas = []
                     self._stuck_mission_points = []
+                    # Per-mission, not lifetime: a pickup in the last
+                    # run must not change how this one is corrected.
+                    self._npicks_at_start = None
+                    self._picked_up_this_mission = False
                     # v3.2.1 DOCK-ANCHOR — a new mission starting means any
                     # still-buffered segment from the PREVIOUS mission never
                     # got a dock-contact confirmation (stuck_and_abandoned,
@@ -1579,6 +1707,17 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Stuck detection
         if "bbrun" in state and self._renderer:
+            _bbrun = self.vacuum_state.get("bbrun") or {}
+            # PICKUP TRACKING. The first bbrun of a mission sets the
+            # baseline; any rise after that is a physical lift, which
+            # changes how the dock-anchor correction must be applied
+            # (a constant offset, not a gradual ramp).
+            _picks = _bbrun.get("nPicks")
+            if isinstance(_picks, int):
+                if self._npicks_at_start is None:
+                    self._npicks_at_start = _picks
+                elif _picks > self._npicks_at_start:
+                    self._picked_up_this_mission = True
             stuck = (self.vacuum_state.get("bbrun") or {}).get("nStuck", 0) or 0
             if stuck > self._last_stuck_count:
                 self._renderer.mark_stuck()
@@ -1773,7 +1912,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             dx, dy, rotation_rad = _compute_dock_correction(
                 measured_final_pos, measured_final_theta, dock_theta_baseline,
             )
-            corrected_points = _interpolate_and_correct_segment(segment, dx, dy, rotation_rad)
+            corrected_points = _interpolate_and_correct_segment(
+                segment, dx, dy, rotation_rad,
+                # getattr, not direct access: this entity is also built
+                # via __new__ in places that never run __init__, and a
+                # correction failing on a missing attribute would be a
+                # worse outcome than falling back to the ramp.
+                picked_up=getattr(self, "_picked_up_this_mission", False),
+                # Indices relative to this segment, which starts where
+                # buffering began -- not to the renderer's full list.
+                breaks={
+                    i - self._last_dock_anchor_index
+                    for i in getattr(self._renderer, "_breaks", set())
+                    if i > self._last_dock_anchor_index
+                } if self._renderer else None,
+            )
             rotation_deg = math.degrees(rotation_rad)
             n = len(thetas)
             corrected_thetas = [
@@ -2016,8 +2169,26 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                             _stuck_wh = (_local.weekday(), _local.hour)
                     except Exception:  # noqa: BLE001
                         pass
-                _gdata.grid_store.update_from_mission(
+                # ANCHOR WHAT THE DOCK COULD NOT VERIFY.
+                #
+                # Segments before a discontinuity are unverified by the
+                # dock measurement, and _interpolate_and_correct_segment
+                # deliberately leaves them where they are. They were
+                # nonetheless being stamped into the accumulated grid at
+                # exactly those unverified positions -- permanently, and
+                # invisibly.
+                #
+                # So this is not a new risk over the status quo: it
+                # replaces "stamp at an arbitrary wrong offset" with
+                # "stamp at a checked offset, or not at all". Both
+                # outcomes beat what happened before.
+                _points_for_grid = _anchored_mission_points(
                     self._mission_points,
+                    getattr(self._renderer, "_breaks", set()),
+                    _gdata.grid_store,
+                )
+                _gdata.grid_store.update_from_mission(
+                    _points_for_grid,
                     self._stuck_mission_points,
                     stuck_wh=_stuck_wh,
                     # v2.9.0 (DISK-FILL) — mark each pose point's actual
@@ -2033,6 +2204,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # rather than adding a second check for a condition
                     # already excluded.
                     robot_radius_mm=self._renderer._cfg.robot_diameter_mm / 2,
+                    # THE RENDERER ALREADY KNOWS WHERE CONTINUITY BROKE.
+                    #
+                    # Without this the grid fell back to a plain distance
+                    # rule (1200 mm), which cannot separate fast driving
+                    # at a slow message rate from a small relocalisation
+                    # -- the exact ambiguity the self-calibrating
+                    # threshold was built to resolve. Passing the marks
+                    # replaces a guessed constant with the decision that
+                    # was already made against this robot's own stream.
+                    #
+                    # Index-aligned because nothing is dropped any more:
+                    # every pose reaches both _points and _mission_points,
+                    # so a break index means the same position in both.
+                    breaks=set(self._renderer._breaks),
                 )
                 # v3.4.0 GS-SMART-COVERAGE — stamp this mission's nMssn as
                 # "already fed into GridStore via the live path". Shared
@@ -2088,7 +2273,17 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 ):
                     _unconfirmed_before = len(_gdata.room_seg_store.unconfirmed_rooms)
                     _recomputed = _gdata.room_seg_store.maybe_recompute(
-                        _gdata.grid_store.cells
+                        _gdata.grid_store.cells,
+                        # Rooms derived after a single mission come from
+                        # the sparsest map the robot will ever produce,
+                        # and this algorithm family splits rooms at
+                        # unvisited thresholds. On this robot's own
+                        # archives: 7 rooms after one mission, 6 after
+                        # four, 5 once coverage settled.
+                        missions_seen=(
+                            _gdata.mission_store.completed_count
+                            if _gdata.mission_store is not None else None
+                        ),
                     )
                     if _recomputed:
                         # ROOM-SEG — fire the same naming-wizard Repair Issue
@@ -2216,6 +2411,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._mission_points = []
         self._mission_thetas = []
         self._stuck_mission_points = []
+        self._npicks_at_start = None
+        self._picked_up_this_mission = False
         # v3.2.1 DOCK-ANCHOR — mission has now genuinely ended; any
         # still-buffered segment (stuck_and_abandoned, no dock contact
         # ever confirmed) is discarded here, same as the mission-start

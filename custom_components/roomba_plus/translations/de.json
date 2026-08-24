@@ -173,7 +173,8 @@
           "map_clean_zones": "Reinigungszonen zeichnen",
           "map_keepout_zones": "Sperrzonen zeichnen",
           "map_nomop_zones": "Wischverbotszonen zeichnen",
-          "enable_maintenance_list": "Wartung als Aufgabenliste anzeigen"
+          "enable_maintenance_list": "Wartung als Aufgabenliste anzeigen",
+          "region_sensors": "Eigener Sensor je Raum und Zone"
         },
         "data_description": {
           "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
@@ -814,6 +815,9 @@
           "mopping": "Wischen",
           "vacuuming_and_mopping": "Saugen und Wischen"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – zuletzt gereinigt"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Wischtuchwäsche erlaubt"
+      },
+      "prime_pad_dry": {
+        "name": "Wischpad jetzt trocknen"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Reinigungskarte"
+        "name": "Reinigungspfad"
       },
       "coverage_map": {
-        "name": "Bedeckungskarte"
+        "name": "Befahrungs-Heatmap"
       },
       "rooms_map": {
         "name": "Raumkarte"
       },
       "cleaning_map": {
-        "name": "Reinigungskarte"
+        "name": "Live-Reinigungskarte"
       },
       "raw_map": {
         "name": "Rohe Live-Karte"

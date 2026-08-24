@@ -44,6 +44,9 @@ def segment_rooms(
     cell_mm: float = 150.0,
     smoothing_sigma: float = 1.0,
     min_distance_cells: float = 8.0,
+    #: Chassis radius. The coverage mask is inset by exactly this, so
+    #: every absolute distance read off it is short by the same amount.
+    robot_radius_mm: float = 170.0,
     merge_ratio: float = 0.55,
 ) -> RoomSegmentationResult:
     if not cells:
@@ -114,9 +117,32 @@ def segment_rooms(
                         if best is None or v < best[0]:
                             best = (v, coord)
             if best is not None:
+                # THE MASK IS A CONFIGURATION SPACE, so the raw distance
+                # value is short by the robot's radius.
+                #
+                # A cell is marked visited when the robot's CENTRE was
+                # within its footprint, so the covered area ends where
+                # the centre could no longer go -- one radius short of
+                # the obstacle. The distance transform therefore
+                # measures clearance for a point robot, and the real
+                # half-width of the gap is that plus r.
+                #
+                # Measured on this project's own data: saddle values run
+                # 54-172 mm, which as widths would be narrower than the
+                # robot itself and physically impossible to have driven
+                # through. Corrected they become 448-684 mm -- ordinary
+                # doors and furniture gaps. `MIN_DOOR_WIDTH_MM = 600`
+                # was being compared against the uncorrected figure and
+                # so rejected every one of them.
+                saddle_raw_mm = best[0] * cell_mm
                 doors.append({
                     "a": a, "b": b, "cell": best[1],
-                    "saddle_mm": best[0] * cell_mm,
+                    #: Kept for continuity with stored results, which
+                    #: hold the uncorrected value.
+                    "saddle_mm": saddle_raw_mm,
+                    #: The physical clearance, half-width and full.
+                    "clearance_mm": saddle_raw_mm + robot_radius_mm,
+                    "width_mm": 2.0 * (saddle_raw_mm + robot_radius_mm),
                 })
 
     return RoomSegmentationResult(rooms=rooms, doors=doors, dist=dist, seeds=seeds_coords)

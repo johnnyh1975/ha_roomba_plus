@@ -944,6 +944,49 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return []
 
     @property
+    def regions_by_pmap(self) -> dict[str, dict[str, str]]:
+        """{pmap_id: {region_id: name}} for EVERY map, not just the active one.
+
+        THE COMPANION TO `regions`, AND DELIBERATELY NOT A REPLACEMENT.
+        `regions` filters to the active map so a room COMMAND cannot go
+        to the wrong floor (#8) -- that filter is right and stays.
+
+        But @dduff617 (S9+, four Smart Maps) showed the filter is wrong
+        for the other direction: `sensor.<robot>_room_cleaning_history`
+        resolved every historical record against the currently active
+        map, so rooms cleaned on a different map stayed as raw ids --
+        `"2"` and `"5"` beside properly named ones. The iRobot app
+        shows those missions correctly, so the account has the context;
+        we were looking at one map's dictionary.
+
+        Naming a past mission's rooms is not the same question as
+        deciding where to send the robot now, so it gets its own view.
+        Keyed by map, so a caller resolves each record against ITS map
+        and duplicate names on different floors cannot collide.
+        """
+        result: dict[str, dict[str, str]] = {}
+        if not self.data:
+            return result
+        for pmap in self.data.get("pmaps", []):
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
+            pmap_id = pmapv.get("pmap_id")
+            if not pmap_id:
+                continue
+            names: dict[str, str] = {}
+            for region in details.get("regions") or []:
+                if not isinstance(region, dict):
+                    continue
+                # Same two-key divergence the active-map read handles.
+                rid = str(region.get("region_id") or region.get("id") or "")
+                name = region.get("name") or ""
+                if rid and name:
+                    names[rid] = str(name)
+            if names:
+                result[str(pmap_id)] = names
+        return result
+
+    @property
     def zones(self) -> list[dict[str, Any]]:
         """Return custom zones from the ACTIVE pmap only.
 

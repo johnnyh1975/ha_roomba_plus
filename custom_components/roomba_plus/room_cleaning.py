@@ -238,6 +238,13 @@ class RoomCleaningBackend(ABC):
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
         operating_mode: list[int | None] | None = None,
+        #: Per-run mop settings. Classic sends both inside the region's
+        #: own params (@ia74's capture); the Prime backend accepts and
+        #: ignores them, so a caller need not know which generation it
+        #: is talking to -- the same contract the other per-room
+        #: parameters here already follow.
+        smart_scrub: list[bool | None] | None = None,
+        pad_wetness: list[int | None] | None = None,
     ) -> None:
         """Sends the robot to clean these rooms, in the order given.
 
@@ -445,6 +452,42 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 translation_key="map_updating",
             )
 
+    async def _region_to_map(self) -> dict[str, str]:
+        """{region_id: p2map_id} across every map, names or not.
+
+        available_rooms() skips regions with no name (it builds a
+        name->id picker), but @chairstacker's zones read `name=None`
+        and still need cleaning by id. This walks the same maps and
+        records every region's map, named or not, so an unqualified
+        zone id can be resolved to its floor.
+
+        A region id appearing on two maps is dropped rather than
+        guessed: with no map reported and the id ambiguous, refusing
+        downstream is the honest answer.
+        """
+        seen: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for p2map_id in await self._all_map_ids():
+            try:
+                map_data = await self._robot.get_map_metadata(p2map_id)
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "roomba_plus: could not read rooms from map %s for %s",
+                    p2map_id, self._data.blid, exc_info=True,
+                )
+                continue
+            for room in map_data.rooms_metadata or []:
+                if not room.room_id:
+                    continue
+                rid = str(room.room_id)
+                if rid in seen and seen[rid] != p2map_id:
+                    ambiguous.add(rid)
+                else:
+                    seen[rid] = p2map_id
+        for rid in ambiguous:
+            del seen[rid]
+        return seen
+
     async def available_rooms(self) -> dict[str, str]:
         """Rooms across ALL maps, not just the current one.
 
@@ -570,6 +613,14 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
         operating_mode: list[int | None] | None = None,
+        # ACCEPTED AND IGNORED, on purpose. Both are Classic-shaped
+        # mop settings (@ia74's capture puts them in the region's own
+        # params). Prime carries pad wetness as `{"padPlate": N}` and
+        # has no confirmed per-region scrub field, so the honest
+        # behaviour is to take the arguments and do nothing rather than
+        # invent a Prime shape from a Classic payload.
+        smart_scrub: list[bool | None] | None = None,
+        pad_wetness: list[int | None] | None = None,
     ) -> None:
 
         # SAME READINESS CHECK CLASSIC HAS. A robot rebuilding its map
@@ -613,6 +664,29 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             return
 
         p2map_id = await self._current_map_id()
+
+        # BEFORE FALLING BACK TO THE ROBOT'S REPORT, ASK THE ROOMS.
+        #
+        # @chairstacker's clean_zone on a two-map robot failed with "not
+        # currently reporting which map" even mid-mission: _current_map_id
+        # reads `cleanMissionStatus.p2mapId`, which his robot did not
+        # populate. But a room/zone id belongs to exactly one map, and
+        # available_rooms() already knows which map each id is on -- so
+        # the map the caller means is derivable from the ids they gave,
+        # with no need for the robot to volunteer it.
+        #
+        # This is the unqualified-id counterpart of the "<map>/<room>"
+        # path above: the qualified form carries the map explicitly, and
+        # here we recover it from the map metadata. Only used when every
+        # requested id resolves to one map; a mix is left to the checks
+        # below, which refuse honestly.
+        if not p2map_id:
+            region_to_map = await self._region_to_map()
+            wanted = {
+                region_to_map[r] for r in room_ids if region_to_map.get(r)
+            }
+            if len(wanted) == 1:
+                p2map_id = wanted.pop()
 
         # THE ROBOT'S MAP MUST BE ONE WE LISTED ROOMS FROM.
         #
@@ -940,6 +1014,8 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
         operating_mode: list[int | None] | None = None,
+        smart_scrub: list[bool | None] | None = None,
+        pad_wetness: list[int | None] | None = None,
     ) -> None:
         """The Classic path, moved here verbatim from services.py.
 
@@ -1079,6 +1155,44 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                         **(
                             {"operatingMode": _mode_for(i)}
                             if _mode_for(i) is not None else {}
+                        ),
+                        # SMART SCRUB, when the caller asks for it.
+                        #
+                        # Shape from a real capture (@ia74): the iRobot
+                        # app sends `swScrub: 1` for "strength 3 with
+                        # smart scrub" and `0` otherwise. The value was
+                        # not inferred from the field name -- the app's
+                        # own control was labelled next to it.
+                        #
+                        # Omitted when unset, like the mode above: this
+                        # integration does not have a device-level scrub
+                        # setting to fall back on, so sending a default
+                        # would be deciding for people who never asked.
+                        **(
+                            {"swScrub": 1 if _per_room(smart_scrub, i) else 0}
+                            if _per_room(smart_scrub, i) is not None else {}
+                        ),
+                        # PAD WETNESS, and the shape differs by tier.
+                        #
+                        # Classic sends `{"disposable": N, "reusable":
+                        # N}` (@ia74's capture, 1=light 2=standard
+                        # 3=hard); Prime sends `{"padPlate": N}`. Same
+                        # field name, different structure -- the same
+                        # trap as 32-vs-6 for the combined mode, and it
+                        # would have been built wrong without a real
+                        # Classic payload to read.
+                        #
+                        # ONLY WHEN NAMED. Both pad-wetness selects
+                        # already exist as device settings, and a
+                        # per-region value would silently override what
+                        # somebody set there. An omitted key leaves the
+                        # robot's own setting alone.
+                        **(
+                            {"padWetness": {
+                                "disposable": _per_room(pad_wetness, i),
+                                "reusable": _per_room(pad_wetness, i),
+                            }}
+                            if _per_room(pad_wetness, i) is not None else {}
                         ),
                         "twoPass": (
                             value if (value := _per_room(two_pass, i)) is not None

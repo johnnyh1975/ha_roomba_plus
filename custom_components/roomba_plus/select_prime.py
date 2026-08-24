@@ -44,6 +44,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.restore_state import RestoreEntity
 
+from .const import CLEANING_MODES_PRIME, cleaning_modes_for
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 
@@ -1007,12 +1008,14 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
     _attr_icon = "mdi:auto-mode"
 
     #: The four the app offers, in the command's vocabulary.
-    MODES: dict[str, int] = {
-        "vacuum": 2,
-        "mop": 4,
-        "vacuum_and_mop": 32,
-        "vacuum_then_mop": 512,
-    }
+    #: THE PRIME TABLE. Kept as a class attribute because callers reach
+    #: for `PrimeCleaningModeSelect.MODES`, but the values now live in
+    #: const.py beside the CLASSIC ones -- the two differ on "vacuum
+    #: and mop" (32 here, 6 there), and a single table would have to
+    #: pick one and be wrong for somebody.
+    #:
+    #: Use `cleaning_modes_for(is_prime)` in tier-neutral code.
+    MODES: dict[str, int] = CLEANING_MODES_PRIME
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         IRobotEntity.__init__(
@@ -1021,6 +1024,18 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_prime_cleaning_mode"
         self._restored: str | None = None
+        # THE TABLE FOR THIS ROBOT'S GENERATION, shadowing the
+        # class-level Prime one. The two differ on "vacuum and mop":
+        # 32 is field-verified on Prime, 6 is what the iRobot app sends
+        # on a mopping Classic robot (@ia74's capture). Sending the
+        # wrong one decides whether water goes on the floor, so the
+        # tier picks rather than a single table guessing.
+        from .models import ConnectionType  # noqa: PLC0415
+
+        self.MODES = cleaning_modes_for(
+            getattr(config_entry.runtime_data, "connection_type", None)
+            is ConnectionType.CLOUD_ONLY
+        )
 
     @property
     def suggested_object_id(self) -> str:
@@ -1037,10 +1052,24 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         a mixed-mode command is possible on paper, has never been seen,
         and the app shows a single mode per mission.
         """
+        # BOTH TIERS CARRY `lastCommand`, in different places. Prime
+        # has it in the `rw-software` named shadow; a Classic robot
+        # reports it in its ordinary state. Falling back rather than
+        # branching on connection_type, because the shape underneath is
+        # identical once found and one lookup that fails is cheaper
+        # than a tier check that can drift.
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_status_coordinator", None
         )
         shadows = getattr(coordinator, "data", None)
+        if not isinstance(shadows, dict):
+            from . import roomba_reported_state  # noqa: PLC0415
+
+            roomba = getattr(self._config_entry.runtime_data, "roomba", None)
+            state = roomba_reported_state(roomba) if roomba is not None else None
+            if isinstance(state, dict):
+                # Classic keeps it top-level rather than under a shadow.
+                shadows = {"rw-software": {"lastCommand": state.get("lastCommand")}}
         if not isinstance(shadows, dict):
             return None
         software = shadows.get("rw-software")

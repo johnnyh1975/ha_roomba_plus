@@ -65,6 +65,8 @@ from .const import (
     CONF_MAP_KEEPOUT_ZONES,
     CONF_MAP_NOMOP_ZONES,
     CONF_MAP_ROOM_LABELS,
+    CONF_REGION_SENSORS,
+    DEFAULT_REGION_SENSORS,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
     CONF_PRESENCE_SCHEDULING_ENABLED,
@@ -1234,6 +1236,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                             ),
                         ): bool,
                         vol.Optional(
+                            CONF_REGION_SENSORS,
+                            default=options.get(
+                                CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+                            ),
+                        ): bool,
+                        vol.Optional(
                             CONF_MAP_ROOM_LABELS,
                             default=options.get(
                                 CONF_MAP_ROOM_LABELS,
@@ -1308,6 +1316,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     # from the `rooms` attribute, and both at once
                     # doubles them up.
                     vol.Optional(
+                        CONF_REGION_SENSORS,
+                        default=options.get(
+                            CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+                        ),
+                    ): bool,
+                    vol.Optional(
                         CONF_MAP_ROOM_LABELS,
                         default=options.get(
                             CONF_MAP_ROOM_LABELS,
@@ -1364,7 +1378,28 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     default=current.get(CONF_BLOCKING_SENSORS, []),
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="binary_sensor",
+                        # NOT JUST binary_sensor.
+                        #
+                        # @chairstacker wants to block missions on a
+                        # "house state" -- vacation or guest mode --
+                        # which in Home Assistant is an `input_boolean`,
+                        # not a sensor. The check behind this reads
+                        # `state.state` against {"on", "home", "true"}
+                        # and never cared which domain produced it; the
+                        # restriction was in this picker alone.
+                        #
+                        # `schedule` and `person`/`device_tracker` come
+                        # along for the same reason: they report the
+                        # same states, and "block while I am home" or
+                        # "block outside these hours" are the same
+                        # question as "block while this is on".
+                        domain=[
+                            "binary_sensor",
+                            "input_boolean",
+                            "schedule",
+                            "person",
+                            "device_tracker",
+                        ],
                         multiple=True,
                     )
                 ),

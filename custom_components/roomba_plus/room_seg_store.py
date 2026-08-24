@@ -53,6 +53,16 @@ CELL_MM = 150.0
 # home size, see ROOM_SEGMENTATION_NOTES.md) — skip recomputation if the
 # grid has barely grown since last time, rather than re-running on every
 # single mission end.
+#: How many COMPLETED missions before rooms are derived at all.
+#:
+#: Three is a compromise, not a measurement. On this project's own data
+#: the room count was still moving at four missions and settled later,
+#: so three is early rather than safe -- but waiting longer means a new
+#: install shows no rooms for over a week, and a user who sees nothing
+#: assumes the feature is broken. Refining this needs more archives than
+#: one robot's.
+MIN_MISSIONS_BEFORE_SEGMENTING = 3
+
 MIN_NEW_CELLS_TO_RECOMPUTE = 30
 
 # A new room candidate is "the same" as an existing persisted room if
@@ -272,10 +282,46 @@ class RoomSegStore:
 
     # ── Recompute ────────────────────────────────────────────────────────────
 
-    def maybe_recompute(self, cells: dict[tuple[int, int], float]) -> bool:
-        """Re-run segmentation if the grid has grown enough since the last
-        computation (or there's no prior result at all). Returns True if a
-        recompute actually ran."""
+    def maybe_recompute(
+        self,
+        cells: dict[tuple[int, int], float],
+        missions_seen: int | None = None,
+    ) -> bool:
+        """Re-run segmentation if there is enough coverage to justify it.
+
+        TWO GATES, and only one of them existed.
+
+        The growth gate below stops needless recomputation once rooms
+        are known. It does nothing on the FIRST run, because `self.rooms`
+        is empty and the condition short-circuits -- so segmentation ran
+        after a single mission, on the sparsest map the robot will ever
+        produce.
+
+        That is the worst possible moment for this algorithm family.
+        Distance-transform-plus-watershed is measurably unstable on
+        incomplete coverage: an unvisited threshold is indistinguishable
+        from a wall, so it splits a room that is not split. More
+        missions cross the threshold and the false split disappears.
+
+        Observed on a real 980's own archives: 7 rooms after one
+        mission, 6 after four, 5 once coverage settled. A user saw seven
+        rooms appear as entities and two of them later vanish.
+
+        COMPLETED missions, not all of them. A run that ended early has
+        no perimeter pass -- the second phase of the coverage strategy,
+        where the robot traces obstacle outlines -- so its mask edge is
+        rougher and further from the real walls. Counting it towards
+        readiness would defeat the point of waiting.
+
+        `missions_seen=None` keeps the old behaviour for callers that
+        cannot count, rather than silently blocking them forever.
+        """
+        if (
+            not self.rooms
+            and missions_seen is not None
+            and missions_seen < MIN_MISSIONS_BEFORE_SEGMENTING
+        ):
+            return False
         if self.rooms and (len(cells) - self.last_cell_count) < MIN_NEW_CELLS_TO_RECOMPUTE:
             return False
         if not cells:

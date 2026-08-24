@@ -173,7 +173,8 @@
           "map_clean_zones": "Afficher les zones de nettoyage",
           "map_keepout_zones": "Afficher les zones interdites",
           "map_nomop_zones": "Afficher les zones sans lavage",
-          "enable_maintenance_list": "Afficher l'entretien comme liste de tâches"
+          "enable_maintenance_list": "Afficher l'entretien comme liste de tâches",
+          "region_sensors": "Capteur distinct par pièce et zone"
         },
         "data_description": {
           "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
@@ -814,6 +815,9 @@
           "mopping": "Lavage",
           "vacuuming_and_mopping": "Aspiration et lavage"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – dernier nettoyage"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Lavage de la serpillière autorisé"
+      },
+      "prime_pad_dry": {
+        "name": "Sécher la serpillière maintenant"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Carte de nettoyage"
+        "name": "Trajet de nettoyage"
       },
       "coverage_map": {
-        "name": "Carte de couverture"
+        "name": "Carte thermique de couverture"
       },
       "rooms_map": {
         "name": "Carte des pièces"
       },
       "cleaning_map": {
-        "name": "Carte de nettoyage"
+        "name": "Carte de nettoyage en direct"
       },
       "raw_map": {
         "name": "Carte en direct brute"

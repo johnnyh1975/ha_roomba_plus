@@ -34,6 +34,10 @@ import time
 
 from typing import Any, Final
 
+from datetime import datetime
+
+from homeassistant.util import dt as dt_util
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -2187,3 +2191,96 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
             if last.get("time"):
                 attrs["last_command_time"] = last["time"]
         return attrs
+
+
+class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
+    """When one room or zone was last cleaned. One entity per region.
+
+    @chairstacker asked for exactly this: "a date/time entity that
+    stores this value for each room and cleaning zone automatically and
+    I don't have to build helpers for each room/cleaning zone". It fits
+    how he uses the integration -- HA observes and reacts, the iRobot
+    app stays in charge of running the robot.
+
+    KEYED BY MAP AND REGION, NOT BY NAME. A name-keyed entity loses its
+    history the moment somebody renames a room in the app, and a region
+    id alone is not unique across maps -- @dduff617's four-map account
+    has ids that repeat, and merging them would attribute one floor's
+    clean to another floor's room.
+
+    The state is the completion time of the most recent mission that
+    finished this region, read from the mission store's own history.
+    Nothing is stored here that is not already stored there.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(
+        self,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        pmap_id: str,
+        region_id: str,
+        region_name: str,
+    ) -> None:
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        self._pmap_id = pmap_id
+        self._region_id = region_id
+        # A TRANSLATED NAME, NOT AN ENGLISH SUFFIX. The room name comes
+        # from the user's own iRobot account, so it is already in their
+        # language; hard-coding "last cleaned" beside it would produce
+        # "Küche last cleaned" for every non-English user. The
+        # placeholder keeps the room name dynamic while the wording
+        # around it follows the locale, same as the favourite buttons.
+        self._attr_translation_key = "region_last_cleaned"
+        self._attr_translation_placeholders = {"region": region_name}
+        self._attr_unique_id = (
+            f"{self.robot_unique_id}_last_cleaned_{pmap_id}_{region_id}"
+        )
+
+    @property
+    def native_value(self) -> datetime | None:
+        store = getattr(self._config_entry.runtime_data, "mission_store", None)
+        if store is None:
+            return None
+        history = store.region_last_cleaned()
+        # Qualified form first; the bare id is the fallback for records
+        # that carry no map (older entries, EPHEMERAL tier).
+        raw = history.get(f"{self._pmap_id}/{self._region_id}") or history.get(
+            self._region_id
+        )
+        if not raw:
+            return None
+        return dt_util.parse_datetime(raw)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The map this region is on, so two rooms sharing a name on
+        different floors can be told apart in the UI."""
+        return {"region_id": self._region_id, "pmap_id": self._pmap_id}
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator that drives the history sync.
+
+        WITHOUT THIS THE SENSOR READS ONCE AND NEVER AGAIN. It has no
+        coordinator of its own -- it reads the mission store, which
+        `prime_mission_sync` rewrites, and that sync is scheduled by
+        the status coordinator (`_schedule_mission_history_sync`).
+        Listening there is what turns a start-up snapshot into a value
+        that moves when a mission finishes.
+
+        Every other Prime sensor subscribes the same way; one that
+        does not looks identical in the UI right up until the state
+        should have changed.
+        """
+        await super().async_added_to_hass()
+        coordinator = (
+            self._config_entry.runtime_data.prime_status_coordinator
+            if self._config_entry is not None else None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )

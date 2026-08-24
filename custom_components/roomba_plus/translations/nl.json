@@ -173,7 +173,8 @@
           "map_clean_zones": "Reinigingszones tonen",
           "map_keepout_zones": "Verboden zones tonen",
           "map_nomop_zones": "Zones zonder dweilen tonen",
-          "enable_maintenance_list": "Onderhoud als takenlijst tonen"
+          "enable_maintenance_list": "Onderhoud als takenlijst tonen",
+          "region_sensors": "Aparte sensor per kamer en zone"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -814,6 +815,9 @@
           "mopping": "Dweilen",
           "vacuuming_and_mopping": "Stofzuigen en dweilen"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – laatst schoongemaakt"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Dweilwassen toegestaan"
+      },
+      "prime_pad_dry": {
+        "name": "Dweil nu drogen"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Schoonmaakkaart"
+        "name": "Schoonmaakroute"
       },
       "coverage_map": {
-        "name": "Dekkingskaart"
+        "name": "Dekkings-heatmap"
       },
       "rooms_map": {
         "name": "Kamerkaart"
       },
       "cleaning_map": {
-        "name": "Reinigingskaart"
+        "name": "Live schoonmaakkaart"
       },
       "raw_map": {
         "name": "Ruwe livekaart"

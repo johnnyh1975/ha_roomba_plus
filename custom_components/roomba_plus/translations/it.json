@@ -173,7 +173,8 @@
           "map_clean_zones": "Mostra zone di pulizia",
           "map_keepout_zones": "Mostra zone vietate",
           "map_nomop_zones": "Mostra zone senza lavaggio",
-          "enable_maintenance_list": "Mostra la manutenzione come elenco attività"
+          "enable_maintenance_list": "Mostra la manutenzione come elenco attività",
+          "region_sensors": "Sensore separato per stanza e zona"
         },
         "data_description": {
           "continuous": "Mantieni una connessione MQTT persistente con il robot. Consigliato.",
@@ -814,6 +815,9 @@
           "mopping": "Lavaggio",
           "vacuuming_and_mopping": "Aspirazione e lavaggio"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – ultima pulizia"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Lavaggio del panno consentito"
+      },
+      "prime_pad_dry": {
+        "name": "Asciuga panno ora"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Mappa di pulizia"
+        "name": "Percorso di pulizia"
       },
       "coverage_map": {
-        "name": "Mappa di copertura"
+        "name": "Mappa di calore della copertura"
       },
       "rooms_map": {
         "name": "Mappa delle stanze"
       },
       "cleaning_map": {
-        "name": "Mappa di pulizia"
+        "name": "Mappa di pulizia dal vivo"
       },
       "raw_map": {
         "name": "Mappa dal vivo grezza"

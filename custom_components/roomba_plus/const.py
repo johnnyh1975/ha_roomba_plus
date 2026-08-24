@@ -127,40 +127,22 @@ CONF_CERT: Final = "certificate"
 CONF_CONNECTION_TYPE: Final = "connection_type"
 
 # Options keys (Phase 2+)
-#: Whether to draw room names INTO the room map image.
+#: One timestamp entity per room and zone, instead of the single
+#: history sensor's {name: timestamp} attributes.
 #:
-#: BOTH GENERATIONS. Briefly named prime_* while only the Prime map
-#: existed, and renamed the same day -- it had never shipped, so there
-#: was no preference to preserve and no reason to keep a name that
-#: describes half of what it does.
+#: OFF BY DEFAULT AND THE SAME OPTION ON BOTH TIERS. @chairstacker
+#: asked for per-region entities so he would not have to build a
+#: helper for each room; @dduff617's four-map account shows the other
+#: side, where that would mean dozens of entities nobody asked for.
 #:
-#: Defaults to False, which looks backwards until you know what Classic
-#: does: it removed its own labels in v2.7.3 precisely because the
-#: xiaomi-vacuum-map-card renders its own overlay from the `rooms`
-#: attribute, and drawing both doubles them up.
-#:
-#: So the default suits the card user, and the option exists for
-#: everyone else -- somebody using a plain picture-entity card, or a
-#: dashboard where the map is just an image, gets nothing from an
-#: attribute nobody reads. For them the labels have to be in the picture
-#: or they do not exist.
-#:
-#: The attributes are published either way -- for Classic through
-#: `rid_to_name()`, for Prime through the map metadata. This only
-#: controls the image.
-#: Whether to create one button per saved favourite.
-#:
-#: On by default. The buttons are the only route that needs no
-#: configuration at all -- after installing, a favourite is there and
-#: tappable, and it works with voice assistants, which a service call
-#: does not.
-#:
-#: The option exists because they are also the only route that costs an
-#: entity each. An account with fifteen favourites gets fifteen entities
-#: on the device page, and someone driving everything from automations
-#: has the `favorites` attribute and the run_favorite service instead --
-#: both of which key on the favourite ID and therefore survive a rename
-#: in the iRobot app.
+#: Deliberately not named `prime_*`: the single-sensor form is what
+#: Classic has always shipped, and giving one generation entities and
+#: the other attributes for the same data is the asymmetry this
+#: project keeps having to unpick. Whoever wants the entities can
+#: have them, on either tier.
+CONF_REGION_SENSORS: Final = "region_sensors"
+DEFAULT_REGION_SENSORS: Final = False
+
 CONF_PRIME_FAVORITE_BUTTONS: Final = "prime_favorite_buttons"
 DEFAULT_PRIME_FAVORITE_BUTTONS: Final = True
 
@@ -301,7 +283,58 @@ ATTR_ORDERED: Final = "ordered"
 ATTR_TWO_PASS: Final = "two_pass"
 #: Vacuum, mop, or both, per call. The select holds the everyday
 #: default; this is for a run that should differ from it.
+#: THE CLEANING MODE VOCABULARY, AND IT DIFFERS BY GENERATION.
+#:
+#: Both tiers send `operatingMode` in a region command's params, and
+#: three of the four values agree. "Vacuum and mop" does not:
+#:
+#:     Prime    32   field-verified before the mode select shipped --
+#:                   the robot answered `command 32 -> status 6`, so it
+#:                   accepts a value its own app does not send.
+#:     Classic   6   captured from the iRobot app's own outbound
+#:                   command on a mopping Classic robot (@ia74), where
+#:                   `operatingMode: 6` appears with `padWetness`.
+#:
+#: Sending the vendor's own value per tier rather than picking one and
+#: hoping: 32 is confirmed on Prime and unknown on Classic, and this is
+#: not a field to be adventurous with -- it decides whether water goes
+#: on the floor.
+CLEANING_MODES_PRIME: Final[dict[str, int]] = {
+    "vacuum": 2,
+    "mop": 4,
+    "vacuum_and_mop": 32,
+    "vacuum_then_mop": 512,
+}
+
+CLEANING_MODES_CLASSIC: Final[dict[str, int]] = {
+    "vacuum": 2,
+    "mop": 4,
+    "vacuum_and_mop": 6,
+    "vacuum_then_mop": 512,
+}
+
+
+def cleaning_modes_for(is_prime: bool) -> dict[str, int]:
+    """The mode table for one generation.
+
+    A function rather than a lookup at the call site, so the one place
+    the two tables differ stays in one place.
+    """
+    return CLEANING_MODES_PRIME if is_prime else CLEANING_MODES_CLASSIC
+
+
 ATTR_CLEANING_MODE: Final = "cleaning_mode"
+
+#: Smart scrub for one run. Shape and meaning from a real Classic
+#: capture (@ia74): the iRobot app sends `swScrub: 1` for "strength 3
+#: with smart scrub" and `0` otherwise -- the app's own control was
+#: labelled beside the value, so this is not a guess off the field name.
+ATTR_SMART_SCRUB: Final = "smart_scrub"
+
+#: Pad wetness for one run: 1 light, 2 standard, 3 hard (@ia74).
+#: Distinct from `ATTR_PAD_WETNESS` below, which is the Braava spray
+#: amount and was never wired to anything.
+ATTR_RUN_PAD_WETNESS: Final = "pad_wetness"
 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0) — optional structured field for
 # individual pass control per room within the same multi-room sequence.
 # Mutually exclusive with ATTR_ROOM_NAME at the service-call level.
@@ -623,6 +656,51 @@ PHASE_TO_ACTIVITY: Final[dict[str, VacuumActivity]] = {
     "hmUsrDock": VacuumActivity.RETURNING,
     "pause": VacuumActivity.PAUSED,
     "run": VacuumActivity.CLEANING,
+    # PRIME MISSION SUB-PHASES. The robot reports a finer phase during a
+    # Prime clean than Classic's "run": which room, which sub-activity.
+    # Names read from the firmware image's `cleanMissionStatus.phase`
+    # enum (3.8.126) and cross-checked against what this project has
+    # already OBSERVED -- "room", "zone" and "refill" were confirmed
+    # from real data before this list existed, which is why the rest
+    # are trusted enough to map rather than left to fall through.
+    #
+    # All the cleaning sub-phases collapse to CLEANING: a user does not
+    # need the vacuum entity flipping between "exploring" and
+    # "traversing", and the detail is on the phase sensor for anyone who
+    # wants it. Only the phases that mean a DIFFERENT activity are
+    # mapped to a different one.
+    #
+    # MEASURED vs ASSUMED, because the difference matters here. Three
+    # of these were seen in real data BEFORE the firmware enum existed;
+    # the rest are names read out of a firmware image that no robot in
+    # this project has yet been observed reporting. They are mapped
+    # anyway -- the three that were confirmed are the evidence that the
+    # list names real phases -- but "in the firmware" is not "seen on a
+    # robot", and if one of them ever behaves oddly, its ASSUMED tag is
+    # where to start.
+    #
+    # OBSERVED in real data:
+    "room": VacuumActivity.CLEANING,      # OBSERVED
+    "zone": VacuumActivity.CLEANING,      # OBSERVED
+    "refill": VacuumActivity.RETURNING,   # OBSERVED -- at the dock for water
+    #
+    # ASSUMED from the firmware 3.8.126 enum, never yet seen reported:
+    "oClean": VacuumActivity.CLEANING,    # ASSUMED -- ordinary clean
+    "polygon": VacuumActivity.CLEANING,   # ASSUMED -- a drawn area
+    "explore": VacuumActivity.CLEANING,   # ASSUMED -- mapping run
+    "disc": VacuumActivity.CLEANING,      # ASSUMED -- discovery
+    "travel": VacuumActivity.CLEANING,    # ASSUMED -- driving to a target
+    "traversal": VacuumActivity.CLEANING, # ASSUMED
+    "plan": VacuumActivity.CLEANING,      # ASSUMED
+    "reloc": VacuumActivity.CLEANING,     # ASSUMED -- relocalising mid-run
+    "tankEmpty": VacuumActivity.ERROR,    # ASSUMED -- cannot continue
+    "binFull": VacuumActivity.ERROR,      # ASSUMED
+    "kidnap": VacuumActivity.ERROR,       # ASSUMED -- picked up mid-mission
+    "error": VacuumActivity.ERROR,        # ASSUMED
+    # `virtual` and `cmd` are deliberately NOT mapped: their activity is
+    # unclear from the name alone, and an unmapped phase falls through
+    # safely (keeps the previous activity, logs once) rather than being
+    # guessed at. They go in when a real robot shows what they mean.
     "stop": VacuumActivity.IDLE,
     "stuck": VacuumActivity.ERROR,
 }
@@ -1190,6 +1268,23 @@ PHASE_LABELS: Final[dict[str, str]] = {
     "padDry": "Drying pad",
     "refill": "Refilling tank",
     "mapupd": "Updating map",
+    # Prime mission sub-phases (firmware 3.8.126 phase enum, mapped to
+    # activities in PHASE_TO_ACTIVITY above). Readable names for the
+    # phase sensor; the vacuum entity collapses most of these to
+    # "cleaning".
+    "oClean": "Cleaning",
+    "room": "Cleaning a room",
+    "zone": "Cleaning a zone",
+    "polygon": "Cleaning an area",
+    "explore": "Mapping",
+    "disc": "Exploring",
+    "travel": "Driving to area",
+    "traversal": "Crossing",
+    "plan": "Planning route",
+    "reloc": "Finding position",
+    "tankEmpty": "Water tank empty",
+    "binFull": "Bin full",
+    "kidnap": "Lifted",
     "idle": "Idle",
 }
 

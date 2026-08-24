@@ -73,9 +73,54 @@ def _mm_to_cell(x_mm: float, y_mm: float) -> tuple[int, int]:
     )
 
 
+def _densified(
+    pose_points: list[tuple[float, float]],
+    radius_mm: float,
+    max_break_mm: float = 1200.0,
+    breaks: set[int] | None = None,
+) -> list[tuple[float, float]]:
+    """Insert intermediate points so consecutive disks overlap.
+
+    `breaks` holds indices where the renderer recorded a discontinuity:
+    the point at that index does not connect to the one before it. Those
+    steps are never filled -- the robot was somewhere else, and painting
+    a corridor between would invent floor it never crossed.
+
+    THE DISTANCE FALLBACK IS A GUESS AND SAYS SO. Without break
+    information a long step is ambiguous: fast driving at a slow message
+    rate looks exactly like a small relocalisation. 1200 mm splits them
+    somewhere plausible and nowhere measured. When `breaks` is supplied
+    it decides instead, because it comes from a threshold that
+    calibrates itself against this robot's own stream.
+    """
+    if len(pose_points) < 2:
+        return list(pose_points)
+    step = max(radius_mm, CELL_SIZE_MM / 2.0)
+    out: list[tuple[float, float]] = [pose_points[0]]
+    # enumerate, not .index(): a lookup by value returns the FIRST
+    # matching point, and a robot revisits positions constantly -- every
+    # break after the first repeat would have been read off the wrong
+    # index. The index here is the position of the SECOND point of the
+    # pair, which is what `breaks` is keyed on.
+    for idx, ((x0, y0), (x1, y1)) in enumerate(
+        zip(pose_points, pose_points[1:], strict=False), start=1
+    ):
+        dist = math.hypot(x1 - x0, y1 - y0)
+        connected = (
+            idx not in breaks if breaks is not None else dist <= max_break_mm
+        )
+        if step < dist and connected:
+            for i in range(1, int(dist / step)):
+                f = i * step / dist
+                out.append((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f))
+        out.append((x1, y1))
+    return out
+
+
 def _disk_filled_cells(
     pose_points: list[tuple[float, float]],
     radius_mm: float,
+    breaks: set[int] | None = None,
 ) -> set[tuple[int, int]]:
     """v2.9.0 (DISK-FILL) — every cell within radius_mm of ANY pose point.
 
@@ -91,6 +136,24 @@ def _disk_filled_cells(
     """
     touched: set[tuple[int, int]] = set()
     cell_radius = int(radius_mm // CELL_SIZE_MM) + 1
+    # ALONG THE PATH, NOT JUST AT THE POINTS.
+    #
+    # Stamping only where poses landed leaves holes between them. On a
+    # real 980 poses arrive ~1.8 s apart, so up to 542 mm at full speed
+    # -- against a 170 mm footprint radius, that is ~200 mm of floor
+    # between consecutive disks that the robot demonstrably drove over
+    # and the grid records as never visited.
+    #
+    # Those holes are not harmless: they are exactly the edge class
+    # that concentrates at doorways, where segmentation decides. A gap
+    # in a threshold reads as a wall and splits a room that is not
+    # split.
+    #
+    # Only legitimate BETWEEN two connected poses. A discontinuity
+    # means the robot was somewhere else, not that it drove the line
+    # between -- so callers pass the two ends of a real step, and the
+    # break marking upstream is what keeps a jump from being filled in.
+    pose_points = _densified(pose_points, radius_mm, breaks=breaks)
     for x_mm, y_mm in pose_points:
         cx, cy = _mm_to_cell(x_mm, y_mm)
         # The cell containing the point itself is always touched, even if
@@ -325,6 +388,7 @@ class GridStore:
         stuck_points: list[tuple[float, float]],
         stuck_wh: tuple[int, int] | None = None,
         robot_radius_mm: float | None = None,
+        breaks: set[int] | None = None,
     ) -> None:
         """Apply EMA decay to all cells, then add visit increments for this mission.
 

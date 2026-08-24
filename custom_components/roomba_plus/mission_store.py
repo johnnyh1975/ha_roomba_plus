@@ -121,6 +121,25 @@ class MissionStore:
     # ── Public read API (v3.3.0 STORE-ENCAP) ────────────────────────────────
 
     @property
+    def completed_count(self) -> int:
+        """Missions that ran to a proper finish.
+
+        `stuck_and_resumed` counts: the robot recovered and carried on,
+        so the run has a perimeter pass like any other. A cancelled or
+        errored run does not, which is why RoomSegStore waits on this
+        number rather than on the raw mission count -- a mask edge from
+        an aborted run is rougher and further from the real walls.
+
+        Same result values the wear and history aggregations already
+        treat as complete, so one definition serves all of them.
+        """
+        return sum(
+            1
+            for r in self.records
+            if r.get("result") in ("completed", "stuck_and_resumed")
+        )
+
+    @property
     def records(self) -> Sequence[dict[str, Any]]:
         """Read-only view of all mission records, oldest first.
 
@@ -502,16 +521,28 @@ class MissionStore:
         self,
         rid_list: list[str],
         region_map: dict[str, str],
+        record_map: dict[str, str] | None = None,
     ) -> list[str]:
         """Resolve region IDs to display names via region_map.
 
         Unknown IDs are returned as their raw ID string — data is never
         silently dropped. Name changes in the Smart Map are reflected
         automatically since region_map is passed at read time, not stored.
-        """
-        return [region_map.get(rid, rid) for rid in rid_list]
 
-    @staticmethod
+        `record_map` IS THE MISSION'S OWN MAP, and it is tried first.
+        @dduff617 (S9+, four Smart Maps) saw historical rooms rendered
+        as raw ids -- `"2"`, `"5"` -- beside correctly named ones,
+        because every record was resolved against whichever map happens
+        to be ACTIVE NOW. A mission run on another floor has no entry
+        there, so its ids survived unresolved.
+
+        The active map stays as the fallback: it is the right answer
+        for records with no map recorded (older entries, EPHEMERAL
+        tier), and it was the only behaviour before this.
+        """
+        lookup = {**region_map, **(record_map or {})}
+        return [lookup.get(rid, rid) for rid in rid_list]
+
     @staticmethod
     def extract_rid(region: Any) -> str | None:
         """Delegates to const.extract_region_id.
@@ -555,10 +586,36 @@ class MissionStore:
             return None
         return self._record_room_names(latest, effective_map)
 
+    @staticmethod
+    def _record_region_map(
+        rec: dict[str, Any],
+        by_pmap: dict[str, dict[str, str]] | None,
+    ) -> dict[str, str] | None:
+        """{region_id: name} for the map THIS mission ran on, or None.
+
+        `pmaps_info` is `[{pmap_id, pmapv_id, ...}]` for the mission --
+        stored since v3.3.0 and, until @dduff617's report, not used for
+        naming. Same first-entry read as mission_map.py::146.
+
+        None means "no map recorded for this record", which is a real
+        state (older entries, EPHEMERAL tier) and not an error -- the
+        caller falls back to the active map, the behaviour that was
+        there before.
+        """
+        pmaps_info = rec.get("pmaps_info")
+        if not by_pmap or not isinstance(pmaps_info, list) or not pmaps_info:
+            return None
+        first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
+        pmap_id = first.get("pmap_id")
+        if not pmap_id:
+            return None
+        return by_pmap.get(str(pmap_id))
+
     def _record_room_names(
         self,
         rec: dict[str, Any],
         effective_map: dict[str, str],
+        by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> list[str] | None:
         """Room names cleaned in ONE record, completion order.
 
@@ -593,7 +650,12 @@ class MissionStore:
                     seen[rid] = len(ordered)
                     ordered.append(rid)
             if ordered:
-                return self._resolve_region_ids(ordered, effective_map)
+                # THE MISSION'S OWN MAP, from the pmaps_info this record
+                # already stores. Falls back to the active map when the
+                # record has none -- older entries and EPHEMERAL tier.
+                return self._resolve_region_ids(
+                    ordered, effective_map, self._record_region_map(rec, by_pmap)
+                )
         imported = rec.get("last_cleaned_rooms")
         if isinstance(imported, list) and imported:
             return [str(r) for r in imported if isinstance(r, str)]
@@ -697,6 +759,7 @@ class MissionStore:
         self,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, str]:
         """Return the most recent clean timestamp per room across all records.
 
@@ -725,16 +788,95 @@ class MissionStore:
             # flows into room_coverage_health's parse_datetime calls.
             if not ended_at or not isinstance(ended_at, str):
                 continue
-            rooms = self._record_room_names(rec, effective_map) or []
+            rooms = self._record_room_names(rec, effective_map, regions_by_pmap) or []
             for room in rooms:
                 if room not in result:
                     result[room] = ended_at
+        return result
+
+    @staticmethod
+    def record_region_ids(rec: dict[str, Any]) -> list[str]:
+        """The raw region ids one record cleaned, completion order.
+
+        THE ID-KEYED COUNTERPART TO _record_room_names, WHICH RESOLVES
+        TO NAMES. Names are right for a human-readable summary and
+        wrong for a per-region entity: rename a room in the iRobot app
+        and a name-keyed entity loses its history, because the key it
+        was built on no longer exists.
+
+        Same finEvents read and the same status filter, stopping one
+        step earlier.
+
+        PRIME RECORDS ARE A DIFFERENT SHAPE, and reading only the
+        Classic one returned [] for every Prime mission -- so the
+        per-region sensors would all have sat at "unknown" forever,
+        looking like a robot that had never cleaned anything.
+
+        `prime_mission_sync` does not store a `timeline` at all. It
+        walks the library's timeline OBJECTS (attributes, and the field
+        is `region_id`, not `rid`) and keeps the result as
+        `room_durations_sec` -- `{region_id: seconds}`. A region with
+        recorded time in a finished mission is a region that was
+        cleaned, which is the same fact finEvents carries.
+        """
+        timeline = rec.get("timeline")
+        if isinstance(timeline, dict):
+            ordered: list[str] = []
+            seen: set[str] = set()
+            for ev in timeline.get("finEvents") or []:
+                if not isinstance(ev, dict) or ev.get("type") != "room":
+                    continue
+                room = ev.get("room") or {}
+                if room.get("status") not in (0, 6):   # 0=complete, 6=after-recovery
+                    continue
+                rid = str(room.get("rid", ""))
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    ordered.append(rid)
+            if ordered:
+                return ordered
+
+        # Prime: {region_id: seconds}. Insertion order is the order the
+        # sync wrote them, which follows the timeline.
+        durations = rec.get("room_durations_sec")
+        if isinstance(durations, dict):
+            return [str(rid) for rid in durations if str(rid)]
+        return []
+
+    def region_last_cleaned(self) -> dict[str, str]:
+        """{"<pmap_id>/<region_id>": ended_at} newest-first, first wins.
+
+        KEYED BY MAP AND REGION TOGETHER, because a region id alone is
+        not unique across maps -- @dduff617's four-map account has ids
+        that repeat, and merging them would attribute one floor's clean
+        to another's room. The same reasoning that made the history fix
+        resolve per map.
+
+        Records with no map recorded (older entries, EPHEMERAL tier)
+        are keyed on the id alone; a caller that knows its map looks up
+        the qualified form first and falls back.
+        """
+        result: dict[str, str] = {}
+        for rec in self._records:
+            ended_at = rec.get("ended_at")
+            if not ended_at or not isinstance(ended_at, str):
+                continue
+            pmaps_info = rec.get("pmaps_info")
+            pmap_id = ""
+            if isinstance(pmaps_info, list) and pmaps_info:
+                first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
+                pmap_id = str(first.get("pmap_id") or "")
+            for rid in self.record_region_ids(rec):
+                key = f"{pmap_id}/{rid}" if pmap_id else rid
+                if key not in result:
+                    result[key] = ended_at
         return result
 
     def room_visit_counts(
         self,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, int]:
         """v3.3.0 SMART-ORDER — number of recorded cleanings per room
         across the whole local window. Public accessor (STORE-ENCAP):
@@ -743,7 +885,12 @@ class MissionStore:
         effective_map = region_map if region_map else (umf_regions or {})
         counts: dict[str, int] = {}
         for rec in self._records:
-            for room in self._record_room_names(rec, effective_map) or []:
+            # Per-map resolution -- see room_cleaning_history. Counting
+            # a raw id as its own room splits one room's visits across
+            # two entries on a multi-map account.
+            for room in self._record_room_names(
+                rec, effective_map, regions_by_pmap
+            ) or []:
                 counts[room] = counts.get(room, 0) + 1
         return counts
 
@@ -753,6 +900,7 @@ class MissionStore:
         now_iso: str,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """v3.3.0 ROOM-SCHED — the ONE home for the overdue rule, shared
         by sensor.*_rooms_overdue and the clean_overdue_rooms service
@@ -776,7 +924,8 @@ class MissionStore:
         from .const import ROOM_SCHEDULE_INTERVALS
 
         health = self.room_coverage_health(
-            now_iso, region_map=region_map, umf_regions=umf_regions
+            now_iso, region_map=region_map, umf_regions=umf_regions,
+            regions_by_pmap=regions_by_pmap,
         )
         config = config or {}
         result: dict[str, dict[str, Any]] = {}
@@ -817,6 +966,7 @@ class MissionStore:
         min_intervals: int = 3,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """v3.2.0 COVERAGE-FREQ — is each room being cleaned in its OWN
         normal rhythm, self-calibrated per room rather than against a
@@ -858,7 +1008,15 @@ class MissionStore:
             ended_at = rec.get("ended_at")
             # v3.3.0 ROOM-SCHED foundation fix — derive, don't read the
             # never-written stored field (see room_cleaning_history).
-            rooms: list[str] = self._record_room_names(rec, effective_map) or []
+            # Per-map resolution, same as room_cleaning_history: a
+            # room cleaned on another Smart Map resolves against ITS
+            # map, not whichever is active now. Without this, rooms
+            # from other floors arrive as raw ids and are counted as
+            # separate, never-cleaned "rooms" -- inflating the
+            # overdue count on any multi-map account.
+            rooms: list[str] = self._record_room_names(
+                rec, effective_map, regions_by_pmap
+            ) or []
             # v3.2.0 full-review fix — defence in depth alongside the
             # import-gate type validation in api_views.py: a store that
             # was ALREADY poisoned with a non-string timestamp (imported
@@ -879,7 +1037,12 @@ class MissionStore:
         now_dt = dt_util.parse_datetime(now_iso)
         result: dict[str, dict[str, Any]] = {}
 
-        for room, last_clean_iso in self.room_cleaning_history(region_map, umf_regions).items():
+        # THE NAMES COME FROM HERE, not from the loop above -- so this
+        # call needs the per-map view too. Passing it to the loop and
+        # not to this line left every name resolved the old way.
+        for room, last_clean_iso in self.room_cleaning_history(
+            region_map, umf_regions, regions_by_pmap
+        ).items():
             last_dt = dt_util.parse_datetime(last_clean_iso)
             if now_dt is None or last_dt is None:
                 continue

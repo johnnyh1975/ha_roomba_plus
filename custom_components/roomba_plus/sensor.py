@@ -59,7 +59,11 @@ from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT faca
 
 from . import roomba_reported_state
 from .entity_cleanup import async_remove_stale_entities
-from .const import CONF_CORRELATION_ENTITIES
+from .const import (
+    CONF_CORRELATION_ENTITIES,
+    CONF_REGION_SENSORS,
+    DEFAULT_REGION_SENSORS,
+)
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_prime import (
     PrimeBatterySensor,
@@ -79,6 +83,7 @@ from .sensor_prime import (
     PrimeMissionEventSensor,
     PrimeNavigationResetsSensor,
     PrimeDockTankLevelSensor,
+    PrimeRegionLastCleanedSensor,
     PrimePadDryStatusSensor,
     PrimeJobInitiatorSensor,
     PrimePadWashStatusSensor,
@@ -168,6 +173,8 @@ from .sensor_rooms import (
     RoombaRoomAccessibilityScoresSensor,
     RoombaRoomAreasSensor,
     RoombaRoomCleaningHistorySensor,
+    PrimeRoomCleaningHistorySensor,
+    PrimeRoomsOverdueSensor,
     RoombaRoomsOverdueSensor,
     RoombaZoneSummarySensor,
     _compute_room_time_estimates,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
@@ -332,6 +339,77 @@ async def async_setup_entry(
         if isinstance(raw_dock, dict) and raw_dock.get("tankLvl") is not None:
             entities.append(PrimeDockTankLevelSensor(data.blid, config_entry))
 
+        # OVERDUE ROOMS, which Prime did not have.
+        #
+        # The Classic sensor sits behind `map_capability == "smart"` in
+        # the branch below, which a CLOUD_ONLY entry never reaches --
+        # not a decision, just the order things were built in. It reads
+        # the mission store and the cloud regions, both of which Prime
+        # has, and it matters MORE here: Prime robots have zones as
+        # well as rooms, so there is more to fall behind.
+        if data.has_cloud and data.cloud_coordinator is not None:
+            entities.append(PrimeRoomsOverdueSensor(data.blid, config_entry))
+            # The single-sensor history, which is what Classic ships and
+            # Prime had no equivalent of. One entity carrying
+            # {region_name: timestamp}, rather than one entity each.
+            if data.mission_store is not None:
+                entities.append(
+                    PrimeRoomCleaningHistorySensor(data.blid, config_entry)
+                )
+
+        # ONE "LAST CLEANED" SENSOR PER ROOM AND ZONE.
+        #
+        # @chairstacker: "have a date/time entity that stores this value
+        # for each room and cleaning zone automatically and I don't have
+        # to build helpers for each room/cleaning zone". Built from the
+        # cloud region list, which already covers every map on the
+        # account -- so a two-map robot gets entities for both floors.
+        #
+        # Keyed by map AND region: region ids repeat across maps, and
+        # merging them would attribute one floor's clean to another's
+        # room (the same fault @dduff617 found in the history sensor).
+        #
+        # ADDED AS THEY APPEAR, not once at setup. @chairstacker adds
+        # and renames zones regularly -- he had gone from eight to
+        # twelve between two reports. A list frozen at startup would
+        # leave every new zone without an entity until he reloaded the
+        # integration, which is exactly the manual step this feature
+        # exists to remove. Same pattern as the schedule switches.
+        if (
+            data.has_cloud
+            and data.cloud_coordinator is not None
+            and config_entry.options.get(
+                CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+            )
+        ):
+            coordinator = data.cloud_coordinator
+            known: set[str] = set()
+
+            def _sync_region_sensors() -> None:
+                new: list[SensorEntity] = []
+                by_pmap = getattr(coordinator, "regions_by_pmap", None)
+                if not isinstance(by_pmap, dict):
+                    return
+                for pmap_id, names in by_pmap.items():
+                    for region_id, region_name in sorted(names.items()):
+                        key = f"{pmap_id}/{region_id}"
+                        if key in known:
+                            continue
+                        known.add(key)
+                        new.append(
+                            PrimeRegionLastCleanedSensor(
+                                data.blid, config_entry,
+                                pmap_id, region_id, region_name,
+                            )
+                        )
+                if new:
+                    async_add_entities(new)
+
+            _sync_region_sensors()
+            config_entry.async_on_unload(
+                coordinator.async_add_listener(_sync_region_sensors)
+            )
+
         async_add_entities(entities)
 
         # Consumable parts: one sensor per part the ROBOT reports,
@@ -462,6 +540,26 @@ async def async_setup_entry(
     # accumulates room data in last_cleaned_rooms will populate this sensor.
     if data.mission_store is not None:
         entities.append(RoombaRoomCleaningHistorySensor(roomba, blid, config_entry))
+
+        # THE SAME OPTION AS PRIME, and it has to be the same one.
+        # Giving one generation per-region entities and the other only
+        # attributes for identical data is the kind of split this
+        # project keeps having to unpick later. Off by default on both:
+        # @dduff617's four maps would mean dozens of entities nobody
+        # asked for.
+        if config_entry.options.get(CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS):
+            by_pmap = (
+                data.cloud_coordinator.regions_by_pmap
+                if data.has_cloud and data.cloud_coordinator is not None
+                else {}
+            )
+            for pmap_id, names in (by_pmap or {}).items():
+                for region_id, region_name in sorted(names.items()):
+                    entities.append(
+                        PrimeRegionLastCleanedSensor(
+                            blid, config_entry, pmap_id, region_id, region_name,
+                        )
+                    )
 
     # v3.1.0 ROOM-SIZE — per-room floor area in m² from UMF polygons (SMART only).
     if data.umf_aligner is not None:

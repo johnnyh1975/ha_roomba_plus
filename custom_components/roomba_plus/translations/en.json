@@ -173,7 +173,8 @@
           "map_clean_zones": "Draw clean zones",
           "map_keepout_zones": "Draw keep-out zones",
           "map_nomop_zones": "Draw no-mop zones",
-          "enable_maintenance_list": "Show maintenance as a to-do list"
+          "enable_maintenance_list": "Show maintenance as a to-do list",
+          "region_sensors": "Separate sensor per room and zone"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -814,6 +815,9 @@
           "mopping": "Mopping",
           "vacuuming_and_mopping": "Vacuuming and mopping"
         }
+      },
+      "region_last_cleaned": {
+        "name": "{region} – last cleaned"
       }
     },
     "binary_sensor": {
@@ -1008,6 +1012,9 @@
       },
       "prime_pad_wash_allowed": {
         "name": "Pad washing allowed"
+      },
+      "prime_pad_dry": {
+        "name": "Dry pad now"
       }
     },
     "select": {
@@ -1160,16 +1167,16 @@
     },
     "image": {
       "map": {
-        "name": "Cleaning map"
+        "name": "Cleaning path"
       },
       "coverage_map": {
-        "name": "Coverage map"
+        "name": "Coverage heatmap"
       },
       "rooms_map": {
-        "name": "Rooms Map"
+        "name": "Room map"
       },
       "cleaning_map": {
-        "name": "Cleaning map"
+        "name": "Live cleaning map"
       },
       "raw_map": {
         "name": "Raw live map"

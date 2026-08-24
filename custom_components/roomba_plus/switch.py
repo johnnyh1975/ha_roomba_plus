@@ -206,6 +206,25 @@ async def async_setup_entry(
                     PrimeCarpetBoostSwitch(data.blid, config_entry),
                 ])
 
+            # PAD DRYING AS ONE SWITCH, alongside the start/stop button
+            # pair rather than replacing it. @chairstacker asked for
+            # this: the buttons only ever appear together, and a switch
+            # is one log entry and one colour-coded tile instead of two
+            # controls that show only that they can be pressed.
+            #
+            # Same dock-capability contract as the buttons: None means
+            # unknown and still gets the control; only an explicit 0
+            # means the dock cannot dry.
+            from .prime_coordinator import _dock_reports_itself  # noqa: PLC0415
+
+            if _dock_reports_itself(config_entry) and not (
+                dock_cap is not None
+                and getattr(dock_cap, "pad_dry", None) == 0
+            ):
+                async_add_entities([
+                    PrimePadDrySwitch(data.blid, config_entry),
+                ])
+
         # SETTING SWITCHES. Capability-gated on the same "None means
         # unknown, only explicit 0 means absent" contract the carpet
         # boost switch uses -- a robot that has not reported its
@@ -957,3 +976,79 @@ class PrimeQuietHoursSwitch(IRobotEntity, SwitchEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if last is not None and last.state in ("on", "off"):
             self._is_on = last.state == "on"
+
+
+class PrimePadDrySwitch(IRobotEntity, SwitchEntity):
+    """Pad drying as one switch instead of a start/stop button pair.
+
+    @chairstacker: the two buttons only ever appear together, and a
+    switch is "one activity/log entry" he can display as a single
+    colour-coded tile rather than two. He is right, and the condition
+    that usually blocks this kind of change is met: the dock reports
+    `PAD_DRY_IN_PROGRESS`, so the switch shows what the dock is
+    actually doing rather than remembering what was last pressed.
+
+    THE BUTTONS STAY. This is the better default control, but an
+    automation that wants to send exactly one command should not have
+    to reason about switch state to do it -- and if `stoppaddry` turns
+    out not to be honoured in some state, a button that is ignored is
+    a nuisance where a switch that springs back looks broken.
+    """
+
+    _attr_translation_key = "prime_pad_dry"
+    _attr_has_entity_name = True
+
+    def __init__(self, blid: str, config_entry: Any) -> None:
+        IRobotEntity.__init__(self, None, blid, config_entry)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_pad_dry"
+
+    @property
+    def is_on(self) -> bool | None:
+        """True while the dock reports a drying cycle in progress.
+
+        None when the dock has not reported at all -- unknown is the
+        honest answer there, and better than showing "off" for a dock
+        that might be running.
+        """
+        from roombapy_prime.models import CurrentStateShadow
+        from roombapy_prime.models.robot_info import DockState
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-currentstate")
+        if raw is None:
+            return None
+        dock = CurrentStateShadow.from_json(raw).dock
+        if dock is None or dock.state is None:
+            return None
+        return dock.state == DockState.PAD_DRY_IN_PROGRESS
+
+    async def _send(self, command: str) -> None:
+        robot = self._config_entry.runtime_data.prime_robot
+        if robot is None:
+            return
+        await robot.send_simple_command(command)
+        # The dock reports the change itself; asking for a refresh just
+        # shortens the wait rather than inventing a state locally.
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            await coordinator.async_request_refresh()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._send("drypad")
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        # THE APP CANNOT DO THIS -- it greys out dock controls once a
+        # task begins. The divergence is deliberate and predates this
+        # switch; see prime_stop_pad_dry in button_prime.py.
+        await self._send("stoppaddry")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )
