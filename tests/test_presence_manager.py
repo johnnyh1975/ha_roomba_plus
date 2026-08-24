@@ -15,6 +15,7 @@ import pytest
 import sys
 import types
 from custom_components.roomba_plus.presence_manager import PresenceManager
+from homeassistant.util import dt as dt_util
 from datetime import UTC
 from datetime import datetime as datetime_v240_scheduling
 from datetime import timedelta
@@ -430,7 +431,7 @@ class TestRecordCleanEvent:
     def test_records_event_in_correct_slot(self):
         pm = _make_pm()
         dt = datetime_v240_scheduling.now(UTC).replace(hour=9)
-        local = dt.astimezone()
+        local = dt_util.as_local(dt)
         expected_slot = (local.weekday(), local.hour)
         pm.record_clean_event(dt)
         assert expected_slot in pm._clean_events
@@ -441,7 +442,7 @@ class TestRecordCleanEvent:
         dt = datetime_v240_scheduling.now(UTC).replace(hour=9)
         for _ in range(5):
             pm.record_clean_event(dt)
-        local = dt.astimezone()
+        local = dt_util.as_local(dt)
         slot = (local.weekday(), local.hour)
         assert len(pm._clean_events[slot]) == 5
 
