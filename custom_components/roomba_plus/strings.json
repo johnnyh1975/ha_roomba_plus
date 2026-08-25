@@ -796,7 +796,7 @@
         "name": "Maintenance – Filter"
       },
       "prime_part_dirt_bag": {
-        "name": "Maintenance – Dirt disposal bag"
+        "name": "Maintenance – Dust Bag"
       },
       "prime_part_mop_pads": {
         "name": "Maintenance – Washable mop pad"
@@ -825,7 +825,7 @@
         "name": "Maintenance – Edge sweeping brush"
       },
       "part_dirt_bag": {
-        "name": "Maintenance – Dirt disposal bag"
+        "name": "Maintenance – Dust Bag"
       }
     },
     "device_tracker": {
