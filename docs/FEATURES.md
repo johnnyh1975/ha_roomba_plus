@@ -217,6 +217,13 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 > ☁️ Requires cloud credentials
 
 - Room and zone names come directly from the Smart Map — no manual naming required
+
+**Where the robot is right now.** A `device_tracker` entity reports the
+room or zone being cleaned, and `Docked` when it is on the dock. Zone
+names come from a different source than room names — a room is named in
+the map's own metadata, while a zone is named by whatever the last
+command called it — so a zone you have never cleaned by name may show
+its id instead *(v4.0.0a44)*.
 - One select entity per floor; multiple Smart Maps supported
 - Each saved iRobot app routine appears as a button entity
 - `clean_room` uses cloud names directly; map version changes trigger an immediate refresh
