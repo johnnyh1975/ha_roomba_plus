@@ -86,6 +86,24 @@ async def async_setup_entry(
     """Set up select entities."""
     data = config_entry.runtime_data
 
+    # BOTH BRANCHES USE THIS, so it cannot live inside one of them.
+    #
+    # @utkjmitch (#79): importing it inside the CLOUD_ONLY branch binds
+    # the name as local to the WHOLE function. On a Classic entry that
+    # branch never runs, so the name is local-but-unbound and the
+    # mopping append below raises UnboundLocalError -- taking every
+    # select on that robot with it, including the cleaning-mode select
+    # the append was adding.
+    #
+    # It needed a Classic robot that reports `padWetness` to surface:
+    # cloud-only households never reach the append, and a vac-only
+    # Classic robot never passes the gate. He had one of each on the
+    # same install.
+    #
+    # Still function-scoped, so the no-top-level-Prime-imports rule
+    # holds. His diagnosis and his fix, verbatim.
+    from .select_prime import PrimeCleaningModeSelect  # noqa: PLC0415
+
     # PRIME BRANCH. Everything below reads roomba_reported_state(), which
     # a Prime robot has no equivalent for -- the Classic descriptions
     # would all evaluate against an empty dict and either all appear or
@@ -94,7 +112,6 @@ async def async_setup_entry(
         from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
         from .select_prime import (  # noqa: PLC0415
             PRIME_SELECTS,
-            PrimeCleaningModeSelect,
             PrimeMapSelect,
             PrimeSettingSelect,
         )

@@ -244,6 +244,31 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
             if backend is not None:
                 self._prime_rooms = await backend.available_rooms()
+
+                # ZONES ARE PLACES THE ROBOT CAN BE.
+                #
+                # `available_rooms()` reads `rooms_metadata` from each
+                # map, which carries rooms and not zones. So a
+                # zone-targeted mission produced a region id that
+                # matched nothing in this cache and the tracker showed
+                # nothing -- not because the zone was unnamed, but
+                # because it was never in the list being searched.
+                #
+                # @chairstacker (#70) assumed the missing zone NAMES in
+                # #47 were the cause. They are not: this would still be
+                # empty if every zone on his map had a name.
+                #
+                # `prime_room_names` holds every region the coordinator
+                # has seen, rooms and zones together, keyed the same
+                # way. Rooms win a collision because they come from the
+                # map's own metadata.
+                zones = getattr(
+                    self._config_entry.runtime_data, "prime_room_names", None
+                ) or {}
+                for region_id, name in zones.items():
+                    if name and str(name) not in self._prime_rooms:
+                        self._prime_rooms[str(name)] = str(region_id)
+
                 record_success("prime room names")
         except Exception:  # noqa: BLE001
             record_failure("prime room names", "refreshing room names")

@@ -1030,11 +1030,21 @@ class PrimePadDrySwitch(IRobotEntity, SwitchEntity):
         if robot is None:
             return
         await robot.send_simple_command(command)
-        # The dock reports the change itself; asking for a refresh just
-        # shortens the wait rather than inventing a state locally.
-        coordinator = self._config_entry.runtime_data.prime_status_coordinator
-        if coordinator is not None:
-            await coordinator.async_request_refresh()
+        # NO REFRESH REQUEST. `PrimeStatusCoordinator` is push-driven --
+        # it has no `_async_update_data`, so `async_request_refresh()`
+        # falls through to Home Assistant's default and raises
+        # `NotImplementedError("Update method not implemented")`.
+        #
+        # @chairstacker (#71) saw that error on every press. It came
+        # from this line, not from the command: the command had already
+        # been sent and the dock had already acted. The switch reported
+        # failure for work that succeeded, which is the worst shape a
+        # failure can take -- it invites pressing again.
+        #
+        # Nothing is needed here anyway. The dock pushes its state, and
+        # the subscription in async_added_to_hass writes it. Waiting for
+        # that is the honest behaviour; asking for it was never more
+        # than an attempt to shorten the wait.
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._send("drypad")

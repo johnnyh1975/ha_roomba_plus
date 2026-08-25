@@ -919,8 +919,27 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
         if rps is not None:
             suggested_by_rid = rps.suggested_cleaning_interval_days()
             if suggested_by_rid:
+                # EVERY MAP, NOT THE ACTIVE ONE.
+                #
+                # @dduff617 (#94): the history fix landed and this
+                # neighbour kept raw ids 1, 2 and 5, because it still
+                # resolved through `_region_maps_for` -- the active-map
+                # view, deliberately filtered so a room COMMAND cannot
+                # go to the wrong floor.
+                #
+                # A suggested interval is not a command. It is a
+                # statement about a room that exists somewhere, and on a
+                # four-map household most of them are not on whichever
+                # map happens to be active. Same distinction the history
+                # fix rested on: naming a room is not deciding where to
+                # send the robot.
                 region_map, umf_regions = _region_maps_for(data)
-                name_of = region_map or (umf_regions or {})
+                name_of = dict(region_map or (umf_regions or {}))
+                for per_map in (_regions_by_pmap_for(data) or {}).values():
+                    for rid, name in per_map.items():
+                        # The active map wins a collision -- it is the
+                        # one the user is looking at.
+                        name_of.setdefault(rid, name)
                 suggested = {
                     name_of.get(rid, rid): days
                     for rid, days in suggested_by_rid.items()

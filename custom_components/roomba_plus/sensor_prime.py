@@ -129,6 +129,29 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
         room = current.room or current.travel
         if room is not None:
             attrs["current_room_id"] = room.region_id
+
+            # AND ITS NAME, which this attribute never carried.
+            #
+            # The timeline report has ids and nothing else, so an
+            # automation reading "which room is being cleaned" got a
+            # number. The device tracker resolves the same ids against
+            # `prime_room_names` and shows a name; this sensor did not,
+            # so the two disagreed about the same robot in the same
+            # moment.
+            #
+            # `prime_room_names` holds rooms and zones together, which
+            # matters here: a zone-targeted mission has never had a
+            # name to show anywhere.
+            #
+            # The id stays alongside. It is what a command takes, and
+            # dropping it would break anything already using it.
+            _names = getattr(
+                self._config_entry.runtime_data, "prime_room_names", None
+            ) or {}
+            _name = _names.get(str(room.region_id))
+            if _name:
+                attrs["current_room"] = _name
+
         if current.room is not None:
             attrs["current_room_area"] = current.room.area
             attrs["current_room_pass_count"] = current.room.pass_count
