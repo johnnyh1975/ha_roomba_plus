@@ -329,3 +329,75 @@ class TestTheRoomNameCacheRefillsWhenEmpty:
 
         tracker.async_write_ha_state.assert_called_once()
         tracker.hass.async_create_task.assert_not_called()
+
+
+class TestZonesReachTheTrackerCache:
+    """@chairstacker (#70): the tracker showed nothing while a zone was
+    being cleaned.
+
+    He assumed the missing zone names from #47 were the cause. They are
+    not. `available_rooms()` reads `rooms_metadata`, which carries rooms
+    and not zones — so a zone-targeted mission produced a region id that
+    matched nothing in the cache. This would still be empty if every
+    zone on his map had a name.
+
+    Two mechanisms, and an earlier fix covered only one of them.
+    """
+
+    @staticmethod
+    def _tracker(rooms, zone_names):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = {}
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = zone_names
+        tracker._config_entry = entry
+        tracker.hass = MagicMock()
+
+        backend = MagicMock()
+        backend.available_rooms = AsyncMock(return_value=dict(rooms))
+        return tracker, backend, patch
+
+    async def _refresh(self, rooms, zone_names):
+        import asyncio
+
+        tracker, backend, patch = self._tracker(rooms, zone_names)
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=backend,
+        ):
+            await tracker._async_refresh_prime_rooms()
+        return tracker._prime_rooms
+
+    @pytest.mark.asyncio
+    async def test_a_zone_reaches_the_cache(self):
+        cache = await self._refresh(
+            rooms={"Kitchen": "MAP/10"},
+            zone_names={"101": "Guest Access Zone"},
+        )
+
+        assert cache.get("Guest Access Zone") == "101"
+
+    @pytest.mark.asyncio
+    async def test_rooms_win_a_name_collision(self):
+        """A room's name comes from the map's own metadata; a zone's
+        comes from whatever the last command called it."""
+        cache = await self._refresh(
+            rooms={"Kitchen": "MAP/10"},
+            zone_names={"999": "Kitchen"},
+        )
+
+        assert cache["Kitchen"] == "MAP/10"
+
+    @pytest.mark.asyncio
+    async def test_rooms_still_arrive(self):
+        """The zone merge must not disturb what already worked."""
+        cache = await self._refresh(rooms={"Kitchen": "MAP/10"}, zone_names={})
+
+        assert cache == {"Kitchen": "MAP/10"}

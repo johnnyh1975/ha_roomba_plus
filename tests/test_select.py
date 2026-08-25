@@ -1302,3 +1302,77 @@ def _make_history_coordinator(history: dict):
 
 # ── 600-series cloud sensor creation (Q1 verification) ───────────────────────
 
+
+
+class TestAFunctionScopedImportUsedInBothBranches:
+    """@utkjmitch (#79): the whole select platform failed on Classic.
+
+    `PrimeCleaningModeSelect` was imported inside the CLOUD_ONLY branch.
+    Python binds a name imported anywhere in a function as local to the
+    *whole* function, so on a Classic entry the import never ran, the
+    name was local-but-unbound, and the mopping append raised
+    `UnboundLocalError` — taking every select on that robot with it,
+    including the cleaning-mode select the append was adding.
+
+    It needed a Classic robot reporting `padWetness` to surface at all:
+    cloud-only households never reach the append, and a vac-only Classic
+    robot never passes the gate.
+    """
+
+    def test_the_name_is_bound_before_either_branch(self):
+        """A GUARD FOR THE CLASS, not a restatement of the fix.
+
+        Any name a function imports inside one branch and uses in
+        another has this fault, and it is invisible until the untaken
+        branch is the one that runs. This walks the import statements
+        and fails if one sits inside a conditional while the name is
+        used outside it.
+        """
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import select
+
+        tree = ast.parse(inspect.getsource(select))
+        setup = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.AsyncFunctionDef)
+            and n.name == "async_setup_entry"
+        )
+
+        # Names imported at the function's own top level are safe.
+        top_level: set[str] = set()
+        for stmt in setup.body:
+            if isinstance(stmt, ast.ImportFrom):
+                top_level |= {a.asname or a.name for a in stmt.names}
+
+        # Names imported inside a conditional are only safe if used
+        # inside that same conditional.
+        problems: list[str] = []
+        for stmt in setup.body:
+            if not isinstance(stmt, ast.If):
+                continue
+            branch_names = {
+                a.asname or a.name
+                for n in ast.walk(stmt)
+                if isinstance(n, ast.ImportFrom)
+                for a in n.names
+            }
+            used_inside = {
+                n.id for n in ast.walk(stmt) if isinstance(n, ast.Name)
+            }
+            for other in setup.body:
+                if other is stmt:
+                    continue
+                used_elsewhere = {
+                    n.id for n in ast.walk(other) if isinstance(n, ast.Name)
+                }
+                for name in branch_names & used_elsewhere:
+                    if name not in top_level and name in used_inside:
+                        problems.append(name)
+
+        assert not problems, (
+            f"imported inside one branch and used in another: "
+            f"{sorted(set(problems))} -- UnboundLocalError on the path "
+            f"that skips the import"
+        )

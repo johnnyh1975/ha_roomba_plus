@@ -835,3 +835,78 @@ class TestPrimeRoomsOverdueSensor:
             asyncio.run(sensor.async_added_to_hass())
 
         coordinator.async_add_listener.assert_called_once()
+
+
+class TestSuggestedIntervalsResolveAcrossMaps:
+    """@dduff617 (#94, follow-up): the history fix landed and this
+    neighbour kept raw ids.
+
+    `suggested_interval_days` resolved through `_region_maps_for` — the
+    active-map view, filtered on purpose so a room COMMAND cannot go to
+    the wrong floor (#8). A suggested interval is not a command. It is a
+    statement about a room that exists somewhere, and on his four-map
+    household most rooms are not on whichever map is active.
+
+    Same distinction the history fix rested on: naming a room is not
+    deciding where to send the robot.
+    """
+
+    @staticmethod
+    def _attrs(active, per_map, suggested):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.sensor_rooms import (
+            RoombaRoomsOverdueSensor,
+        )
+
+        sensor = RoombaRoomsOverdueSensor.__new__(RoombaRoomsOverdueSensor)
+        entry = MagicMock()
+        entry.options = {}
+        sensor._config_entry = entry
+        sensor.vacuum = MagicMock()
+
+        data = MagicMock()
+        rps = MagicMock()
+        rps.suggested_cleaning_interval_days.return_value = suggested
+        data.robot_profile_store = rps
+        ms = MagicMock()
+        ms.rooms_overdue_merged.return_value = {}
+        data.mission_store = ms
+        entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor_rooms._region_maps_for",
+            return_value=(active, None),
+        ), patch(
+            "custom_components.roomba_plus.sensor_rooms._regions_by_pmap_for",
+            return_value=per_map,
+        ):
+            return sensor.extra_state_attributes
+
+    def test_a_room_on_another_map_gets_its_name(self):
+        attrs = self._attrs(
+            active={"10": "Kitchen"},
+            per_map={"MAP-B": {"2": "Pantry", "5": "Foyer"}},
+            suggested={"10": 3, "2": 7, "5": 14},
+        )
+
+        assert "Pantry" in attrs["suggested_interval_days"]
+        assert "5" not in attrs["suggested_interval_days"]
+
+    def test_the_active_map_wins_a_collision(self):
+        """It is the map the user is looking at."""
+        attrs = self._attrs(
+            active={"2": "Study"},
+            per_map={"MAP-B": {"2": "Pantry"}},
+            suggested={"2": 7},
+        )
+
+        assert "Study" in attrs["suggested_interval_days"]
+
+    def test_an_unknown_id_still_survives_as_itself(self):
+        """Better a number than a dropped room."""
+        attrs = self._attrs(
+            active={}, per_map={}, suggested={"99": 5},
+        )
+
+        assert attrs["suggested_interval_days"] == {"99": 5}

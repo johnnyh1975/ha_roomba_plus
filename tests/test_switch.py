@@ -870,3 +870,87 @@ class TestPrimePadDrySwitch:
 
         robot = sw._config_entry.runtime_data.prime_robot
         robot.send_simple_command.assert_awaited_once_with("stoppaddry")
+
+
+class TestPadDrySwitchDoesNotAskAPushCoordinatorToRefresh:
+    """@chairstacker (#71): every press returned "Failed to perform the
+    action switch/turn_on. Update method not implemented".
+
+    The message came from the refresh request after the send, not from
+    the send. `PrimeStatusCoordinator` is push-driven and has no
+    `_async_update_data`, so `async_request_refresh()` falls through to
+    Home Assistant's default and raises.
+
+    The command had already gone out and the dock had already acted.
+    The switch reported failure for work that succeeded — which is the
+    worst shape a failure can take, because it invites pressing again.
+    """
+
+    @staticmethod
+    def _switch():
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        sw = PrimePadDrySwitch.__new__(PrimePadDrySwitch)
+        entry = MagicMock()
+        robot = MagicMock()
+        robot.send_simple_command = AsyncMock()
+        entry.runtime_data.prime_robot = robot
+
+        coordinator = MagicMock()
+        coordinator.async_request_refresh = AsyncMock(
+            side_effect=NotImplementedError("Update method not implemented")
+        )
+        entry.runtime_data.prime_status_coordinator = coordinator
+        sw._config_entry = entry
+        return sw, robot, coordinator
+
+    @pytest.mark.asyncio
+    async def test_turning_on_does_not_raise(self):
+        sw, robot, _ = self._switch()
+
+        await sw.async_turn_on()
+
+        robot.send_simple_command.assert_awaited_once_with("drypad")
+
+    @pytest.mark.asyncio
+    async def test_turning_off_does_not_raise(self):
+        sw, robot, _ = self._switch()
+
+        await sw.async_turn_off()
+
+        robot.send_simple_command.assert_awaited_once_with("stoppaddry")
+
+    @pytest.mark.asyncio
+    async def test_the_coordinator_is_left_alone(self):
+        """A push coordinator has nothing to be asked for. The dock
+        sends its state and the subscription writes it."""
+        sw, _, coordinator = self._switch()
+
+        await sw.async_turn_on()
+
+        coordinator.async_request_refresh.assert_not_awaited()
+
+    def test_no_entity_asks_this_coordinator_to_refresh(self):
+        """A GUARD FOR THE CLASS. Any caller of
+        `prime_status_coordinator.async_request_refresh()` raises the
+        same way, and the failure surfaces as a broken action rather
+        than as anything pointing at the coordinator.
+        """
+        import pathlib
+        import re
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            text = path.read_text()
+            for match in re.finditer(
+                r"prime_status_coordinator[\s\S]{0,200}?async_request_refresh",
+                text,
+            ):
+                offenders.append(f"{path.name}: {match.group()[:40]}")
+
+        assert not offenders, (
+            f"PrimeStatusCoordinator is push-driven and has no "
+            f"_async_update_data -- refreshing it raises: {offenders}"
+        )

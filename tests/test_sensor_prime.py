@@ -2091,3 +2091,70 @@ class TestPrimeRegionLastCleanedSensor:
         assert sensor._attr_translation_key == "region_last_cleaned"
         assert sensor._attr_translation_placeholders == {"region": "Küche"}
         assert not hasattr(sensor, "_attr_name") or sensor._attr_name is None
+
+
+class TestTheMissionStatusNamesItsRoom:
+    """The timeline report carries ids and nothing else, so
+    `current_room_id` was a number and there was no name beside it.
+
+    The device tracker resolves the same ids against `prime_room_names`
+    and shows a name. This sensor did not, so the two entities
+    disagreed about the same robot in the same moment.
+
+    `prime_room_names` holds rooms and zones together, which matters
+    here: a zone-targeted mission has never had a name to show
+    anywhere.
+    """
+
+    @staticmethod
+    def _attrs(region_id, names, is_room=True):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeMissionEventSensor,
+        )
+
+        sensor = PrimeMissionEventSensor.__new__(PrimeMissionEventSensor)
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = names
+        sensor._config_entry = entry
+
+        event = MagicMock()
+        region = MagicMock()
+        region.region_id = region_id
+        region.area = 12.0
+        region.pass_count = 1
+        event.room = region if is_room else None
+        event.travel = None if is_room else region
+
+        report = MagicMock()
+        report.event = [event]
+        report.mission_id = "m1"
+        # `_report` is a property reading the coordinator, not a field.
+        entry.runtime_data.prime_coordinator.data = report
+        return sensor.extra_state_attributes
+
+    def test_a_room_gets_its_name(self):
+        attrs = self._attrs("10", {"10": "Kitchen"})
+
+        assert attrs["current_room"] == "Kitchen"
+
+    def test_a_zone_gets_its_name_too(self):
+        """The case that had no name anywhere before."""
+        attrs = self._attrs("101", {"101": "Guest Access Zone"})
+
+        assert attrs["current_room"] == "Guest Access Zone"
+
+    def test_the_id_stays_alongside(self):
+        """It is what a command takes; dropping it would break anything
+        already reading it."""
+        attrs = self._attrs("10", {"10": "Kitchen"})
+
+        assert attrs["current_room_id"] == "10"
+
+    def test_an_unknown_id_adds_no_name(self):
+        """Better no attribute than an invented one."""
+        attrs = self._attrs("99", {"10": "Kitchen"})
+
+        assert "current_room" not in attrs
+        assert attrs["current_room_id"] == "99"
