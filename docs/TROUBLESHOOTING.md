@@ -399,6 +399,43 @@ If a room is split that should be one, check whether the doorway between
 them has actually been driven through — an uncrossed threshold reads as
 a wall. Merging is available in the Options Flow.
 
+## The coverage heatmap does not line up with the room map
+
+Fixed in v4.0.0a45. It was drawn upside down against every other map —
+measuring upward from the bottom of the grid while the rest measure
+downward from the top. A row of cells at one edge was also always
+missing, for a related reason.
+
+If the two still disagree after updating, that is a different problem
+and worth reporting: mark two or three known places on both images (the
+dock is the easiest) and say where each one landed.
+
+## `cleaned_rooms` is empty on a mission that definitely cleaned rooms
+
+That field is built from the cloud's own account of the mission
+(`timeline.finEvents`). Empty means **the cloud data has not arrived**,
+not that no rooms were cleaned — the two look identical from outside.
+
+Enrichment usually lands within a few minutes of docking. If it is
+consistently absent for one robot while another on the same account gets
+it, that is worth reporting with a diagnostics download: it now records
+whether each stored mission carries a timeline at all.
+
+## Sending a diagnostics download
+
+Settings → Devices & Services → Roomba+ → the three dots → Download
+diagnostics. Sensitive values are redacted before the file is written.
+
+**Pull it during a mission if the question is about navigation or the
+map.** The robot's navigation telemetry — pose confidence, kidnap
+detection, landmark counts, map state — only fills while it is cleaning.
+On the dock most of it reads zero, so a download taken afterwards looks
+identical to a robot that does not report those fields at all
+*(v4.0.0a45)*.
+
+For anything else — entity states, settings, mission history, dock
+identity — the timing does not matter.
+
 ## Cloud & history
 
 **Mission history export**
