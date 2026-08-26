@@ -973,10 +973,10 @@
         "name": "Iniciar el secado"
       },
       "reset_side_brush": {
-        "name": "Restablecer cepillo lateral"
+        "name": "Mantenimiento – Confirmar sustitución de cepillo lateral"
       },
       "reset_clean_base_bag": {
-        "name": "Restablecer bolsa de la Clean Base"
+        "name": "Mantenimiento – Confirmar sustitución de bolsa de la Clean Base"
       }
     },
     "switch": {

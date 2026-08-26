@@ -973,10 +973,10 @@
         "name": "Start pad drying"
       },
       "reset_side_brush": {
-        "name": "Reset side brush"
+        "name": "Maintenance – Confirm side brush replacement"
       },
       "reset_clean_base_bag": {
-        "name": "Reset Clean Base bag"
+        "name": "Maintenance – Confirm Clean Base bag replacement"
       }
     },
     "switch": {

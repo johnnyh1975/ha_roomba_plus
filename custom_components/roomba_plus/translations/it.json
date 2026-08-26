@@ -973,10 +973,10 @@
         "name": "Avviare l'asciugatura"
       },
       "reset_side_brush": {
-        "name": "Azzera spazzola laterale"
+        "name": "Manutenzione – Conferma sostituzione spazzola laterale"
       },
       "reset_clean_base_bag": {
-        "name": "Azzera sacchetto Clean Base"
+        "name": "Manutenzione – Conferma sostituzione sacchetto Clean Base"
       }
     },
     "switch": {

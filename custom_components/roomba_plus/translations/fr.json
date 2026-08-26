@@ -973,10 +973,10 @@
         "name": "Démarrer le séchage"
       },
       "reset_side_brush": {
-        "name": "Réinitialiser la brosse latérale"
+        "name": "Maintenance – Confirmer le remplacement de la brosse latérale"
       },
       "reset_clean_base_bag": {
-        "name": "Réinitialiser le sac de la Clean Base"
+        "name": "Maintenance – Confirmer le remplacement du sac de la Clean Base"
       }
     },
     "switch": {

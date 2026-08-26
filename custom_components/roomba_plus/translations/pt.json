@@ -973,10 +973,10 @@
         "name": "Iniciar a secagem"
       },
       "reset_side_brush": {
-        "name": "Reiniciar escova lateral"
+        "name": "Manutenção – Confirmar substituição de escova lateral"
       },
       "reset_clean_base_bag": {
-        "name": "Reiniciar saco da Clean Base"
+        "name": "Manutenção – Confirmar substituição de saco da Clean Base"
       }
     },
     "switch": {
