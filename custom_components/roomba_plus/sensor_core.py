@@ -35,7 +35,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     EVENT_MISSION_COMPLETED,
-    CLEAN_BASE_LABELS,
+    CARPET_BOOST_SLUGS,
+    CLEAN_BASE_STATUS_SLUGS,
+    CLEAN_MODE_SLUGS,
     CONF_BRUSH_HOURS,
     IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     IROBOT_PART_ROLE_FILTER,
@@ -44,9 +46,9 @@ from .const import (
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
-    JOB_INITIATOR_LABELS,
-    MOP_RANK_LABELS,
-    PAD_LABELS,
+    JOB_INITIATOR_SLUGS,
+    MOP_BEHAVIOR_SLUGS,
+    MOP_PAD_SLUGS,
     SQFT_TO_M2,
     get_localized_error_entry,
     has_carpet_boost,
@@ -69,8 +71,6 @@ from .sensor_helpers import (
     _battery_capacity_retention,
     _brush_days_until_due,
     _brush_wear_rate,
-    _carpet_boost_mode,
-    _clean_mode,
     _completion_rate_30d,
     _error_value,
     _estcap_to_mah,
@@ -140,6 +140,32 @@ def _has_cloud_part(entity: Any, role: str) -> bool:
     return bool(store and store.cloud_part_by_role(role) is not None)
 
 
+def _clean_mode_slug(entity: Any) -> str:
+    """Slug counterpart of sensor_helpers._clean_mode, for translation_key."""
+    no_auto = entity.vacuum_state.get("noAutoPasses")
+    two_pass = entity.vacuum_state.get("twoPass")
+    if no_auto is None or two_pass is None:
+        return CLEAN_MODE_SLUGS["n-a"]
+    if no_auto and two_pass:
+        return CLEAN_MODE_SLUGS["two"]
+    if no_auto and not two_pass:
+        return CLEAN_MODE_SLUGS["one"]
+    return CLEAN_MODE_SLUGS["auto"]
+
+
+def _carpet_boost_mode_slug(entity: Any) -> str:
+    """Slug counterpart of sensor_helpers._carpet_boost_mode, for translation_key."""
+    vac_high = entity.vacuum_state.get("vacHigh")
+    carpet_boost = entity.vacuum_state.get("carpetBoost")
+    if vac_high is None or carpet_boost is None:
+        return CARPET_BOOST_SLUGS["n-a"]
+    if carpet_boost:
+        return CARPET_BOOST_SLUGS["auto"]
+    if vac_high:
+        return CARPET_BOOST_SLUGS["performance"]
+    return CARPET_BOOST_SLUGS["eco"]
+
+
 SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
@@ -179,8 +205,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="job_initiator",
         name="Status – Started by",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda e: JOB_INITIATOR_LABELS.get(
-            e.clean_mission_status.get("initiator", "none"), "None"
+        value_fn=lambda e: JOB_INITIATOR_SLUGS.get(
+            e.clean_mission_status.get("initiator", "none"), "none"
         ),
     ),
     RoombaSensorDescription(
@@ -188,7 +214,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="clean_mode",
         name="Setting – Cleaning passes",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=_clean_mode,
+        value_fn=_clean_mode_slug,
     ),
     RoombaSensorDescription(
         key="carpet_boost_mode",
@@ -196,7 +222,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Setting – Carpet boost",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_carpet_boost,
-        value_fn=_carpet_boost_mode,
+        value_fn=_carpet_boost_mode_slug,
     ),
 
     # GROUP 3 — Maintenance (DIAGNOSTIC, enabled)
@@ -743,8 +769,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Clean Base status",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_clean_base,
-        value_fn=lambda e: CLEAN_BASE_LABELS.get(
-            (e.vacuum_state.get("dock") or {}).get("state", -2), "Unknown"
+        value_fn=lambda e: CLEAN_BASE_STATUS_SLUGS.get(
+            (e.vacuum_state.get("dock") or {}).get("state", -2), "unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -782,8 +808,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Mop pad",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "detectedPad" in s,
-        value_fn=lambda e: PAD_LABELS.get(
-            e.vacuum_state.get("detectedPad", "invalid"), "Unknown"
+        value_fn=lambda e: MOP_PAD_SLUGS.get(
+            e.vacuum_state.get("detectedPad", "invalid"), "unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -793,8 +819,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,  # superseded by mop_ars_behavior (F3b)
         filter_fn=lambda s: "rankOverlap" in s,
-        value_fn=lambda e: MOP_RANK_LABELS.get(
-            e.vacuum_state.get("rankOverlap") or 0, "Unknown"
+        value_fn=lambda e: MOP_BEHAVIOR_SLUGS.get(
+            e.vacuum_state.get("rankOverlap") or 0, "unknown"
         ),
     ),
     RoombaSensorDescription(
