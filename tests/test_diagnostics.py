@@ -1242,3 +1242,68 @@ class TestDockIdentityIsExported:
         result = await _run_diag({})
 
         assert result["dock_identity"]["hw_rev"] is None
+
+
+class TestTheBlidSurvivesNowhere:
+    """@utkjmitch (#83): the blid appeared in clear text twice in his
+    download, inside the `lastCommand` repr.
+
+    `map_id` is `<blid>-<epoch>`, so a redaction list matching key names
+    never touched it -- the secret was a substring of a composite value
+    under a key that does not sound sensitive.
+
+    `_redact_values` was built for exactly this after an earlier report
+    about `p2map_id`, and then applied only to the shadow section. The
+    outer pass checked key names and did not know the blid at all.
+
+    A diagnostics file exists to be pasted into a public issue. One
+    field leaking it through a side door defeats redacting it
+    everywhere else.
+    """
+
+    @staticmethod
+    async def _run(payload, blid):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.diagnostics import (
+            async_get_config_entry_diagnostics,
+        )
+
+        entry = MagicMock()
+        entry.data = {"blid": blid}
+        with patch(
+            "custom_components.roomba_plus.diagnostics._build_diagnostics",
+            AsyncMock(return_value=payload),
+        ):
+            return await async_get_config_entry_diagnostics(MagicMock(), entry)
+
+    @pytest.mark.asyncio
+    async def test_a_composite_id_does_not_leak_it(self):
+        """His exact shape: the blid inside a longer string, under a
+        key nobody would list as a secret."""
+        import json
+
+        out = await self._run(
+            {"prime": {"last_command": "map_id='ABC123-1752720067'"}},
+            "ABC123",
+        )
+
+        assert "ABC123" not in json.dumps(out)
+
+    @pytest.mark.asyncio
+    async def test_it_is_caught_at_any_depth(self):
+        import json
+
+        out = await self._run(
+            {"a": {"b": [{"c": "prefix-ABC123-suffix"}]}}, "ABC123"
+        )
+
+        assert "ABC123" not in json.dumps(out)
+
+    @pytest.mark.asyncio
+    async def test_unrelated_values_are_untouched(self):
+        """Redaction must not eat the diagnostics it exists to carry."""
+        out = await self._run({"phase": "run", "battery": 36}, "ABC123")
+
+        assert out["phase"] == "run"
+        assert out["battery"] == 36

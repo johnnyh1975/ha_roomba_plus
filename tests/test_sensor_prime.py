@@ -1251,7 +1251,7 @@ class TestThePhaseOptionsMatchTheVendorEnum:
     #: `Phase`, app 3.0.0, in the JSON casing the shadow uses.
     VENDOR_PHASES = {
         "stop", "charge", "run", "stuck", "hmPostMsn", "hmMidMsn",
-        "hmUsrDock", "hmUsrChrg", "chargingError", "mapUpd", "evac",
+        "hmUsrDock", "sent_to_charge", "chargingError", "mapUpd", "evac",
         "refill", "padWash", "padDry",
     }
 
@@ -1265,7 +1265,18 @@ class TestThePhaseOptionsMatchTheVendorEnum:
         return set(PrimePhaseSensor.options.fget(entity))
 
     def test_every_vendor_phase_is_offered(self):
-        missing = sorted(self.VENDOR_PHASES - self._options())
+        # THROUGH THE TABLE NOW. Options carry translation keys, not
+        # firmware words, so a vendor phase is "offered" when
+        # PHASE_LABELS maps it to something the options list contains.
+        # Comparing the two sets directly stopped meaning anything the
+        # moment the sensor became translatable.
+        from custom_components.roomba_plus.const import PHASE_LABELS
+
+        options = self._options()
+        missing = sorted(
+            v for v in self.VENDOR_PHASES
+            if PHASE_LABELS.get(v, v) not in options
+        )
 
         assert not missing, (
             "these phases would make the entity unavailable rather than "
@@ -1276,13 +1287,13 @@ class TestThePhaseOptionsMatchTheVendorEnum:
         """Returning to charge mid-mission — the one most likely to be
         hit, and the one a captures-only list would miss because it
         happens on long cleans."""
-        assert "hmUsrChrg" in self._options()
+        assert "sent_to_charge" in self._options()
 
     def test_the_older_values_are_kept(self):
         """They cost nothing if never sent, and dropping them on the
         strength of one app version would trade a confirmed list for a
         complete one — Classic robots reach this code too."""
-        assert {"pause", "new"} <= self._options()
+        assert {"paused", "new_mission"} <= self._options()
 
 
 class TestUnfinishedRoomsAreVisible:
@@ -1397,24 +1408,24 @@ class TestAFrozenShadowIsNotReportedAsCleaning:
                 clock["now"] += step_sec
         return readings
 
-    def test_a_rising_battery_during_a_long_run_reads_stale(self):
+    def test_a_rising_battery_during_a_long_run_reads_not_responding(self):
         """His exact case: climbing while the document says run -- and
         the run is old enough that no charge tail can explain it. The
         real freeze rose for 61 hours; eleven minutes is generous."""
-        assert self._sensor([75, 75, 80])[-1] == "stale"
+        assert self._sensor([75, 75, 80])[-1] == "not_responding"
 
     def test_one_reading_is_never_enough(self):
         """A single sample cannot show a direction, and calling a robot
         stale on its first update would be worse than the freeze."""
-        assert self._sensor([75])[0] == "run"
+        assert self._sensor([75])[0] == "running"
 
     def test_a_falling_battery_is_a_real_mission(self):
         """Which is what cleaning looks like."""
-        assert self._sensor([90, 85, 80])[-1] == "run"
+        assert self._sensor([90, 85, 80])[-1] == "running"
 
     def test_a_steady_battery_is_not_stale(self):
         """Conservative on purpose: it takes a real increase."""
-        assert self._sensor([80, 80])[-1] == "run"
+        assert self._sensor([80, 80])[-1] == "running"
 
     def test_stale_is_a_declared_option(self):
         """An ENUM value outside `options` takes the entity down, which
@@ -1426,7 +1437,7 @@ class TestAFrozenShadowIsNotReportedAsCleaning:
         entity = object.__new__(PrimePhaseSensor)
         entity._config_entry = MagicMock()
 
-        assert "stale" in PrimePhaseSensor.options.fget(entity)
+        assert "not_responding" in PrimePhaseSensor.options.fget(entity)
 
 
 class TestTheGraceWindowFromTheField:
@@ -1453,7 +1464,7 @@ class TestTheGraceWindowFromTheField:
             [("charge", 37), ("run", 37), ("run", 40)], step_sec=30.0
         )
 
-        assert readings[-1] == "run"
+        assert readings[-1] == "running"
 
     def test_every_resume_restarts_the_grace_clock(self):
         """A long mission with a second recharge stop must not inherit
@@ -1462,13 +1473,13 @@ class TestTheGraceWindowFromTheField:
             [("run", 75), ("run", 70), ("charge", 80), ("run", 80), ("run", 84)]
         )
 
-        assert readings[-1] == "run"
+        assert readings[-1] == "running"
 
     def test_a_restart_into_a_frozen_shadow_still_detects_it(self):
         """Home Assistant restarting mid-freeze sees `run` from its very
         first reading, with no transition to anchor on. The clock starts
         there, so detection is delayed by one window rather than lost."""
-        assert self._sensor([75, 80, 85])[-1] == "stale"
+        assert self._sensor([75, 80, 85])[-1] == "not_responding"
 
 
 class TestTheVendorTextArrivesAsAttributes:
@@ -2158,3 +2169,84 @@ class TestTheMissionStatusNamesItsRoom:
 
         assert "current_room" not in attrs
         assert attrs["current_room_id"] == "99"
+
+
+class TestBothGenerationsReportTheSameStates:
+    """Classic and Prime deliberately spell their status differently --
+    Classic translates, Prime reports the robot's own words, because
+    every existing template matches on those.
+
+    What must match is WHICH states exist, not how they read. Two were
+    missing on both sides:
+
+    `chargeMidMission` -- a robot topping up mid-run reports `charge`
+    with its cycle still live. @chairstacker's timeline read Cleaning,
+    Docked, Cleaning three times in one morning.
+
+    `noContact` -- @utkjmitch's S9+ stopped transmitting at 36% and
+    every entity held its last value for nine days. This sensor said
+    `stuck` as if it had just arrived.
+    """
+
+    @staticmethod
+    def _prime_phase(phase, cycle="none", last_ts=None):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        sensor = PrimePhaseSensor.__new__(PrimePhaseSensor)
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.last_message_ts = last_ts
+        entry.runtime_data.prime_status_coordinator = coordinator
+        sensor._config_entry = entry
+        sensor._last_phase = phase
+
+        status = MagicMock()
+        status.phase = phase
+        status.cycle = cycle
+        state = MagicMock()
+        state.clean_mission_status = status
+        type(sensor)._current_state = property(lambda s: state)
+        return sensor.native_value
+
+    def test_prime_charging_mid_mission(self):
+        import time
+
+        assert self._prime_phase(
+            "charge", cycle="clean", last_ts=time.time()
+        ) == "charging_mid_mission"
+
+    def test_prime_charging_between_runs_is_plain_charge(self):
+        import time
+
+        assert self._prime_phase(
+            "charge", cycle="none", last_ts=time.time()
+        ) == "charging"
+
+    def test_prime_silence_overrides_the_frozen_phase(self):
+        """Nine days of `stuck` is what this exists to stop."""
+        import time
+
+        assert self._prime_phase(
+            "stuck", last_ts=time.time() - 9 * 86400
+        ) == "no_contact"
+
+    def test_prime_a_brief_gap_does_not_trigger_it(self):
+        """A dropout must not rewrite the status mid-mission."""
+        import time
+
+        assert self._prime_phase(
+            "run", cycle="clean", last_ts=time.time() - 300
+        ) == "running"
+
+    def test_both_new_states_are_offered_as_options(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        sensor = PrimePhaseSensor.__new__(PrimePhaseSensor)
+        sensor._config_entry = MagicMock()
+
+        assert "charging_mid_mission" in sensor.options
+        assert "no_contact" in sensor.options

@@ -599,9 +599,9 @@ class TestPhaseAndCycleLabelsCoverTheVendorsEnums:
         labels a user would actually have seen."""
         from custom_components.roomba_plus.const import PHASE_LABELS
 
-        assert PHASE_LABELS["padWash"] == "Washing pad"
-        assert PHASE_LABELS["padDry"] == "Drying pad"
-        assert PHASE_LABELS["refill"] == "Refilling tank"
+        assert PHASE_LABELS["padWash"] == "washing_pad"
+        assert PHASE_LABELS["padDry"] == "drying_pad"
+        assert PHASE_LABELS["refill"] == "refilling_tank"
 
 
 class TestDroppedFavouritesAreReported:

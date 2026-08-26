@@ -649,35 +649,39 @@ class TestBatteryAgeDays:
 class TestPhaseValue:
     def test_idle_when_charging_and_full(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "charge", "cycle": "none"}, "batPct": 100})
-        assert _phase_value(e) == "Idle"
+        assert _phase_value(e) == "idle"
 
     def test_not_idle_when_charging_not_full(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "charge", "cycle": "none"}, "batPct": 80})
-        assert _phase_value(e) == "Charging"
+        assert _phase_value(e) == "charging"
 
     def test_stopped_when_cycle_none_phase_stop(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "stop", "cycle": "none"}, "batPct": 50})
-        assert _phase_value(e) == "Stopped"
+        assert _phase_value(e) == "stopped"
 
     def test_running_normal(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "run", "cycle": "clean"}, "batPct": 90})
-        assert _phase_value(e) == "Running"
+        assert _phase_value(e) == "running"
 
     def test_stuck(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "stuck", "cycle": "clean"}, "batPct": 60})
-        assert _phase_value(e) == "Stuck"
+        assert _phase_value(e) == "stuck"
 
-    def test_unknown_phase_returns_raw(self):
+    def test_unknown_phase_returns_the_unknown_key(self):
+        """WAS "returns the phase verbatim". Since the sensor became
+        translatable its value is a translation key, and a raw firmware
+        word has none -- so an unmapped phase reports `unknown` rather
+        than a string Home Assistant cannot translate."""
         e = _FakeEntity({"cleanMissionStatus": {"phase": "mystery", "cycle": "none"}, "batPct": 50})
-        assert _phase_value(e) == "mystery"
+        assert _phase_value(e) == "unknown"
 
     def test_empty_phase_returns_unknown(self):
         e = _FakeEntity({"cleanMissionStatus": {}, "batPct": 50})
-        assert _phase_value(e) == "Unknown"
+        assert _phase_value(e) == "unknown"
 
     def test_paused(self):
         e = _FakeEntity({"cleanMissionStatus": {"phase": "pause", "cycle": "clean"}, "batPct": 70})
-        assert _phase_value(e) == "Paused"
+        assert _phase_value(e) == "paused"
 
 
 # ── _ts_or_none ───────────────────────────────────────────────────────────────

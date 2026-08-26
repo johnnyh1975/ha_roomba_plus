@@ -364,8 +364,6 @@ class TestZonesReachTheTrackerCache:
         return tracker, backend, patch
 
     async def _refresh(self, rooms, zone_names):
-        import asyncio
-
         tracker, backend, patch = self._tracker(rooms, zone_names)
         with patch(
             "custom_components.roomba_plus.room_cleaning."
@@ -478,3 +476,47 @@ class TestAZoneCleanIsNamedToo:
         assert self._resolve(
             {"room": None, "travel": None, "zone": None}, {"Kitchen": "10"}
         ) is None
+
+
+class TestAStuckRobotDoesNotSayCleaning:
+    """@utkjmitch's S9+ went `stuck` at 11:52, drained for six hours,
+    declared battery-low, and stopped transmitting at 36%.
+
+    Nine days later this entity still read "Cleaning" — because `stuck`
+    is not a mission-end phase (correctly; the mission did not end) so
+    it fell through to the active label, and because the last value any
+    entity received stays until a new one arrives.
+
+    Not added to MISSION_END_PHASES: that set means "the mission
+    finished" and drives history and statistics. A stuck robot's mission
+    did not finish. This is a display question.
+    """
+
+    def test_stuck_reports_stuck(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stuck")
+
+        assert tracker.state == "Stuck"
+
+    def test_stuck_does_not_say_cleaning(self):
+        """The regression itself, in his words."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stuck")
+
+        assert tracker.state != "Cleaning"
+
+    def test_a_running_mission_is_untouched(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="run")
+
+        assert tracker.state == "Cleaning"
+
+    def test_docked_is_untouched(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="charge")
+
+        assert tracker.state == "Docked"

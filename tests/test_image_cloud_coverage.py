@@ -54,7 +54,27 @@ def _pose_less_state() -> dict:
 
 
 def _pose_capable_state() -> dict:
-    return {"cap": {"pose": 1}, "sku": "j755840", "softwareVer": "sapphire+1.0.0"}
+    """A robot that has ACTUALLY SENT a pose.
+
+    The gate read `cap.pose` -- the capability flag. @pk-1966's i7 on
+    lewis firmware declares `pose: 2` and never sends one, so the gate
+    blocked the fallback for exactly the robots needing it.
+    """
+    return {
+        "cap": {"pose": 1},
+        "pose": {"theta": 0, "point": {"x": 0, "y": 0}},
+        "sku": "j755840",
+        "softwareVer": "sapphire+1.0.0",
+    }
+
+
+def _promises_pose_but_never_sends() -> dict:
+    """@pk-1966's i7: `cap.pose: 2`, no `pose` key, ever.
+
+    Three robots have shown this -- @veronoicc in June, @Thonno's field
+    dump, and his. A property of lewis 22.52.10, not an install.
+    """
+    return {"cap": {"pose": 2}, "sku": "i755640", "softwareVer": "lewis+22.52.10"}
 
 
 async def _run_executor(fn, *args):
@@ -438,3 +458,41 @@ class TestCloudCoverageSkipsOverlays:
         assert result[:8] == b"\x89PNG\r\n\x1a\n"
         entity._renderer.render_keepout_zones.assert_not_called()
         entity._renderer.render.assert_not_called()
+
+
+class TestARobotThatPromisesPoseAndNeverSendsOne:
+    """@pk-1966 asked whether the cleaning path would simply never work
+    on his model. It would not have, and his asking is what found it.
+
+    The fallback was gated on `cap.pose`. His i7 declares `pose: 2` and
+    never sends one, so the gate stood aside on the robot that promises
+    pose and does not deliver.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_fallback_is_not_blocked_by_the_flag(self):
+        entity, data = _make_entity(
+            vacuum_state=_promises_pose_but_never_sends(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+        data.cloud_coordinator.api.get_pmap_umf.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_did_send_a_pose_is_untouched(self):
+        """The rule the gate exists for: an empty renderer on a
+        pose-reporting robot means the mission has not started yet."""
+        entity, data = _make_entity(
+            vacuum_state=_pose_capable_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+        assert result == b"local-render-bytes"

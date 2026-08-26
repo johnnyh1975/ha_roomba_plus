@@ -439,3 +439,55 @@ class TestRoombaSensorAvailability:
         assert "return super().available" in source
 
 
+
+
+class TestClassicStatusReportsTheSameTwoStates:
+    """The Classic side of the same pair Prime got.
+
+    Both generations must report the same STATES; they deliberately
+    spell them differently, because Classic translates and Prime uses
+    the robot's own words that templates match on.
+    """
+
+    @staticmethod
+    def _status(phase, cycle="none", battery=50, last_ts=None):
+        import time
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_helpers import _phase_value
+
+        entity = MagicMock()
+        entity.clean_mission_status = {"phase": phase, "cycle": cycle}
+        entity.vacuum_state = {"batPct": battery}
+        entity._config_entry.runtime_data.last_mqtt_message_ts = (
+            time.time() if last_ts is None else last_ts
+        )
+        return _phase_value(entity)
+
+    def test_charging_mid_mission(self):
+        """Plain "charging" would be indistinguishable from a finished
+        mission, and an automation on it fires mid-clean."""
+        assert self._status("charge", cycle="clean") == "charging_mid_mission"
+
+    def test_charging_between_runs_is_plain_charging(self):
+        assert self._status("charge", cycle="none") == "charging"
+
+    def test_a_full_battery_still_reads_idle(self):
+        """The existing rule must survive: charge at 100% is Idle."""
+        assert self._status("charge", cycle="none", battery=100) == "idle"
+
+    def test_silence_overrides_the_frozen_phase(self):
+        import time
+
+        value = self._status("stuck", last_ts=time.time() - 9 * 86400)
+
+        assert value == "no_contact"
+        assert value != "stuck"
+
+    def test_a_brief_gap_does_not_trigger_it(self):
+        """A dropout must not rewrite the status mid-mission."""
+        import time
+
+        assert self._status(
+            "run", cycle="clean", last_ts=time.time() - 300
+        ) == "running"
