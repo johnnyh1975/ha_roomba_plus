@@ -323,7 +323,34 @@
         "name": "Missions – Last"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "New mission",
+          "resumed": "Resumed",
+          "recharging": "Recharging",
+          "mission_completed": "Mission completed",
+          "cancelled": "Cancelled",
+          "paused": "Paused",
+          "base_unplugged": "Base unplugged",
+          "charging": "Charging",
+          "running": "Running",
+          "emptying_bin": "Emptying bin",
+          "stopped": "Stopped",
+          "stuck": "Stuck",
+          "sent_home": "Sent home",
+          "sent_to_charge": "Sent to charge",
+          "docking_mid_mission": "Docking mid-mission",
+          "returning_after_mission": "Returning after mission",
+          "updating_map": "Updating map",
+          "refilling_tank": "Refilling tank",
+          "washing_pad": "Washing pad",
+          "drying_pad": "Drying pad",
+          "not_responding": "Not responding",
+          "charging_mid_mission": "Charging mid-mission",
+          "no_contact": "No contact",
+          "idle": "Idle",
+          "unknown": "Unknown"
+        }
       },
       "error": {
         "name": "Status – Error"

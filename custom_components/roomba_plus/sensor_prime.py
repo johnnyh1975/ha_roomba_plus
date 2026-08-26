@@ -30,6 +30,13 @@ matching where their Classic equivalents already live.
 """
 from __future__ import annotations
 
+import time as _time_mod
+
+#: Mirrors sensor_helpers'. Far above the five-minute link watchdog:
+#: that answers "is the link healthy", this answers "should you still
+#: believe what this says".
+_SILENCE_BEFORE_STATUS_SAYS_SO_SEC = 3600
+
 import time
 
 from typing import Any, Final
@@ -50,6 +57,7 @@ from roombapy_prime.models.mission_history import FaultScene
 
 from .prime_dirt import unfinished_missions
 from .const import (
+    PHASE_LABELS,
     ERROR_CODE_LABELS,
     CLEANING_PHASES,
     DOCK_TASK_PHASES,
@@ -1986,16 +1994,23 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         # app version would be trading a confirmed list for a complete
         # one -- Classic robots reach this code too.
         return [
-            "stop", "charge", "run", "stuck",
-            "hmPostMsn", "hmMidMsn", "hmUsrDock", "hmUsrChrg",
-            "chargingError", "mapUpd", "evac", "refill",
-            "padWash", "padDry",
-            # Not in the 3.0.0 enum; seen in older captures.
-            "pause", "new",
-            # Not a robot phase at all: this integration's own reading
-            # that the document has stopped tracking reality. See
-            # `native_value`.
-            "stale",
+            # TRANSLATION KEYS, not firmware words. Home Assistant only
+            # accepts lowercase under a `state` block, so `hmPostMsn`
+            # can never be translated and `returning_after_mission` can.
+            #
+            # Shared with Classic through PHASE_LABELS: both generations
+            # now report the same values and one set of translations
+            # serves both. Which states each robot can actually reach
+            # still differs -- a robot with no mop station never reports
+            # washing_pad -- but an option nobody reaches costs nothing.
+            "stopped", "charging", "running", "stuck",
+            "returning_after_mission", "docking_mid_mission",
+            "sent_home", "sent_to_charge",
+            "base_unplugged", "updating_map", "emptying_bin",
+            "refilling_tank", "washing_pad", "drying_pad",
+            "paused", "new_mission", "not_responding",
+            "charging_mid_mission", "no_contact",
+            "idle", "unknown",
         ]
 
     @property
@@ -2065,13 +2080,50 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
                 and (now - run_since) >= self._STALE_GRACE_SEC
             )
             if rising and grace_over:
-                return "stale"
+                # Translation key, like every other return here.
+                return "not_responding"
 
         # AN UNLISTED PHASE READS AS UNKNOWN, not as itself. Home
         # Assistant rejects an ENUM value outside `options`, and the
         # entity would go unavailable rather than show one odd word --
         # losing the ninety-nine phases that do work to display the one
         # that does not.
+        # CHARGING WITH A LIVE CYCLE IS NOT THE SAME AS CHARGING.
+        #
+        # A robot topping up mid-run reports `charge` while its cycle
+        # stays `clean`. As plain `charge` that is indistinguishable
+        # from a finished mission -- @chairstacker watched his activity
+        # timeline read Cleaning, Docked, Cleaning three times in one
+        # morning because of it.
+        if text == "charge":
+            _cycle = getattr(status, "cycle", None)
+            if _cycle not in (None, "", "none"):
+                return "charging_mid_mission"
+
+        # AND A ROBOT THAT STOPPED TALKING IS NOT STILL DOING THIS.
+        #
+        # @utkjmitch's S9+ stopped transmitting at 36% battery and every
+        # entity held its final value for nine days -- this sensor said
+        # `stuck` as if it had just arrived. The silence was recorded
+        # already; nothing surfaced it where the state is read.
+        _coord = self._config_entry.runtime_data.prime_status_coordinator
+        _last = getattr(_coord, "last_message_ts", None)
+        # Type-checked, not truth-checked: this runs against whatever a
+        # coordinator happens to expose, and a non-numeric value must
+        # not raise out of a status read.
+        if isinstance(_last, (int, float)) and _last > 0 and (
+            _time_mod.time() - _last
+        ) > _SILENCE_BEFORE_STATUS_SAYS_SO_SEC:
+            return "no_contact"
+
+        # THE TRANSLATION KEY, not the wire word. `hmPostMsn` cannot be
+        # a Home Assistant state key; `returning_after_mission` can, and
+        # that is what makes this sensor translatable at all. Classic
+        # maps through the same table, so both generations now report
+        # the same values and share one set of translations.
+        mapped = PHASE_LABELS.get(text)
+        if mapped is not None:
+            return mapped
         return text if text in self.options else None
 
     @property

@@ -65,6 +65,13 @@ _DOCKED_LABEL: dict[str, str] = {
     "de": "Angedockt",
     "en": "Docked",
 }
+#: Shown while the robot reports `stuck`. Its own state, not a place --
+#: which is the point: "Cleaning" was actively wrong there.
+_STUCK_LABEL: dict[str, str] = {
+    "de": "Steckt fest",
+    "en": "Stuck",
+}
+
 _ACTIVE_FALLBACK_LABEL: dict[str, str] = {
     "de": "Unterwegs",
     "en": "Cleaning",
@@ -189,6 +196,24 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
 
         if phase in MISSION_END_PHASES or phase == "":
             return self._label(_DOCKED_LABEL)
+
+        # A STUCK ROBOT IS NOT CLEANING, and saying so for days is worse
+        # than saying nothing.
+        #
+        # `stuck` is not a mission-end phase -- correctly, the mission
+        # has not ended -- so this fell through to the active label.
+        # @utkjmitch's S9+ went `stuck` at 11:52, drained for six hours,
+        # declared battery-low, and stopped transmitting. Nine days
+        # later this entity still read "Cleaning", because the last
+        # value any entity received simply stays until a new one
+        # arrives.
+        #
+        # Deliberately NOT added to MISSION_END_PHASES: that set means
+        # "the mission finished", which drives history and statistics.
+        # A stuck robot's mission did not finish. This is a display
+        # question, and it belongs here.
+        if phase == "stuck":
+            return self._label(_STUCK_LABEL)
 
         room = self._resolve_room(data)
         if room:

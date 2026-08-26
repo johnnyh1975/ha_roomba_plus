@@ -323,7 +323,34 @@
         "name": "Missies – Laatste"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "Nieuwe missie",
+          "resumed": "Hervat",
+          "recharging": "Bijladen",
+          "mission_completed": "Missie voltooid",
+          "cancelled": "Geannuleerd",
+          "paused": "Gepauzeerd",
+          "base_unplugged": "Basis zonder stroom",
+          "charging": "Opladen",
+          "running": "Aan het schoonmaken",
+          "emptying_bin": "Bak legen",
+          "stopped": "Gestopt",
+          "stuck": "Vastgelopen",
+          "sent_home": "Naar huis gestuurd",
+          "sent_to_charge": "Naar laadstation gestuurd",
+          "docking_mid_mission": "Tussentijds naar dock",
+          "returning_after_mission": "Terug na missie",
+          "updating_map": "Kaart bijwerken",
+          "refilling_tank": "Tank vullen",
+          "washing_pad": "Dweil wassen",
+          "drying_pad": "Dweil drogen",
+          "not_responding": "Reageert niet",
+          "charging_mid_mission": "Opladen tijdens missie",
+          "no_contact": "Geen contact",
+          "idle": "Inactief",
+          "unknown": "Onbekend"
+        }
       },
       "error": {
         "name": "Status – Fout"

@@ -323,7 +323,34 @@
         "name": "Missions – Dernière"
       },
       "phase": {
-        "name": "Statut"
+        "name": "Statut",
+        "state": {
+          "new_mission": "Nouvelle mission",
+          "resumed": "Repris",
+          "recharging": "Recharge",
+          "mission_completed": "Mission terminée",
+          "cancelled": "Annulé",
+          "paused": "En pause",
+          "base_unplugged": "Base non alimentée",
+          "charging": "En charge",
+          "running": "Nettoyage",
+          "emptying_bin": "Vidage du bac",
+          "stopped": "Arrêté",
+          "stuck": "Bloqué",
+          "sent_home": "Renvoyé à la base",
+          "sent_to_charge": "Envoyé en charge",
+          "docking_mid_mission": "Retour à la base",
+          "returning_after_mission": "Retour après mission",
+          "updating_map": "Mise à jour de la carte",
+          "refilling_tank": "Remplissage du réservoir",
+          "washing_pad": "Lavage de la lingette",
+          "drying_pad": "Séchage de la lingette",
+          "not_responding": "Ne répond pas",
+          "charging_mid_mission": "En charge pendant la mission",
+          "no_contact": "Aucun contact",
+          "idle": "Inactif",
+          "unknown": "Inconnu"
+        }
       },
       "error": {
         "name": "Statut – Erreur"

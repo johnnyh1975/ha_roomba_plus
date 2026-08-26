@@ -323,7 +323,34 @@
         "name": "Misje – Ostatnia"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "Nowa misja",
+          "resumed": "Wznowiono",
+          "recharging": "Doładowywanie",
+          "mission_completed": "Misja zakończona",
+          "cancelled": "Anulowano",
+          "paused": "Wstrzymany",
+          "base_unplugged": "Stacja bez zasilania",
+          "charging": "Ładowanie",
+          "running": "Sprzątanie",
+          "emptying_bin": "Opróżnianie pojemnika",
+          "stopped": "Zatrzymany",
+          "stuck": "Utknął",
+          "sent_home": "Odesłany do stacji",
+          "sent_to_charge": "Odesłany do ładowania",
+          "docking_mid_mission": "Powrót do stacji",
+          "returning_after_mission": "Powrót po misji",
+          "updating_map": "Aktualizacja mapy",
+          "refilling_tank": "Napełnianie zbiornika",
+          "washing_pad": "Mycie nakładki",
+          "drying_pad": "Suszenie nakładki",
+          "not_responding": "Nie odpowiada",
+          "charging_mid_mission": "Ładowanie w trakcie misji",
+          "no_contact": "Brak kontaktu",
+          "idle": "Bezczynny",
+          "unknown": "Nieznany"
+        }
       },
       "error": {
         "name": "Status – Błąd"

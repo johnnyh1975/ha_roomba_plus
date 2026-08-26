@@ -1304,59 +1304,75 @@ def get_localized_error_entry(code: int, language: str | None) -> dict[str, str]
     }
 
 
+#: Robot phase -> translation state key.
+#:
+#: LOWERCASE KEYS, because Home Assistant only accepts those under a
+#: `state` block -- `hmPostMsn` cannot be a translation key, `hmpostmsn`
+#: can. That constraint is why this sensor showed English to everyone
+#: for as long as it existed: Classic translated in code (one language)
+#: and Prime reported raw firmware words (no language).
+#:
+#: The VALUE the entity reports is the key here. Automations therefore
+#: match `charging`, not `charge` -- a break, taken deliberately while
+#: this is still alpha rather than after a stable release.
+#:
+#: `completed`, `cancelled`, `resume` and `recharge` appear in no
+#: diagnostics download this project has seen, and callbacks.py's own
+#: comment calls them "valid end states in some firmware variants".
+#: Kept, because three downloads from two robots cannot disprove a
+#: firmware variant -- but they are not offered on the Prime side,
+#: where the equivalent arrives as a mission RESULT and is already
+#: translated there.
 PHASE_LABELS: Final[dict[str, str]] = {
-    "new": "New mission",
-    "resume": "Resumed",
-    "recharge": "Recharging",
-    "completed": "Mission completed",
-    "cancelled": "Cancelled",
-    "pause": "Paused",
-    "chargingerror": "Base unplugged",
-    #: SECOND SPELLING, SAME CONDITION. `PhaseData` declares both
-    #: `chargingerror` (one word, as reported) and `chgerr`. Which a
-    #: robot sends is not established, so both are labelled.
-    "chgerr": "Base unplugged",
-    "charge": "Charging",
-    "run": "Running",
-    "evac": "Emptying bin",
-    "stop": "Stopped",
-    "stuck": "Stuck",
-    "hmUsrDock": "Sent home",
-    "hmMidMsn": "Docking mid-mission",
-    "hmPostMsn": "Docking — end of mission",
-    #: SIX PHASES `MissionPhase` DECLARES AND THIS TABLE DID NOT LABEL.
-    #:
-    #: `_phase_value()` falls back to the raw wire string, so a robot in
-    #: any of these showed "padWash" or "hmUsrChrg" in the sensor rather
-    #: than words. Not a crash, and not visible in any test — the
-    #: fallback made it look deliberate.
-    #:
-    #: The three dock phases matter most: a combo robot washing or
-    #: drying its pad, or refilling, spends real time in them at the end
-    #: of every mop mission.
-    "hmUsrChrg": "Sent home to charge",
-    "padWash": "Washing pad",
-    "padDry": "Drying pad",
-    "refill": "Refilling tank",
-    "mapupd": "Updating map",
-    # Prime mission sub-phases (firmware 3.8.126 phase enum, mapped to
-    # activities in PHASE_TO_ACTIVITY above). Readable names for the
-    # phase sensor; the vacuum entity collapses most of these to
-    # "cleaning".
-    "oClean": "Cleaning",
-    "room": "Cleaning a room",
-    "zone": "Cleaning a zone",
-    "polygon": "Cleaning an area",
-    "explore": "Mapping",
-    "disc": "Exploring",
-    "travel": "Driving to area",
-    "traversal": "Crossing",
-    "plan": "Planning route",
-    "reloc": "Finding position",
-    "tankEmpty": "Water tank empty",
-    "binFull": "Bin full",
-    "kidnap": "Lifted",
-    "idle": "Idle",
+    "new":           "new_mission",
+    "resume":        "resumed",
+    "recharge":      "recharging",
+    "completed":     "mission_completed",
+    "cancelled":     "cancelled",
+    "pause":         "paused",
+    "chargingerror": "base_unplugged",
+    "chgerr":        "base_unplugged",
+    "chargingError": "base_unplugged",
+    "charge":        "charging",
+    "run":           "running",
+    "evac":          "emptying_bin",
+    "stop":          "stopped",
+    "stuck":         "stuck",
+    "hmUsrDock":     "sent_home",
+    "hmUsrChrg":     "sent_to_charge",
+    "hmMidMsn":      "docking_mid_mission",
+    "hmPostMsn":     "returning_after_mission",
+    "mapUpd":        "updating_map",
+    # Second spelling seen in the vendor enum, like chgerr/chargingerror.
+    "mapupd":        "updating_map",
+    "refill":        "refilling_tank",
+    "padWash":       "washing_pad",
+    "padDry":        "drying_pad",
+    "stale":         "not_responding",
+    # PHASES THAT REACHED PHASE_TO_ACTIVITY BUT NEVER GOT A LABEL.
+    #
+    # A guard has required every mapped phase to have one for a long
+    # time; these fifteen were missing before this table was rewritten
+    # and only surfaced when the rewrite made the guard fail loudly.
+    # A phase the vacuum entity can map but the status sensor cannot
+    # name reads as `unknown` to the user.
+    # NOT mapped: an absent cleanMissionStatus and a robot genuinely
+    # between phases both arrive as "", and reporting idle for the
+    # first would claim knowledge we do not have.
+    "binFull":    "bin_full",
+    "disc":       "discovering",
+    "error":      "error",
+    "explore":    "exploring",
+    "kidnap":     "picked_up",
+    "oClean":     "spot_cleaning",
+    "plan":       "planning",
+    "polygon":    "cleaning_area",
+    "reloc":      "relocating",
+    "room":       "cleaning_room",
+    "tankEmpty":  "tank_empty",
+    "travel":     "travelling",
+    "traversal":  "traversing",
+    "zone":       "cleaning_zone",
 }
 
 #: DEFINED HERE AND READ BY NOTHING, for as long as it has existed.

@@ -933,7 +933,23 @@ async def async_get_config_entry_diagnostics(
     later is covered without its author having to remember.
     """
     payload = await _build_diagnostics(hass, config_entry)
-    return dict(_redact_secrets_everywhere(payload))
+    # KEY-BASED REDACTION IS NOT ENOUGH, and this is the second time.
+    #
+    # `_redact_values` already replaces the blid wherever it appears in
+    # a string, at any depth -- built after a tester found `p2map_id`
+    # carrying "<BLID>-<epoch>" past a redaction list that only matched
+    # key names. But it was only ever applied to the shadow section.
+    #
+    # The Prime payload's `lastCommand` repr embeds `map_id`, which is
+    # the same "<blid>-<epoch>" shape, and it never went through it.
+    # @utkjmitch found the blid in clear text twice in his own download
+    # (#83) and has not attached one to an issue since.
+    #
+    # A diagnostics file exists to be pasted into a public issue. One
+    # field leaking the blid through a side door defeats redacting it
+    # everywhere else, and invites trust the output has not earned.
+    _blid = config_entry.data.get("blid")
+    return dict(_redact_values(_redact_secrets_everywhere(payload), _blid))
 
 
 def _redact_secrets_everywhere(value: Any) -> Any:

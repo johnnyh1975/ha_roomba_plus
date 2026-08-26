@@ -323,7 +323,34 @@
         "name": "Missionen – Letzte"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "Neue Mission",
+          "resumed": "Fortgesetzt",
+          "recharging": "Lädt nach",
+          "mission_completed": "Mission abgeschlossen",
+          "cancelled": "Abgebrochen",
+          "paused": "Pausiert",
+          "base_unplugged": "Station ohne Strom",
+          "charging": "Lädt",
+          "running": "Reinigt",
+          "emptying_bin": "Behälter wird geleert",
+          "stopped": "Gestoppt",
+          "stuck": "Steckt fest",
+          "sent_home": "Nach Hause geschickt",
+          "sent_to_charge": "Zum Laden geschickt",
+          "docking_mid_mission": "Zwischenandocken",
+          "returning_after_mission": "Rückfahrt nach Mission",
+          "updating_map": "Karte wird aktualisiert",
+          "refilling_tank": "Tank wird gefüllt",
+          "washing_pad": "Wischpad wird gewaschen",
+          "drying_pad": "Wischpad wird getrocknet",
+          "not_responding": "Reagiert nicht",
+          "charging_mid_mission": "Lädt während der Mission",
+          "no_contact": "Kein Kontakt",
+          "idle": "Bereit",
+          "unknown": "Unbekannt"
+        }
       },
       "error": {
         "name": "Status – Fehler"

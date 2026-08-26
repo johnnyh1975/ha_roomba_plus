@@ -120,17 +120,65 @@ def _error_value(entity: "IRobotEntity") -> str:
     return ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or "None")
 
 
+#: How long a robot may go quiet before the status says so rather than
+#: repeating its last phase.
+#:
+#: Deliberately far above the five minutes the MQTT watchdog uses. That
+#: sensor answers "is the link healthy"; this answers "should you still
+#: believe what this says", and a brief dropout must not rewrite the
+#: status for anyone watching a mission.
+_SILENCE_BEFORE_STATUS_SAYS_SO_SEC = 3600
+
+
 def _phase_value(entity: "IRobotEntity") -> str:
-    """Phase label with Idle and Stopped detection."""
+    """Phase label with Idle, Stopped and silence detection."""
+    # A ROBOT THAT STOPPED TALKING IS NOT STILL DOING THE LAST THING.
+    #
+    # @utkjmitch's S9+ went `stuck`, drained for six hours off its dock,
+    # and stopped transmitting at 36% battery. Nine days later every
+    # entity still read its final value -- the status said "Stuck" as if
+    # it had just arrived, because the last value any entity receives
+    # simply stays until a new one comes.
+    #
+    # The information existed: `RoombaMqttStale` had been on the whole
+    # time. It just lived in a separate binary sensor, so knowing the
+    # status was nine days old required already suspecting it.
+    # getattr on the ENTITY too: this runs for every status read, and
+    # not every caller carries a config entry -- a lighter test double
+    # or a partially built entity must not raise out of a value
+    # function.
+    _entry = getattr(entity, "_config_entry", None)
+    _data = getattr(_entry, "runtime_data", None)
+    _last = getattr(_data, "last_mqtt_message_ts", 0.0) or 0.0
+    if _last:
+        _quiet = _time_mod.time() - _last
+        if _quiet > _SILENCE_BEFORE_STATUS_SAYS_SO_SEC:
+            return "no_contact"
+
     status = entity.clean_mission_status
     phase = status.get("phase", "")
     cycle = status.get("cycle", "")
     battery = entity.vacuum_state.get("batPct")
     if phase == "charge" and battery == 100:
-        return "Idle"
+        return "idle"
     if cycle == "none" and phase == "stop":
-        return "Stopped"
-    return PHASE_LABELS.get(phase, phase or "Unknown")
+        return "stopped"
+
+    # CHARGING WITH A LIVE CYCLE IS NOT THE SAME AS CHARGING.
+    #
+    # A robot that returns to top up mid-run reports `charge` while its
+    # cycle stays `clean`. Reported as plain "Charging" that is
+    # indistinguishable from a finished mission, and an automation
+    # reacting to it fires mid-clean.
+    #
+    # The distinction already existed as its own binary sensor
+    # (`mid_mission_recharge`), which meant anyone wanting it had to
+    # know to look for a second entity beside the one that says what
+    # the robot is doing.
+    if phase == "charge" and cycle not in ("", "none"):
+        return "charging_mid_mission"
+
+    return PHASE_LABELS.get(phase, "unknown")
 
 
 def _mission_elapsed_value(entity: "IRobotEntity") -> float | None:

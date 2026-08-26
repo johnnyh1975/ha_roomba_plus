@@ -56,7 +56,6 @@ from . import roomba_reported_state
 from .const import (
     CONF_MAP_CLEAN_ZONES,
     CONF_MAP_KEEPOUT_ZONES,
-    has_pose,
     CONF_MAP_NOMOP_ZONES,
     DEFAULT_MAP_ZONES,
     room_slug,
@@ -1439,8 +1438,19 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         state = roomba_reported_state(self.vacuum)
         if not isinstance(state, dict):
             return None
+        # THE FLAG SAYS "CAN", NOT "DOES", and on lewis firmware those
+        # differ. @pk-1966's i7 declares `cap.pose: 2` and then never
+        # sends a `pose` key -- established on three robots (@veronoicc
+        # in June, @Thonno's field dump, his). Gating on the capability
+        # blocked this fallback for exactly the robots needing it most:
+        # the ones that promise pose and do not deliver.
+        #
+        # What matters is whether a pose has ACTUALLY ARRIVED, which is
+        # also what the renderer is waiting for. A robot mid-first-
+        # mission still falls through to the local render, because this
+        # only runs when the renderer is empty AND no pose has landed.
         try:
-            if has_pose(state):
+            if state.get("pose") is not None:
                 return None
         except (TypeError, AttributeError):
             return None

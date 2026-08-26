@@ -323,7 +323,34 @@
         "name": "Misiones – Última"
       },
       "phase": {
-        "name": "Estado"
+        "name": "Estado",
+        "state": {
+          "new_mission": "Nueva misión",
+          "resumed": "Reanudado",
+          "recharging": "Recargando",
+          "mission_completed": "Misión completada",
+          "cancelled": "Cancelado",
+          "paused": "En pausa",
+          "base_unplugged": "Base sin corriente",
+          "charging": "Cargando",
+          "running": "Limpiando",
+          "emptying_bin": "Vaciando el depósito",
+          "stopped": "Detenido",
+          "stuck": "Atascado",
+          "sent_home": "Enviado a la base",
+          "sent_to_charge": "Enviado a cargar",
+          "docking_mid_mission": "Volviendo a la base",
+          "returning_after_mission": "Regresando tras la misión",
+          "updating_map": "Actualizando el mapa",
+          "refilling_tank": "Rellenando el tanque",
+          "washing_pad": "Lavando la mopa",
+          "drying_pad": "Secando la mopa",
+          "not_responding": "No responde",
+          "charging_mid_mission": "Cargando durante la misión",
+          "no_contact": "Sin contacto",
+          "idle": "Inactivo",
+          "unknown": "Desconocido"
+        }
       },
       "error": {
         "name": "Estado – Error"
