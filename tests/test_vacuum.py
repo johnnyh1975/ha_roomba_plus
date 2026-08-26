@@ -1807,14 +1807,33 @@ class TestReturningCorrectionCoversBothBranches:
 
     def test_both_branches_go_through_the_same_correction(self):
         """Guards against the a9 mistake recurring: fixing one branch and
-        forgetting its sibling. There must be one place, not two."""
-        import inspect
+        forgetting its sibling.
 
-        from custom_components.roomba_plus.vacuum import IRobotVacuum
+        WAS A SOURCE-TEXT COUNT of `_prime_cycle_is_idle()` calls,
+        pinned at two. That broke the moment a third correct use was
+        added -- at a change, not at a fault -- and it never verified
+        that either branch behaved. This exercises both.
+        """
+        from homeassistant.components.vacuum import VacuumActivity
 
-        source = inspect.getsource(IRobotVacuum.activity.fget)
+        # Phase branch: a stale RETURNING with no cycle is really docked.
+        assert (
+            self._vacuum(phase="hmUsrDock", cycle="none").activity
+            == VacuumActivity.DOCKED
+        )
 
-        assert source.count("_prime_cycle_is_idle()") == 2
+        # Event branch: same correction, reached a different way.
+        assert (
+            self._vacuum(event_type="evac", cycle="none").activity
+            == VacuumActivity.DOCKED
+        )
+
+        # And with a live cycle neither branch may claim docked.
+        for kwargs in ({"phase": "hmUsrDock"}, {"event_type": "evac"}):
+            assert (
+                self._vacuum(cycle="clean", **kwargs).activity
+                != VacuumActivity.DOCKED
+            ), kwargs
 
 
 class TestVacuumSubscribesToTheStatusCoordinator:
@@ -2650,3 +2669,72 @@ class TestPhaseEvidenceIsLabelled:
                 f"{phase} comes from the firmware enum only -- an unlabelled "
                 "entry reads as though somebody watched a robot do it"
             )
+
+
+class TestAPrimeRobotToppingUpIsNotDocked:
+    """@chairstacker (#71): his activity timeline read Cleaning, then
+    Docked for about 70 seconds, then Cleaning again — three times over
+    one morning. It looks like the mission ended and a new one started.
+
+    `charge` maps to DOCKED, but a robot returning to top up mid-run is
+    not finished: its cycle is still `clean`. The Classic path has had
+    this rule for a long time — an active cycle while idle or docked
+    means paused — and only the Prime branch checked the cycle in one
+    direction (RETURNING) and not the other.
+
+    Worse than cosmetic: an automation reacting to "docked" fires
+    mid-clean, and one reacting to "cleaning" fires several times per
+    run.
+    """
+
+    @staticmethod
+    def _activity(phase, cycle):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import RoombaVacuum
+
+        vac = RoombaVacuum.__new__(RoombaVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        vac._config_entry = entry
+        vac._connection_type = ConnectionType.CLOUD_ONLY
+
+        # Read straight off the status coordinator, which is where the
+        # Prime branch looks.
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {
+                "cleanMissionStatus": {"phase": phase, "cycle": cycle}
+            }
+        }
+        entry.runtime_data.prime_status_coordinator = coordinator
+
+        with patch.object(
+            RoombaVacuum, "_prime_cycle_is_idle",
+            lambda self: cycle == "none",
+        ):
+            return vac.activity
+
+    def test_charging_mid_mission_is_paused(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("charge", "clean") == VacuumActivity.PAUSED
+
+    def test_charging_with_no_mission_is_docked(self):
+        """The ordinary case must not change: charging between runs is
+        exactly what docked means."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("charge", "none") == VacuumActivity.DOCKED
+
+    def test_cleaning_is_untouched(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("run", "clean") == VacuumActivity.CLEANING
+
+    def test_returning_with_an_idle_cycle_still_reads_docked(self):
+        """The rule that already existed, in the other direction."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("hmUsrDock", "none") == VacuumActivity.DOCKED

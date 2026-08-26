@@ -401,3 +401,80 @@ class TestZonesReachTheTrackerCache:
         cache = await self._refresh(rooms={"Kitchen": "MAP/10"}, zone_names={})
 
         assert cache == {"Kitchen": "MAP/10"}
+
+
+class TestAZoneCleanIsNamedToo:
+    """@chairstacker (#64): during a zone mission the tracker read
+    "Cleaning" — its fallback for "somewhere, unknown" — while his own
+    diagnostics carried all seven zone names under
+    `region_names.merged`.
+
+    A timeline event has three place fields: `room` and `travel`, both
+    keyed `region_id`, and `zone`, keyed `zone_id`. Only the first two
+    were read, so a zone mission produced no id — and a name lookup
+    with nothing to look up.
+
+    Three rounds of explanation called this a protocol gap. It was a
+    field nobody read, which is the same shape as `zone_layers` and
+    `pd_state` this week.
+    """
+
+    @staticmethod
+    def _resolve(event_kwargs, names):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = names
+
+        event = MagicMock()
+        event.room = event_kwargs.get("room")
+        event.travel = event_kwargs.get("travel")
+        event.zone = event_kwargs.get("zone")
+        report = MagicMock()
+        report.event = [event]
+
+        data = MagicMock()
+        data.prime_coordinator.data = report
+        return tracker._resolve_prime_room(data)
+
+    @staticmethod
+    def _zone(zone_id):
+        from unittest.mock import MagicMock
+
+        z = MagicMock()
+        z.zone_id = zone_id
+        return z
+
+    @staticmethod
+    def _room(region_id):
+        from unittest.mock import MagicMock
+
+        r = MagicMock()
+        r.region_id = region_id
+        return r
+
+    def test_a_zone_event_resolves_to_its_name(self):
+        """Zone 107 is the one his last recorded mission targeted."""
+        name = self._resolve(
+            {"room": None, "travel": None, "zone": self._zone("107")},
+            {"Guest Access Zone": "107"},
+        )
+
+        assert name == "Guest Access Zone"
+
+    def test_a_room_event_still_resolves(self):
+        name = self._resolve(
+            {"room": self._room("10"), "travel": None, "zone": None},
+            {"Kitchen": "MAP/10"},
+        )
+
+        assert name == "Kitchen"
+
+    def test_neither_present_resolves_nothing(self):
+        assert self._resolve(
+            {"room": None, "travel": None, "zone": None}, {"Kitchen": "10"}
+        ) is None

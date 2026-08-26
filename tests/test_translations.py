@@ -827,3 +827,58 @@ class TestImageNamesMatchWhatEachTierGets:
         for path in sorted((_ROOT / "translations").glob("*.json")):
             names = self._names(path.stem)
             assert names["map"] != names["cleaning_map"], path.stem
+
+
+class TestStringsJsonAgreesWithEnglish:
+    """`strings.json` and `translations/en.json` must not disagree.
+
+    Home Assistant serves `translations/en.json` to English users;
+    `strings.json` is the source the other locales are generated from
+    and what a developer reads. When they diverge, the file everyone
+    looks at is not the file anyone sees.
+
+    Found by @mdarocha (PR #100) while settling a naming question: he
+    assumed `prime_part_dirt_bag` and `part_dirt_bag` disagreed with
+    each other. They did not — `strings.json` disagreed with all eight
+    shipped locales, which already said "Dust Bag".
+
+    The duplicate-name check added in a43 could not see this: it
+    compares entities within one platform in one file, and this is the
+    same entity across two files.
+    """
+
+    @staticmethod
+    def _mismatches():
+        import json
+
+        strings = json.loads(_STRINGS.read_text(encoding="utf-8"))
+        english = json.loads(
+            (_ROOT / "translations" / "en.json").read_text(encoding="utf-8")
+        )
+
+        found: list[tuple[str, str, str]] = []
+
+        def walk(a, b, path=""):
+            if isinstance(a, dict) and isinstance(b, dict):
+                for key in a:
+                    if key in b:
+                        walk(a[key], b[key], f"{path}.{key}")
+            elif isinstance(a, str) and isinstance(b, str) and a != b:
+                found.append((path, a, b))
+
+        walk(strings, english)
+        return found
+
+    def test_no_entity_name_disagrees(self):
+        """Names are what a user sees, so a divergence here is visible
+        in a way a description or a flow string is not."""
+        offenders = [
+            (p, a, b) for p, a, b in self._mismatches()
+            if p.endswith(".name") and ".entity." in p
+        ]
+
+        assert not offenders, (
+            "strings.json and translations/en.json give different names:\n"
+            + "\n".join(f"  {p}\n    strings: {a}\n    en:      {b}"
+                        for p, a, b in offenders)
+        )

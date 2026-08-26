@@ -791,3 +791,86 @@ class TestPrimeFiresRoomCompleted:
 
         payload = c.hass.bus.async_fire.call_args[0][1]
         assert payload["room_id"] == "10"
+
+
+class TestAMissedChargeTransitionStillSyncs:
+    """@chairstacker (#64): his second zone mission of the day was
+    ignored completely — no sensor update, no activity entry — while the
+    connection sensor read Connected. Reloading the integration brought
+    it in.
+
+    The history sync fired only on observing a `charge` transition. Miss
+    that one message and the mission never syncs until a reload or the
+    six-hour interval.
+
+    `nMssn` counts missions and only goes up, so a change means one
+    ended whatever was observed in between.
+    """
+
+    @staticmethod
+    def _coordinator():
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        c = PrimeStatusCoordinator.__new__(PrimeStatusCoordinator)
+        c._schedule_mission_history_sync = MagicMock()
+        c._note_dock_position = MagicMock()
+        # The handler returns early without a timer store, so the mock
+        # has to carry one or nothing under test ever runs.
+        c.entry = MagicMock()
+        return c
+
+    @staticmethod
+    def _feed(c, phase, nmssn):
+        """Calls the real handler.
+
+        A FIRST VERSION OF THIS REIMPLEMENTED THE LOGIC HERE, which
+        would have proved the test agrees with itself and nothing about
+        the coordinator — the same mistake that let a broken zone-name
+        reader ship green three times.
+        """
+        c._note_phase_for_timer({
+            "ro-currentstate": {
+                "cleanMissionStatus": {"phase": phase, "nMssn": nmssn}
+            }
+        })
+
+    def test_a_mission_counted_without_a_charge_phase_still_syncs(self):
+        c = self._coordinator()
+        self._feed(c, "run", 372)          # baseline
+        c._schedule_mission_history_sync.reset_mock()
+
+        self._feed(c, "run", 373)          # a mission ended unseen
+
+        c._schedule_mission_history_sync.assert_called_once()
+
+    def test_the_first_reading_does_not_fire(self):
+        """No previous count means no transition — firing here would
+        sync on every reconnect."""
+        c = self._coordinator()
+
+        self._feed(c, "run", 373)
+
+        c._schedule_mission_history_sync.assert_not_called()
+
+    def test_an_unchanged_count_does_not_fire(self):
+        c = self._coordinator()
+        self._feed(c, "run", 373)
+        c._schedule_mission_history_sync.reset_mock()
+
+        self._feed(c, "run", 373)
+
+        c._schedule_mission_history_sync.assert_not_called()
+
+    def test_charge_still_syncs_on_its_own(self):
+        """The existing path must keep working."""
+        c = self._coordinator()
+        self._feed(c, "run", 373)
+        c._schedule_mission_history_sync.reset_mock()
+
+        self._feed(c, "charge", 373)
+
+        c._schedule_mission_history_sync.assert_called_once()

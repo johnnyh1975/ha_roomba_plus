@@ -814,7 +814,11 @@ class TestPrimePadDrySwitch:
         coordinator = entry.runtime_data.prime_status_coordinator
         if has_dock:
             coordinator.data = {
-                "ro-currentstate": {"dock": {"state": dock_state}}
+                # `pdState` -- the field the switch reads. This helper
+                # set `state` and the tests passed, because the code
+                # read `state` too. Both were wrong the same way, which
+                # is how a switch that could never be on shipped green.
+                "ro-currentstate": {"dock": {"pdState": dock_state}}
             }
         else:
             coordinator.data = {"ro-currentstate": {}}
@@ -839,7 +843,7 @@ class TestPrimePadDrySwitch:
         assert sw.is_on is True
 
     def test_it_is_off_in_another_dock_state(self):
-        sw = self._switch(dock_state=301)  # an ordinary docked state
+        sw = self._switch(dock_state=701)  # PAD_DRY_OKAY: idle
 
         assert sw.is_on is False
 
@@ -954,3 +958,76 @@ class TestPadDrySwitchDoesNotAskAPushCoordinatorToRefresh:
             f"PrimeStatusCoordinator is push-driven and has no "
             f"_async_update_data -- refreshing it raises: {offenders}"
         )
+
+
+class TestPadDrySwitchReadsTheRightDockField:
+    """@chairstacker (#71): the switch behaved as a momentary one — on
+    briefly, then off, and turning it off did nothing.
+
+    The dock reports three status fields in separate numeric bands:
+    `state` for the dock itself (301 = DOCK_READY), `pw_state` for pad
+    washing (601), `pd_state` for pad drying (701 = PAD_DRY_OKAY).
+
+    `PAD_DRY_IN_PROGRESS` is 702 — a 700-band value, so it can only
+    appear in `pd_state`. Reading `state` for it meant `is_on` was never
+    true whatever the dock was doing: Home Assistant showed the switch
+    on until the next state write, then it read 301 and reported off.
+
+    The pad-dry status sensor beside it read `pd_state` correctly all
+    along, which is why his screenshot showed "Pad dry in progress"
+    while the switch showed off.
+    """
+
+    @staticmethod
+    def _switch(dock_state=None, pd_state=None):
+        """Raw shadow JSON, because that is what the switch parses."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        sw = PrimePadDrySwitch.__new__(PrimePadDrySwitch)
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {
+                "dock": {
+                    "state": int(dock_state) if dock_state is not None else None,
+                    "pdState": int(pd_state) if pd_state is not None else None,
+                }
+            }
+        }
+        entry.runtime_data.prime_status_coordinator = coordinator
+        sw._config_entry = entry
+        return sw, None
+
+    def test_drying_in_pd_state_turns_it_on(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.DOCK_READY,
+            pd_state=DockState.PAD_DRY_IN_PROGRESS,
+        )
+
+        assert sw.is_on is True
+
+    def test_an_idle_dock_is_off(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.DOCK_READY,
+            pd_state=DockState.PAD_DRY_OKAY,
+        )
+
+        assert sw.is_on is False
+
+    def test_the_dock_state_field_is_not_consulted(self):
+        """The regression itself: 702 in `state` is impossible, and
+        reading it there is what made this a momentary switch."""
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.PAD_DRY_IN_PROGRESS,
+            pd_state=DockState.PAD_DRY_OKAY,
+        )
+
+        assert sw.is_on is False, "pd_state decides, not state"

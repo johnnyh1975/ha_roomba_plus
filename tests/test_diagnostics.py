@@ -1175,3 +1175,70 @@ class TestFavouritesReportTheTierInUse:
 
         assert result["count"] == 0
         assert "no prime robot" in result["source"]
+
+
+class TestNavigationTelemetryIsExported:
+    """Firmware analysis of the i-series documents twelve fields in
+    `mssnNavStats`, validated against a real m6 dump. This integration
+    reads one of them.
+
+    Among the rest: `kdp`/`sfkdp`, a kidnapped-detection signal that the
+    live-map work went looking for and concluded did not exist on
+    Classic robots. It does. Nobody had looked here.
+
+    Exported verbatim rather than key-by-key, because the 980 is a
+    different platform from the i-series and choosing keys in advance
+    would decide the question this exists to answer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_whole_object_survives(self):
+        nav = {"kdp": 2, "l_drift": 5, "mpSt": "idle", "reLc": 1}
+
+        result = await _run_diag({"mssnNavStats": nav})
+
+        assert result["nav_telemetry"] == nav
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_field_is_not_dropped(self):
+        """Key-by-key export would silently discard whatever a 980
+        reports that an i-series robot does not."""
+        result = await _run_diag({"mssnNavStats": {"somethingNew": 7}})
+
+        assert result["nav_telemetry"]["somethingNew"] == 7
+
+    @pytest.mark.asyncio
+    async def test_a_missing_object_is_empty_not_absent(self):
+        """Reading nothing must be distinguishable from the section
+        having been forgotten."""
+        result = await _run_diag({})
+
+        assert result["nav_telemetry"] == {}
+
+
+class TestDockIdentityIsExported:
+    """The i-series OTA carries dock firmware for 14 hardware/variant
+    combinations named `dock_hw{N}_var{M}`, and `dock.hwRev`/`dock.varID`
+    map straight onto N and M.
+
+    So the dock model is determinable, and until now was not determined
+    — which bears on which docks can evacuate, which have a fresh-water
+    tank, and why `empty-now` does nothing on one tester's install.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_four_identifying_fields(self):
+        result = await _run_diag({
+            "dock": {"hwRev": 4, "varID": 5, "pn": "ABC-123", "fwVer": "4.8.1"}
+        })
+
+        assert result["dock_identity"] == {
+            "hw_rev": 4, "var_id": 5,
+            "part_number": "ABC-123", "fw_version": "4.8.1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_robot_without_a_dock_object(self):
+        result = await _run_diag({})
+
+        assert result["dock_identity"]["hw_rev"] is None

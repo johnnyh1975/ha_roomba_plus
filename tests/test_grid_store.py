@@ -1590,3 +1590,102 @@ class TestBreaksDecideWhatGetsFilled:
         assert _disk_filled_cells(pts, 170.0) == _disk_filled_cells(
             pts, 170.0, breaks=None
         )
+
+
+class TestTheHeatmapIsNotUpsideDown:
+    """@pk-1966 (#78) noticed the coverage heatmap did not line up with
+    the room map, and marked four known places on both to show it.
+
+    Normalising his screenshot: y matched `1 - y` on all four points
+    while x kept its order. That is a vertical flip, not the rotation it
+    looks like — the rotation is the two tiles' aspect ratios fooling
+    the eye.
+
+    The renderer measured downward from the bottom of the grid while
+    every other map measures downward from the top. It had been upside
+    down since it was written, and nobody noticed because it has no
+    landmark: no dock icon, no room outlines, nothing to be upside down
+    relative to.
+    """
+
+    @staticmethod
+    def _row_of(png_bytes, y_fraction):
+        """Which columns are painted at a given height of the image."""
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        w, h = img.size
+        row = int(h * y_fraction)
+        return [x for x in range(w) if img.getpixel((x, row))[3] > 0]
+
+    @staticmethod
+    def _store_with(cells):
+        from custom_components.roomba_plus.grid_store import GridStore
+
+        gs = GridStore()
+        gs._cells = dict.fromkeys(cells, 1.0)
+        return gs
+
+    def test_a_cell_high_in_mm_is_drawn_high_in_the_image(self):
+        """The whole bug in one assertion: larger y means further up on
+        screen, because image rows run downward.
+
+        ASYMMETRIC ON PURPOSE. A first version of this used two cells at
+        opposite ends and asserted both top and bottom were painted --
+        which is true in either orientation, so it passed with the flip
+        reverted. Three cells clustered low leaves the top of the image
+        empty, and that emptiness is what distinguishes the two.
+        """
+        # DIAGONAL, so top and bottom differ in x as well as being
+        # occupied. Symmetric data cannot distinguish the orientations:
+        # two cells at opposite ends paint top and bottom either way.
+        #
+        #   high y, low x   -> belongs TOP-LEFT
+        #   low y, high x   -> belongs BOTTOM-RIGHT
+        gs = self._store_with({(0, 20), (20, 0)})
+
+        png = gs.render_heatmap()
+
+        top = self._row_of(png, 0.02)
+        bottom = self._row_of(png, 0.98)
+
+        assert top and bottom, "both cells must be visible"
+        assert max(top) < 200, "the high-y cell is the LEFT one"
+        assert min(bottom) > 200, "the low-y cell is the RIGHT one"
+
+    def test_x_order_is_unchanged(self):
+        """He confirmed x keeps its order in both maps. Fixing y must
+        not disturb that."""
+        gs = self._store_with({(0, 0), (20, 0)})
+
+        png = gs.render_heatmap()
+        # Both cells share a row here, so read wherever they landed.
+        painted = [
+            x for frac in (0.02, 0.5, 0.98)
+            for x in self._row_of(png, frac)
+        ]
+
+        assert painted, "both cells must be visible"
+        assert min(painted) < 50, "left cell stays left"
+        assert max(painted) > 300, "right cell stays right"
+
+    def test_a_cell_is_inside_the_canvas(self):
+        """Flipping the top-left corner without accounting for the cell
+        height would push the bottom row off the image."""
+        import io
+
+        from PIL import Image
+
+        gs = self._store_with({(0, 0)})
+
+        img = Image.open(io.BytesIO(gs.render_heatmap())).convert("RGBA")
+        painted = [
+            (x, y)
+            for x in range(img.size[0])
+            for y in range(img.size[1])
+            if img.getpixel((x, y))[3] > 0
+        ]
+
+        assert painted, "the single cell must be visible at all"
