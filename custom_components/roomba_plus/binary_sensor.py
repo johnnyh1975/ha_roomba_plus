@@ -30,19 +30,14 @@ from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
-    MAP_UPDATING_NOT_READY,
+    CONSUMABLE_ROLES,
     CONF_BLOCKING_SENSORS,
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_CLEAN_BASE_BAG_HOURS,
-    DEFAULT_FILTER_HOURS,
-    DEFAULT_SIDE_BRUSH_HOURS,
+    MAP_UPDATING_NOT_READY,
     DOMAIN,
     EVENT_STUCK,
+    MAINTENANCE_ACTION_SLUGS,
     MQTT_WATCHDOG_SECONDS,
     MQTT_WATCHDOG_START_GRACE_SECONDS,
-    get_localized_maintenance_action,
     has_smart_map,
     is_mop,
 )
@@ -582,37 +577,30 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return which consumables are due, how many hours overdue each
-        one is, and a localized action string per due consumable.
-
-        overdue_by_hours values are 0 when exactly at threshold, positive when
-        past it. This is useful for automations that escalate alerts based on
-        how long maintenance has been deferred.
-        """
+        """Return due consumables, overdue hours, and action slugs."""
         due = self._due_items()
         overdue: dict[str, int] = {}
         store = self._entry.runtime_data.maintenance_store
         if store and due:
             current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
-            options = self._entry.options
-            brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
-            role_thresholds = {
-                "filter": (store.filter_reset_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)),
-                brush_key: (store.brush_reset_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)),
-                "side_brush": (store.side_brush_reset_hr, DEFAULT_SIDE_BRUSH_HOURS),
-                "clean_base_bag": (store.clean_base_bag_reset_hr, DEFAULT_CLEAN_BASE_BAG_HOURS),
-            }
-            for part, (reset_hr, threshold) in role_thresholds.items():
+            is_mop_device = is_mop(self.vacuum_state)
+            for role, spec in CONSUMABLE_ROLES.items():
+                part = (
+                    spec.mop_due_key
+                    if spec.mop_due_key and is_mop_device
+                    else spec.due_key
+                )
                 if part in due:
+                    reset_hr = getattr(store, f"{spec.slot}_reset_hr")
+                    threshold = store.threshold_hours(role, self._entry.options)
                     overdue[part] = max(0, (current_hr - reset_hr) - threshold)
-        required_actions = {
-            part: get_localized_maintenance_action(part, self.hass.config.language)
-            for part in due
-        }
         return {
             "due": due,
             "overdue_by_hours": overdue,
-            "required_actions": required_actions,
+            "required_actions": {
+                part: MAINTENANCE_ACTION_SLUGS[part]
+                for part in due
+            },
         }
 
     def _due_items(self) -> list[str]:

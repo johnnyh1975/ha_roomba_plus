@@ -1323,6 +1323,18 @@
         "state": {
           "on": "Due",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Required actions",
+            "state": {
+              "replace_filter": "Replace the filter.",
+              "replace_main_brushes": "Replace the main brushes.",
+              "replace_mop_pad": "Replace the mop pad.",
+              "replace_side_brush": "Replace the side brush.",
+              "replace_clean_base_bag": "Replace the Clean Base bag."
+            }
+          }
         }
       },
       "start_blocked": {

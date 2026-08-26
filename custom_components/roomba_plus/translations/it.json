@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Necessaria",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Azioni richieste",
+            "state": {
+              "replace_filter": "Sostituire il filtro.",
+              "replace_main_brushes": "Sostituire le spazzole principali.",
+              "replace_mop_pad": "Sostituire il panno per il lavaggio.",
+              "replace_side_brush": "Sostituire la spazzola laterale.",
+              "replace_clean_base_bag": "Sostituire il sacchetto della Clean Base."
+            }
+          }
         }
       },
       "start_blocked": {

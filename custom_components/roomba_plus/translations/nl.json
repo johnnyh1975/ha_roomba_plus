@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Vereist",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Vereiste acties",
+            "state": {
+              "replace_filter": "Vervang het filter.",
+              "replace_main_brushes": "Vervang de hoofdborstels.",
+              "replace_mop_pad": "Vervang de dweilpad.",
+              "replace_side_brush": "Vervang de zijborstel.",
+              "replace_clean_base_bag": "Vervang de Clean Base-zak."
+            }
+          }
         }
       },
       "start_blocked": {

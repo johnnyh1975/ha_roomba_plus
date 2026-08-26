@@ -1156,8 +1156,7 @@ def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"
 
 
 class TestRoombaMaintenanceDueRequiredActions:
-    """required_actions: a localized action string per currently-due
-    consumable, covering all four maintenance roles alike."""
+    """required_actions exposes a stable action slug per due consumable."""
 
     def _due_store(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -1181,33 +1180,17 @@ class TestRoombaMaintenanceDueRequiredActions:
         attrs = entity.extra_state_attributes
         assert set(attrs["due"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
         assert attrs["required_actions"] == {
-            "filter": "Replace the filter.",
-            "brush": "Replace the main brushes.",
-            "side_brush": "Replace the side brush.",
-            "clean_base_bag": "Replace the Clean Base bag.",
+            "filter": "replace_filter",
+            "brush": "replace_main_brushes",
+            "side_brush": "replace_side_brush",
+            "clean_base_bag": "replace_clean_base_bag",
         }
         assert set(attrs["overdue_by_hours"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
-        assert attrs["overdue_by_hours"]["clean_base_bag"] == 20
-
-    def test_localizes_to_polish(self):
-        entity = _make_maintenance_due(
-            self._due_store(),
-            options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
-            hr=50,
-            language="pl",
-        )
-        attrs = entity.extra_state_attributes
-        assert attrs["required_actions"] == {
-            "filter": "Wymień filtr.",
-            "brush": "Wymień szczotki główne.",
-            "side_brush": "Wymień szczotkę boczną.",
-            "clean_base_bag": "Wymień worek stacji Clean Base.",
-        }
 
     def test_empty_when_nothing_due(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
-        entity = _make_maintenance_due(MaintenanceStore(), hr=0)
-        attrs = entity.extra_state_attributes
+
+        attrs = _make_maintenance_due(MaintenanceStore(), hr=0).extra_state_attributes
         assert attrs["due"] == []
         assert attrs["required_actions"] == {}
 
@@ -1216,11 +1199,29 @@ class TestRoombaMaintenanceDueRequiredActions:
         entity = _make_maintenance_due(
             store,
             options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
-            hr=50, mop=True,
+            hr=50,
+            mop=True,
         )
         attrs = entity.extra_state_attributes
         assert "pad" in attrs["due"]
-        assert attrs["required_actions"]["pad"] == "Replace the mop pad."
+        assert attrs["required_actions"]["pad"] == "replace_mop_pad"
+
+    def test_action_slugs_have_translation_entries(self):
+        import json
+        from pathlib import Path
+
+        states = json.loads(
+            Path("custom_components/roomba_plus/strings.json").read_text()
+        )["entity"]["binary_sensor"]["maintenance_due"]["state_attributes"][
+            "required_actions"
+        ]["state"]
+        assert set(states) == {
+            "replace_filter",
+            "replace_main_brushes",
+            "replace_mop_pad",
+            "replace_side_brush",
+            "replace_clean_base_bag",
+        }
 
 
 def _make_layout_change_sensor(grid_store=None):

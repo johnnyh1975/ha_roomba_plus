@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Necessária",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Ações necessárias",
+            "state": {
+              "replace_filter": "Substitua o filtro.",
+              "replace_main_brushes": "Substitua as escovas principais.",
+              "replace_mop_pad": "Substitua o pano de limpeza.",
+              "replace_side_brush": "Substitua a escova lateral.",
+              "replace_clean_base_bag": "Substitua o saco da Clean Base."
+            }
+          }
         }
       },
       "start_blocked": {

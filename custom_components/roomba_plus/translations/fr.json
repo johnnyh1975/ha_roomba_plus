@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Requise",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Actions requises",
+            "state": {
+              "replace_filter": "Remplacez le filtre.",
+              "replace_main_brushes": "Remplacez les brosses principales.",
+              "replace_mop_pad": "Remplacez la lingette de lavage.",
+              "replace_side_brush": "Remplacez la brosse latérale.",
+              "replace_clean_base_bag": "Remplacez le sac de la Clean Base."
+            }
+          }
         }
       },
       "start_blocked": {

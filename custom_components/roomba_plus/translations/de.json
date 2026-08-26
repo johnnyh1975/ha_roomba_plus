@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Fällig",
           "off": "Kein Bedarf"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Erforderliche Maßnahmen",
+            "state": {
+              "replace_filter": "Filter austauschen.",
+              "replace_main_brushes": "Hauptbürsten austauschen.",
+              "replace_mop_pad": "Wischpad austauschen.",
+              "replace_side_brush": "Seitenbürste austauschen.",
+              "replace_clean_base_bag": "Clean Base-Beutel austauschen."
+            }
+          }
         }
       },
       "start_blocked": {

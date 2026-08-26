@@ -216,14 +216,14 @@ class TestRoombaSensorNativeValue:
     optional and the arithmetic differs between the two paths."""
 
     def _sensor(self, key, *, run_stats=None, options=None, store=None):
-        from custom_components.roomba_plus.sensor_core import RoombaSensor
+        from custom_components.roomba_plus.sensor_core import RoombaSensor, SENSORS
 
         sensor = object.__new__(RoombaSensor)
         entry = MagicMock()
         entry.options = options or {}
         entry.runtime_data.maintenance_store = store
         sensor._config_entry = entry
-        sensor.entity_description = MagicMock(key=key)
+        sensor.entity_description = next(d for d in SENSORS if d.key == key)
         type(sensor).run_stats = PropertyMock(return_value=run_stats or {})
         return sensor
 

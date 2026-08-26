@@ -22,23 +22,13 @@ import statistics
 from dataclasses import dataclass, field
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from .const import (
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_CLEAN_BASE_BAG_HOURS,
-    DEFAULT_FILTER_HOURS,
-    DEFAULT_SIDE_BRUSH_HOURS,
-    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
-    IROBOT_PART_ROLE_FILTER,
-    IROBOT_PART_ROLE_MAIN_BRUSH,
-    IROBOT_PART_ROLE_SIDE_BRUSH,
-    IROBOT_PART_ROLE_TO_STORE_SLOT,
+    CONSUMABLE_ROLES,
     is_mop,
     part_role,
 )
-from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
@@ -360,7 +350,7 @@ class MaintenanceStore:
         successful cloud poll and otherwise leaves it untouched, which is
         what lets this survive a cloud outage — see its own docstring.
         """
-        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[role]
+        slot = CONSUMABLE_ROLES[role].slot
         return getattr(self, f"{slot}_reset_hr"), getattr(self, f"{slot}_reset_at")
 
     # ── Cloud hydration ───────────────────────────────────────────────────────
@@ -427,9 +417,10 @@ class MaintenanceStore:
                 self.cloud_parts[key] = snapshot
                 changed = True
 
-            slot = IROBOT_PART_ROLE_TO_STORE_SLOT.get(snapshot["role"] or "")
-            if slot is None:
+            spec = CONSUMABLE_ROLES.get(snapshot["role"] or "")
+            if spec is None:
                 continue
+            slot = spec.slot
 
             # Only minute-denominated counters are convertible to the
             # bbrun.hr domain the legacy slots live in. Anything else
@@ -515,9 +506,7 @@ class MaintenanceStore:
 
     def _learned_hours(self, slot: str) -> float | None:
         """Median interval between a role's local resets, or None with
-        fewer than 2 recorded. Shared by learned_filter_hours/
-        learned_brush_hours and the local-threshold fallback in
-        _local_remaining().
+        fewer than 2 recorded. Shared by the local-threshold fallback.
         """
         history = getattr(self, f"{slot}_reset_history")
         if len(history) < 2:
@@ -529,73 +518,46 @@ class MaintenanceStore:
         ]
         return statistics.median(intervals) if intervals else None
 
+    def learned_hours(self, role: str) -> float | None:
+        """Return the learned replacement interval for a consumable role."""
+        return self._learned_hours(CONSUMABLE_ROLES[role].slot)
+
     @property
     def learned_filter_hours(self) -> float | None:
-        """Median interval between filter replacements, or None if < 2 resets.
-
-        L2: after 2+ replacements, returns the personal filter lifespan.
-        Exposed in diagnostics. Used by filter_remaining when available.
-        """
-        return self._learned_hours("filter")
+        """Median interval between filter replacements, or None if < 2 resets."""
+        return self.learned_hours("filter")
 
     @property
     def learned_brush_hours(self) -> float | None:
-        """Median interval between brush replacements, or None if < 2 resets.
-
-        L2: after 2+ replacements, returns the personal brush lifespan.
-        Exposed in diagnostics. Used by brush_remaining when available.
-        """
-        return self._learned_hours("brush")
-
-    @property
-    def learned_side_brush_hours(self) -> float | None:
-        """Median interval between side-brush replacements, or None if < 2 resets."""
-        return self._learned_hours("side_brush")
-
-    @property
-    def learned_clean_base_bag_hours(self) -> float | None:
-        """Median interval between Clean Base bag replacements, or None if < 2 resets."""
-        return self._learned_hours("clean_base_bag")
+        """Median interval between brush replacements, or None if < 2 resets."""
+        return self.learned_hours("main_brush")
 
     # ── Remaining-life calculations ───────────────────────────────────────────
+
+    def threshold_hours(self, role: str, options: Mapping[str, Any]) -> int:
+        """Return a role's configured or built-in local threshold."""
+        spec = CONSUMABLE_ROLES[role]
+        if spec.conf_key is None:
+            return spec.default_hours
+        try:
+            return int(options.get(spec.conf_key, spec.default_hours))
+        except (TypeError, ValueError):
+            return spec.default_hours
 
     def due_items(
         self, vacuum_state: Mapping[str, Any], options: Mapping[str, Any]
     ) -> list[str]:
-        """Return consumable keys currently due for replacement, for all
-        four maintenance roles through the one shared _is_due() check:
-        the cloud's own exhausted counter when a cloud record exists,
-        else zero remaining local hours against each role's configured
-        (filter/main_brush) or hardcoded (side_brush/clean_base_bag)
-        threshold.
-
-        Extracted from binary_sensor.py's RoombaMaintenanceDue._due_items()
-        (identical logic, now shared) so the household REST endpoint's
-        fleet-health rollup can report the same "is maintenance due"
-        signal without duplicating the threshold/mop-vs-vacuum-key logic
-        a second time. binary_sensor.py's _due_items() now delegates here.
-        """
+        """Return due consumables using the shared four-role lifecycle."""
         current_hr = (vacuum_state.get("bbrun") or {}).get("hr", 0)
+        is_mop_device = is_mop(dict(vacuum_state))
         items: list[str] = []
-        if self._is_due(
-            IROBOT_PART_ROLE_FILTER, current_hr,
-            options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
-        ):
-            items.append("filter")
-        brush_key = "pad" if is_mop(dict(vacuum_state)) else "brush"
-        if self._is_due(
-            IROBOT_PART_ROLE_MAIN_BRUSH, current_hr,
-            options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
-        ):
-            items.append(brush_key)
-        if self._is_due(
-            IROBOT_PART_ROLE_SIDE_BRUSH, current_hr, DEFAULT_SIDE_BRUSH_HOURS,
-        ):
-            items.append("side_brush")
-        if self._is_due(
-            IROBOT_PART_ROLE_CLEAN_BASE_BAG, current_hr, DEFAULT_CLEAN_BASE_BAG_HOURS,
-        ):
-            items.append("clean_base_bag")
+        for role, spec in CONSUMABLE_ROLES.items():
+            threshold = self.threshold_hours(role, options)
+            if self._is_due(role, current_hr, threshold):
+                items.append(
+                    spec.mop_due_key
+                    if spec.mop_due_key and is_mop_device else spec.due_key
+                )
         return items
 
     def _is_due(self, role: str, current_hr: int, threshold: int) -> bool:
@@ -647,25 +609,14 @@ class MaintenanceStore:
         """Hours remaining until replacement for any of the four
         maintenance roles, local-only (no cloud counter) — see
         _local_remaining()."""
-        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[role]
-        return self._local_remaining(slot, current_hr, threshold)
+        return self._local_remaining(CONSUMABLE_ROLES[role].slot, current_hr, threshold)
 
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next filter replacement, local-only (no
         cloud counter) — see _local_remaining()."""
-        return self.remaining_hours(IROBOT_PART_ROLE_FILTER, current_hr, threshold)
+        return self.remaining_hours("filter", current_hr, threshold)
 
     def brush_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next brush/pad replacement, local-only (no
         cloud counter) — see _local_remaining()."""
-        return self.remaining_hours(IROBOT_PART_ROLE_MAIN_BRUSH, current_hr, threshold)
-
-    def side_brush_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next side-brush replacement, local-only
-        (no cloud counter) — see _local_remaining()."""
-        return self.remaining_hours(IROBOT_PART_ROLE_SIDE_BRUSH, current_hr, threshold)
-
-    def clean_base_bag_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next Clean Base bag replacement, local-only
-        (no cloud counter) — see _local_remaining()."""
-        return self.remaining_hours(IROBOT_PART_ROLE_CLEAN_BASE_BAG, current_hr, threshold)
+        return self.remaining_hours("main_brush", current_hr, threshold)

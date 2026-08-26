@@ -1601,132 +1601,91 @@ def _cloud_part(part_id, *, count_used, count_remaining,
 
 
 class TestConsumableWearRateAndDaysUntilDueAllFourRoles:
-    """The four *_wear_rate/*_days_until_due sensor_helpers functions are
-    one shared role-parameterized implementation — side_brush/clean_base_bag
-    must behave exactly like filter/main_brush once hydrated."""
+    """The four roles use the same role-parameterized helper functions."""
 
     def test_side_brush_wear_rate_available_with_valid_cloud_data(self):
-        from custom_components.roomba_plus.sensor_helpers import _side_brush_wear_rate
+        from custom_components.roomba_plus.sensor_helpers import _consumable_wear_rate
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
         )
-        entity = _wear_entity(500, store)
-        rate = _side_brush_wear_rate(entity)
+        rate = _consumable_wear_rate(_wear_entity(500, store), "side_brush")
         assert rate is not None and rate > 0
 
     def test_clean_base_bag_wear_rate_available_with_valid_cloud_data(self):
-        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_wear_rate
+        from custom_components.roomba_plus.sensor_helpers import _consumable_wear_rate
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [_cloud_part("139", count_used=600, count_remaining=3000)], 500,
         )
-        entity = _wear_entity(500, store)
-        rate = _clean_base_bag_wear_rate(entity)
+        rate = _consumable_wear_rate(_wear_entity(500, store), "clean_base_bag")
         assert rate is not None and rate > 0
 
     def test_side_brush_wear_rate_unavailable_with_missing_timestamp(self):
-        from custom_components.roomba_plus.sensor_helpers import _side_brush_wear_rate
+        from custom_components.roomba_plus.sensor_helpers import _consumable_wear_rate
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [{"part_id": "36", "count_used": 600, "count_remaining": 3000,
-              "count_type": "minutes"}],  # no last_updated_ts at all
+              "count_type": "minutes"}],
             500,
         )
-        entity = _wear_entity(500, store)
-        assert _side_brush_wear_rate(entity) is None
+        assert _consumable_wear_rate(_wear_entity(500, store), "side_brush") is None
 
     def test_clean_base_bag_wear_rate_unavailable_with_non_minute_counter(self):
-        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_wear_rate
+        from custom_components.roomba_plus.sensor_helpers import _consumable_wear_rate
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [_cloud_part("139", count_used=600, count_remaining=3000, count_type="cycles")],
             500,
         )
-        entity = _wear_entity(500, store)
-        assert _clean_base_bag_wear_rate(entity) is None
+        assert _consumable_wear_rate(_wear_entity(500, store), "clean_base_bag") is None
 
     def test_side_brush_days_until_due_available_with_valid_cloud_data(self):
-        from custom_components.roomba_plus.sensor_helpers import _side_brush_days_until_due
+        from custom_components.roomba_plus.sensor_helpers import _consumable_days_until_due
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
         )
-        entity = _wear_entity(500, store)
-        assert _side_brush_days_until_due(entity) is not None
+        assert _consumable_days_until_due(
+            _wear_entity(500, store), "side_brush"
+        ) is not None
 
-    def test_clean_base_bag_days_until_due_unavailable_without_cloud_data(self):
-        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_days_until_due
-        store = MaintenanceStore()
-        entity = _wear_entity(500, store)
-        assert _clean_base_bag_days_until_due(entity) is None
+    def test_clean_base_bag_days_until_due_unavailable_without_wear_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _consumable_days_until_due
+        assert _consumable_days_until_due(
+            _wear_entity(500, MaintenanceStore()), "clean_base_bag"
+        ) is None
 
-    def test_side_brush_wear_rate_survives_a_cloud_outage(self):
-        """Once hydrated, wear-rate needs only the local reset_hr/reset_at
-        it was given — it must keep working even after cloud_parts is
-        wiped (simulating the account no longer serving this part), and
-        max_hours falls back to the hardcoded default once the cloud
-        full-life figure is gone."""
+    def test_side_brush_wear_rate_and_max_hours_survive_a_cloud_outage(self):
         from custom_components.roomba_plus.sensor_helpers import (
-            _side_brush_max_hours,
-            _side_brush_wear_rate,
+            _consumable_max_hours,
+            _consumable_wear_rate,
         )
         store = MaintenanceStore()
         store.hydrate_from_cloud_parts(
             [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
         )
         entity = _wear_entity(500, store)
-        assert _side_brush_wear_rate(entity) is not None
-        assert _side_brush_max_hours(entity) == 60  # (600+3000)/60
-        assert store.cloud_remaining_hours("side_brush") is not None
-
+        assert _consumable_wear_rate(entity, "side_brush") is not None
+        assert _consumable_max_hours(entity, "side_brush") == 60
         store.cloud_parts = {}
-
-        assert _side_brush_wear_rate(entity) is not None
-        assert _side_brush_max_hours(entity) == 150  # DEFAULT_SIDE_BRUSH_HOURS
-        assert store.cloud_remaining_hours("side_brush") is None
+        assert _consumable_wear_rate(entity, "side_brush") is not None
+        assert _consumable_max_hours(entity, "side_brush") == 150
 
 
 class TestMaxHoursPerRole:
-    """max_hours: cloud full-life when a cloud record exists, else the
-    learned-or-hardcoded/configured threshold for every role alike."""
-
-    def test_filter_max_hours_falls_back_to_configured_default_without_cloud(self):
-        from custom_components.roomba_plus.sensor_helpers import _filter_max_hours
+    def test_max_hours_uses_local_or_cloud_life_for_every_role(self):
+        from custom_components.roomba_plus.sensor_helpers import _consumable_max_hours
         store = MaintenanceStore()
-        entity = _wear_entity(0, store)
-        assert _filter_max_hours(entity) == 60  # DEFAULT_FILTER_HOURS
-
-    def test_filter_max_hours_uses_cloud_full_life_when_present(self):
-        from custom_components.roomba_plus.sensor_helpers import _filter_max_hours
-        store = MaintenanceStore()
-        store.hydrate_from_cloud_parts(
-            [_cloud_part("35", count_used=600, count_remaining=3000)], 500,
-        )
-        entity = _wear_entity(500, store)
-        assert _filter_max_hours(entity) == 60  # (600+3000)/60
-
-    def test_brush_max_hours_uses_learned_hours_over_configured_default(self):
-        from custom_components.roomba_plus.sensor_helpers import _brush_max_hours
-        store = MaintenanceStore()
+        assert _consumable_max_hours(_wear_entity(0, store), "filter") == 60
         store.reset_brush(0)
         store.reset_brush(100)
-        store.reset_brush(220)  # intervals [100, 120] -> median 110
-        entity = _wear_entity(220, store)
-        assert _brush_max_hours(entity) == 110
-
-    def test_side_brush_max_hours_falls_back_to_hardcoded_default_without_cloud(self):
-        from custom_components.roomba_plus.sensor_helpers import _side_brush_max_hours
-        store = MaintenanceStore()
-        store.reset_side_brush(50)
-        entity = _wear_entity(50, store)
-        assert _side_brush_max_hours(entity) == 150  # DEFAULT_SIDE_BRUSH_HOURS
-
-    def test_clean_base_bag_max_hours_uses_cloud_full_life_when_present(self):
-        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_max_hours
-        store = MaintenanceStore()
+        store.reset_brush(220)
+        assert _consumable_max_hours(_wear_entity(220, store), "main_brush") == 110
+        assert _consumable_max_hours(_wear_entity(50, store), "side_brush") == 150
         store.hydrate_from_cloud_parts(
             [_cloud_part("139", count_used=1200, count_remaining=2400)], 500,
         )
-        entity = _wear_entity(500, store)
-        assert _clean_base_bag_max_hours(entity) == 60  # (1200+2400)/60
+        assert _consumable_max_hours(
+            _wear_entity(500, store), "clean_base_bag"
+        ) == 60

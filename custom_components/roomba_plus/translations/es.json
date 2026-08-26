@@ -1316,6 +1316,18 @@
         "state": {
           "on": "Requerido",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Acciones necesarias",
+            "state": {
+              "replace_filter": "Sustituya el filtro.",
+              "replace_main_brushes": "Sustituya los cepillos principales.",
+              "replace_mop_pad": "Sustituya la almohadilla de fregado.",
+              "replace_side_brush": "Sustituya el cepillo lateral.",
+              "replace_clean_base_bag": "Sustituya la bolsa de la Clean Base."
+            }
+          }
         }
       },
       "start_blocked": {
