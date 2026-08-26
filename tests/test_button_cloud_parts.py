@@ -40,6 +40,7 @@ def _parts(exclude: set[str] | None = None) -> list[dict]:
 def _store(parts: list[dict] | None = None) -> MaintenanceStore:
     store = MaintenanceStore()
     store.hydrate_from_cloud_parts(_parts() if parts is None else parts, 300)
+    store.async_save = AsyncMock()
     return store
 
 
@@ -63,6 +64,7 @@ def _button(cls, entry: MagicMock):
     button._config_entry = entry
     button.hass = MagicMock()
     button.vacuum = MagicMock()
+    button.vacuum_state = {"bbrun": {"hr": 300}}
     button.schedule_update_ha_state = MagicMock()
     button._maintenance_store = lambda: entry.runtime_data.maintenance_store
     return button
@@ -141,6 +143,29 @@ class TestPressWritesTheCloudCounter:
         button = _button(SideBrushResetButton, entry)
         await button.async_press()
         button.schedule_update_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_side_brush_press_also_writes_local_store_state(self):
+        """A successful press must leave a local baseline behind too, so
+        wear-rate/days-until-due survive a later cloud outage instead of
+        depending on the next successful poll to re-hydrate them."""
+        entry = _entry(_store())
+        store = entry.runtime_data.maintenance_store
+        await _button(SideBrushResetButton, entry).async_press()
+
+        assert store.side_brush_reset_hr == 300
+        assert store.side_brush_reset_at is not None
+        store.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bag_press_also_writes_local_store_state(self):
+        entry = _entry(_store())
+        store = entry.runtime_data.maintenance_store
+        await _button(CleanBaseBagResetButton, entry).async_press()
+
+        assert store.clean_base_bag_reset_hr == 300
+        assert store.clean_base_bag_reset_at is not None
+        store.async_save.assert_awaited_once()
 
 
 class TestPressFailureHandling:

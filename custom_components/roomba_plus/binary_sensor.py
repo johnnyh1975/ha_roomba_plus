@@ -40,6 +40,7 @@ from .const import (
     EVENT_STUCK,
     MQTT_WATCHDOG_SECONDS,
     MQTT_WATCHDOG_START_GRACE_SECONDS,
+    get_localized_maintenance_action,
     has_smart_map,
     is_mop,
 )
@@ -579,7 +580,8 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return which consumables are due and how many hours overdue each is.
+        """Return which consumables are due, how many hours overdue each
+        filter/brush is, and a localized action string per due consumable.
 
         overdue_by_hours values are 0 when exactly at threshold, positive when
         past it. This is useful for automations that escalate alerts based on
@@ -600,9 +602,14 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
                 threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
                 hours_since_reset = current_hr - store.brush_reset_hr
                 overdue[brush_key] = max(0, hours_since_reset - threshold)
+        required_actions = {
+            part: get_localized_maintenance_action(part, self.hass.config.language)
+            for part in due
+        }
         return {
             "due": due,
             "overdue_by_hours": overdue,
+            "required_actions": required_actions,
         }
 
     def _due_items(self) -> list[str]:

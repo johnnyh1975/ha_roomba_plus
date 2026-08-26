@@ -343,6 +343,77 @@ class TestMaintenanceStoreDueItems:
         store.reset_filter(200)
         assert store.filter_remaining(500, 200) == 0
 
+    def _cloud_part(self, part_id, *, count_used=0, count_remaining=100,
+                     count_type="minutes", last_updated_ts=1700000000):
+        """part_id alone determines the hydrated role (see part_role() /
+        IROBOT_PART_ROLES): "35"=filter, "36"=side_brush, "37"=main_brush,
+        "139"=clean_base_bag."""
+        return {
+            "part_id": part_id, "count_used": count_used,
+            "count_remaining": count_remaining, "count_type": count_type,
+            "last_updated_ts": last_updated_ts,
+        }
+
+    def test_side_brush_due_when_cloud_counter_exhausted(self):
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("36", count_remaining=0)], 300,
+        )
+        assert "side_brush" in store.due_items({"bbrun": {"hr": 300}}, {})
+
+    def test_side_brush_due_when_cloud_counter_negative(self):
+        """A counter that has overshot zero (still not reset) must also read due."""
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("36", count_remaining=-30)], 300,
+        )
+        assert "side_brush" in store.due_items({"bbrun": {"hr": 300}}, {})
+
+    def test_side_brush_not_due_with_positive_remaining(self):
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("36", count_remaining=6000)], 300,
+        )
+        assert "side_brush" not in store.due_items({"bbrun": {"hr": 300}}, {})
+
+    def test_side_brush_never_due_without_any_cloud_data(self):
+        """No cloud record at all and no local threshold to fall back to —
+        must never be due, not treated as due-by-default."""
+        store = MaintenanceStore()
+        assert "side_brush" not in store.due_items({"bbrun": {"hr": 99999}}, {})
+
+    def test_clean_base_bag_due_when_cloud_counter_exhausted(self):
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("139", count_remaining=0)], 300,
+        )
+        assert "clean_base_bag" in store.due_items({"bbrun": {"hr": 300}}, {})
+
+    def test_clean_base_bag_never_due_without_any_cloud_data(self):
+        store = MaintenanceStore()
+        assert "clean_base_bag" not in store.due_items({"bbrun": {"hr": 99999}}, {})
+
+    def test_cloud_exhausted_counter_overrides_local_threshold_for_filter(self):
+        """Local elapsed hours alone would say "not due yet" (10h since
+        reset, 60h threshold) but the cloud's own counter says otherwise —
+        the cloud signal must win."""
+        store = MaintenanceStore()
+        store.reset_filter(290)
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("35", count_remaining=0)], 300,
+        )
+        assert "filter" in store.due_items({"bbrun": {"hr": 300}}, {})
+
+    def test_cloud_healthy_counter_overrides_local_threshold_for_filter(self):
+        """Local elapsed hours alone would say "due" (past the 60h
+        threshold with no reset recorded) but the cloud's own counter
+        says there is plenty left — the cloud signal must win."""
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [self._cloud_part("35", count_remaining=6000)], 300,
+        )
+        assert "filter" not in store.due_items({"bbrun": {"hr": 300}}, {})
+
 
 class TestMaintenanceStoreSerialisation:
     def test_data_dict_round_trip(self):
@@ -1383,3 +1454,274 @@ class TestMaintenanceColdStartBaseline:
         # And this existing user's genuine reset history must be intact —
         # exactly what the seeding logic's second gate condition protects.
         assert ms2.filter_reset_history == [150]
+
+class TestSymmetricLocalResetSlots:
+    """All four maintenance roles go through the same local-slot mechanism
+    (IROBOT_PART_ROLE_TO_STORE_SLOT / reset_baseline_for_role) — side_brush
+    and clean_base_bag are symmetric with filter/main_brush, not a special
+    cloud-only case."""
+
+    def test_reset_side_brush_writes_its_own_slot(self):
+        store = MaintenanceStore()
+        store.reset_side_brush(150)
+        assert store.side_brush_reset_hr == 150
+        assert store.side_brush_reset_at is not None
+        assert store.side_brush_reset_history == [150]
+
+    def test_reset_clean_base_bag_writes_its_own_slot(self):
+        store = MaintenanceStore()
+        store.reset_clean_base_bag(250)
+        assert store.clean_base_bag_reset_hr == 250
+        assert store.clean_base_bag_reset_at is not None
+        assert store.clean_base_bag_reset_history == [250]
+
+    def test_reset_baseline_for_role_covers_all_four_roles(self):
+        from custom_components.roomba_plus.const import (
+            IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+            IROBOT_PART_ROLE_FILTER,
+            IROBOT_PART_ROLE_MAIN_BRUSH,
+            IROBOT_PART_ROLE_SIDE_BRUSH,
+        )
+        store = MaintenanceStore()
+        store.reset_filter(10)
+        store.reset_brush(20)
+        store.reset_side_brush(30)
+        store.reset_clean_base_bag(40)
+        assert store.reset_baseline_for_role(IROBOT_PART_ROLE_FILTER)[0] == 10
+        assert store.reset_baseline_for_role(IROBOT_PART_ROLE_MAIN_BRUSH)[0] == 20
+        assert store.reset_baseline_for_role(IROBOT_PART_ROLE_SIDE_BRUSH)[0] == 30
+        assert store.reset_baseline_for_role(IROBOT_PART_ROLE_CLEAN_BASE_BAG)[0] == 40
+
+    def test_hydration_populates_local_slots_for_all_four_roles(self):
+        """hydrate_from_cloud_parts() reconstructs reset_hr/reset_at for
+        side_brush/clean_base_bag exactly as it already does for
+        filter/main_brush — same code path, extended IROBOT_PART_ROLE_TO_STORE_SLOT."""
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "35", "count_used": 600, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+            {"part_id": "36", "count_used": 1200, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+            {"part_id": "37", "count_used": 1800, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+            {"part_id": "139", "count_used": 2400, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        assert store.filter_reset_hr == 500 - 10
+        assert store.brush_reset_hr == 500 - 30
+        assert store.side_brush_reset_hr == 500 - 20
+        assert store.clean_base_bag_reset_hr == 500 - 40
+        for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
+            assert getattr(store, f"{slot}_reset_at") is not None
+
+    def test_side_brush_and_clean_base_bag_slots_round_trip_through_save_load(self):
+        store = MaintenanceStore()
+        store.reset_side_brush(77)
+        store.reset_clean_base_bag(88)
+        data = {
+            "side_brush_reset_hr": store.side_brush_reset_hr,
+            "side_brush_reset_at": store.side_brush_reset_at,
+            "side_brush_reset_history": store.side_brush_reset_history,
+            "clean_base_bag_reset_hr": store.clean_base_bag_reset_hr,
+            "clean_base_bag_reset_at": store.clean_base_bag_reset_at,
+            "clean_base_bag_reset_history": store.clean_base_bag_reset_history,
+        }
+        store2 = MaintenanceStore()
+        store2.side_brush_reset_hr = int(data["side_brush_reset_hr"])
+        store2.side_brush_reset_at = data["side_brush_reset_at"]
+        store2.side_brush_reset_history = list(data["side_brush_reset_history"])
+        store2.clean_base_bag_reset_hr = int(data["clean_base_bag_reset_hr"])
+        store2.clean_base_bag_reset_at = data["clean_base_bag_reset_at"]
+        store2.clean_base_bag_reset_history = list(data["clean_base_bag_reset_history"])
+        assert store2.side_brush_reset_hr == 77
+        assert store2.clean_base_bag_reset_hr == 88
+
+    @pytest.mark.asyncio
+    async def test_async_save_load_round_trip_includes_all_four_roles(self):
+        store = MaintenanceStore()
+        store.reset_filter(10)
+        store.reset_brush(20)
+        store.reset_side_brush(30)
+        store.reset_clean_base_bag(40)
+
+        saved: dict = {}
+
+        async def _save(data):
+            saved.update(data)
+
+        async def _load():
+            return saved
+
+        store_mock = MagicMock()
+        store_mock.async_save = _save
+        store_mock.async_load = _load
+        hass = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.maintenance_store.Store",
+            return_value=store_mock,
+        ):
+            await store.async_save(hass, "e1")
+            store2 = MaintenanceStore()
+            await store2.async_load(hass, "e1")
+
+        assert store2.side_brush_reset_hr == 30
+        assert store2.clean_base_bag_reset_hr == 40
+
+
+def _wear_entity(hr, maintenance_store, options=None):
+    """Minimal fake IRobotEntity for exercising sensor_helpers' consumable
+    wear-rate/days-until-due/max-hours functions directly."""
+    entity = MagicMock()
+    entity._config_entry.options = options or {}
+    entity._config_entry.runtime_data.maintenance_store = maintenance_store
+    entity._config_entry.runtime_data.mission_store = MissionStore()
+    entity.run_stats = {"hr": hr}
+    return entity
+
+
+def _cloud_part(part_id, *, count_used, count_remaining,
+                 count_type="minutes", days_ago=10, ts=None):
+    """part_id determines the role (see part_role()). days_ago controls
+    last_updated_ts so wear_rate_since_reset's 3-day minimum baseline is
+    satisfied by default; pass ts=None explicitly via omitting last_updated_ts
+    is not supported here — use _cloud_part_no_timestamp for that case."""
+    import time
+    epoch = ts if ts is not None else int(time.time()) - int(days_ago * 86400)
+    return {
+        "part_id": part_id, "count_used": count_used,
+        "count_remaining": count_remaining, "count_type": count_type,
+        "last_updated_ts": epoch,
+    }
+
+
+class TestConsumableWearRateAndDaysUntilDueAllFourRoles:
+    """The four *_wear_rate/*_days_until_due sensor_helpers functions are
+    one shared role-parameterized implementation — side_brush/clean_base_bag
+    must behave exactly like filter/main_brush once hydrated."""
+
+    def test_side_brush_wear_rate_available_with_valid_cloud_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _side_brush_wear_rate
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
+        )
+        entity = _wear_entity(500, store)
+        rate = _side_brush_wear_rate(entity)
+        assert rate is not None and rate > 0
+
+    def test_clean_base_bag_wear_rate_available_with_valid_cloud_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_wear_rate
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("139", count_used=600, count_remaining=3000)], 500,
+        )
+        entity = _wear_entity(500, store)
+        rate = _clean_base_bag_wear_rate(entity)
+        assert rate is not None and rate > 0
+
+    def test_side_brush_wear_rate_unavailable_with_missing_timestamp(self):
+        from custom_components.roomba_plus.sensor_helpers import _side_brush_wear_rate
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [{"part_id": "36", "count_used": 600, "count_remaining": 3000,
+              "count_type": "minutes"}],  # no last_updated_ts at all
+            500,
+        )
+        entity = _wear_entity(500, store)
+        assert _side_brush_wear_rate(entity) is None
+
+    def test_clean_base_bag_wear_rate_unavailable_with_non_minute_counter(self):
+        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_wear_rate
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("139", count_used=600, count_remaining=3000, count_type="cycles")],
+            500,
+        )
+        entity = _wear_entity(500, store)
+        assert _clean_base_bag_wear_rate(entity) is None
+
+    def test_side_brush_days_until_due_available_with_valid_cloud_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _side_brush_days_until_due
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
+        )
+        entity = _wear_entity(500, store)
+        assert _side_brush_days_until_due(entity) is not None
+
+    def test_clean_base_bag_days_until_due_unavailable_without_cloud_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_days_until_due
+        store = MaintenanceStore()
+        entity = _wear_entity(500, store)
+        assert _clean_base_bag_days_until_due(entity) is None
+
+    def test_side_brush_wear_rate_survives_a_cloud_outage(self):
+        """Once hydrated, wear-rate needs only the local reset_hr/reset_at
+        it was given — it must keep working even after cloud_parts is
+        wiped (simulating the account no longer serving this part),
+        while remaining/max_hours correctly go unavailable since they
+        have no local threshold of their own to fall back to."""
+        from custom_components.roomba_plus.sensor_helpers import (
+            _side_brush_max_hours,
+            _side_brush_wear_rate,
+        )
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("36", count_used=600, count_remaining=3000)], 500,
+        )
+        entity = _wear_entity(500, store)
+        assert _side_brush_wear_rate(entity) is not None
+        assert _side_brush_max_hours(entity) is not None
+        assert store.cloud_remaining_hours("side_brush") is not None
+
+        store.cloud_parts = {}  # cloud truth gone; local slot is untouched
+
+        assert _side_brush_wear_rate(entity) is not None
+        assert _side_brush_max_hours(entity) is None
+        assert store.cloud_remaining_hours("side_brush") is None
+
+
+class TestMaxHoursPerRole:
+    """max_hours: cloud full-life when a cloud record exists; filter/
+    main_brush fall back to the learned-or-configured threshold with no
+    cloud, side_brush/clean_base_bag have no such fallback."""
+
+    def test_filter_max_hours_falls_back_to_configured_default_without_cloud(self):
+        from custom_components.roomba_plus.sensor_helpers import _filter_max_hours
+        store = MaintenanceStore()
+        entity = _wear_entity(0, store)
+        assert _filter_max_hours(entity) == 60  # DEFAULT_FILTER_HOURS
+
+    def test_filter_max_hours_uses_cloud_full_life_when_present(self):
+        from custom_components.roomba_plus.sensor_helpers import _filter_max_hours
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("35", count_used=600, count_remaining=3000)], 500,
+        )
+        entity = _wear_entity(500, store)
+        assert _filter_max_hours(entity) == 60  # (600+3000)/60
+
+    def test_brush_max_hours_uses_learned_hours_over_configured_default(self):
+        from custom_components.roomba_plus.sensor_helpers import _brush_max_hours
+        store = MaintenanceStore()
+        store.reset_brush(0)
+        store.reset_brush(100)
+        store.reset_brush(220)  # intervals [100, 120] -> median 110
+        entity = _wear_entity(220, store)
+        assert _brush_max_hours(entity) == 110
+
+    def test_side_brush_max_hours_is_none_without_cloud_data(self):
+        from custom_components.roomba_plus.sensor_helpers import _side_brush_max_hours
+        store = MaintenanceStore()
+        store.reset_side_brush(50)  # a local reset alone is not a threshold
+        entity = _wear_entity(50, store)
+        assert _side_brush_max_hours(entity) is None
+
+    def test_clean_base_bag_max_hours_uses_cloud_full_life_when_present(self):
+        from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_max_hours
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(
+            [_cloud_part("139", count_used=1200, count_remaining=2400)], 500,
+        )
+        entity = _wear_entity(500, store)
+        assert _clean_base_bag_max_hours(entity) == 60  # (1200+2400)/60
