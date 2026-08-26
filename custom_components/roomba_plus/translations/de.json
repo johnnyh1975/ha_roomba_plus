@@ -1000,10 +1000,10 @@
         "name": "Trocknen starten"
       },
       "reset_side_brush": {
-        "name": "Seitenbürste zurücksetzen"
+        "name": "Wartung – Austausch der Seitenbürste bestätigen"
       },
       "reset_clean_base_bag": {
-        "name": "Clean Base Beutel zurücksetzen"
+        "name": "Wartung – Austausch des Clean Base Beutels bestätigen"
       }
     },
     "switch": {

@@ -1000,10 +1000,10 @@
         "name": "Drogen starten"
       },
       "reset_side_brush": {
-        "name": "Zijborstel resetten"
+        "name": "Onderhoud – Vervanging zijborstel bevestigen"
       },
       "reset_clean_base_bag": {
-        "name": "Clean Base-zak resetten"
+        "name": "Onderhoud – Vervanging Clean Base-zak bevestigen"
       }
     },
     "switch": {
