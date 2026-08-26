@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – última limpeza"
+      },
+      "part_edge_brush": {
+        "name": "Manutenção – Escova lateral"
+      },
+      "part_dirt_bag": {
+        "name": "Manutenção – Saco de pó"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Iniciar a secagem"
+      },
+      "reset_side_brush": {
+        "name": "Reiniciar escova lateral"
+      },
+      "reset_clean_base_bag": {
+        "name": "Reiniciar saco da Clean Base"
       }
     },
     "switch": {

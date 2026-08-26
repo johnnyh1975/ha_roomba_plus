@@ -264,6 +264,12 @@
       },
       "recent_time_30d": {
         "default": "mdi:clock-time-five-outline"
+      },
+      "part_edge_brush": {
+        "default": "mdi:broom"
+      },
+      "part_dirt_bag": {
+        "default": "mdi:trash-can-outline"
       }
     },
     "button": {
@@ -308,6 +314,12 @@
       },
       "favorite": {
         "default": "mdi:star-outline"
+      },
+      "reset_side_brush": {
+        "default": "mdi:broom"
+      },
+      "reset_clean_base_bag": {
+        "default": "mdi:trash-can-outline"
       }
     },
     "select": {

@@ -67,6 +67,12 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
 # neither catches up, the existing 24h idle poll remains the backstop.
 CLOUD_CATCHUP_FIRST_DELAY_SEC = 90
 CLOUD_CATCHUP_SECOND_DELAY_SEC = 600
+# How close a local record's end time must be to the start of a checkpoint
+# sequence for that record to BE the mission that just ended. Same window
+# as MissionStore.backfill_from_cloud()'s matching tolerance, deliberately:
+# a record this accepts is one backfill would pair with the same cloud
+# record.
+_CLOUD_CATCHUP_MISSION_MATCH_SEC = 120
 
 # v2.8.0 AUTO-ADVANCE-ROOM — phases that may represent an inter-room transition
 # on lewis firmware (i7+/s9+) rather than a genuine mission end or recharge.
@@ -1530,6 +1536,11 @@ def make_mission_complete_callback(
     # v2.10.1 CLOUD-CATCHUP fix — see _latest_has_timeline()'s docstring.
     _baseline_latest_record: dict[str, Any] | None = None
     _baseline_had_timeline: bool = False
+    # Wall clock at the moment the checkpoint sequence started, i.e. mission
+    # end. Used to tell "the baseline record IS the mission that just ended"
+    # apart from "the baseline record is an older mission" — see
+    # _baseline_is_this_mission().
+    _baseline_captured_ts: float = 0.0
 
     def _cancel_pending(*_args: Any) -> None:
         nonlocal _cancel_checkpoint
@@ -1575,12 +1586,65 @@ def make_mission_complete_callback(
         ms = getattr(entry.runtime_data, "mission_store", None)
         if ms is None:
             return True
-        latest = ms.latest()
+        # Annotated because the identity comparison below narrows this to
+        # the DECLARED type of _baseline_latest_record (dict | None),
+        # discarding the None guard directly above it. The annotation
+        # keeps it a plain dict in both branches.
+        latest: dict[str, Any] | None = ms.latest()
         if latest is None:
             return False
-        if latest is _baseline_latest_record:
-            return _baseline_had_timeline
-        return isinstance(latest.get("timeline"), dict)
+        record: dict[str, Any] = latest
+        if record is not _baseline_latest_record:
+            return isinstance(record.get("timeline"), dict)
+        # SAME OBJECT AS THE BASELINE — two opposite situations look
+        # identical here, and the frozen answer is right for only one.
+        #
+        # (a) The baseline is an OLDER mission's record, because this
+        #     mission had not been locally recorded yet when the sequence
+        #     started. Re-reading it live is the Thonno bug above: an
+        #     unrelated backfill enriching that old record in place would
+        #     read as "our mission is done". Frozen answer is correct.
+        #
+        # (b) The baseline IS this mission's record, appended before the
+        #     sequence started — the ordinary case, since _schedule() is
+        #     deferred through call_soon_threadsafe and the recording
+        #     callback has already run by then. Here the frozen answer is
+        #     WRONG and can never become right: backfill_from_cloud()
+        #     merges the cloud timeline into that same dict IN PLACE, so
+        #     the object never changes identity and the frozen False
+        #     outlives the data actually arriving. That produced a
+        #     "giving up for this mission" warning on a mission whose
+        #     timeline had in fact been merged (@mdarocha).
+        #
+        # The record's own end time separates them: this mission ended
+        # when the sequence started, an older one ended before that.
+        if _baseline_is_this_mission(record):
+            return isinstance(record.get("timeline"), dict)
+        return _baseline_had_timeline
+
+    def _baseline_is_this_mission(record: dict[str, Any]) -> bool:
+        """True when `record` is the mission whose end started this sequence.
+
+        Compared against the capture time rather than any id: at capture
+        the record may be seconds old and its `ended_at` is the only field
+        tying it to this mission that is set locally, before any cloud
+        data arrives. The window matches backfill_from_cloud()'s own
+        ±120 s matching tolerance, so a record this considers "this
+        mission" is one backfill would also pair with this mission's
+        cloud record.
+        """
+        if not _baseline_captured_ts:
+            return False
+        ended_str = record.get("ended_at") or ""
+        if not ended_str:
+            return False
+        try:
+            ended_dt = datetime.datetime.fromisoformat(ended_str)
+        except (TypeError, ValueError):
+            return False
+        if ended_dt.tzinfo is None:
+            ended_dt = ended_dt.replace(tzinfo=datetime.timezone.utc)
+        return abs(ended_dt.timestamp() - _baseline_captured_ts) <= _CLOUD_CATCHUP_MISSION_MATCH_SEC
 
     async def _attempt(checkpoint: int) -> None:
         nonlocal _cancel_checkpoint
@@ -1601,6 +1665,7 @@ def make_mission_complete_callback(
 
     def _schedule(checkpoint: int, delay: int) -> None:
         nonlocal _cancel_checkpoint, _baseline_latest_record, _baseline_had_timeline
+        nonlocal _baseline_captured_ts
         _cancel_pending()
         if checkpoint == 1:
             # Captured only when a NEW checkpoint sequence starts
@@ -1616,6 +1681,7 @@ def make_mission_complete_callback(
                 _baseline_latest_record
                 and isinstance(_baseline_latest_record.get("timeline"), dict)
             )
+            _baseline_captured_ts = _time_mod.time()
 
         async def _action(_now: Any) -> None:
             await _attempt(checkpoint)

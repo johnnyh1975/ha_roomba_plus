@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – last cleaned"
+      },
+      "part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
+      },
+      "part_dirt_bag": {
+        "name": "Maintenance – Dust Bag"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Start pad drying"
+      },
+      "reset_side_brush": {
+        "name": "Reset side brush"
+      },
+      "reset_clean_base_bag": {
+        "name": "Reset Clean Base bag"
       }
     },
     "switch": {

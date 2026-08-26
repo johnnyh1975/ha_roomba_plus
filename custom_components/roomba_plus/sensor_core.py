@@ -37,6 +37,10 @@ from .const import (
     EVENT_MISSION_COMPLETED,
     CLEAN_BASE_LABELS,
     CONF_BRUSH_HOURS,
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    IROBOT_PART_ROLE_FILTER,
+    IROBOT_PART_ROLE_MAIN_BRUSH,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
     DEFAULT_FILTER_HOURS,
@@ -125,6 +129,17 @@ class RoombaSensorDescription(SensorEntityDescription):
     extra_attributes_fn: Callable[[IRobotEntity], dict[str, Any]] | None = field(
         default=None
     )
+
+def _has_cloud_part(entity: Any, role: str) -> bool:
+    """True when the cloud reports the consumable this sensor represents.
+
+    Used as `available_fn` so a part the robot does not have produces no
+    entity state at all, instead of an entity permanently reading unknown.
+    """
+    store = entity._config_entry.runtime_data.maintenance_store
+    return bool(store and store.cloud_part_by_role(role) is not None)
+
+
 SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
@@ -203,6 +218,29 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
+    ),
+    # Consumables iRobot's cloud tracks that have no local wear signal.
+    # available_fn hides them entirely rather than showing a permanent
+    # "unknown" on a robot whose account does not report that part —
+    # a Braava has no side brush, a robot without a Clean Base has no bag.
+    RoombaSensorDescription(
+        key="part_edge_brush",
+        translation_key="part_edge_brush",
+        name="Maintenance – Side brush",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        entity_category=None,
+        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
+        filter_fn=lambda state: not is_braava(state),
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="part_dirt_bag",
+        translation_key="part_dirt_bag",
+        name="Maintenance – Clean Base bag",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        entity_category=None,
+        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
     ),
     RoombaSensorDescription(
         key="battery_cycles",
@@ -1647,7 +1685,22 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         options = self._config_entry.options
         store = self._config_entry.runtime_data.maintenance_store
 
+        # CLOUD FIRST, WHERE THERE IS CLOUD. iRobot tracks these two
+        # consumables itself, in robot runtime minutes, and the official
+        # app's maintenance tiles read that counter. When it is available
+        # it is simply better than anything derivable locally: it survives
+        # reinstalls, and it already accounts for replacements confirmed
+        # in the app before this integration existed.
+        #
+        # The local threshold estimate stays as the fallback for robots
+        # or accounts with no cloud parts data, so nothing regresses for
+        # them. `filter_remaining()` still runs in that case, hydrated
+        # baseline included.
         if key == "filter_remaining_hours":
+            if store:
+                cloud_hours = store.cloud_remaining_hours(IROBOT_PART_ROLE_FILTER)
+                if cloud_hours is not None:
+                    return cloud_hours
             threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
             current_hr = self.run_stats.get("hr", 0)
             if store:
@@ -1655,11 +1708,27 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             return int(max(0, threshold - current_hr))
 
         if key == "brush_remaining_hours":
+            # The MAIN brushes own this sensor. The side brush wears on a
+            # different schedule and gets its own entity rather than being
+            # averaged into a single "brushes" number.
+            if store:
+                cloud_hours = store.cloud_remaining_hours(IROBOT_PART_ROLE_MAIN_BRUSH)
+                if cloud_hours is not None:
+                    return cloud_hours
             threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
             current_hr = self.run_stats.get("hr", 0)
             if store:
                 return store.brush_remaining(current_hr, threshold)
             return int(max(0, threshold - current_hr))
+
+        # Consumables iRobot tracks that have no local equivalent — there
+        # is no runtime-hours fallback to compute, so these are cloud-only
+        # and report unknown without it.
+        if key == "part_edge_brush":
+            return store.cloud_remaining_hours(IROBOT_PART_ROLE_SIDE_BRUSH) if store else None
+
+        if key == "part_dirt_bag":
+            return store.cloud_remaining_hours(IROBOT_PART_ROLE_CLEAN_BASE_BAG) if store else None
 
         if key == "next_clean":
             return self._calc_next_clean()

@@ -249,6 +249,9 @@ class TestRoombaSensorNativeValue:
         arithmetic does not. Preferring the store is the whole reason it
         exists."""
         store = MagicMock()
+        # No cloud counter for this part — this test is about the local
+        # threshold/store fallback, which only runs when the cloud has none.
+        store.cloud_remaining_hours.return_value = None
         store.filter_remaining.return_value = 42
 
         sensor = self._sensor(
@@ -263,6 +266,8 @@ class TestRoombaSensorNativeValue:
         """Filter and brush wear at different rates and are replaced
         independently -- crossing the two would be silently wrong."""
         store = MagicMock()
+        # As above: local-path test, so no cloud counter.
+        store.cloud_remaining_hours.return_value = None
         store.brush_remaining.return_value = 11
 
         sensor = self._sensor(

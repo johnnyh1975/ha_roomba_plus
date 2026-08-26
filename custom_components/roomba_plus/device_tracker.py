@@ -1,11 +1,16 @@
 """Device tracker platform for Roomba+.
 
-v2.9.0 DEVICE-TRACKER. Tier-aware location reporting via TrackerEntity's
-location_name (which HA's own state property checks BEFORE falling back to
-lat/lon zone lookups — see homeassistant.components.device_tracker.config_entry
-.TrackerEntity.state). Returning a named string here means NO fake GPS
-coordinates are needed at all; HA core was already built for exactly this
-"named location, not a map point" use case for an indoor robot.
+v2.9.0 DEVICE-TRACKER. Tier-aware location reporting: the entity writes a
+named string straight to its own `state`, so NO fake GPS coordinates are
+needed at all — "named location, not a map point", which is what an indoor
+robot actually has.
+
+This went through TrackerEntity's `location_name` until issue #54: that
+property is deprecated and warns on every route into it (overriding it, or
+setting `_attr_location_name`), unsupported from Home Assistant 2027.7.
+Since `TrackerEntity.state` only ever returned `location_name` verbatim
+when set, writing `state` directly is the same value without the
+deprecation — see RoombaDeviceTracker.state.
 
 - SMART robots (i/s/j-series, Braava m6): current room name during an
   active mission — reuses sensor.py's _resolve_smart_tier_room_state(),
@@ -52,10 +57,10 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 
-# v2.9.0 — location_name is returned directly as the entity's state by
-# TrackerEntity (see module docstring) and does NOT go through HA's normal
-# translation_key lookup. A tiny manual table covers the two fixed labels
-# this platform needs; expand here if more languages are needed later.
+# v2.9.0 — these labels ARE the entity's state (see module docstring), so
+# they do NOT go through HA's normal translation_key lookup. A tiny manual
+# table covers the two fixed labels this platform needs; expand here if
+# more languages are needed later.
 _DOCKED_LABEL: dict[str, str] = {
     "de": "Angedockt",
     "en": "Docked",
@@ -132,23 +137,31 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         return table.get(lang, table["en"])
 
     @property
-    def location_name(self) -> str | None:
-        """DEPRECATED BY HOME ASSISTANT, kept until 2027.7.
+    def state(self) -> str | None:
+        """Return the robot's location as this entity's state.
 
-        This property stops working in Home Assistant Core 2027.7
-        (reported by @mdarocha, issue #54). HA's guidance is to report
-        zone entity ids via `in_zones`, or to move extra context to a
-        sensor or state attribute.
+        REPORTED AS `state`, NOT `location_name` (issue #54, @mdarocha).
 
-        `in_zones` does not apply: HA zones are geographic -- a latitude,
-        longitude and radius -- and creating one per room would misuse
-        the concept. HA AREAS are the room-shaped concept, and they are
-        not what in_zones takes.
+        `location_name` was the original route here, because
+        TrackerEntity.state returns it verbatim when it isn't None — which
+        is exactly the "named location, not a map point" case an indoor
+        robot needs, with no fake GPS coordinates involved.
 
-        So the room has moved to the `room` and `area_id` state
-        attributes, and this property stays only so that existing
-        automations reading the state keep working through the
-        deprecation window. It will be removed, not reimplemented.
+        Home Assistant now deprecates that property, and warns on BOTH
+        routes into it: overriding `location_name` trips a warning in
+        TrackerEntity.__init_subclass__, and setting `_attr_location_name`
+        trips one in the getter. Both stop working in 2027.7.
+
+        Writing `state` directly sidesteps the deprecation entirely and
+        produces the identical value, because returning it from
+        `location_name` only ever meant "let TrackerEntity.state return
+        this". The lat/lon fallback that `location_name` short-circuited
+        is not lost either: this platform never sets latitude/longitude,
+        so that branch could only ever have yielded None anyway.
+
+        The room also remains available as the `room` and `area_id` state
+        attributes, which is where an automation should read it from —
+        those are structured, while this is a display string.
         """
         data = self._config_entry.runtime_data
 
@@ -345,9 +358,9 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         replaced it for room naming/the live map and could fill this
         extension point too (resolve current room from RoomSegStore's
         room cells + live pose) — a reasonable next step, not yet done.
-        Nothing else in this platform needs to change: location_name, the
-        docked check, and the attribute exposure below are all
-        tier-agnostic already.
+        Nothing else in this platform needs to change: the state
+        resolution, the docked check, and the attribute exposure below are
+        all tier-agnostic already.
         """
         return None
 

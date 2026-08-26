@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – ostatnio sprzątano"
+      },
+      "part_edge_brush": {
+        "name": "Konserwacja – Szczotka boczna"
+      },
+      "part_dirt_bag": {
+        "name": "Konserwacja – Worek na kurz"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Rozpocznij suszenie"
+      },
+      "reset_side_brush": {
+        "name": "Zeruj szczotkę boczną"
+      },
+      "reset_clean_base_bag": {
+        "name": "Zeruj worek stacji Clean Base"
       }
     },
     "switch": {

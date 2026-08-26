@@ -262,6 +262,23 @@ A Repair Issue (`battery_contact_suspect`) fires on two independent signals that
 
 `image.{name}_cleaning_map` — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
 
+**Robots that don't report live position ☁️** — a robot can have persistent Smart Maps and still
+never send pose data over local MQTT. The live renderer has nothing to draw from on those, so this
+entity would otherwise stay blank white indefinitely, with nothing logged to explain it. (Several
+i-series models behave this way — an i3/i3+ on `daredevil` firmware, for instance — but the
+fallback keys off what the robot reports about itself, not off any model list.)
+
+With cloud credentials configured, such a robot falls back to the **last completed mission's
+coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
+from. Nothing changes for a robot that does report position: there, an empty renderer means "this
+mission hasn't started yet", which still renders as it always did.
+
+The cloud map is fetched per mission (verified against that mission's own number, so a stale or
+mismatched map is never served) and cached, then re-rendered when a newer mission appears. Note
+that keep-out and clean-zone overlays are not drawn on the cloud-composited image: those are
+positioned in the local renderer's coordinate space, which doesn't apply to a canvas the cloud
+compositor scaled to its own extent.
+
 ```yaml
 type: picture-entity
 entity: image.roomba_cleaning_map
@@ -351,7 +368,52 @@ data:
 
 **Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
 
-**First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate.
+**First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate. **With cloud credentials configured this assumption is replaced by the real thing** — see cloud consumable counters below.
+
+#### Cloud-synced consumables ☁️
+
+> ☁️ Requires cloud credentials. Applies to whichever consumables your robot's account reports.
+
+iRobot's cloud tracks each consumable itself, in robot runtime minutes, and that is what the
+official app's maintenance tiles show. Where a Roomba+ sensor already exists for a part, it now
+reads that counter instead of estimating locally:
+
+| Sensor | Source when cloud is available |
+|---|---|
+| Filter remaining hours | iRobot's own filter counter |
+| Brush remaining hours | iRobot's own **main** brush counter |
+
+Robots or accounts that don't report parts keep the previous behaviour exactly — the local
+threshold estimate, hydrated baseline included — so nothing regresses for them.
+
+Consumables with no local wear signal get their own sensors, created only when the account
+actually reports that part (so a Braava gets no edge-brush sensor, and a robot without a Clean
+Base gets no bag sensor):
+
+| Sensor | Notes |
+|---|---|
+| Edge sweeping brush | The side brush. Wears on its own schedule, so it is not averaged into the main brush sensor |
+| Dust Bag | The Clean Base bag |
+
+**Migrating from the official app:** a part's cloud counter includes replacements you confirmed
+in iRobot's app, so the runtime-hours reading at each replacement is recoverable, and Roomba+
+adopts it as its baseline on the first cloud refresh. That replaces the install-time "assume
+everything is fresh" assumption with your robot's real service history, which is also what gives
+the `*_days_until_due` sensors something real to extrapolate from. Your own confirmed resets keep
+building the self-calibrating history from there; a hydrated baseline is not counted as a
+replacement event and does not skew the learned interval.
+
+**Resets go both ways.** Pressing a reset button or calling `roomba_plus.reset_filter` /
+`reset_brush` now also records the replacement with iRobot, so the app and Home Assistant agree
+about a part you just changed. This is best-effort: the local reset is saved first, and a cloud
+failure is logged without failing the action. The edge brush and bag have their own reset buttons,
+which write to the cloud counter directly since they have no local slot.
+
+**About part identification:** the endpoint returns a numeric `part_id` and no name — the app
+resolves names from a per-SKU catalog it does not serve, and the id space is not the same across
+robot families. `IROBOT_PART_ROLES` in `const.py` records the mapping and the evidence for each
+entry; an id this integration doesn't recognise is left unmapped rather than given an invented
+name, following the same reasoning as the Prime path's `_KNOWN_PARTS`.
 
 #### Clean Base / dock status
 

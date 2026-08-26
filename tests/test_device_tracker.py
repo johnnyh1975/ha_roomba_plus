@@ -46,12 +46,12 @@ class TestLocationNameDockedFallback:
     def test_docked_phase_shows_docked_label(self):
         tracker, roomba, _ = _make_tracker()
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_idle_empty_phase_shows_docked_label(self):
         tracker, roomba, _ = _make_tracker()
         _set_state(roomba, phase="")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
 
 class TestLocationNameNullRegression:
@@ -63,19 +63,19 @@ class TestLocationNameNullRegression:
         tracker, roomba, _ = _make_tracker()
         roomba.master_state = {"state": {"reported": {"cleanMissionStatus": None}}}
         # Falls through to the empty-phase branch, same as a docked robot.
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_docked_label_respects_language(self):
         tracker, roomba, _ = _make_tracker()
         tracker.hass.config.language = "en"
         _set_state(roomba, phase="stop")
-        assert tracker.location_name == "Docked"
+        assert tracker.state == "Docked"
 
     def test_unknown_language_falls_back_to_english(self):
         tracker, roomba, _ = _make_tracker()
         tracker.hass.config.language = "ja"
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Docked"
+        assert tracker.state == "Docked"
 
 
 class TestLocationNameSmartTier:
@@ -89,7 +89,7 @@ class TestLocationNameSmartTier:
             "custom_components.roomba_plus.sensor._resolve_smart_tier_room_state",
             return_value={"current_room": "Kitchen", "next_room": "Hallway"},
         ):
-            assert tracker.location_name == "Kitchen"
+            assert tracker.state == "Kitchen"
 
     def test_falls_back_to_active_label_when_room_unknown(self):
         """No room resolved (e.g. no MTS mission, or estimates entirely
@@ -101,7 +101,7 @@ class TestLocationNameSmartTier:
             "custom_components.roomba_plus.sensor._resolve_smart_tier_room_state",
             return_value={},
         ):
-            assert tracker.location_name == "Unterwegs"
+            assert tracker.state == "Unterwegs"
 
 
 class TestLocationNameEphemeralTier:
@@ -116,12 +116,12 @@ class TestLocationNameEphemeralTier:
     def test_active_mission_shows_generic_fallback_not_none(self):
         tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
         _set_state(roomba, phase="run")
-        assert tracker.location_name == "Unterwegs"
+        assert tracker.state == "Unterwegs"
 
     def test_docked_shows_docked_label_same_as_smart_tier(self):
         tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_extension_point_returns_none_today(self):
         """Documents current behaviour explicitly — once EPHEMERAL room/
@@ -280,12 +280,12 @@ class TestPrimeReadsItsPhaseFromTheShadow:
     def test_a_running_prime_robot_is_not_reported_as_docked(self):
         tracker = self._tracker("run")
 
-        assert tracker.location_name != "Docked"
+        assert tracker.state != "Docked"
 
     def test_a_docked_prime_robot_still_is(self):
         tracker = self._tracker("charge")
 
-        assert tracker.location_name == "Docked"
+        assert tracker.state == "Docked"
 
 
 class TestTheRoomNameCacheRefillsWhenEmpty:

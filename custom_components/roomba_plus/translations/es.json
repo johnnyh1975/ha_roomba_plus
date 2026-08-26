@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – última limpieza"
+      },
+      "part_edge_brush": {
+        "name": "Mantenimiento – Cepillo lateral"
+      },
+      "part_dirt_bag": {
+        "name": "Mantenimiento – Bolsa para polvo"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Iniciar el secado"
+      },
+      "reset_side_brush": {
+        "name": "Restablecer cepillo lateral"
+      },
+      "reset_clean_base_bag": {
+        "name": "Restablecer bolsa de la Clean Base"
       }
     },
     "switch": {

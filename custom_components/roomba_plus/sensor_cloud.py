@@ -32,7 +32,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.typing import StateType
 
 from homeassistant.util import dt as dt_util
-
 from .const import (
     SQFT_TO_M2,
 )

@@ -56,6 +56,7 @@ from . import roomba_reported_state
 from .const import (
     CONF_MAP_CLEAN_ZONES,
     CONF_MAP_KEEPOUT_ZONES,
+    has_pose,
     CONF_MAP_NOMOP_ZONES,
     DEFAULT_MAP_ZONES,
     room_slug,
@@ -79,6 +80,12 @@ from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import MapRenderer
+from .mission_map import (
+    MissionMapMismatch,
+    MissionMapUnavailable,
+    async_fetch_mission_map,
+    render_mission_map_png,
+)
 from .models import ConnectionType, MapCapability, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -1153,6 +1160,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_map"
 
+        # Rendered cloud-coverage fallback, and the mission id it was
+        # rendered from. Only populated for pose-less robots — see
+        # _async_cloud_coverage_png().
+        self._cloud_coverage_png: bytes | None = None
+        self._cloud_coverage_png_for: str | None = None
+
         # Mission tracking
         self._last_phase: str = ""
         self._last_stuck_count: int = 0
@@ -1283,6 +1296,36 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """Return current map as PNG bytes. Always returns a valid image."""
         if self._renderer is None:
             return self._blank_image()
+
+        # A ROBOT THAT NEVER SENDS POSE CAN NEVER FILL THIS RENDERER.
+        #
+        # MapCapability is SMART whenever the robot has persistent maps,
+        # independently of whether it reports pose (see __init__.py's
+        # has_pose() or has_smart_map() test), so an i-series robot on
+        # lewis/daredevil firmware gets a renderer built and then renders
+        # an empty canvas forever: pose is the only thing that ever calls
+        # add_pose(), and that message never arrives. The user sees a
+        # blank white square with no error anywhere.
+        #
+        # The cloud already has the answer for exactly these robots —
+        # iRobot's own app draws their "last clean" from it — and this
+        # integration already fetches and renders it for the REST
+        # /mission-map endpoint. So when the local renderer has nothing,
+        # fall back to that instead of serving blank.
+        #
+        # Robots that DO report pose are untouched: has_data is true for
+        # them as soon as the first pose lands, and before that they are
+        # genuinely mid-first-mission with nothing to show yet.
+        if not self._renderer.has_data:
+            cloud_png = await self._async_cloud_coverage_png()
+            if cloud_png is not None:
+                # Returned directly, skipping the overlays below: those
+                # project pose-space millimetres through the renderer's
+                # own transform, which does not apply to a canvas the
+                # cloud compositor scaled to its own extent. Drawing them
+                # here would put keepout boxes in the wrong place.
+                return cloud_png
+
         png = await self.hass.async_add_executor_job(self._renderer.render)
 
         # v2.3.0 Step 6 — keepout zone overlay (Amendment 4)
@@ -1360,6 +1403,104 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     )
                     if outline_png is not None:
                         png = outline_png
+        return png
+
+    async def _async_cloud_coverage_png(self) -> bytes | None:
+        """Render the newest cloud mission's coverage, or None if unavailable.
+
+        Only ever used as the fallback for a robot that reports no pose.
+        Returns None — never a blank canvas — so the caller keeps its own
+        blank-image behaviour and this path stays additive.
+
+        The fetch half is shared with the REST /mission-map endpoint
+        (mission_map.async_fetch_mission_map), including its 24 h cache and
+        its nMssn verification gate, so this cannot serve a map belonging
+        to a different mission. The rendered PNG is cached separately here,
+        keyed on the mission it came from: async_image() is called on every
+        frontend fetch, and the compositor is real CPU work.
+        """
+        if self._config_entry is None:
+            return None
+        data = self._config_entry.runtime_data
+        cc = data.cloud_coordinator
+        if cc is None:
+            return None
+
+        # FEATURE GATE. A pose-reporting robot must never land here: its
+        # empty renderer means "mission hasn't started yet", not "this
+        # robot cannot draw itself".
+        #
+        # Defensive because this runs in the render path: has_pose()
+        # compares cap.pose numerically, so a malformed or non-numeric
+        # capability payload would otherwise raise straight out of
+        # async_image() and break the entity. "Cannot tell" is treated as
+        # "do not take over" — the local render stays in charge rather
+        # than this path hijacking it on a guess.
+        state = roomba_reported_state(self.vacuum)
+        if not isinstance(state, dict):
+            return None
+        try:
+            if has_pose(state):
+                return None
+        except (TypeError, AttributeError):
+            return None
+
+        record = next(
+            (r for r in cc.raw_records if r.get("pmaps_info")), None
+        )
+        if record is None:
+            return None
+
+        # raw_records rows carry no "id"; mint the same synthetic id the
+        # REST layer uses so both share one cache entry per mission.
+        ts = record.get("startTime") or record.get("timestamp")
+        if ts is None:
+            return None
+        record_id = f"c_{int(ts)}"
+
+        if self._cloud_coverage_png_for == record_id:
+            return self._cloud_coverage_png
+
+        try:
+            payload = await async_fetch_mission_map(
+                data, {**record, "id": record_id}
+            )
+        except (MissionMapUnavailable, MissionMapMismatch) as exc:
+            # Both are ordinary states for this path: a mission with no
+            # coverage layer, or cloud data that failed verification.
+            _LOGGER.debug(
+                "Roomba+ map: no cloud coverage for %s (%s)", record_id, exc
+            )
+            return None
+        except Exception:  # noqa: BLE001
+            # Cloud transport failure must not break the image entity —
+            # the caller falls back to the local (blank) render, which is
+            # what it did before this path existed.
+            _LOGGER.debug(
+                "Roomba+ map: cloud coverage fetch failed for %s",
+                record_id, exc_info=True,
+            )
+            return None
+
+        coverage_mm = payload.get("coverage_mm") or []
+        if not coverage_mm:
+            return None
+
+        png = await self.hass.async_add_executor_job(
+            render_mission_map_png,
+            coverage_mm,
+            payload.get("point_area_m") or [],
+            [],
+            # Unrotated: rotation is a per-request concern on the REST
+            # endpoint (?rotate=), with no entity-level setting to read.
+            0,
+        )
+        self._cloud_coverage_png_for = record_id
+        self._cloud_coverage_png = png
+        _LOGGER.debug(
+            "Roomba+ map: rendered cloud coverage for %s (%d cell(s), nMssn=%s)",
+            record_id, len(coverage_mm), payload.get("nmssn"),
+        )
         return png
 
     # v2.3.0 Step 5 — calibration + rooms for xiaomi-vacuum-map-card

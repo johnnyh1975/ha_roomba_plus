@@ -796,7 +796,7 @@
         "name": "Maintenance – Filter"
       },
       "prime_part_dirt_bag": {
-        "name": "Maintenance – Dirt disposal bag"
+        "name": "Maintenance – Dust Bag"
       },
       "prime_part_mop_pads": {
         "name": "Maintenance – Washable mop pad"
@@ -820,6 +820,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – last cleaned"
+      },
+      "part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
+      },
+      "part_dirt_bag": {
+        "name": "Maintenance – Dust Bag"
       }
     },
     "device_tracker": {
@@ -972,6 +978,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Start pad drying"
+      },
+      "reset_side_brush": {
+        "name": "Reset side brush"
+      },
+      "reset_clean_base_bag": {
+        "name": "Reset Clean Base bag"
       }
     },
     "switch": {

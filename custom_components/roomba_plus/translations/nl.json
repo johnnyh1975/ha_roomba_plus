@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – laatst schoongemaakt"
+      },
+      "part_edge_brush": {
+        "name": "Onderhoud – Zijborstel"
+      },
+      "part_dirt_bag": {
+        "name": "Onderhoud – Stofzak"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Drogen starten"
+      },
+      "reset_side_brush": {
+        "name": "Zijborstel resetten"
+      },
+      "reset_clean_base_bag": {
+        "name": "Clean Base-zak resetten"
       }
     },
     "switch": {

@@ -273,6 +273,77 @@ DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
 DEFAULT_FILTER_HOURS: Final = 60    # iRobot recommendation: every 2 months
 DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
 
+# ── Cloud consumable parts (/v1/robots/{blid}/parts) ─────────────────────────
+#
+# iRobot's cloud tracks each consumable by a numeric `part_id` and returns
+# NO name for it. The official app resolves names client-side from a per-SKU
+# catalog that the endpoint does not serve, so the mapping below has to live
+# here.
+#
+# STATUS: FIELD-INFERRED, NOT VENDOR-CONFIRMED. What is confirmed is the
+# response itself, captured live from an i3+ (sku i355640, firmware
+# daredevil+2.6.0) which reports exactly these four ids, and whose app shows
+# exactly four tiles: Clean Base bag, side brush, main brushes, filter.
+# The id->role assignment rests on three agreeing signals:
+#
+#   * `part_id` 139 is numerically far from the 35/36/37 cluster, and the
+#     app's own `PartCategoryItem` enum has exactly two values, Robot and
+#     Dock — so 139 is the one Dock-side part, i.e. the Clean Base bag.
+#     It also has the shortest budget, which fits a bag.
+#   * Budget (count_used + count_remaining) for 35 is ~52 h, against
+#     DEFAULT_FILTER_HOURS = 60 above (iRobot's "every 2 months") — the
+#     closest pairing of any id to any published interval.
+#   * 36 (~157 h) and 37 (~312 h) are then the two brushes, both inside
+#     iRobot's "every 6-12 months" guidance. The longer-lived pair member
+#     is taken as the main (multi-surface) brushes and the shorter as the
+#     edge-sweeping side brush, which wears faster.
+#
+# 36 = SIDE BRUSH IS FIELD-CONFIRMED, not inferred: @mdarocha replaced the
+# side brush on an i3+ and confirmed the reset in iRobot's app, and 36 is
+# the id whose counter went to 0 (observed live in the same session). The
+# remaining three keep the reasoning above until someone confirms them the
+# same way.
+#
+# A wrong guess here is visible and cheap to correct: every part sensor
+# carries its raw `part_id` and counters as attributes, so comparing one
+# screen of the official app against the entity attributes settles it.
+# Unknown ids are NOT dropped — they surface as a generic part sensor
+# (see sensor_cloud.py), so a j7/s9/Braava reporting different ids still
+# gets working entities instead of nothing.
+IROBOT_PART_ROLE_FILTER: Final = "filter"
+IROBOT_PART_ROLE_SIDE_BRUSH: Final = "side_brush"
+IROBOT_PART_ROLE_MAIN_BRUSH: Final = "main_brush"
+IROBOT_PART_ROLE_CLEAN_BASE_BAG: Final = "clean_base_bag"
+
+IROBOT_PART_ROLES: Final[dict[str, str]] = {
+    "35":  IROBOT_PART_ROLE_FILTER,
+    "36":  IROBOT_PART_ROLE_SIDE_BRUSH,
+    "37":  IROBOT_PART_ROLE_MAIN_BRUSH,
+    "139": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+}
+
+# Which cloud role hydrates which legacy MaintenanceStore slot. The store
+# only ever modelled a single "brush" lifecycle, so the main brushes own
+# that slot — they are the part the brush sensors were always about, and
+# the side brush gets its own cloud-backed entity rather than being
+# averaged into a shared number.
+IROBOT_PART_ROLE_TO_STORE_SLOT: Final[dict[str, str]] = {
+    IROBOT_PART_ROLE_FILTER:     "filter",
+    IROBOT_PART_ROLE_MAIN_BRUSH: "brush",
+}
+
+
+def part_role(part_id: Any) -> str | None:
+    """Return the consumable role for a cloud `part_id`, or None if unknown.
+
+    Ids arrive from the cloud as strings but are compared as strings after
+    normalisation, so an int-typed id from a future firmware still matches.
+    """
+    if part_id is None:
+        return None
+    return IROBOT_PART_ROLES.get(str(part_id).strip())
+
+
 ROOMBA_SESSION: Final = "roomba_session"
 
 # ── clean_room action ─────────────────────────────────────────────────────────

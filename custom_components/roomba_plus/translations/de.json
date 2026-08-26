@@ -818,6 +818,12 @@
       },
       "region_last_cleaned": {
         "name": "{region} – zuletzt gereinigt"
+      },
+      "part_edge_brush": {
+        "name": "Wartung – Seitenbürste"
+      },
+      "part_dirt_bag": {
+        "name": "Wartung – Staubbeutel"
       }
     },
     "binary_sensor": {
@@ -965,6 +971,12 @@
       },
       "prime_start_pad_dry": {
         "name": "Trocknen starten"
+      },
+      "reset_side_brush": {
+        "name": "Seitenbürste zurücksetzen"
+      },
+      "reset_clean_base_bag": {
+        "name": "Clean Base Beutel zurücksetzen"
       }
     },
     "switch": {
