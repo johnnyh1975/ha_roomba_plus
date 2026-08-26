@@ -322,14 +322,14 @@ class TestMaintenanceStoreDueItems:
 
     def test_custom_thresholds_from_options(self):
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 30}}
-        assert store.due_items(state, {"filter_threshold_hours": 30}) == ["filter"]
+        state = {"bbrun": {"hr": 5}}
+        assert store.due_items(state, {"filter_threshold_hours": 5}) == ["filter"]
 
-    def test_both_due_simultaneously(self):
+    def test_all_four_due_simultaneously_without_cloud_data(self):
         store = MaintenanceStore()
         state = {"bbrun": {"hr": 300}}
         due = store.due_items(state, {})
-        assert set(due) == {"filter", "brush"}
+        assert set(due) == {"filter", "brush", "side_brush", "clean_base_bag"}
 
     def test_missing_bbrun_defaults_to_zero_hours(self):
         """No bbrun at all -> current_hr defaults to 0, nothing due yet
@@ -376,11 +376,13 @@ class TestMaintenanceStoreDueItems:
         )
         assert "side_brush" not in store.due_items({"bbrun": {"hr": 300}}, {})
 
-    def test_side_brush_never_due_without_any_cloud_data(self):
-        """No cloud record at all and no local threshold to fall back to —
-        must never be due, not treated as due-by-default."""
+    def test_side_brush_not_due_below_hardcoded_threshold_without_cloud_data(self):
         store = MaintenanceStore()
-        assert "side_brush" not in store.due_items({"bbrun": {"hr": 99999}}, {})
+        assert "side_brush" not in store.due_items({"bbrun": {"hr": 50}}, {})
+
+    def test_side_brush_due_at_hardcoded_threshold_without_cloud_data(self):
+        store = MaintenanceStore()
+        assert "side_brush" in store.due_items({"bbrun": {"hr": 150}}, {})
 
     def test_clean_base_bag_due_when_cloud_counter_exhausted(self):
         store = MaintenanceStore()
@@ -389,9 +391,13 @@ class TestMaintenanceStoreDueItems:
         )
         assert "clean_base_bag" in store.due_items({"bbrun": {"hr": 300}}, {})
 
-    def test_clean_base_bag_never_due_without_any_cloud_data(self):
+    def test_clean_base_bag_not_due_below_hardcoded_threshold_without_cloud_data(self):
         store = MaintenanceStore()
-        assert "clean_base_bag" not in store.due_items({"bbrun": {"hr": 99999}}, {})
+        assert "clean_base_bag" not in store.due_items({"bbrun": {"hr": 10}}, {})
+
+    def test_clean_base_bag_due_at_hardcoded_threshold_without_cloud_data(self):
+        store = MaintenanceStore()
+        assert "clean_base_bag" in store.due_items({"bbrun": {"hr": 30}}, {})
 
     def test_cloud_exhausted_counter_overrides_local_threshold_for_filter(self):
         """Local elapsed hours alone would say "not due yet" (10h since
@@ -1658,9 +1664,9 @@ class TestConsumableWearRateAndDaysUntilDueAllFourRoles:
     def test_side_brush_wear_rate_survives_a_cloud_outage(self):
         """Once hydrated, wear-rate needs only the local reset_hr/reset_at
         it was given — it must keep working even after cloud_parts is
-        wiped (simulating the account no longer serving this part),
-        while remaining/max_hours correctly go unavailable since they
-        have no local threshold of their own to fall back to."""
+        wiped (simulating the account no longer serving this part), and
+        max_hours falls back to the hardcoded default once the cloud
+        full-life figure is gone."""
         from custom_components.roomba_plus.sensor_helpers import (
             _side_brush_max_hours,
             _side_brush_wear_rate,
@@ -1671,20 +1677,19 @@ class TestConsumableWearRateAndDaysUntilDueAllFourRoles:
         )
         entity = _wear_entity(500, store)
         assert _side_brush_wear_rate(entity) is not None
-        assert _side_brush_max_hours(entity) is not None
+        assert _side_brush_max_hours(entity) == 60  # (600+3000)/60
         assert store.cloud_remaining_hours("side_brush") is not None
 
-        store.cloud_parts = {}  # cloud truth gone; local slot is untouched
+        store.cloud_parts = {}
 
         assert _side_brush_wear_rate(entity) is not None
-        assert _side_brush_max_hours(entity) is None
+        assert _side_brush_max_hours(entity) == 150  # DEFAULT_SIDE_BRUSH_HOURS
         assert store.cloud_remaining_hours("side_brush") is None
 
 
 class TestMaxHoursPerRole:
-    """max_hours: cloud full-life when a cloud record exists; filter/
-    main_brush fall back to the learned-or-configured threshold with no
-    cloud, side_brush/clean_base_bag have no such fallback."""
+    """max_hours: cloud full-life when a cloud record exists, else the
+    learned-or-hardcoded/configured threshold for every role alike."""
 
     def test_filter_max_hours_falls_back_to_configured_default_without_cloud(self):
         from custom_components.roomba_plus.sensor_helpers import _filter_max_hours
@@ -1710,12 +1715,12 @@ class TestMaxHoursPerRole:
         entity = _wear_entity(220, store)
         assert _brush_max_hours(entity) == 110
 
-    def test_side_brush_max_hours_is_none_without_cloud_data(self):
+    def test_side_brush_max_hours_falls_back_to_hardcoded_default_without_cloud(self):
         from custom_components.roomba_plus.sensor_helpers import _side_brush_max_hours
         store = MaintenanceStore()
-        store.reset_side_brush(50)  # a local reset alone is not a threshold
+        store.reset_side_brush(50)
         entity = _wear_entity(50, store)
-        assert _side_brush_max_hours(entity) is None
+        assert _side_brush_max_hours(entity) == 150  # DEFAULT_SIDE_BRUSH_HOURS
 
     def test_clean_base_bag_max_hours_uses_cloud_full_life_when_present(self):
         from custom_components.roomba_plus.sensor_helpers import _clean_base_bag_max_hours

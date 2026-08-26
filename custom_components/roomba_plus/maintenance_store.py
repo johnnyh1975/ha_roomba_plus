@@ -27,7 +27,9 @@ from .const import (
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
+    DEFAULT_CLEAN_BASE_BAG_HOURS,
     DEFAULT_FILTER_HOURS,
+    DEFAULT_SIDE_BRUSH_HOURS,
     IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     IROBOT_PART_ROLE_FILTER,
     IROBOT_PART_ROLE_MAIN_BRUSH,
@@ -545,6 +547,16 @@ class MaintenanceStore:
         """
         return self._learned_hours("brush")
 
+    @property
+    def learned_side_brush_hours(self) -> float | None:
+        """Median interval between side-brush replacements, or None if < 2 resets."""
+        return self._learned_hours("side_brush")
+
+    @property
+    def learned_clean_base_bag_hours(self) -> float | None:
+        """Median interval between Clean Base bag replacements, or None if < 2 resets."""
+        return self._learned_hours("clean_base_bag")
+
     # ── Remaining-life calculations ───────────────────────────────────────────
 
     def due_items(
@@ -553,7 +565,9 @@ class MaintenanceStore:
         """Return consumable keys currently due for replacement, for all
         four maintenance roles through the one shared _is_due() check:
         the cloud's own exhausted counter when a cloud record exists,
-        else (filter/main_brush only) zero remaining local hours.
+        else zero remaining local hours against each role's configured
+        (filter/main_brush) or hardcoded (side_brush/clean_base_bag)
+        threshold.
 
         Extracted from binary_sensor.py's RoombaMaintenanceDue._due_items()
         (identical logic, now shared) so the household REST endpoint's
@@ -574,30 +588,29 @@ class MaintenanceStore:
             options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
         ):
             items.append(brush_key)
-        if self._is_due(IROBOT_PART_ROLE_SIDE_BRUSH, current_hr, None):
+        if self._is_due(
+            IROBOT_PART_ROLE_SIDE_BRUSH, current_hr, DEFAULT_SIDE_BRUSH_HOURS,
+        ):
             items.append("side_brush")
-        if self._is_due(IROBOT_PART_ROLE_CLEAN_BASE_BAG, current_hr, None):
+        if self._is_due(
+            IROBOT_PART_ROLE_CLEAN_BASE_BAG, current_hr, DEFAULT_CLEAN_BASE_BAG_HOURS,
+        ):
             items.append("clean_base_bag")
         return items
 
-    def _is_due(self, role: str, current_hr: int, threshold: int | None) -> bool:
+    def _is_due(self, role: str, current_hr: int, threshold: int) -> bool:
         """True when a maintenance role is due for replacement.
 
         The cloud's own exhausted-counter state wins whenever a usable
         cloud record exists — the same authoritative signal the official
         app uses, at minute rather than rounded-hour precision. Only when
         there is no such record does this fall back to the local
-        threshold-based hour count, and only for roles that have one
-        (`threshold` given); side_brush/clean_base_bag have none and are
-        never "due" without a cloud counter to ask.
+        threshold-based hour count, for every role alike.
         """
         exhausted = self._cloud_exhaustion_state(role)
         if exhausted is not None:
             return exhausted
-        if threshold is None:
-            return False
-        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[role]
-        return self._local_remaining(slot, current_hr, threshold) == 0
+        return self.remaining_hours(role, current_hr, threshold) == 0
 
     def _cloud_exhaustion_state(self, role: str) -> bool | None:
         """True/False when the cloud's own minute counter answers due-ness
@@ -630,12 +643,29 @@ class MaintenanceStore:
             return effective
         return max(0, effective - (current_hr - reset_hr))
 
+    def remaining_hours(self, role: str, current_hr: int, threshold: int) -> int:
+        """Hours remaining until replacement for any of the four
+        maintenance roles, local-only (no cloud counter) — see
+        _local_remaining()."""
+        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[role]
+        return self._local_remaining(slot, current_hr, threshold)
+
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next filter replacement, local-only (no
         cloud counter) — see _local_remaining()."""
-        return self._local_remaining("filter", current_hr, threshold)
+        return self.remaining_hours(IROBOT_PART_ROLE_FILTER, current_hr, threshold)
 
     def brush_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next brush/pad replacement, local-only (no
         cloud counter) — see _local_remaining()."""
-        return self._local_remaining("brush", current_hr, threshold)
+        return self.remaining_hours(IROBOT_PART_ROLE_MAIN_BRUSH, current_hr, threshold)
+
+    def side_brush_remaining(self, current_hr: int, threshold: int) -> int:
+        """Hours remaining until next side-brush replacement, local-only
+        (no cloud counter) — see _local_remaining()."""
+        return self.remaining_hours(IROBOT_PART_ROLE_SIDE_BRUSH, current_hr, threshold)
+
+    def clean_base_bag_remaining(self, current_hr: int, threshold: int) -> int:
+        """Hours remaining until next Clean Base bag replacement, local-only
+        (no cloud counter) — see _local_remaining()."""
+        return self.remaining_hours(IROBOT_PART_ROLE_CLEAN_BASE_BAG, current_hr, threshold)

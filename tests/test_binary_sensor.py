@@ -1157,8 +1157,7 @@ def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"
 
 class TestRoombaMaintenanceDueRequiredActions:
     """required_actions: a localized action string per currently-due
-    consumable, covering all four maintenance roles (filter/brush plus
-    the cloud-only side_brush/clean_base_bag)."""
+    consumable, covering all four maintenance roles alike."""
 
     def _due_store(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -1187,6 +1186,8 @@ class TestRoombaMaintenanceDueRequiredActions:
             "side_brush": "Replace the side brush.",
             "clean_base_bag": "Replace the Clean Base bag.",
         }
+        assert set(attrs["overdue_by_hours"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
+        assert attrs["overdue_by_hours"]["clean_base_bag"] == 20
 
     def test_localizes_to_polish(self):
         entity = _make_maintenance_due(

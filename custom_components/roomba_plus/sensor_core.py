@@ -45,7 +45,9 @@ from .const import (
     IROBOT_PART_ROLE_SIDE_BRUSH,
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
+    DEFAULT_CLEAN_BASE_BAG_HOURS,
     DEFAULT_FILTER_HOURS,
+    DEFAULT_SIDE_BRUSH_HOURS,
     JOB_INITIATOR_SLUGS,
     MOP_BEHAVIOR_SLUGS,
     MOP_PAD_SLUGS,
@@ -143,16 +145,6 @@ class RoombaSensorDescription(SensorEntityDescription):
     extra_attributes_fn: Callable[[IRobotEntity], dict[str, Any]] | None = field(
         default=None
     )
-
-def _has_cloud_part(entity: Any, role: str) -> bool:
-    """True when the cloud reports the consumable this sensor represents.
-
-    Used as `available_fn` so a part the robot does not have produces no
-    entity state at all, instead of an entity permanently reading unknown.
-    """
-    store = entity._config_entry.runtime_data.maintenance_store
-    return bool(store and store.cloud_part_by_role(role) is not None)
-
 
 def _clean_mode_slug(entity: Any) -> str:
     """Slug counterpart of sensor_helpers._clean_mode, for translation_key."""
@@ -261,10 +253,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
         max_hours_fn=_brush_max_hours,
     ),
-    # Consumables iRobot's cloud tracks that have no local wear signal.
-    # available_fn hides them entirely rather than showing a permanent
-    # "unknown" on a robot whose account does not report that part —
-    # a Braava has no side brush, a robot without a Clean Base has no bag.
     RoombaSensorDescription(
         key="part_edge_brush",
         translation_key="part_edge_brush",
@@ -273,7 +261,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=None,
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         filter_fn=lambda state: not is_braava(state),
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
+        threshold_fn=lambda e: DEFAULT_SIDE_BRUSH_HOURS,
         max_hours_fn=_side_brush_max_hours,
     ),
     RoombaSensorDescription(
@@ -283,7 +271,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.HOURS,
         entity_category=None,
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        filter_fn=has_clean_base,
+        threshold_fn=lambda e: DEFAULT_CLEAN_BASE_BAG_HOURS,
         max_hours_fn=_clean_base_bag_max_hours,
     ),
     RoombaSensorDescription(
@@ -1341,7 +1330,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda state: not is_braava(state),
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
         value_fn=_side_brush_wear_rate,
     ),
     RoombaSensorDescription(
@@ -1352,7 +1340,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        filter_fn=has_clean_base,
         value_fn=_clean_base_bag_wear_rate,
     ),
     RoombaSensorDescription(
@@ -1363,7 +1351,6 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,
         filter_fn=lambda state: not is_braava(state),
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
         value_fn=_side_brush_days_until_due,
     ),
     RoombaSensorDescription(
@@ -1373,7 +1360,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,
-        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        filter_fn=has_clean_base,
         value_fn=_clean_base_bag_days_until_due,
     ),
     # ── v1.9.0 Device Intelligence ───────────────────────────────────────────
@@ -1595,6 +1582,13 @@ _MISSION_STORE_SENSORS: frozenset[str] = frozenset({
     "last_error_code", "last_error_at", "last_error_zone",
 })
 
+_REMAINING_HOURS_ROLES: dict[str, tuple[str, str | None, int]] = {
+    "filter_remaining_hours": (IROBOT_PART_ROLE_FILTER, CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
+    "brush_remaining_hours": (IROBOT_PART_ROLE_MAIN_BRUSH, CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
+    "part_edge_brush": (IROBOT_PART_ROLE_SIDE_BRUSH, None, DEFAULT_SIDE_BRUSH_HOURS),
+    "part_dirt_bag": (IROBOT_PART_ROLE_CLEAN_BASE_BAG, None, DEFAULT_CLEAN_BASE_BAG_HOURS),
+}
+
 
 class RoombaSensor(IRobotEntity, SensorEntity):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
@@ -1773,50 +1767,25 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         options = self._config_entry.options
         store = self._config_entry.runtime_data.maintenance_store
 
-        # CLOUD FIRST, WHERE THERE IS CLOUD. iRobot tracks these two
+        # CLOUD FIRST, WHERE THERE IS CLOUD. iRobot tracks all four
         # consumables itself, in robot runtime minutes, and the official
         # app's maintenance tiles read that counter. When it is available
         # it is simply better than anything derivable locally: it survives
         # reinstalls, and it already accounts for replacements confirmed
-        # in the app before this integration existed.
-        #
-        # The local threshold estimate stays as the fallback for robots
-        # or accounts with no cloud parts data, so nothing regresses for
-        # them. `filter_remaining()` still runs in that case, hydrated
-        # baseline included.
-        if key == "filter_remaining_hours":
+        # in the app before this integration existed. The local reset
+        # baseline is the fallback for every role alike when the cloud has
+        # nothing to say.
+        if key in _REMAINING_HOURS_ROLES:
+            role, conf_key, default_hours = _REMAINING_HOURS_ROLES[key]
             if store:
-                cloud_hours = store.cloud_remaining_hours(IROBOT_PART_ROLE_FILTER)
+                cloud_hours = store.cloud_remaining_hours(role)
                 if cloud_hours is not None:
                     return cloud_hours
-            threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
+            threshold = options.get(conf_key, default_hours) if conf_key else default_hours
             current_hr = self.run_stats.get("hr", 0)
             if store:
-                return store.filter_remaining(current_hr, threshold)
+                return store.remaining_hours(role, current_hr, threshold)
             return int(max(0, threshold - current_hr))
-
-        if key == "brush_remaining_hours":
-            # The MAIN brushes own this sensor. The side brush wears on a
-            # different schedule and gets its own entity rather than being
-            # averaged into a single "brushes" number.
-            if store:
-                cloud_hours = store.cloud_remaining_hours(IROBOT_PART_ROLE_MAIN_BRUSH)
-                if cloud_hours is not None:
-                    return cloud_hours
-            threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-            current_hr = self.run_stats.get("hr", 0)
-            if store:
-                return store.brush_remaining(current_hr, threshold)
-            return int(max(0, threshold - current_hr))
-
-        # Consumables iRobot tracks that have no local equivalent — there
-        # is no runtime-hours fallback to compute, so these are cloud-only
-        # and report unknown without it.
-        if key == "part_edge_brush":
-            return store.cloud_remaining_hours(IROBOT_PART_ROLE_SIDE_BRUSH) if store else None
-
-        if key == "part_dirt_bag":
-            return store.cloud_remaining_hours(IROBOT_PART_ROLE_CLEAN_BASE_BAG) if store else None
 
         if key == "next_clean":
             return self._calc_next_clean()

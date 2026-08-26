@@ -1,10 +1,10 @@
 """Cloud-synced maintenance consumables.
 
-The existing filter/brush sensors read iRobot's own per-part counters when
-the account serves them, and fall back to the local runtime-hours estimate
-when it does not. Parts with no local equivalent (side brush, Clean Base
-bag) get their own cloud-only sensors. Replacements recorded here are
-pushed back to iRobot so the app and this integration agree.
+All four consumables (filter, main brush, side brush, Clean Base bag)
+read iRobot's own per-part counters when the account serves them, and
+fall back to the same local reset-baseline/threshold estimate when it
+does not. Replacements recorded here are pushed back to iRobot so the
+app and this integration agree.
 
 Every payload here is a real capture from an i3+ (sku i355640, firmware
 daredevil+2.6.0) — see tests/fixtures/irobot_parts_i3plus.json.
@@ -277,20 +277,20 @@ class TestSensorsPreferCloud:
     def test_brush_sensor_reports_the_main_brush_cloud_hours(self):
         assert self._sensor("brush_remaining_hours", _hydrated()).native_value == 18
 
-    def test_side_brush_sensor_is_cloud_only(self):
+    def test_side_brush_sensor_prefers_cloud(self):
         assert self._sensor(
             "part_edge_brush", _hydrated()
         ).native_value == 99
 
-    def test_bag_sensor_is_cloud_only(self):
+    def test_bag_sensor_prefers_cloud(self):
         assert self._sensor(
             "part_dirt_bag", _hydrated()
         ).native_value == 12
 
-    def test_cloud_only_sensors_report_none_without_cloud_data(self):
+    def test_side_brush_and_bag_fall_back_to_local_estimate_without_cloud(self):
         empty = MaintenanceStore()
-        for key in ("part_edge_brush", "part_dirt_bag"):
-            assert self._sensor(key, empty).native_value is None
+        assert self._sensor("part_edge_brush", empty).native_value == 150
+        assert self._sensor("part_dirt_bag", empty).native_value == 30
 
     def test_filter_falls_back_to_local_estimate_without_cloud(self):
         """Robots whose account serves no parts data must keep the

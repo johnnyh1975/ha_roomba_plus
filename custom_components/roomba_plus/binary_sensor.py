@@ -35,7 +35,9 @@ from .const import (
     CONF_BRUSH_HOURS,
     CONF_FILTER_HOURS,
     DEFAULT_BRUSH_HOURS,
+    DEFAULT_CLEAN_BASE_BAG_HOURS,
     DEFAULT_FILTER_HOURS,
+    DEFAULT_SIDE_BRUSH_HOURS,
     DOMAIN,
     EVENT_STUCK,
     MQTT_WATCHDOG_SECONDS,
@@ -581,7 +583,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return which consumables are due, how many hours overdue each
-        filter/brush is, and a localized action string per due consumable.
+        one is, and a localized action string per due consumable.
 
         overdue_by_hours values are 0 when exactly at threshold, positive when
         past it. This is useful for automations that escalate alerts based on
@@ -593,15 +595,16 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         if store and due:
             current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
             options = self._entry.options
-            if "filter" in due:
-                threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-                hours_since_reset = current_hr - store.filter_reset_hr
-                overdue["filter"] = max(0, hours_since_reset - threshold)
             brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
-            if brush_key in due:
-                threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-                hours_since_reset = current_hr - store.brush_reset_hr
-                overdue[brush_key] = max(0, hours_since_reset - threshold)
+            role_thresholds = {
+                "filter": (store.filter_reset_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)),
+                brush_key: (store.brush_reset_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)),
+                "side_brush": (store.side_brush_reset_hr, DEFAULT_SIDE_BRUSH_HOURS),
+                "clean_base_bag": (store.clean_base_bag_reset_hr, DEFAULT_CLEAN_BASE_BAG_HOURS),
+            }
+            for part, (reset_hr, threshold) in role_thresholds.items():
+                if part in due:
+                    overdue[part] = max(0, (current_hr - reset_hr) - threshold)
         required_actions = {
             part: get_localized_maintenance_action(part, self.hass.config.language)
             for part in due

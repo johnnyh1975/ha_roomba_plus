@@ -272,6 +272,10 @@ DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
 
 DEFAULT_FILTER_HOURS: Final = 60    # iRobot recommendation: every 2 months
 DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
+# Local fallback only, from the i3+ cloud full-life capture (~157h/~29h)
+# in tests/fixtures/irobot_parts_i3plus.json.
+DEFAULT_SIDE_BRUSH_HOURS: Final = 150
+DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 30
 
 # ── Cloud consumable parts (/v1/robots/{blid}/parts) ─────────────────────────
 #

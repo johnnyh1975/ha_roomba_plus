@@ -252,7 +252,7 @@ class TestRoombaSensorNativeValue:
         # No cloud counter for this part — this test is about the local
         # threshold/store fallback, which only runs when the cloud has none.
         store.cloud_remaining_hours.return_value = None
-        store.filter_remaining.return_value = 42
+        store.remaining_hours.return_value = 42
 
         sensor = self._sensor(
             "filter_remaining_hours", run_stats={"hr": 30},
@@ -260,15 +260,15 @@ class TestRoombaSensorNativeValue:
         )
 
         assert sensor.native_value == 42
-        store.filter_remaining.assert_called_once_with(30, 100)
+        store.remaining_hours.assert_called_once_with("filter", 30, 100)
 
-    def test_brush_hours_use_their_own_threshold_and_store_method(self):
+    def test_brush_hours_use_their_own_threshold_and_role(self):
         """Filter and brush wear at different rates and are replaced
         independently -- crossing the two would be silently wrong."""
         store = MagicMock()
         # As above: local-path test, so no cloud counter.
         store.cloud_remaining_hours.return_value = None
-        store.brush_remaining.return_value = 11
+        store.remaining_hours.return_value = 11
 
         sensor = self._sensor(
             "brush_remaining_hours", run_stats={"hr": 60},
@@ -276,8 +276,7 @@ class TestRoombaSensorNativeValue:
         )
 
         assert sensor.native_value == 11
-        store.brush_remaining.assert_called_once_with(60, 200)
-        store.filter_remaining.assert_not_called()
+        store.remaining_hours.assert_called_once_with("main_brush", 60, 200)
 
     def test_missing_runtime_hours_are_treated_as_zero(self):
         """A freshly connected robot has no 'hr' yet; the sensor must
@@ -291,9 +290,8 @@ class TestRoombaSensorNativeValue:
 
 class TestRoombaSensorMaxHoursAttribute:
     """max_hours in extra_state_attributes: cloud full-life hours when a
-    cloud record exists, else (filter/main_brush only) the learned-or-
-    configured threshold; side_brush/clean_base_bag have no such local
-    fallback and simply omit the attribute without a cloud record."""
+    cloud record exists, else the learned-or-hardcoded/configured
+    threshold for every role alike."""
 
     def _sensor(self, key, *, options=None, store=None):
         from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
@@ -332,13 +330,13 @@ class TestRoombaSensorMaxHoursAttribute:
         attrs = sensor.extra_state_attributes
         assert attrs["max_hours"] == 60  # (600+3000)/60, overrides the 80h configured threshold
 
-    def test_part_edge_brush_has_no_max_hours_without_cloud_data(self):
+    def test_part_edge_brush_falls_back_to_hardcoded_threshold_without_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 
         sensor = self._sensor("part_edge_brush", store=MaintenanceStore())
         attrs = sensor.extra_state_attributes
-        assert "max_hours" not in attrs
-        assert "threshold_hours" not in attrs
+        assert attrs["threshold_hours"] == 150
+        assert attrs["max_hours"] == 150
 
     def test_part_edge_brush_exposes_max_hours_with_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -351,7 +349,15 @@ class TestRoombaSensorMaxHoursAttribute:
         sensor = self._sensor("part_edge_brush", store=store)
         attrs = sensor.extra_state_attributes
         assert attrs["max_hours"] == 60
-        assert "threshold_hours" not in attrs
+        assert attrs["threshold_hours"] == 150
+
+    def test_part_dirt_bag_falls_back_to_hardcoded_threshold_without_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor("part_dirt_bag", store=MaintenanceStore())
+        attrs = sensor.extra_state_attributes
+        assert attrs["threshold_hours"] == 30
+        assert attrs["max_hours"] == 30
 
     def test_part_dirt_bag_exposes_max_hours_with_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -362,7 +368,9 @@ class TestRoombaSensorMaxHoursAttribute:
              "count_type": "minutes", "last_updated_ts": 1700000000},
         ], 500)
         sensor = self._sensor("part_dirt_bag", store=store)
-        assert sensor.extra_state_attributes["max_hours"] == 60
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60
+        assert attrs["threshold_hours"] == 30
 
 
 class TestNewConsumableSensorDescriptors:
@@ -379,7 +387,7 @@ class TestNewConsumableSensorDescriptors:
         ):
             assert key in keys, f"Missing sensor key: {key}"
 
-    def test_new_descriptors_are_gated_on_their_cloud_part(self):
+    def test_new_descriptors_are_gated_on_robot_capability(self):
         from custom_components.roomba_plus.sensor_core import SENSORS
 
         for key in (
@@ -387,7 +395,7 @@ class TestNewConsumableSensorDescriptors:
             "clean_base_bag_wear_rate", "clean_base_bag_days_until_due",
         ):
             desc = next(d for d in SENSORS if d.key == key)
-            assert desc.available_fn is not None
+            assert desc.filter_fn is not None
             assert desc.translation_key == key
 
 
