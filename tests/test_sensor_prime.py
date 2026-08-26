@@ -389,16 +389,18 @@ class TestDockStateLabel:
     def test_confirmed_real_captured_values(self):
         """Uses chairstacker's own real captured values (301/601/701),
         confirming the dock/pad-wash/pad-dry status labels resolve to
-        the real, named DockState members, not just bare numbers."""
-        assert _dock_state_label(301) == "Dock ready"
-        assert _dock_state_label(601) == "Pad wash okay"
-        assert _dock_state_label(701) == "Pad dry okay"
+        stable [a-z0-9_]+ slugs for the real, named DockState members,
+        not just bare numbers or English prose."""
+        assert _dock_state_label(301) == "dock_ready"
+        assert _dock_state_label(601) == "pad_wash_okay"
+        assert _dock_state_label(701) == "pad_dry_okay"
 
     def test_unrecognized_value_does_not_crash(self):
         """DockState has 86 confirmed values -- an out-of-range value
         (a server-side addition this library doesn't know about yet)
-        must degrade gracefully, not raise."""
-        assert _dock_state_label(99999) == "Unknown (99999)"
+        must degrade gracefully, not raise, and must still be a valid
+        state slug rather than a number embedded in text."""
+        assert _dock_state_label(99999) == "unrecognized"
 
     def test_none_returns_none(self):
         assert _dock_state_label(None) is None
@@ -409,7 +411,15 @@ class TestPrimeDockStatusSensor:
         config_entry = _make_status_config_entry({"dock": {"state": 301}})
         sensor = PrimeDockStatusSensor("BLID123", config_entry)
 
-        assert sensor.native_value == "Dock ready"
+        assert sensor.native_value == "dock_ready"
+        assert sensor.extra_state_attributes == {"code": 301}
+
+    def test_unrecognized_code_falls_back_to_a_slug(self):
+        config_entry = _make_status_config_entry({"dock": {"state": 99999}})
+        sensor = PrimeDockStatusSensor("BLID123", config_entry)
+
+        assert sensor.native_value == "unrecognized"
+        assert sensor.extra_state_attributes == {"code": 99999}
 
 
 class TestPrimePadWashStatusSensor:
@@ -417,7 +427,8 @@ class TestPrimePadWashStatusSensor:
         config_entry = _make_status_config_entry({"dock": {"pwState": 601}})
         sensor = PrimePadWashStatusSensor("BLID123", config_entry)
 
-        assert sensor.native_value == "Pad wash okay"
+        assert sensor.native_value == "pad_wash_okay"
+        assert sensor.extra_state_attributes == {"code": 601}
 
 
 class TestPrimePadDryStatusSensor:
@@ -425,7 +436,8 @@ class TestPrimePadDryStatusSensor:
         config_entry = _make_status_config_entry({"dock": {"pdState": 701}})
         sensor = PrimePadDryStatusSensor("BLID123", config_entry)
 
-        assert sensor.native_value == "Pad dry okay"
+        assert sensor.native_value == "pad_dry_okay"
+        assert sensor.extra_state_attributes == {"code": 701}
 
 
 class TestPrimeSuctionLevelSensor:
@@ -995,7 +1007,7 @@ class TestFieldObservedDockStates:
         return _dock_state_label(value)
 
     def test_671_is_named(self):
-        assert self._label(671) == "Pad wash not possible (check tanks)"
+        assert self._label(671) == "pad_wash_blocked_check_tanks"
 
     def test_it_does_not_say_empty(self):
         """The tank was REMOVED, not empty. "Empty" sends someone to
@@ -1005,11 +1017,11 @@ class TestFieldObservedDockStates:
 
     def test_enum_values_still_win(self):
         """The overlay must not shadow the decompiled enum."""
-        assert self._label(601) == "Pad wash okay"
-        assert self._label(301) == "Dock ready"
+        assert self._label(601) == "pad_wash_okay"
+        assert self._label(301) == "dock_ready"
 
     def test_an_unknown_code_still_falls_back(self):
-        assert self._label(9999) == "Unknown (9999)"
+        assert self._label(9999) == "unrecognized"
 
     def test_the_enum_is_not_polluted(self):
         """DockState stays purely APK-derived, so the next reader can
@@ -1727,6 +1739,58 @@ class TestTheBlockingReportDoesNotBlock:
         assert "language = (" in before_error
 
 
+class TestPrimeReadinessSensor:
+    """Untested before this session -- `notReady` was slug-converted
+    alongside the dock/pad-wash/pad-dry/job-initiator sensors, and
+    needed its own coverage for the same reason they did."""
+
+    @staticmethod
+    def _sensor(not_ready):
+        from unittest.mock import MagicMock, PropertyMock, patch
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeReadinessSensor,
+        )
+
+        sensor = PrimeReadinessSensor.__new__(PrimeReadinessSensor)
+        state = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(not_ready=not_ready)
+        )
+        return sensor, patch.object(
+            PrimeReadinessSensor, "_current_state",
+            new_callable=PropertyMock, return_value=state,
+        )
+
+    def test_zero_means_ready(self):
+        sensor, state = self._sensor(0)
+        with state:
+            assert sensor.native_value == "none"
+            assert sensor.extra_state_attributes == {"code": 0}
+
+    def test_a_named_code_becomes_a_slug(self):
+        """13 is "Bin full" in READINESS_STATE_LABELS."""
+        sensor, state = self._sensor(13)
+        with state:
+            assert sensor.native_value == "bin_full"
+            assert sensor.extra_state_attributes == {"code": 13}
+
+    def test_an_unrecognized_code_still_falls_back(self):
+        """@connormxy's error 236 is exactly this case -- a code the
+        table has no entry for must still show something, not a blank
+        sensor, and it must still be a valid state slug."""
+        sensor, state = self._sensor(236)
+        with state:
+            assert sensor.native_value == "unrecognized"
+            assert sensor.extra_state_attributes == {"code": 236}
+
+    def test_no_code_reads_none(self):
+        sensor, state = self._sensor(None)
+        with state:
+            assert sensor.native_value is None
+            assert sensor.extra_state_attributes == {}
+
+
 class TestTheInitiatorSensorSeparatesTwoQuestions:
     """`cleanMissionStatus.initiator` and `lastCommand.initiator` are
     different fields, and @chairstacker's dump shows them disagreeing at
@@ -1765,7 +1829,7 @@ class TestTheInitiatorSensorSeparatesTwoQuestions:
     def test_it_reports_the_mission_initiator(self):
         sensor, state, _ = self._sensor("schedule")
         with state:
-            assert sensor.native_value == "iRobot schedule"
+            assert sensor.native_value == "schedule"
 
     def test_the_last_command_is_an_attribute_not_the_state(self):
         """Both are real. A second entity called "Last command by" beside
@@ -1775,11 +1839,11 @@ class TestTheInitiatorSensorSeparatesTwoQuestions:
             {"command": "stoppaddry", "initiator": "rmtApp", "time": 1784831254},
         )
         with state, last:
-            assert sensor.native_value == "iRobot cloud"
+            assert sensor.native_value == "cloud"
             attrs = sensor.extra_state_attributes
 
         assert attrs["last_command"] == "stoppaddry"
-        assert attrs["last_command_by"] == "iRobot app"
+        assert attrs["last_command_by"] == "rmt_app"
         assert attrs["initiator"] == "cloud"
 
     def test_the_raw_value_is_kept_beside_the_label(self):
@@ -1792,12 +1856,14 @@ class TestTheInitiatorSensorSeparatesTwoQuestions:
         assert attrs["initiator"] == "dockBtn"
         assert attrs["last_command_initiator"] == "alexa"
 
-    def test_an_unmapped_value_shows_itself(self):
+    def test_an_unmapped_value_still_produces_a_valid_slug(self):
         """Rather than "None", which is the same answer as "no
-        information at all" — the failure this table already had once."""
+        information at all" — the failure this table already had once.
+        And rather than the raw camelCase wire value, which is not a
+        valid `[a-z0-9_]+` Home Assistant state."""
         sensor, state, _ = self._sensor("somethingNew")
         with state:
-            assert sensor.native_value == "somethingNew"
+            assert sensor.native_value == "something_new"
 
 
 class TestTheThirdPhaseCategory:
@@ -1886,7 +1952,7 @@ class TestADockTheRobotDoesNotKnowSaysSo:
 
         value = self._sensor(MagicMock(state=None, known=False))
 
-        assert value == "Not reported by this dock"
+        assert value == "not_reported"
 
     def test_a_known_dock_with_no_state_still_reads_none(self):
         """`known: true` and no state is a different situation — the
@@ -1901,7 +1967,7 @@ class TestADockTheRobotDoesNotKnowSaysSo:
 
         value = self._sensor(MagicMock(state=301, known=True))
 
-        assert value not in (None, "Not reported by this dock")
+        assert value not in (None, "not_reported")
 
 
 # ============================================================================

@@ -2275,3 +2275,30 @@ PRIME_ERROR_SEVERITY: Final[dict[int, tuple[str, int]]] = {
     4003: ('maintanance', 0),
     4004: ('p3', 0),
 }
+
+
+# READINESS_STATE_LABELS and JOB_INITIATOR_LABELS above stay English:
+# test_const.py asserts their values directly, and sensor_core.py/
+# sensor_helpers.py read them as Classic display text. sensor_prime.py's
+# V4/Prime sensors (prime_dock_status, prime_pad_wash_status,
+# prime_pad_dry_status, readiness, job_initiator) need a stable
+# `[a-z0-9_]+` slug instead, for Home Assistant's translated-state
+# lookup (see PrimeDetectedPadSensor's own _PAD_STATE_SLUGS) -- derived
+# here rather than duplicated, so neither table can drift from the
+# other.
+def state_slug(value: str) -> str:
+    """An English label ("Wheel drop both") or a camelCase wire value
+    ("dockBtn") -> a stable `[a-z0-9_]+` Home Assistant state slug.
+
+    Splits camelCase boundaries before collapsing everything else --
+    spaces, punctuation, runs of either -- to single underscores, so one
+    function handles both kinds of input this project has: hand-written
+    English descriptions and the vendor's own bare identifiers. An empty
+    result falls back to "unknown" rather than "" -- Home Assistant's
+    state machine rejects an empty state outright.
+    """
+    import re as _re  # noqa: PLC0415
+
+    with_boundaries = _re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", with_boundaries).strip("_").lower()
+    return slug or "unknown"
