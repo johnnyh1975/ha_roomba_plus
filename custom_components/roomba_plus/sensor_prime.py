@@ -53,11 +53,11 @@ from .const import (
     ERROR_CODE_LABELS,
     CLEANING_PHASES,
     DOCK_TASK_PHASES,
-    JOB_INITIATOR_LABELS,
     PRIME_BLOCKING_FAULTS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
     get_localized_error_entry,
+    state_slug,
 )
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
@@ -607,20 +607,24 @@ _PAD_STATE_SLUGS: dict[str, str] = {
 #: The label below stands on its own evidence: two controlled
 #: before-and-after observations on a real dock, which remain the only
 #: source describing THIS state.
-_FIELD_OBSERVED_DOCK_STATES: Final[dict[int, str]] = {
-    671: "Pad wash not possible (check tanks)",
+_FIELD_OBSERVED_DOCK_STATE_SLUGS: Final[dict[int, str]] = {
+    671: "pad_wash_blocked_check_tanks",
 }
 
 
 def _dock_state_label(raw_value: Any) -> str | None:
-    """Formats a DockState enum member (or its raw int, if the value
-    isn't one of the 86 confirmed members) into a readable label --
-    e.g. DOCK_READY -> "Dock ready". Not run through HA's own
-    device_class=ENUM/translated-options machinery: DockState has 86
-    members, mostly rarely-seen *_ERROR states -- translating all of
-    them in all 8 languages would be a disproportionate effort for
-    values a real user will almost never see, the same reasoning
-    already applied to PrimeDetectedPadSensor above."""
+    """Formats a DockState enum member (or its raw int) into a stable
+    `[a-z0-9_]+` Home Assistant state slug -- e.g. DOCK_READY ->
+    "dock_ready". Not run through HA's own device_class=ENUM/
+    translated-options machinery: DockState has 86 members, mostly
+    rarely-seen *_ERROR states -- declaring all of them as `options`
+    would be a disproportionate effort for values a real user will
+    almost never see, the same reasoning already applied to
+    PrimeDetectedPadSensor above. A value outside those 86 falls back
+    to a field-observed slug (_FIELD_OBSERVED_DOCK_STATE_SLUGS) or, for
+    a genuinely unrecognised code, "unrecognized" -- the raw int stays
+    available via the sensor's own extra_state_attributes rather than
+    being folded into the state itself."""
     from roombapy_prime.models.robot_info import DockState
 
     if raw_value is None:
@@ -628,12 +632,8 @@ def _dock_state_label(raw_value: Any) -> str | None:
     try:
         member = DockState(raw_value)
     except ValueError:
-        # Field-observed codes before the bare fallback: "Unknown (671)"
-        # is what a tester actually saw for a condition this project can
-        # name.
-        known = _FIELD_OBSERVED_DOCK_STATES.get(raw_value)
-        return known if known else f"Unknown ({raw_value})"
-    return str(member.name.replace("_", " ").capitalize())
+        return _FIELD_OBSERVED_DOCK_STATE_SLUGS.get(raw_value, "unrecognized")
+    return state_slug(member.name)
 
 
 class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
@@ -679,16 +679,20 @@ class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
         # The sensor was right to have nothing to say. It just did not
         # say which nothing.
         if state.dock.state is None:
-            # Plain text, like every other value this sensor returns
-            # -- "Pad wash okay", "Unknown (671)". It has no translated
-            # state list.
             return (
-                "Not reported by this dock"
+                "not_reported"
                 if state.dock.known is False
                 else None
             )
 
         return _dock_state_label(state.dock.state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        if state is None or state.dock is None or state.dock.state is None:
+            return {}
+        return {"code": int(state.dock.state)}
 
 
 class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
@@ -711,6 +715,13 @@ class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
         if state is None or state.dock is None:
             return None
         return _dock_state_label(state.dock.pw_state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        if state is None or state.dock is None or state.dock.pw_state is None:
+            return {}
+        return {"code": int(state.dock.pw_state)}
 
 
 class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
@@ -776,6 +787,13 @@ class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
         if state is None or state.dock is None:
             return None
         return _dock_state_label(state.dock.pd_state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        if state is None or state.dock is None or state.dock.pd_state is None:
+            return {}
+        return {"code": int(state.dock.pd_state)}
 
 
 class PrimeSuctionLevelSensor(_PrimeCurrentStateSensorBase):
@@ -2125,11 +2143,20 @@ class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
             code_int = int(code)
         except (TypeError, ValueError):
             return None
-        # THE CODE WHEN THERE IS NO LABEL, rather than nothing. An
-        # unmapped reason a user can quote in a report is worth more
-        # than a blank sensor -- @connormxy's error 236 is exactly the
-        # case, and it went unnamed because nothing displayed it.
-        return READINESS_STATE_LABELS.get(code_int) or f"Unknown ({code_int})"
+        label = READINESS_STATE_LABELS.get(code_int)
+        return state_slug(label) if label else "unrecognized"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        status = None if state is None else state.clean_mission_status
+        code = getattr(status, "not_ready", None)
+        if code is None:
+            return {}
+        try:
+            return {"code": int(code)}
+        except (TypeError, ValueError):
+            return {}
 
 
 class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
@@ -2183,7 +2210,7 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
         raw = getattr(status, "initiator", None)
         if not raw:
             return None
-        return JOB_INITIATOR_LABELS.get(str(raw), str(raw))
+        return state_slug(str(raw))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -2207,9 +2234,7 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
             if command:
                 attrs["last_command"] = str(command)
             if initiator:
-                attrs["last_command_by"] = JOB_INITIATOR_LABELS.get(
-                    str(initiator), str(initiator)
-                )
+                attrs["last_command_by"] = state_slug(str(initiator))
                 attrs["last_command_initiator"] = str(initiator)
             if last.get("time"):
                 attrs["last_command_time"] = last["time"]
