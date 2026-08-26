@@ -624,8 +624,11 @@ class MaintenanceStore:
         int(), avoids a systematic truncation error of up to 59 minutes.
         """
         effective = round(self._learned_hours(slot) or threshold)
-        hours_since_reset = current_hr - getattr(self, f"{slot}_reset_hr")
-        return max(0, effective - hours_since_reset)
+        try:
+            reset_hr = int(getattr(self, f"{slot}_reset_hr"))
+        except (TypeError, ValueError):
+            return effective
+        return max(0, effective - (current_hr - reset_hr))
 
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next filter replacement, local-only (no

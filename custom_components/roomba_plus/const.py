@@ -1564,20 +1564,6 @@ BIN_LABELS: Final[dict[bool, str]] = {True: "Full", False: "Not full"}
 
 YES_NO_LABELS: Final[dict[bool, str]] = {True: "Yes", False: "No"}
 
-CLEAN_BASE_LABELS: Final[dict[int, str]] = {
-    -2: "Not available",
-    -1: "Unknown",
-    300: "Ready",
-    301: "Ready",
-    302: "Empty",
-    303: "Empty",
-    350: "Bag missing",
-    351: "Clogged",
-    352: "Sealing problem",
-    353: "Bag full",
-    360: "IR comms problem",
-    364: "Bin full — sensors not cleared",
-}
 
 JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     # A SCHEDULED MISSION MAY NOT REPORT `schedule`. @chairstacker's
@@ -1643,12 +1629,6 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     "unknown": "Unknown",
 }
 
-MOP_RANK_LABELS: Final[dict[int, str]] = {
-    15: "No mop",
-    25: "Extended",
-    67: "Standard",
-    85: "Deep",
-}
 
 #: `detectedPad` wire values.
 #:
@@ -1692,10 +1672,6 @@ CLEAN_MODE_LABELS: Final[dict[str, str]] = {
     "n-a": "Not available",
 }
 
-# Slug counterparts of the label dicts above, for translation_key sensors.
-# The *_LABELS dicts keep their English values — select.py and
-# sensor_prime.py still read them as display/command text — so these are
-# separate dicts, not a mutation in place.
 CLEAN_BASE_STATUS_SLUGS: Final[dict[int, str]] = {
     -2: "not_available",
     -1: "unknown",

@@ -284,7 +284,11 @@ def _consumable_max_hours(
         return None
     threshold = entity._config_entry.options.get(conf_key, default_hours)
     learned = getattr(maint, learned_hours_attr) if learned_hours_attr else None
-    return round(learned or threshold)
+    value = learned if learned is not None else threshold
+    try:
+        return round(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _filter_wear_rate(entity: "IRobotEntity") -> float | None:
