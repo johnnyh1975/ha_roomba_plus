@@ -61,6 +61,7 @@ from .const import (
     ERROR_CODE_LABELS,
     CLEANING_PHASES,
     DOCK_TASK_PHASES,
+    JOB_INITIATOR_SLUGS,
     PRIME_BLOCKING_FAULTS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
@@ -2272,7 +2273,7 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
         raw = getattr(status, "initiator", None)
         if not raw:
             return None
-        return state_slug(str(raw))
+        return JOB_INITIATOR_SLUGS.get(str(raw), "none")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -2296,7 +2297,7 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
             if command:
                 attrs["last_command"] = str(command)
             if initiator:
-                attrs["last_command_by"] = state_slug(str(initiator))
+                attrs["last_command_by"] = JOB_INITIATOR_SLUGS.get(str(initiator), "none")
                 attrs["last_command_initiator"] = str(initiator)
             if last.get("time"):
                 attrs["last_command_time"] = last["time"]
