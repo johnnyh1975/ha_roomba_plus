@@ -70,13 +70,18 @@ from .sensor_helpers import (
     _battery_age_days,
     _battery_capacity_retention,
     _brush_days_until_due,
+    _brush_max_hours,
     _brush_wear_rate,
+    _clean_base_bag_days_until_due,
+    _clean_base_bag_max_hours,
+    _clean_base_bag_wear_rate,
     _completion_rate_30d,
     _error_value,
     _estcap_to_mah,
     _estimated_battery_eol,
     _expire_minutes_remaining,
     _filter_days_until_due,
+    _filter_max_hours,
     _filter_wear_rate,
     _last_error_at_value,
     _last_error_code_value,
@@ -95,6 +100,9 @@ from .sensor_helpers import (
     _presence_utilisation,
     _problem_zone_value,
     _recharge_minutes_remaining,
+    _side_brush_days_until_due,
+    _side_brush_max_hours,
+    _side_brush_wear_rate,
     _total_energy_consumed_kwh,
     _ts_or_none,
 )
@@ -122,6 +130,12 @@ class RoombaSensorDescription(SensorEntityDescription):
     # v1.7.0 L2 — when set, exposed as "threshold_hours" in extra_state_attributes
     # Used by the Lovelace card to compute remaining % without hard-coded thresholds.
     threshold_fn: Callable[[IRobotEntity], int | None] = field(
+        default_factory=lambda: lambda _: None
+    )
+    # Full-life hours for a consumable, exposed as "max_hours" alongside
+    # threshold_hours — lets the card render remaining/max as a fraction
+    # even for cloud-only consumables that have no threshold_fn.
+    max_hours_fn: Callable[[IRobotEntity], int | None] = field(
         default_factory=lambda: lambda _: None
     )
     # v2.7.1 — optional extra attributes beyond what RoombaSensor.extra_state_attributes
@@ -235,6 +249,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         threshold_fn=lambda e: e._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
+        max_hours_fn=_filter_max_hours,
     ),
     RoombaSensorDescription(
         key="brush_remaining_hours",
@@ -244,6 +259,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
+        max_hours_fn=_brush_max_hours,
     ),
     # Consumables iRobot's cloud tracks that have no local wear signal.
     # available_fn hides them entirely rather than showing a permanent
@@ -258,6 +274,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         filter_fn=lambda state: not is_braava(state),
         available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
+        max_hours_fn=_side_brush_max_hours,
     ),
     RoombaSensorDescription(
         key="part_dirt_bag",
@@ -267,6 +284,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=None,
         value_fn=lambda e: None,  # computed in RoombaSensor.native_value
         available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        max_hours_fn=_clean_base_bag_max_hours,
     ),
     RoombaSensorDescription(
         key="battery_cycles",
@@ -1314,6 +1332,50 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         filter_fn=lambda s: is_mop(s),
         value_fn=_brush_days_until_due,
     ),
+    RoombaSensorDescription(
+        key="side_brush_wear_rate",
+        translation_key="side_brush_wear_rate",
+        name="Maintenance – Side brush wear rate",
+        native_unit_of_measurement="h/day",
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        filter_fn=lambda state: not is_braava(state),
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
+        value_fn=_side_brush_wear_rate,
+    ),
+    RoombaSensorDescription(
+        key="clean_base_bag_wear_rate",
+        translation_key="clean_base_bag_wear_rate",
+        name="Maintenance – Clean Base bag wear rate",
+        native_unit_of_measurement="h/day",
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        value_fn=_clean_base_bag_wear_rate,
+    ),
+    RoombaSensorDescription(
+        key="side_brush_days_until_due",
+        translation_key="side_brush_days_until_due",
+        name="Maintenance – Side brush days until due",
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=None,
+        filter_fn=lambda state: not is_braava(state),
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_SIDE_BRUSH),
+        value_fn=_side_brush_days_until_due,
+    ),
+    RoombaSensorDescription(
+        key="clean_base_bag_days_until_due",
+        translation_key="clean_base_bag_days_until_due",
+        name="Maintenance – Clean Base bag days until due",
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=None,
+        available_fn=lambda e: _has_cloud_part(e, IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        value_fn=_clean_base_bag_days_until_due,
+    ),
     # ── v1.9.0 Device Intelligence ───────────────────────────────────────────
     # opt-in (entity_registry_enabled_default=False): lifetime diagnostic
     # counters and static hardware values. Useful for power users and
@@ -1789,10 +1851,19 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         extra_fn = self.entity_description.extra_attributes_fn
         if extra_fn is not None:
             return extra_fn(self)
-        # v1.7.0 L2: threshold_hours for consumable remaining sensors
+        # v1.7.0 L2: threshold_hours/max_hours for consumable remaining
+        # sensors — independent of each other, so a cloud-only role like
+        # side_brush/clean_base_bag can report max_hours with no
+        # threshold_hours at all.
         threshold = self.entity_description.threshold_fn(self)
-        if threshold is not None:
-            return {"threshold_hours": threshold}
+        max_hours = self.entity_description.max_hours_fn(self)
+        if threshold is not None or max_hours is not None:
+            attrs: dict[str, Any] = {}
+            if threshold is not None:
+                attrs["threshold_hours"] = threshold
+            if max_hours is not None:
+                attrs["max_hours"] = max_hours
+            return attrs
         # v1.8.0 L3: description + action for last_error_code
         # v3.4.1: localised via hass.config.language, falls back to English
         if key == "last_error_code":
@@ -1809,16 +1880,22 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         # native_value must stay None (HA requirement for MEASUREMENT sensors)
         # but extra attributes give the user context about why.
         if key in ("filter_wear_rate", "brush_wear_rate", "pad_wear_rate",
-                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due"):
+                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due",
+                   "side_brush_wear_rate", "side_brush_days_until_due",
+                   "clean_base_bag_wear_rate", "clean_base_bag_days_until_due"):
             if self.native_value is None:
                 maint = self._config_entry.runtime_data.maintenance_store
                 if maint is None:
                     return {"status": "Maintenance store not available"}
-                reset_at = (
-                    maint.filter_reset_at
-                    if "filter" in key
-                    else maint.brush_reset_at
-                )
+                if "filter" in key:
+                    role = IROBOT_PART_ROLE_FILTER
+                elif "side_brush" in key:
+                    role = IROBOT_PART_ROLE_SIDE_BRUSH
+                elif "clean_base_bag" in key:
+                    role = IROBOT_PART_ROLE_CLEAN_BASE_BAG
+                else:
+                    role = IROBOT_PART_ROLE_MAIN_BRUSH
+                _reset_hr, reset_at = maint.reset_baseline_for_role(role)
                 if reset_at is None:
                     return {"status": "Press the replacement confirmation button to start tracking"}
                 return {"status": "Collecting data — available after 3 days"}
@@ -1900,7 +1977,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             return "bbrun" in new_state
         # v1.9.0 L4 — Wear Intelligence sensors
         if key in ("filter_wear_rate", "brush_wear_rate", "pad_wear_rate",
-                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due"):
+                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due",
+                   "side_brush_wear_rate", "side_brush_days_until_due",
+                   "clean_base_bag_wear_rate", "clean_base_bag_days_until_due"):
             # bbrun: 900-series source for hr; runtimeStats: i/s/j-series source.
             # cleanMissionStatus: triggers recalc at mission end.
             return (

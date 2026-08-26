@@ -289,6 +289,108 @@ class TestRoombaSensorNativeValue:
         assert sensor.native_value == 100
 
 
+class TestRoombaSensorMaxHoursAttribute:
+    """max_hours in extra_state_attributes: cloud full-life hours when a
+    cloud record exists, else (filter/main_brush only) the learned-or-
+    configured threshold; side_brush/clean_base_bag have no such local
+    fallback and simply omit the attribute without a cloud record."""
+
+    def _sensor(self, key, *, options=None, store=None):
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        sensor = object.__new__(RoombaSensor)
+        sensor.entity_description = next(d for d in SENSORS if d.key == key)
+        entry = MagicMock()
+        entry.options = options or {}
+        entry.runtime_data.maintenance_store = store
+        sensor._config_entry = entry
+        return sensor
+
+    def test_filter_remaining_hours_max_hours_falls_back_to_local_threshold(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor(
+            "filter_remaining_hours",
+            options={"filter_threshold_hours": 80},
+            store=MaintenanceStore(),
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["threshold_hours"] == 80
+        assert attrs["max_hours"] == 80
+
+    def test_filter_remaining_hours_max_hours_prefers_cloud_full_life(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "35", "count_used": 600, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor(
+            "filter_remaining_hours", options={"filter_threshold_hours": 80}, store=store,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60  # (600+3000)/60, overrides the 80h configured threshold
+
+    def test_part_edge_brush_has_no_max_hours_without_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor("part_edge_brush", store=MaintenanceStore())
+        attrs = sensor.extra_state_attributes
+        assert "max_hours" not in attrs
+        assert "threshold_hours" not in attrs
+
+    def test_part_edge_brush_exposes_max_hours_with_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "36", "count_used": 600, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor("part_edge_brush", store=store)
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60
+        assert "threshold_hours" not in attrs
+
+    def test_part_dirt_bag_exposes_max_hours_with_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "139", "count_used": 1200, "count_remaining": 2400,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor("part_dirt_bag", store=store)
+        assert sensor.extra_state_attributes["max_hours"] == 60
+
+
+class TestNewConsumableSensorDescriptors:
+    """side_brush/clean_base_bag get the same wear-rate/days-until-due
+    descriptor shape filter/main_brush already have."""
+
+    def test_all_four_wear_rate_and_days_until_due_keys_present(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        keys = {d.key for d in SENSORS}
+        for key in (
+            "side_brush_wear_rate", "side_brush_days_until_due",
+            "clean_base_bag_wear_rate", "clean_base_bag_days_until_due",
+        ):
+            assert key in keys, f"Missing sensor key: {key}"
+
+    def test_new_descriptors_are_gated_on_their_cloud_part(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        for key in (
+            "side_brush_wear_rate", "side_brush_days_until_due",
+            "clean_base_bag_wear_rate", "clean_base_bag_days_until_due",
+        ):
+            desc = next(d for d in SENSORS if d.key == key)
+            assert desc.available_fn is not None
+            assert desc.translation_key == key
+
+
 class TestRoombaSensorCountdownTick:
     """The 60-second tick for the recharge/expire countdown sensors.
 

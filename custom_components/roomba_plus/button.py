@@ -47,6 +47,7 @@ from .entity_cleanup import async_remove_stale_entities
 from .const import (
     IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     IROBOT_PART_ROLE_SIDE_BRUSH,
+    IROBOT_PART_ROLE_TO_STORE_SLOT,
     MAP_UPDATING_NOT_READY,
 )
 from .entity import IRobotEntity
@@ -493,10 +494,12 @@ class BrushResetButton(_MaintenanceResetButton):
 class _CloudPartResetButton(_MaintenanceResetButton):
     """Base for consumables that exist only as an iRobot cloud counter.
 
-    The filter and main brushes have local MaintenanceStore slots; the side
-    brush and Clean Base bag do not, so there is nothing local to reset and
-    the cloud counter IS the state. Created only when the account actually
-    reports the part — see async_setup_entry.
+    The cloud counter is the authoritative state; a successful press also
+    writes MaintenanceStore's own local slot for this role (mirroring
+    FilterResetButton/BrushResetButton), so wear-rate/days-until-due keep
+    a baseline through a later cloud outage instead of depending on the
+    next successful poll to re-hydrate it. Created only when the account
+    actually reports the part — see async_setup_entry.
     """
 
     _cloud_role: str = ""
@@ -531,8 +534,10 @@ class _CloudPartResetButton(_MaintenanceResetButton):
             "%s: recorded replacement with iRobot (part_id=%s)",
             type(self).__name__, part_id,
         )
+        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[self._cloud_role]
+        getattr(store, f"reset_{slot}")(self._current_hr())
+        await self._save()
         await cc.async_request_refresh()
-        self.schedule_update_ha_state()
 
 
 class SideBrushResetButton(_CloudPartResetButton):

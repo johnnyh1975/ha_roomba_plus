@@ -31,6 +31,10 @@ from .const import (
     INTEGRATION_HEALTH_GOOD_THRESHOLD,
     INTEGRATION_HEALTH_LOW_THRESHOLD,
     INTEGRATION_HEALTH_MQTT_STALE_HOURS,
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    IROBOT_PART_ROLE_FILTER,
+    IROBOT_PART_ROLE_MAIN_BRUSH,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
     READINESS_STATE_LABELS,
     decode_not_ready,
     PHASE_LABELS,
@@ -215,56 +219,130 @@ def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
 
 # ── v1.9.0 L4 — Wear Intelligence helpers ────────────────────────────────────
 
-def _filter_wear_rate(entity: "IRobotEntity") -> float | None:
-    """Filter wear rate in bbrun hours/day since last reset."""
-    store = entity._config_entry.runtime_data.mission_store
+def _consumable_wear_rate(entity: "IRobotEntity", role: str) -> float | None:
+    """Consumable wear rate in bbrun hours/day since its last reset."""
+    mission_store = entity._config_entry.runtime_data.mission_store
     maint = entity._config_entry.runtime_data.maintenance_store
-    if store is None or maint is None:
+    if mission_store is None or maint is None:
         return None
     current_hr = entity.run_stats.get("hr", 0)
-    return store.wear_rate_since_reset(
-        maint.filter_reset_hr, maint.filter_reset_at, current_hr
-    )
+    reset_hr, reset_at = maint.reset_baseline_for_role(role)
+    return mission_store.wear_rate_since_reset(reset_hr, reset_at, current_hr)
+
+
+def _consumable_days_until_due(
+    entity: "IRobotEntity",
+    role: str,
+    conf_key: str | None = None,
+    default_hours: int | None = None,
+) -> int | None:
+    """Estimated days until replacement at the current wear rate.
+
+    filter/main_brush (conf_key given) forecast to their configured/learned
+    threshold, matching filter_remaining()/brush_remaining(). side_brush/
+    clean_base_bag (conf_key omitted) have no local threshold and forecast
+    to iRobot's own cloud remaining-hours counter instead — their only
+    source of a "remaining" figure.
+    """
+    rate = _consumable_wear_rate(entity, role)
+    if rate is None or rate <= 0:
+        return None
+    maint = entity._config_entry.runtime_data.maintenance_store
+    if maint is None:
+        return None
+    current_hr = entity.run_stats.get("hr", 0)
+    if conf_key is not None:
+        reset_hr, _reset_at = maint.reset_baseline_for_role(role)
+        threshold = entity._config_entry.options.get(conf_key, default_hours)
+        remaining_hr = max(0, threshold - (current_hr - reset_hr))
+    else:
+        remaining_hr = maint.cloud_remaining_hours(role)
+        if remaining_hr is None:
+            return None
+    return int(remaining_hr / rate)
+
+
+def _consumable_max_hours(
+    entity: "IRobotEntity",
+    role: str,
+    conf_key: str | None = None,
+    default_hours: int | None = None,
+    learned_hours_attr: str | None = None,
+) -> int | None:
+    """Full-life hours for a consumable: the cloud's own figure when a
+    cloud record exists, else (conf_key given) the learned or configured
+    threshold as a local approximation of "fresh" capacity. None when
+    there is no cloud record and no local fallback applies.
+    """
+    maint = entity._config_entry.runtime_data.maintenance_store
+    if maint is None:
+        return None
+    full_life = maint.cloud_full_life_hours(role)
+    if full_life is not None:
+        return full_life
+    if conf_key is None:
+        return None
+    threshold = entity._config_entry.options.get(conf_key, default_hours)
+    learned = getattr(maint, learned_hours_attr) if learned_hours_attr else None
+    return round(learned or threshold)
+
+
+def _filter_wear_rate(entity: "IRobotEntity") -> float | None:
+    return _consumable_wear_rate(entity, IROBOT_PART_ROLE_FILTER)
 
 
 def _brush_wear_rate(entity: "IRobotEntity") -> float | None:
-    """Brush/pad wear rate in bbrun hours/day since last reset."""
-    store = entity._config_entry.runtime_data.mission_store
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if store is None or maint is None:
-        return None
-    current_hr = entity.run_stats.get("hr", 0)
-    return store.wear_rate_since_reset(
-        maint.brush_reset_hr, maint.brush_reset_at, current_hr
-    )
+    return _consumable_wear_rate(entity, IROBOT_PART_ROLE_MAIN_BRUSH)
+
+
+def _side_brush_wear_rate(entity: "IRobotEntity") -> float | None:
+    return _consumable_wear_rate(entity, IROBOT_PART_ROLE_SIDE_BRUSH)
+
+
+def _clean_base_bag_wear_rate(entity: "IRobotEntity") -> float | None:
+    return _consumable_wear_rate(entity, IROBOT_PART_ROLE_CLEAN_BASE_BAG)
 
 
 def _filter_days_until_due(entity: "IRobotEntity") -> int | None:
-    """Estimated days until filter replacement at current wear rate."""
-    rate = _filter_wear_rate(entity)
-    if rate is None or rate <= 0:
-        return None
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if maint is None:
-        return None
-    threshold = entity._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-    current_hr = entity.run_stats.get("hr", 0)
-    remaining_hr = max(0, threshold - (current_hr - maint.filter_reset_hr))
-    return int(remaining_hr / rate)
+    return _consumable_days_until_due(
+        entity, IROBOT_PART_ROLE_FILTER, CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS
+    )
 
 
 def _brush_days_until_due(entity: "IRobotEntity") -> int | None:
-    """Estimated days until brush/pad replacement at current wear rate."""
-    rate = _brush_wear_rate(entity)
-    if rate is None or rate <= 0:
-        return None
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if maint is None:
-        return None
-    threshold = entity._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-    current_hr = entity.run_stats.get("hr", 0)
-    remaining_hr = max(0, threshold - (current_hr - maint.brush_reset_hr))
-    return int(remaining_hr / rate)
+    return _consumable_days_until_due(
+        entity, IROBOT_PART_ROLE_MAIN_BRUSH, CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS
+    )
+
+
+def _side_brush_days_until_due(entity: "IRobotEntity") -> int | None:
+    return _consumable_days_until_due(entity, IROBOT_PART_ROLE_SIDE_BRUSH)
+
+
+def _clean_base_bag_days_until_due(entity: "IRobotEntity") -> int | None:
+    return _consumable_days_until_due(entity, IROBOT_PART_ROLE_CLEAN_BASE_BAG)
+
+
+def _filter_max_hours(entity: "IRobotEntity") -> int | None:
+    return _consumable_max_hours(
+        entity, IROBOT_PART_ROLE_FILTER, CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS,
+        "learned_filter_hours",
+    )
+
+
+def _brush_max_hours(entity: "IRobotEntity") -> int | None:
+    return _consumable_max_hours(
+        entity, IROBOT_PART_ROLE_MAIN_BRUSH, CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS,
+        "learned_brush_hours",
+    )
+
+
+def _side_brush_max_hours(entity: "IRobotEntity") -> int | None:
+    return _consumable_max_hours(entity, IROBOT_PART_ROLE_SIDE_BRUSH)
+
+
+def _clean_base_bag_max_hours(entity: "IRobotEntity") -> int | None:
+    return _consumable_max_hours(entity, IROBOT_PART_ROLE_CLEAN_BASE_BAG)
 
 
 def _mission_store_last_started_at(entity: "IRobotEntity") -> "datetime.datetime | None":

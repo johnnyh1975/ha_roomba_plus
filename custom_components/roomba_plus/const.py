@@ -322,14 +322,16 @@ IROBOT_PART_ROLES: Final[dict[str, str]] = {
     "139": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
 }
 
-# Which cloud role hydrates which legacy MaintenanceStore slot. The store
-# only ever modelled a single "brush" lifecycle, so the main brushes own
-# that slot — they are the part the brush sensors were always about, and
-# the side brush gets its own cloud-backed entity rather than being
-# averaged into a shared number.
+# Which cloud role hydrates which MaintenanceStore local slot — every
+# consumable role has one, so wear-rate/days-until-due keep a baseline to
+# work from even when the cloud counter itself is temporarily unreachable.
+# The main brushes keep the legacy "brush" slot name (pad and brush share
+# it); the other three roles use their own name.
 IROBOT_PART_ROLE_TO_STORE_SLOT: Final[dict[str, str]] = {
-    IROBOT_PART_ROLE_FILTER:     "filter",
-    IROBOT_PART_ROLE_MAIN_BRUSH: "brush",
+    IROBOT_PART_ROLE_FILTER:         "filter",
+    IROBOT_PART_ROLE_MAIN_BRUSH:     "brush",
+    IROBOT_PART_ROLE_SIDE_BRUSH:     "side_brush",
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG: "clean_base_bag",
 }
 
 
@@ -342,6 +344,87 @@ def part_role(part_id: Any) -> str | None:
     if part_id is None:
         return None
     return IROBOT_PART_ROLES.get(str(part_id).strip())
+
+
+# ── Maintenance action localization ──────────────────────────────────────────
+# Keyed by the consumable keys MaintenanceStore.due_items() produces.
+MAINTENANCE_ACTIONS: Final[dict[str, str]] = {
+    "filter": "Replace the filter.",
+    "brush": "Replace the main brushes.",
+    "pad": "Replace the mop pad.",
+    "side_brush": "Replace the side brush.",
+    "clean_base_bag": "Replace the Clean Base bag.",
+}
+
+# Machine-assisted translations, not reviewed by a native speaker of each
+# language — same caveat as ERROR_CATALOGUE_TRANSLATIONS in
+# error_translations.py. Corrections from native speakers are welcome.
+MAINTENANCE_ACTION_TRANSLATIONS: Final[dict[str, dict[str, str]]] = {
+    "de": {
+        "filter": "Filter austauschen.",
+        "brush": "Hauptbürsten austauschen.",
+        "pad": "Wischpad austauschen.",
+        "side_brush": "Seitenbürste austauschen.",
+        "clean_base_bag": "Clean Base-Beutel austauschen.",
+    },
+    "es": {
+        "filter": "Sustituya el filtro.",
+        "brush": "Sustituya los cepillos principales.",
+        "pad": "Sustituya la almohadilla de fregado.",
+        "side_brush": "Sustituya el cepillo lateral.",
+        "clean_base_bag": "Sustituya la bolsa de la Clean Base.",
+    },
+    "fr": {
+        "filter": "Remplacez le filtre.",
+        "brush": "Remplacez les brosses principales.",
+        "pad": "Remplacez la lingette de lavage.",
+        "side_brush": "Remplacez la brosse latérale.",
+        "clean_base_bag": "Remplacez le sac de la Clean Base.",
+    },
+    "it": {
+        "filter": "Sostituire il filtro.",
+        "brush": "Sostituire le spazzole principali.",
+        "pad": "Sostituire il panno per il lavaggio.",
+        "side_brush": "Sostituire la spazzola laterale.",
+        "clean_base_bag": "Sostituire il sacchetto della Clean Base.",
+    },
+    "nl": {
+        "filter": "Vervang het filter.",
+        "brush": "Vervang de hoofdborstels.",
+        "pad": "Vervang de dweilpad.",
+        "side_brush": "Vervang de zijborstel.",
+        "clean_base_bag": "Vervang de Clean Base-zak.",
+    },
+    "pl": {
+        "filter": "Wymień filtr.",
+        "brush": "Wymień szczotki główne.",
+        "pad": "Wymień nakładkę mopującą.",
+        "side_brush": "Wymień szczotkę boczną.",
+        "clean_base_bag": "Wymień worek stacji Clean Base.",
+    },
+    "pt": {
+        "filter": "Substitua o filtro.",
+        "brush": "Substitua as escovas principais.",
+        "pad": "Substitua o pano de limpeza.",
+        "side_brush": "Substitua a escova lateral.",
+        "clean_base_bag": "Substitua o saco da Clean Base.",
+    },
+}
+
+
+def get_localized_maintenance_action(part: str, language: str | None) -> str:
+    """Return a short "what to do" string for a due maintenance consumable.
+
+    `part` is one of the keys MaintenanceStore.due_items() produces
+    (filter/brush/pad/side_brush/clean_base_bag). Falls back to English
+    when the language has no translation dict, or no entry for this part;
+    an unrecognised `part` returns "" rather than raising, since callers
+    only ever pass keys due_items() itself produced.
+    """
+    base = MAINTENANCE_ACTIONS.get(part, "")
+    if not base or not language or language == "en":
+        return base
+    return MAINTENANCE_ACTION_TRANSLATIONS.get(language, {}).get(part, base)
 
 
 ROOMBA_SESSION: Final = "roomba_session"
