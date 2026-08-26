@@ -415,6 +415,22 @@ robot families. `IROBOT_PART_ROLES` in `const.py` records the mapping and the ev
 entry; an id this integration doesn't recognise is left unmapped rather than given an invented
 name, following the same reasoning as the Prime path's `_KNOWN_PARTS`.
 
+#### Status
+
+`sensor.{name}_status` reports what the robot is doing, translated into
+your Home Assistant language. Both robot generations report the same set
+of states *(v4.0.0a46)* — the wording differs from what the robot itself
+sends, and automations should match the state value rather than the
+displayed text.
+
+Two states are worth knowing about:
+
+- **Charging mid-mission** — the robot returned to top up and will
+  resume. Separate from plain charging, because an automation reacting to
+  charging would otherwise fire mid-clean.
+- **No contact** — nothing has been received for over an hour. Every
+  other entity is still showing its last value, which may be days old.
+
 #### Clean Base / dock status
 
 `sensor.{name}_clean_base_status` — the dock's own health, not the robot's onboard bin: tank/bag missing, low, clogged, a sealing problem, a full bag, an IR communication issue, or ready/empty. This is the entity that corresponds to what the official app calls the "docking station bag" indicator — distinct from `binary_sensor.{name}_bin_full`, which reflects the robot's own onboard dust bin (rarely full on a Clean-Base-equipped setup, since the robot empties into the dock automatically after each mission). Requires a Clean Base — absent otherwise.

@@ -421,6 +421,24 @@ consistently absent for one robot while another on the same account gets
 it, that is worth reporting with a diagnostics download: it now records
 whether each stored mission carries a timeline at all.
 
+## The status says "No contact"
+
+The robot has not sent anything for over an hour. Every other entity is
+still showing whatever it last reported, which can be days old — a
+battery percentage from before the robot went quiet looks exactly like a
+live one.
+
+Usual causes: the robot is off its dock with a flat battery, the dock has
+no power, or it is out of Wi-Fi range. The connectivity binary sensor
+tells you the same thing sooner, within five minutes; the status waits an
+hour so a brief dropout does not rewrite it mid-mission.
+
+## The status says "Charging mid-mission"
+
+Normal. The robot returned to top up and will resume. It is distinguished
+from plain charging because an automation reacting to "docked" or
+"charging" would otherwise fire in the middle of a clean *(v4.0.0a46)*.
+
 ## Sending a diagnostics download
 
 Settings → Devices & Services → Roomba+ → the three dots → Download
