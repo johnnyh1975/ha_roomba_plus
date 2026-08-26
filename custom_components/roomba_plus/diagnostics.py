@@ -525,6 +525,44 @@ def _prime_store_summary(data: Any) -> dict[str, Any]:
                 "record_count": len(records),
                 "latest_id": latest.get("id") if latest else None,
                 "latest_record": latest,
+                # THE LAST TEN, in summary. One full record shows what a
+                # record looks like; it cannot show whether two of them
+                # describe the same run.
+                #
+                # @chairstacker (#64): "two previously cancelled
+                # missions showing in the file while there was actually
+                # only one". Deduplication keys on `p_{mission_id}`, so
+                # a duplicate means two different mission ids for one
+                # physical run -- and answering that needs both records
+                # side by side, which this section could not show.
+                #
+                # Summary only: a full record carries the entire command
+                # payload and ten of those would swamp the file.
+                "recent": [
+                    {
+                        "id": r.get("id"),
+                        "started_at": r.get("started_at"),
+                        "ended_at": r.get("ended_at"),
+                        "result": r.get("result"),
+                        "duration_min": r.get("duration_min"),
+                        "area_sqft": r.get("area_sqft"),
+                        # WHETHER THE CLOUD MERGE LANDED. `cleaned_rooms`
+                        # is derived from `timeline.finEvents`, so a null
+                        # room list means the timeline never arrived --
+                        # not that no rooms were cleaned.
+                        #
+                        # @ScenicSystemsLLC (#82) saw null on both of one
+                        # robot's missions and populated lists on the
+                        # other robot's, same model and same day. Without
+                        # this flag the two cases are indistinguishable
+                        # from outside.
+                        "has_timeline": isinstance(r.get("timeline"), dict),
+                        "room_event_count": len(
+                            (r.get("timeline") or {}).get("finEvents") or []
+                        ) if isinstance(r.get("timeline"), dict) else 0,
+                    }
+                    for r in records[-10:]
+                ],
                 "records_with_area": sum(
                     1 for r in records if r.get("area_sqft") is not None
                 ),
@@ -1377,6 +1415,45 @@ async def _build_diagnostics(
             "bbchg3": state.get("bbchg3") or {},
             # v2.8.0 DOCK-HEALTH — dock contact counters (nChatters/nKnockoffs/nAborts)
             "bbchg": state.get("bbchg") or {},
+        },
+
+        # NAVIGATION TELEMETRY, WHOLE. Not a selection of keys, because
+        # the point is to find out which keys a given robot fills.
+        #
+        # Firmware analysis of the i-series (lewis 22.52.08) documents
+        # twelve fields here, validated against a real m6 dump: `kdp`
+        # and `sfkdp` (kidnapped detection), `l_drift`/`h_drift` (pose
+        # confidence), `gLmk`/`lmk` (landmark density), `mpSt` (map
+        # state), `reLc` (relocalisations), and map-change counters.
+        #
+        # This integration reads exactly one of them. The others were
+        # assumed absent -- including a kidnap signal that the live-map
+        # work went looking for and concluded did not exist on Classic
+        # robots. It does; nobody had looked here.
+        #
+        # ONLY FILLED DURING A MISSION. On the dock most of it reads
+        # zero, so a diagnostics download taken afterwards shows nothing
+        # even when the fields are supported. It has to be pulled while
+        # the robot is cleaning.
+        #
+        # Emitted verbatim rather than key-by-key: the 980 is a
+        # different platform from the i-series, and picking keys in
+        # advance would decide the question this exists to answer.
+        "nav_telemetry": state.get("mssnNavStats") or {},
+
+        # DOCK IDENTITY. The i-series OTA carries dock firmware for 14
+        # hardware/variant combinations named `dock_hw{N}_var{M}`, and
+        # these two fields map straight onto N and M -- so the dock
+        # model is determinable and currently is not determined.
+        #
+        # Bears on several open reports: which docks can evacuate, which
+        # have a fresh-water tank, and why `empty-now` does nothing on
+        # one tester's install.
+        "dock_identity": {
+            "hw_rev": (state.get("dock") or {}).get("hwRev"),
+            "var_id": (state.get("dock") or {}).get("varID"),
+            "part_number": (state.get("dock") or {}).get("pn"),
+            "fw_version": (state.get("dock") or {}).get("fwVer"),
         },
 
         # RF0 — robot profile (confirms which profile was matched at startup)

@@ -1021,9 +1021,30 @@ class PrimePadDrySwitch(IRobotEntity, SwitchEntity):
         if raw is None:
             return None
         dock = CurrentStateShadow.from_json(raw).dock
-        if dock is None or dock.state is None:
+        # GUARD ON THE FIELD ACTUALLY READ. This checked `dock.state`
+        # while returning a verdict about `pd_state` -- a dock reporting
+        # pad drying but no overall state would have returned None.
+        if dock is None or dock.pd_state is None:
             return None
-        return dock.state == DockState.PAD_DRY_IN_PROGRESS
+        # `pd_state`, NOT `state`. The dock reports three status fields
+        # in separate numeric bands: `state` for the dock itself (301 =
+        # DOCK_READY), `pw_state` for pad washing (601), and `pd_state`
+        # for pad drying (701 = PAD_DRY_OKAY).
+        #
+        # PAD_DRY_IN_PROGRESS is 702 -- a 700-band value, so it can only
+        # ever appear in `pd_state`. Reading `state` for it meant this
+        # was never true, whatever the dock was doing.
+        #
+        # @chairstacker (#71): the switch behaved as a momentary one.
+        # Home Assistant shows it on until the next state write, then
+        # `is_on` read the wrong field, found 301, and reported off --
+        # and turning it off did nothing because it was never on.
+        #
+        # The pad-dry STATUS sensor beside it has read `pd_state`
+        # correctly all along, which is why his screenshot showed "Pad
+        # dry in progress" while the switch showed off. Two entities,
+        # one dock, two fields.
+        return dock.pd_state == DockState.PAD_DRY_IN_PROGRESS
 
     async def _send(self, command: str) -> None:
         robot = self._config_entry.runtime_data.prime_robot

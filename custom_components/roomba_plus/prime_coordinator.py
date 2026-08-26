@@ -916,6 +916,31 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # travel-home time to record it.
                 self._schedule_mission_history_sync()
 
+            # A SECOND WAY IN, because the first depends on catching one
+            # moment live.
+            #
+            # The sync above fires only when a `charge` transition is
+            # actually observed. Miss that message -- a quiet push
+            # stream, a reconnect, a short run -- and the mission never
+            # syncs at all: no sensor update, no activity entry, nothing,
+            # until a reload or the six-hour interval.
+            #
+            # @chairstacker (#64) hit exactly that. His second zone
+            # mission of the day was ignored completely while the
+            # connection sensor read Connected; reloading the
+            # integration brought it in.
+            #
+            # `nMssn` counts missions and only ever goes up. Seeing it
+            # change means one ended, whatever we did or did not observe
+            # in between -- so this catches what the phase watch drops,
+            # without firing twice for the same run.
+            mission_number = status.get("nMssn")
+            if isinstance(mission_number, int):
+                previous = getattr(self, "_last_seen_nmssn", None)
+                if previous is not None and mission_number != previous:
+                    self._schedule_mission_history_sync()
+                self._last_seen_nmssn = mission_number
+
             # THE TRAIL IS CLEARED ON A NEW MISSION NUMBER, WHATEVER
             # THE PHASE. It used to sit inside the `phase == "run"`
             # branch below, which requires catching a shadow update

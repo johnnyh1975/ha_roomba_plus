@@ -480,6 +480,30 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                         and self._prime_cycle_is_idle()
                     ):
                         return VacuumActivity.DOCKED
+                    # AND THE SAME TEST IN THE OTHER DIRECTION.
+                    #
+                    # `charge` maps to DOCKED, but a robot that returns
+                    # to top up mid-run is not done -- its cycle is
+                    # still `clean`. @chairstacker (#71) saw his
+                    # activity timeline read Cleaning, Docked for about
+                    # 70 seconds, then Cleaning again, which looks like
+                    # the mission ended and a new one started.
+                    #
+                    # That is worse than cosmetic: an automation
+                    # reacting to "docked" fires mid-clean, and one
+                    # reacting to "cleaning" fires several times per
+                    # run.
+                    #
+                    # The Classic path has had this rule for a long
+                    # time -- an active cycle while idle or docked means
+                    # paused. Only the Prime branch was checking the
+                    # cycle in one direction and not the other.
+                    if (
+                        activity
+                        in (VacuumActivity.DOCKED, VacuumActivity.IDLE)
+                        and not self._prime_cycle_is_idle()
+                    ):
+                        return VacuumActivity.PAUSED
                     return activity
             coordinator = (
                 self._config_entry.runtime_data.prime_coordinator

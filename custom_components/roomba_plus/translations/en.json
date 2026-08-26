@@ -649,13 +649,13 @@
         "name": "Robot health score"
       },
       "lifetime_completion_rate": {
-        "name": "Lifetime Completion Rate"
+        "name": "Lifetime completion rate"
       },
       "battery_cycle_count_bms": {
-        "name": "Battery Cycle Count Bms"
+        "name": "Battery BMS cycle count"
       },
       "battery_age_days": {
-        "name": "Battery Age Days"
+        "name": "Battery age"
       },
       "wifi_last_channel": {
         "name": "Wi-Fi last channel"

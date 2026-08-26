@@ -126,9 +126,19 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
             return {}
         attrs: dict[str, Any] = {"mission_id": report.mission_id}
         current = report.event[0]
+        # ZONES CARRY THEIR OWN FIELD. `room` and `travel` are keyed
+        # `region_id`; a zone event is keyed `zone_id`, so a
+        # zone-targeted mission set no id here at all -- and therefore
+        # no name either, however well the name lookup worked.
         room = current.room or current.travel
+        zone = getattr(current, "zone", None)
+        if room is None and zone is not None and getattr(zone, "zone_id", None):
+            room = zone
         if room is not None:
-            attrs["current_room_id"] = room.region_id
+            attrs["current_room_id"] = str(
+                getattr(room, "region_id", None)
+                or getattr(room, "zone_id", None)
+            )
 
             # AND ITS NAME, which this attribute never carried.
             #

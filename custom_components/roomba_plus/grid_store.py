@@ -1115,7 +1115,14 @@ class GridStore:
         x_min, x_max, y_min, y_max = bbox
         span_x = max(x_max - x_min, CELL_SIZE_MM)
         span_y = max(y_max - y_min, CELL_SIZE_MM)
-        scale = size_px / max(span_x, span_y)
+        # THE SPAN IS CORNER-TO-CORNER, so the last cell's own width has
+        # to fit beyond it. Without this, `scale` maps the outermost cell
+        # centre exactly onto the canvas edge and its body falls off --
+        # previously the bottom row, and after the y-flip below the top
+        # row. One row of cells was always missing, in either
+        # orientation, which is invisible without a landmark to check
+        # against.
+        scale = size_px / (max(span_x, span_y) + CELL_SIZE_MM)
 
         img = Image.new("RGBA", (size_px, size_px), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
@@ -1128,8 +1135,33 @@ class GridStore:
         for (gx, gy), weight in self._cells.items():
             x_mm, y_mm = _cell_to_mm(gx, gy)
             px = int((x_mm - x_min) * scale)
-            py = int((y_mm - y_min) * scale)
+            # Y-FLIP, the same one RoombaRoomsImage.to_px() applies.
+            #
+            # This measured downward from the bottom of the grid while
+            # every other map in the integration measures downward from
+            # the top, so the coverage heatmap has been upside down
+            # against all of them since it was written.
+            #
+            # Nobody noticed because it has no landmark -- no dock icon,
+            # no room outlines, nothing to be upside down relative to.
+            # @pk-1966 (#78) marked four known places on his coverage and
+            # room maps and it fell out at once: y matched `1 - y` on all
+            # four while x kept its order, which is a vertical flip and
+            # not the rotation it looks like.
+            #
+            # Nothing else needed changing: everything that computes from
+            # the grid works in millimetres or cell indices, both of
+            # which are orientation-neutral. This was one line in one
+            # renderer.
             cell_px = max(2, int(CELL_SIZE_MM * scale))
+            # MEASURED FROM y_max, not from size_px.
+            #
+            # `size_px - (y - y_min) * scale` looks like the same flip
+            # and puts the topmost cell at -cell_px, off the canvas: the
+            # bbox has no padding, so the highest cell's own span
+            # consumes the full height. Anchoring on y_max instead
+            # places that cell's top-left corner at 0, where it belongs.
+            py = int((y_max - y_mm) * scale)
             if (gx, gy) in hotspot_cells:
                 colour: tuple[int, int, int, int] = (220, 50, 50, 220)
             else:
