@@ -1832,7 +1832,7 @@ class TestTheInitiatorSensorSeparatesTwoQuestions:
             attrs = sensor.extra_state_attributes
 
         assert attrs["last_command"] == "stoppaddry"
-        assert attrs["last_command_by"] == "rmt_app"
+        assert attrs["last_command_by"] == "remote_app"
         assert attrs["initiator"] == "cloud"
 
     def test_the_raw_value_is_kept_beside_the_label(self):
@@ -1845,14 +1845,15 @@ class TestTheInitiatorSensorSeparatesTwoQuestions:
         assert attrs["initiator"] == "dockBtn"
         assert attrs["last_command_initiator"] == "alexa"
 
-    def test_an_unmapped_value_still_produces_a_valid_slug(self):
-        """Rather than "None", which is the same answer as "no
-        information at all" — the failure this table already had once.
-        And rather than the raw camelCase wire value, which is not a
-        valid `[a-z0-9_]+` Home Assistant state."""
+    def test_an_unmapped_value_falls_back_to_none_like_classic_does(self):
+        """Prime and Classic share `translation_key="job_initiator"` by
+        design, so an unrecognised wire value must resolve the same way
+        on both -- Classic's value_fn already falls back to "none" via
+        `JOB_INITIATOR_SLUGS.get(raw, "none")`, and this sensor now uses
+        the exact same table rather than a separately-derived slug."""
         sensor, state, _ = self._sensor("somethingNew")
         with state:
-            assert sensor.native_value == "something_new"
+            assert sensor.native_value == "none"
 
 
 class TestTheThirdPhaseCategory:
