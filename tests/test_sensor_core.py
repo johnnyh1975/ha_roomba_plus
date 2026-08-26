@@ -439,8 +439,6 @@ class TestRoombaSensorAvailability:
         assert "return super().available" in source
 
 
-
-
 class TestClassicStatusReportsTheSameTwoStates:
     """The Classic side of the same pair Prime got.
 
@@ -491,3 +489,97 @@ class TestClassicStatusReportsTheSameTwoStates:
         assert self._status(
             "run", cycle="clean", last_ts=time.time() - 300
         ) == "running"
+class _FakeEntity:
+    def __init__(self, vacuum_state=None, clean_mission_status=None):
+        self.vacuum_state = vacuum_state or {}
+        self.clean_mission_status = clean_mission_status or {}
+
+
+def _descriptor(key):
+    from custom_components.roomba_plus.sensor_core import SENSORS
+
+    return next(d for d in SENSORS if d.key == key)
+
+
+class TestEnumSensorsReturnTranslationReadySlugs:
+    """A Polish install must see "Gotowy", not "Ready" -- but the sensor
+    can only supply a slug for HA to translate, not the English word
+    itself. Each case below pairs a raw robot/cloud value with the slug
+    its descriptor's value_fn must produce.
+    """
+
+    def test_job_initiator_maps_known_and_unknown_values(self):
+        value_fn = _descriptor("job_initiator").value_fn
+
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "schedule"})) == "schedule"
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "rmtApp"})) == "remote_app"
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "dockBtn"})) == "dock_button"
+        assert value_fn(_FakeEntity(clean_mission_status={})) == "none"
+
+    def test_clean_base_status_maps_dock_state_codes(self):
+        value_fn = _descriptor("clean_base_status").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"dock": {"state": 300}})) == "ready"
+        assert value_fn(_FakeEntity(vacuum_state={"dock": {"state": 353}})) == "bag_full"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_mop_pad_maps_detected_pad_including_the_lowercase_variant(self):
+        value_fn = _descriptor("mop_pad").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "reusableWet"})) == "reusable_wet"
+        # reusablewet (all-lowercase) is the Braava jet m6's own spelling
+        # of reusableWet -- same pad, different case.
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "reusablewet"})) == "reusable_wet"
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "padPlate"})) == "plate_fitted"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "no_pad"
+
+    def test_mop_behavior_legacy_maps_rank_overlap(self):
+        value_fn = _descriptor("mop_behavior").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 67})) == "standard"
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 15})) == "no_mop"
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 999})) == "unknown"
+
+    def test_clean_mode_derives_a_slug_from_the_two_bit_flags(self):
+        value_fn = _descriptor("clean_mode").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": True, "twoPass": True})) == "two_passes"
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": True, "twoPass": False})) == "one_pass"
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": False, "twoPass": False})) == "auto"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_carpet_boost_mode_derives_a_slug_from_vac_high_and_carpet_boost(self):
+        value_fn = _descriptor("carpet_boost_mode").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 1, "vacHigh": 0})) == "auto"
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 0, "vacHigh": 1})) == "performance"
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 0, "vacHigh": 0})) == "eco"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_every_slug_is_a_legal_ha_state_key(self):
+        """hassfest requires translation_key state keys to match
+        [a-z0-9_]+ -- no spaces, dashes, or uppercase."""
+        import re
+
+        from custom_components.roomba_plus.const import (
+            CARPET_BOOST_SLUGS,
+            CLEAN_BASE_STATUS_SLUGS,
+            CLEAN_MODE_SLUGS,
+            JOB_INITIATOR_SLUGS,
+            MOP_BEHAVIOR_SLUGS,
+            MOP_PAD_SLUGS,
+        )
+
+        legal = re.compile(r"[a-z0-9_]+")
+        offenders = [
+            slug
+            for mapping in (
+                CARPET_BOOST_SLUGS, CLEAN_BASE_STATUS_SLUGS, CLEAN_MODE_SLUGS,
+                JOB_INITIATOR_SLUGS, MOP_BEHAVIOR_SLUGS, MOP_PAD_SLUGS,
+            )
+            for slug in mapping.values()
+            if not legal.fullmatch(slug)
+        ]
+
+        assert not offenders
+

@@ -1625,6 +1625,86 @@ CLEAN_MODE_LABELS: Final[dict[str, str]] = {
     "n-a": "Not available",
 }
 
+# Slug counterparts of the label dicts above, for translation_key sensors.
+# The *_LABELS dicts keep their English values — select.py and
+# sensor_prime.py still read them as display/command text — so these are
+# separate dicts, not a mutation in place.
+CLEAN_BASE_STATUS_SLUGS: Final[dict[int, str]] = {
+    -2: "not_available",
+    -1: "unknown",
+    300: "ready",
+    301: "ready",
+    302: "empty",
+    303: "empty",
+    350: "bag_missing",
+    351: "clogged",
+    352: "sealing_problem",
+    353: "bag_full",
+    360: "ir_comms_problem",
+    364: "bin_full_sensors_not_cleared",
+}
+
+JOB_INITIATOR_SLUGS: Final[dict[str, str]] = {
+    "schedule": "schedule",
+    "rmtApp": "remote_app",
+    "manual": "manual",
+    "localApp": "local_app",
+    "demand": "demand",
+    "none": "none",
+    "dockBtn": "dock_button",
+    "alexa": "alexa",
+    "siri": "siri",
+    "ifttt": "ifttt",
+    "iftttc": "ifttt",
+    "homey": "homey",
+    "openHAB": "openhab",
+    "yonomi": "yonomi",
+    "bosch": "bosch",
+    "swisscom": "swisscom",
+    "alismart": "alismart",
+    "team": "teamed_robot",
+    "cloud": "cloud",
+    "rmtAuto": "remote_automation",
+    "loclAuto": "local_automation",
+    "simAuto": "simulated_automation",
+    "wifi": "wifi",
+    "shell": "shell",
+    "internal": "internal",
+    "unknown": "unknown",
+}
+
+MOP_PAD_SLUGS: Final[dict[str, str]] = {
+    "reusableDry": "reusable_dry",
+    "reusableWet": "reusable_wet",
+    "reusablewet": "reusable_wet",
+    "dispDry": "disposable_dry",
+    "dispWet": "disposable_wet",
+    "padPlate": "plate_fitted",
+    "noPad": "no_plate",
+    "invalid": "no_pad",
+}
+
+MOP_BEHAVIOR_SLUGS: Final[dict[int, str]] = {
+    15: "no_mop",
+    25: "extended",
+    67: "standard",
+    85: "deep",
+}
+
+CARPET_BOOST_SLUGS: Final[dict[str, str]] = {
+    "auto": "auto",
+    "performance": "performance",
+    "eco": "eco",
+    "n-a": "not_available",
+}
+
+CLEAN_MODE_SLUGS: Final[dict[str, str]] = {
+    "auto": "auto",
+    "one": "one_pass",
+    "two": "two_passes",
+    "n-a": "not_available",
+}
+
 # ── Attributes ────────────────────────────────────────────────────────────────
 ATTR_STATUS: Final = "status"
 ATTR_CLEANING_TIME: Final = "cleaning_time"
