@@ -2520,3 +2520,140 @@ class TestZoneNamesReachTheRenderedMap:
         plan = self._plan(rooms_layer={"features": []}, stored_names=None)
 
         assert plan.room_names == {}
+
+
+class TestZonesReachTheMap:
+    """@chairstacker (#84): no zone names on the map, while his own
+    diagnostics carried every one of them.
+
+    A `CleanZoneFeature` has a Polygon beside its name, and nothing read
+    it — so a zone had a name in `prime_room_names` and no shape to
+    attach it to. The `map_clean_zones` option that is supposed to
+    control this was read in the options flow and nowhere else.
+    """
+
+    @staticmethod
+    def _bundle():
+        return {
+            "rooms": {"features": [{
+                "id": "10",
+                "geometry": {"type": "Polygon", "coordinates": [[
+                    [0, 0], [3, 0], [3, 3], [0, 3],
+                ]]},
+                "properties": {"name": "Kitchen"},
+            }]},
+            "cleanZones": {"features": [{
+                "id": "101",
+                "geometry": {"type": "Polygon", "coordinates": [[
+                    [1, 1], [2, 1], [2, 2], [1, 2],
+                ]]},
+                "properties": {"name": "Guest Access Zone"},
+            }]},
+        }
+
+    def test_a_zone_gets_a_polygon(self):
+        from custom_components.roomba_plus.prime_room_map import (
+            _room_polygons_from_bundle,
+        )
+
+        polys = _room_polygons_from_bundle(self._bundle()["cleanZones"])
+
+        assert "101" in polys
+        assert len(polys["101"]) >= 3
+
+    def test_zones_are_kept_apart_from_rooms(self):
+        """A zone sits inside a room. Merged into one set it would be
+        filled over the room it belongs to."""
+        from custom_components.roomba_plus.prime_room_map import (
+            _room_polygons_from_bundle,
+        )
+
+        rooms = _room_polygons_from_bundle(self._bundle()["rooms"])
+        zones = _room_polygons_from_bundle(self._bundle()["cleanZones"])
+
+        assert set(rooms) == {"10"}
+        assert set(zones) == {"101"}
+
+    def test_a_bundle_without_zones_is_fine(self):
+        from custom_components.roomba_plus.prime_room_map import (
+            _room_polygons_from_bundle,
+        )
+
+        assert _room_polygons_from_bundle(None) == {}
+
+
+class TestZonesAreActuallyDrawn:
+    """The half I kept deferring.
+
+    Reading zone polygons out of the bundle is tested above; that they
+    reach the rendered image was not. Three times this week a fix
+    looked right and did nothing — a heatmap flip whose first tests
+    passed with the fix reverted, a zone-name reader whose mocks agreed
+    with a broken call site — so "the code is there" is not the claim
+    worth making.
+
+    This renders a PNG and looks at the pixels.
+    """
+
+    @staticmethod
+    def _rendered(zone_polygons):
+        import io
+        from unittest.mock import MagicMock
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+        from custom_components.roomba_plus.prime_room_map import PrimeFloorPlan
+
+        entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+        entity._renderer = None
+        entity._names = {}
+        entity._preferences = {}
+        entity._config_entry = MagicMock()
+        entity._config_entry.options = {}
+        # Explicit empties: a MagicMock returns a Mock for every
+        # attribute, and the renderer unpacks these.
+        entity._config_entry.runtime_data.prime_positions = []
+        # A room to give the canvas an extent, so the zone is drawn
+        # inside a fitted image rather than defining the fit alone.
+        entity._polygons = {
+            "10": [(0.0, 0.0), (4000.0, 0.0), (4000.0, 4000.0), (0.0, 4000.0)]
+        }
+        entity._zone_polygons = zone_polygons
+        entity._live_bundle = None
+        entity._robot_pose = None
+        entity._floor_plan = PrimeFloorPlan(
+            room_names={}, room_polygons={}, floor_plan=[], borders=[],
+            carpet=[], furniture=[], dock=None,
+        )
+        return Image.open(io.BytesIO(entity._render_png())).convert("RGB")
+
+    def test_a_zone_changes_the_image(self):
+        """The assertion that would have caught a silent no-op."""
+        without = self._rendered({})
+        with_zone = self._rendered({
+            "101": [
+                (1000.0, 1000.0), (3000.0, 1000.0),
+                (3000.0, 3000.0), (1000.0, 3000.0),
+            ]
+        })
+
+        assert list(without.getdata()) != list(with_zone.getdata())
+
+    def test_the_zone_outline_is_its_own_colour(self):
+        """Blue, so it reads as a marked-out part of a room rather than
+        another room. A fill would hide the room it belongs to."""
+        img = self._rendered({
+            "101": [
+                (1000.0, 1000.0), (3000.0, 1000.0),
+                (3000.0, 3000.0), (1000.0, 3000.0),
+            ]
+        })
+
+        assert (120, 190, 255) in set(img.getdata())
+
+    def test_no_zones_renders_nothing_extra(self):
+        """A robot with no saved zones must not gain stray lines."""
+        img = self._rendered({})
+
+        assert (120, 190, 255) not in set(img.getdata())

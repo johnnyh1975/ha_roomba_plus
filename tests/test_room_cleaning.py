@@ -1735,3 +1735,84 @@ class TestClassicMopParamsMatchTheCapture:
 
         assert "padWetness" not in params
         assert "swScrub" not in params
+
+
+class TestPrimeOffersZonesForAreaMapping:
+    """A zone could not be mapped to a Home Assistant area, because it
+    was never in the list the mapping dialog shows.
+
+    `get_segments()` built from `available_rooms()`, which reads
+    `rooms_metadata` — rooms, not zones. Classic has offered its zones
+    all along, in this same file.
+
+    Not a decision: when this was written `available_rooms()` was the
+    only name source Prime had. `prime_room_names` came later, for the
+    map, and the places already reading the older source were never
+    revisited.
+    """
+
+    @staticmethod
+    def _backend(rooms, names):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend.available_rooms = AsyncMock(return_value=rooms)
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = names
+        backend._config_entry = entry
+        return backend
+
+    @pytest.mark.asyncio
+    async def test_a_zone_is_offered(self):
+        backend = self._backend(
+            rooms={"Kitchen": "10"},
+            names={"10": "Kitchen", "107": "Guest Access Zone"},
+        )
+
+        segments = await backend.get_segments()
+        by_id = {s.id: s for s in segments}
+
+        assert "zid_107" in by_id
+        assert by_id["zid_107"].name == "Guest Access Zone"
+
+    @pytest.mark.asyncio
+    async def test_a_zone_uses_its_own_prefix(self):
+        """`zid_`, not `rid_`: area_resolver distinguishes them, and a
+        zone under a room's prefix would collide with a room of the same
+        id."""
+        backend = self._backend(
+            rooms={"Kitchen": "10"}, names={"10": "Kitchen", "10x": "Zone"},
+        )
+
+        ids = {s.id for s in await backend.get_segments()}
+
+        assert "rid_10" in ids
+        assert "zid_10x" in ids
+
+    @pytest.mark.asyncio
+    async def test_rooms_are_not_duplicated_as_zones(self):
+        """`prime_room_names` holds both, so a room appearing there must
+        not be offered twice."""
+        backend = self._backend(
+            rooms={"Kitchen": "10"}, names={"10": "Kitchen"},
+        )
+
+        segments = await backend.get_segments()
+
+        assert len(segments) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_zone_segment_decodes_back(self):
+        """The other half: a `zid_` id sent to clean_segments must not
+        be decoded by the room rule, which would drop four characters
+        and clean whatever room shared the remainder."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend(rooms={}, names={})
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["107"]

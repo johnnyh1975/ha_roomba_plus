@@ -246,8 +246,19 @@ class TestNoPrimeEntityClassIsNeverBuilt:
                 f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
             )
             created: list = []
+            # OPTIONAL ENTITIES NEED THEIR OPTION ON. The fixture's
+            # `options` is a MagicMock, so `.get()` used to return a
+            # truthy mock and every option read as enabled -- which is
+            # why this guard passed while the region sensors were gated
+            # on a coordinator a Prime entry does not have.
+            #
+            # Explicit options make the guard mean what it says: these
+            # classes are reachable on an entry that has asked for them.
+            _entry = prime_fixtures.cloud_only_config_entry()
+            _entry.options = {"region_sensors": True, "room_schedule": True}
+            _entry.runtime_data.prime_room_names = {"10": "Kitchen"}
             await module.async_setup_entry(
-                MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+                MagicMock(), _entry, created.extend
             )
             built |= {type(entity).__name__ for entity in created}
 
@@ -334,8 +345,17 @@ class TestRegionSensorsGrowWithTheMap:
         from tests import prime_fixtures
 
         entry = prime_fixtures.cloud_only_config_entry()
-        coordinator = entry.runtime_data.cloud_coordinator
-        coordinator.regions_by_pmap = {"MAP-A": {"10": "Kitchen"}}
+        # `prime_room_names` ON THE ENTRY, not `regions_by_pmap` on a
+        # Classic coordinator. A Prime entry has no `cloud_coordinator`
+        # at all, so this fixture agreed with a gate that could never
+        # open -- @chairstacker ticked the option, ran a zone mission,
+        # reloaded, and got no entities (#84) while this test passed.
+        # THE OPTION HAS TO BE ON. It defaults to False, and the old
+        # gate never opened on Prime anyway -- so this test passed
+        # without ever exercising the code it names.
+        entry.options = {**getattr(entry, "options", {}), "region_sensors": True}
+        entry.runtime_data.prime_room_names = {"10": "Kitchen"}
+        coordinator = entry.runtime_data.prime_status_coordinator
 
         listeners: list = []
         coordinator.async_add_listener = lambda cb: listeners.append(cb) or (
@@ -349,10 +369,8 @@ class TestRegionSensorsGrowWithTheMap:
             1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"
         )
 
-        # A new zone appears in the cloud, and the coordinator fires.
-        coordinator.regions_by_pmap = {
-            "MAP-A": {"10": "Kitchen", "101": "Sofa corner"}
-        }
+        # A new zone appears, and the status coordinator fires.
+        entry.runtime_data.prime_room_names["101"] = "Sofa corner"
         for callback in listeners:
             callback()
 

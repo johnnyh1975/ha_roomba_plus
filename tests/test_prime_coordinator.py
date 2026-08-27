@@ -726,9 +726,11 @@ class TestPrimeFiresRoomCompleted:
         c = PrimeCoordinator.__new__(PrimeCoordinator)
         c.hass = MagicMock()
         c.entry = MagicMock(entry_id="E1", title="Robot")
-        c.entry.runtime_data.cloud_coordinator.regions_by_pmap = {
-            "MAP-A": {"10": "Kitchen", "11": "Hall"}
-        }
+        # `prime_room_names`, NOT the Classic coordinator. This fixture
+        # fed a source a Prime entry does not have, so it agreed with a
+        # lookup that returned None for every region -- and the test
+        # passed while the event's `room_name` was always empty.
+        c.entry.runtime_data.prime_room_names = {"10": "Kitchen", "11": "Hall"}
         c._last_room_id = None
         return c
 
@@ -874,3 +876,38 @@ class TestAMissedChargeTransitionStillSyncs:
         self._feed(c, "charge", 373)
 
         c._schedule_mission_history_sync.assert_called_once()
+
+
+class TestTheRoomNameInItsOwnEvent:
+    """`_room_name()` read `cloud_coordinator.regions_by_pmap`. A Prime
+    entry has no `cloud_coordinator`, so it returned None for every
+    region — and it feeds the `room_name` field of the event a caller
+    automates on. "Kitchen finished" arrived without the kitchen.
+    """
+
+    @staticmethod
+    def _coordinator(names):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeCoordinator,
+        )
+
+        c = PrimeCoordinator.__new__(PrimeCoordinator)
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = names
+        c.entry = entry
+        return c
+
+    def test_a_room_resolves(self):
+        assert self._coordinator({"10": "Kitchen"})._room_name("10") == "Kitchen"
+
+    def test_a_zone_resolves_too(self):
+        """`prime_room_names` is flat and holds both, which is what
+        makes this work for a zone clean."""
+        c = self._coordinator({"107": "Guest Access Zone"})
+
+        assert c._room_name("107") == "Guest Access Zone"
+
+    def test_an_unknown_id_is_none(self):
+        assert self._coordinator({"10": "Kitchen"})._room_name("99") is None

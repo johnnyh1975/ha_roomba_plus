@@ -121,3 +121,28 @@ class TestTheManifestKeysAreOrderedAsHassfestWants:
             f"manifest keys after domain/name must be alphabetical -- "
             f"Hassfest refuses otherwise. Got: {rest}"
         )
+
+
+class TestPrimeCodeDoesNotReadClassicSources:
+    """Five bugs this week shared one shape: Prime code reading a source
+    that is Classic-only or knows only part of the answer.
+
+    The guard script is the durable version of that check. This runs it
+    so the suite fails rather than only CI.
+    """
+
+    def test_the_guard_passes(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        script = (
+            Path(__file__).resolve().parent.parent
+            / "scripts" / "check_prime_sources.py"
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True
+        )
+
+        assert result.returncode == 0, result.stdout
