@@ -439,6 +439,23 @@ Normal. The robot returned to top up and will resume. It is distinguished
 from plain charging because an automation reacting to "docked" or
 "charging" would otherwise fire in the middle of a clean *(v4.0.0a46)*.
 
+## Setup cannot find the robot password
+
+Choose **"Set up with my iRobot account"**. It is required for
+Combo/V4-generation robots, which have no local setup — and it is also
+the right choice for any robot whose password could not be retrieved
+automatically, whatever its model.
+
+The wording before v4.0.0a47 suggested the option was only for newer
+models. It was not.
+
+## The per-room sensors did not appear after enabling the option
+
+Fixed in v4.0.0a47 for Prime robots, where the option created no
+entities at all. If they are still missing after updating, a diagnostics
+download will show whether the region names have arrived —
+`region_names.merged` lists every room and zone the integration knows.
+
 ## Sending a diagnostics download
 
 Settings → Devices & Services → Roomba+ → the three dots → Download

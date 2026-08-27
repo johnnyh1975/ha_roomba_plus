@@ -218,6 +218,15 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 
 - Room and zone names come directly from the Smart Map — no manual naming required
 
+**Zones on the rooms map** *(v4.0.0a47)*. Saved clean zones are drawn as
+outlines rather than filled shapes — a zone sits inside a room, and
+filling it would hide the room it belongs to. Controlled by the
+"Show clean zones on the map" option.
+
+**Zones as Home Assistant areas** *(v4.0.0a47)*. Prime robots now offer
+their zones alongside their rooms in the area-mapping dialog, so a zone
+can be mapped to an area the same way a room can.
+
 **Where the robot is right now.** A `device_tracker` entity reports the
 room or zone being cleaned, and `Docked` when it is on the dock. Zone
 names come from a different source than room names — a room is named in
