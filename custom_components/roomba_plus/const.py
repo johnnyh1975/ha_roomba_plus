@@ -1294,7 +1294,16 @@ ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     # really was cleanMissionStatus.error then deleting it destroys a
     # real observation. See DOCK_STATE_FIELD_CODES for the dock side.
     671: {"label": "Pad wash not possible",      "description": "The dock cannot wash the pad. Seen with the clean water tank both empty and removed.", "action": "Check that both dock tanks are fitted and the clean water tank is filled."},
-    1010: {"label": "Clear path",              "description": "The robot's path is obstructed.",                          "action": "Clear obstacles from the robot's path and restart."},
+    # CONFIRMED BY THE ROBOT ITSELF (@utkjmitch, Y351020). "Clear path"
+    # was an unconfirmed guess, and it is wrong: 1010 is a DOCKING
+    # failure. His robot finished a mission, drove home, aborted the
+    # final approach two inches short of a powered, working dock, and
+    # raised 1010 -- hand-placed on the same dock it charged at once.
+    #
+    # Same code appeared on 2026-08-17 when the dock was unpowered, and
+    # was read as an obstruction for ten days. It cost six hours of
+    # visible battery drain nobody acted on.
+    1010: {"label": "Couldn't dock",           "description": "The robot could not return to its dock.",                  "action": "Move the robot and place it on the dock by hand."},
 }
 
 # Backward-compatible derived view — all existing code that reads ERROR_CODE_LABELS

@@ -59,11 +59,14 @@ from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT faca
 
 from . import roomba_reported_state
 from .entity_cleanup import async_remove_stale_entities
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
 from .const import (
     CONF_CORRELATION_ENTITIES,
     CONF_REGION_SENSORS,
     DEFAULT_REGION_SENSORS,
 )
+from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_prime import (
     PrimeBatterySensor,
@@ -421,11 +424,19 @@ async def async_setup_entry(
             # the status coordinator, so a robot that has not reported
             # regions yet at setup time gets its sensors on the first
             # update rather than never.
-            _coordinator = data.prime_status_coordinator
-            if _coordinator is not None:
-                config_entry.async_on_unload(
-                    _coordinator.async_add_listener(_sync_region_sensors)
+            # LISTEN WHERE THE NAMES ARE WRITTEN. They are filled during
+            # a map build, not by the status coordinator -- so a
+            # coordinator listener fired plenty and never with names
+            # present. The sensors therefore appeared only when a map
+            # happened to be built before this platform set up, and
+            # vanished on reload when it was not.
+            config_entry.async_on_unload(
+                async_dispatcher_connect(
+                    hass,
+                    SIGNAL_PRIME_ROOM_NAMES.format(config_entry.entry_id),
+                    _sync_region_sensors,
                 )
+            )
 
         async_add_entities(entities)
 

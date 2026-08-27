@@ -2368,6 +2368,24 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
         raw = history.get(f"{self._pmap_id}/{self._region_id}") or history.get(
             self._region_id
         )
+        if not raw and self._pmap_id is None:
+            # ONLY WHEN THIS SENSOR HAS NO MAP OF ITS OWN.
+            #
+            # With a pmap, matching on the region alone would show a
+            # clean of region 2 on a different floor -- the multi-map
+            # fault @dduff617 found. Prime sensors carry no pmap because
+            # region ids are unique across a Prime robot's maps, so
+            # there is no other floor to confuse this with.
+            # The store keys `{pmap_id}/{rid}` when it knows a map. A
+            # Prime sensor has no pmap -- region ids are unique across
+            # a Prime robot's maps -- so both lookups above missed and
+            # every one of these read Unknown, including the zone that
+            # had just been cleaned (@chairstacker, #84).
+            _suffix = f"/{self._region_id}"
+            for _key, _value in history.items():
+                if _key.endswith(_suffix):
+                    raw = _value
+                    break
         if not raw:
             return None
         return dt_util.parse_datetime(raw)

@@ -759,13 +759,17 @@ _TRANSLATION_GROUPS: Final[list[tuple[list[int], dict[str, dict[str, str]]]]] = 
         "pt": {"label": "Falha na atualização da Clean Base", "description": "A atualização de software da Clean Base falhou.", "action": "Tente novamente a atualização. Contacte o suporte iRobot se o erro persistir."},
         "nl": {"label": "Update Clean Base mislukt", "description": "De software-update van het Clean Base-station is mislukt.", "action": "Probeer de update opnieuw. Neem contact op met iRobot-support als de fout blijft optreden."},
     }),
+    # 1010 IS A DOCKING FAILURE, not an obstruction -- confirmed by the
+    # robot's own message text (@utkjmitch). The previous wording was a
+    # guess, and it sent people looking for something in the robot's way
+    # when it was standing two inches from its dock.
     ([1010], {
-        "de": {"label": "Weg freimachen", "description": "Der Weg des Roboters ist blockiert.", "action": "Hindernisse aus dem Weg des Roboters entfernen und neu starten."},
-        "fr": {"label": "Dégager le chemin", "description": "Le chemin du robot est obstrué.", "action": "Retirez les obstacles du chemin du robot et redémarrez."},
-        "it": {"label": "Liberare il percorso", "description": "Il percorso del robot è ostruito.", "action": "Rimuovere gli ostacoli dal percorso del robot e riavviare."},
-        "es": {"label": "Despejar camino", "description": "El camino del robot está obstruido.", "action": "Retire los obstáculos del camino del robot y reinicie."},
-        "pt": {"label": "Desobstruir caminho", "description": "O caminho do robô está obstruído.", "action": "Remova os obstáculos do caminho do robô e reinicie."},
-        "nl": {"label": "Pad vrijmaken", "description": "Het pad van de robot is geblokkeerd.", "action": "Verwijder obstakels uit het pad van de robot en start opnieuw."},
+        "de": {"label": "Andocken fehlgeschlagen", "description": "Der Roboter konnte nicht zur Ladestation zurückkehren.", "action": "Den Roboter von Hand auf die Ladestation setzen."},
+        "fr": {"label": "Retour à la base impossible", "description": "Le robot n'a pas pu retourner à sa base.", "action": "Placez le robot sur la base à la main."},
+        "it": {"label": "Rientro alla base non riuscito", "description": "Il robot non è riuscito a tornare alla base.", "action": "Posizionare il robot sulla base manualmente."},
+        "es": {"label": "No pudo volver a la base", "description": "El robot no pudo regresar a su base.", "action": "Coloque el robot en la base a mano."},
+        "pt": {"label": "Não conseguiu voltar à base", "description": "O robô não conseguiu regressar à base.", "action": "Coloque o robô na base manualmente."},
+        "nl": {"label": "Dokken mislukt", "description": "De robot kon niet terugkeren naar het laadstation.", "action": "Plaats de robot met de hand op het laadstation."},
     }),
     # FIELD-REPORTED (chairstacker, Combo 405 / V4 Prime). The wording
     # WIDENED in a19: a second, controlled observation showed 671 with

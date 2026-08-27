@@ -35,6 +35,7 @@ and it needs no flag to be interpreted correctly at 32 call sites.
 
 from __future__ import annotations
 
+
 import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -536,34 +537,56 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 continue
 
             is_current = bool(current_map) and p2map_id == current_map
+            # BOTH SOURCES, like get_segments() twenty lines down.
+            #
+            # `rooms_metadata` carries a name only for some rooms.
+            # @utkjmitch's Y351020 has five named rooms that live in the
+            # version endpoint's `geojson_details.regions` and nowhere
+            # in metadata -- so this produced {} and the service told
+            # him to "finish a mapping run and name the rooms", which he
+            # had done.
+            #
+            # Metadata names win where present: they are the per-map,
+            # user-set ones. `prime_room_names` is the fallback, and it
+            # is what get_segments() has been layering on all along --
+            # the same source this loop was never revisited to use.
+            _fallback = getattr(
+                getattr(self._config_entry, "runtime_data", None),
+                "prime_room_names", None,
+            ) or {}
 
             for room in map_data.rooms_metadata or []:
-                if not (room.name and room.room_id):
+                _name = room.name or _fallback.get(str(room.room_id))
+                if not (_name and room.room_id):
                     continue
+                # LOCAL NAME, not a rewritten object. `replace()` needs
+                # a dataclass and this loop also sees plain namespaces
+                # from tests and from other readers.
+                room_name = str(_name)
 
-                if room.name in rooms:
-                    if is_current and room.name not in from_current:
+                if room_name in rooms:
+                    if is_current and room_name not in from_current:
                         _LOGGER.warning(
                             "roomba_plus: room name %r exists on more than one map "
                             "for %s -- using the one on the map the robot is "
                             "currently on. Rename one of them in the iRobot app to "
                             "target them separately.",
-                            room.name, self._data.blid,
+                            room_name, self._data.blid,
                         )
-                        rooms[room.name] = f"{p2map_id}/{room.room_id}"
-                        from_current.add(room.name)
+                        rooms[room_name] = f"{p2map_id}/{room.room_id}"
+                        from_current.add(room_name)
                     else:
                         _LOGGER.warning(
                             "roomba_plus: room name %r exists on more than one map "
                             "for %s -- keeping the first match. Rename one of them "
                             "in the iRobot app to target them separately.",
-                            room.name, self._data.blid,
+                            room_name, self._data.blid,
                         )
                     continue
 
-                rooms[room.name] = f"{p2map_id}/{room.room_id}"
+                rooms[room_name] = f"{p2map_id}/{room.room_id}"
                 if is_current:
-                    from_current.add(room.name)
+                    from_current.add(room_name)
         return rooms
 
     _SEGMENT_PREFIX = "rid_"
@@ -1010,9 +1033,22 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             )
 
     async def available_rooms(self) -> dict[str, str]:
+        # NO EARLY RETURN ON A MISSING COORDINATOR.
+        #
+        # Stored zone data lives in the config entry options and needs
+        # no cloud at all -- the comment below says as much, and says a
+        # first version of this "lost every user-named room on installs
+        # without cloud credentials". Six tests caught that.
+        #
+        # It came back here as a guard clause: without a coordinator
+        # this returned {} BEFORE reading the stored zones. Same fault,
+        # four lines higher, and this time nothing caught it because the
+        # tests build a coordinator.
+        #
+        # @Young9898 reported that local-only installs have no way to
+        # get region ids and proposed probing for them by launching real
+        # missions. The ids were already available; we discarded them.
         coordinator = self._data.cloud_coordinator
-        if coordinator is None or coordinator.data is None:
-            return {}
         # BOTH SOURCES, in the original's order: stored zone data
         # first, cloud regions and zones layered on top.
         #

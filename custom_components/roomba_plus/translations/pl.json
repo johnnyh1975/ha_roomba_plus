@@ -1277,7 +1277,7 @@
         }
       },
       "region_last_cleaned": {
-        "name": "{region} – ostatnio sprzątano"
+        "name": "Ostatnie sprzątanie – {region}"
       },
       "part_edge_brush": {
         "name": "Konserwacja – Szczotka boczna"

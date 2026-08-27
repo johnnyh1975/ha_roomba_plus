@@ -1277,7 +1277,7 @@
         }
       },
       "region_last_cleaned": {
-        "name": "{region} – ultima pulizia"
+        "name": "Ultima pulizia – {region}"
       },
       "part_edge_brush": {
         "name": "Manutenzione – Spazzola laterale"

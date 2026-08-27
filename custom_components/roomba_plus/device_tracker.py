@@ -72,6 +72,13 @@ _STUCK_LABEL: dict[str, str] = {
     "en": "Stuck",
 }
 
+#: Shown when the robot reports an error. Not a place -- which is the
+#: point: "Docked" was actively wrong there.
+_ERROR_LABEL: dict[str, str] = {
+    "de": "Fehler",
+    "en": "Error",
+}
+
 _ACTIVE_FALLBACK_LABEL: dict[str, str] = {
     "de": "Unterwegs",
     "en": "Cleaning",
@@ -186,13 +193,33 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         if data.connection_type is ConnectionType.CLOUD_ONLY:
             coordinator = getattr(data, "prime_status_coordinator", None)
             shadows = getattr(coordinator, "data", None) or {}
-            phase = (
+            _status = (
                 (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus")
                 or {}
-            ).get("phase", "")
+            )
+            phase = _status.get("phase", "")
         else:
             state = roomba_reported_state(self.vacuum)
-            phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+            _status = state.get("cleanMissionStatus") or {}
+            phase = _status.get("phase", "")
+
+        # AN ERROR IS NOT AN ARRIVAL.
+        #
+        # `stop` is a mission-end phase, and a robot that failed to dock
+        # reports exactly that -- so this said "Docked" about a robot
+        # flashing red two inches short of its dock, having aborted the
+        # final approach (@utkjmitch, error 1010).
+        #
+        # Last week the same entity said "Cleaning" for nine days about
+        # a robot that had stopped transmitting. One root: states
+        # derived from what SHOULD follow rather than from what the
+        # robot reports.
+        #
+        # Checked before the mission-end branch because a mission can
+        # end BY failing, and the failure is the more important half.
+        _err = _status.get("error")
+        if isinstance(_err, int) and _err != 0:
+            return self._label(_ERROR_LABEL)
 
         if phase in MISSION_END_PHASES or phase == "":
             return self._label(_DOCKED_LABEL)

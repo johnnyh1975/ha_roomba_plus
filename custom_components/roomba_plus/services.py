@@ -78,6 +78,12 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+#: How long to give a robot to open a cycle before saying the
+#: command looks swallowed. Long enough for a normal start (a
+#: field capture showed ~10s for a region launch), short enough
+#: that the log line is still near the action that caused it.
+_SWALLOWED_COMMAND_GRACE_SEC = 20
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -197,6 +203,65 @@ def _modes_for_backend(backend: Any) -> dict[str, int]:
     )
 
 
+async def _async_warn_if_swallowed(
+    hass: HomeAssistant, entry: Any, what: str
+) -> None:
+    """Log when a command was accepted and nothing happened.
+
+    THREE CAUSES, ONE SIGNATURE. A robot can take a command into
+    `lastCommand`, report `notReady: 0` and `error: 0`, and simply not
+    act on it. @Young9898 documented three routes to that state on one
+    i3+ in a single day:
+
+      - a stale `user_pmapv_id` (already guarded, separately)
+      - a region-targeted start sent while the robot is off its dock,
+        which works 6/6 from the dock and 0/2 mid-floor
+      - `notReady: 1` (Cliff) after a false cliff reading on a dark rug,
+        which swallows every motion command until the robot is picked up
+
+    Enumerating causes does not scale -- the first was diagnosed and
+    written down, and the other two look identical to it from outside,
+    which is exactly how a second cause gets attributed to the first for
+    months. Watching for the SYMPTOM covers all three and whatever comes
+    next.
+
+    Deliberately a log line and not an exception: the service has
+    already returned by the time this can be known, and a robot that
+    starts late is better served by a warning than by a caller that
+    was told the call failed.
+    """
+    import asyncio  # noqa: PLC0415
+
+    await asyncio.sleep(_SWALLOWED_COMMAND_GRACE_SEC)
+
+    try:
+        from . import roomba_reported_state  # noqa: PLC0415
+
+        status = roomba_reported_state(
+            entry.runtime_data.roomba
+        ).get("cleanMissionStatus") or {}
+    except Exception:  # noqa: BLE001
+        return
+
+    if (status.get("cycle") or "none") != "none":
+        return
+
+    not_ready = status.get("notReady")
+    _LOGGER.warning(
+        "%s was accepted by the robot but no mission started within %ds "
+        "(phase=%r, notReady=%r, error=%r). The robot takes a command "
+        "and silently ignores it in several situations: a cliff sensor "
+        "reading a dark floor as a drop-off, a region-targeted start "
+        "sent while the robot is away from its dock, or a stale map "
+        "version. Check the readiness sensor.",
+        what,
+        _SWALLOWED_COMMAND_GRACE_SEC,
+        status.get("phase"),
+        not_ready,
+        status.get("error"),
+    )
+
+
 async def _async_clean_rooms_via_backend(
     backend: Any,
     entity_id: str,
@@ -223,8 +288,16 @@ async def _async_clean_rooms_via_backend(
     available = await backend.available_rooms()
     if not available:
         raise ServiceValidationError(
-            f"{entity_id} has no named rooms yet. Finish a mapping run and name "
-            "the rooms in the iRobot app first.",
+            # ABSENCE AND UNREACHABILITY ARE DIFFERENT FINDINGS.
+            #
+            # This asserted a cause it had not checked. @utkjmitch's
+            # robot had five named rooms and was told to go and name
+            # them -- they lived in a source this reader did not
+            # consult. He had done the thing the message asked for.
+            f"No rooms with names could be found for {entity_id}. If the "
+            "rooms are named in the iRobot app, a diagnostics download "
+            "will show what this integration can see; otherwise finish "
+            "a mapping run and name them there first.",
             translation_domain=DOMAIN,
             translation_key="no_rooms_configured",
         )
@@ -294,6 +367,18 @@ async def _async_clean_rooms_via_backend(
         # one-element list across the whole call.
         operating_mode=[caller_mode] if caller_mode is not None else None,
     )
+
+    # Fire and forget: the service returns now, and this reports later
+    # if nothing actually started.
+    _entry = getattr(backend, "_config_entry", None) or getattr(
+        backend, "_data", None
+    )
+    if _entry is not None and hasattr(_entry, "async_create_background_task"):
+        _entry.async_create_background_task(
+            call.hass,
+            _async_warn_if_swallowed(call.hass, _entry, "clean_room"),
+            name=f"roomba_plus_swallow_watch_{_entry.entry_id}",
+        )
 
 
 async def async_handle_clean_zone(call: ServiceCall) -> None:
@@ -1459,6 +1544,12 @@ def async_register_services(hass: HomeAssistant) -> None:
                 # not allowed @ data['two_pass']". Untested — test_services.py
                 # had no coverage that went through real schema validation.
                 vol.Optional(ATTR_TWO_PASS): cv.boolean,
+                # DOCUMENTED AND REJECTED. services.yaml describes this
+                # field with its options; the schema did not list it, so
+                # a caller following the documentation got "extra keys
+                # not allowed" (@utkjmitch). The handler has read it all
+                # along -- only the schema was missing.
+                vol.Optional(ATTR_CLEANING_MODE): cv.string,
                 vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
                 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): individual pass count
                 # per room within the same sequence, e.g.

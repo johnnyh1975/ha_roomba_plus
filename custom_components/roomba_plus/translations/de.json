@@ -1277,7 +1277,7 @@
         }
       },
       "region_last_cleaned": {
-        "name": "{region} – zuletzt gereinigt"
+        "name": "Zuletzt gereinigt – {region}"
       },
       "part_edge_brush": {
         "name": "Wartung – Seitenbürste"

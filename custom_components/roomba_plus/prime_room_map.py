@@ -44,6 +44,9 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 #: Prime coordinates are metres, the renderer works in millimetres.
+#: Fired when `runtime_data.prime_room_names` gains entries.
+SIGNAL_PRIME_ROOM_NAMES = "roomba_plus_prime_room_names_{}"
+
 METRES_TO_MM = 1000.0
 
 
@@ -590,8 +593,27 @@ async def async_build_prime_floor_plan(
                 **prime_region_names_from_command(runtime),
                 **existing,
             }
+        before = dict(existing)
         existing.update(names_for_others)
         runtime.prime_room_names = existing
+
+        # TELL ANYONE WAITING. Region names are filled HERE, during a
+        # map build -- not by the status coordinator. Entities built
+        # from them had no way to learn they had arrived, so the
+        # per-region sensors were created only if a map happened to be
+        # built before the sensor platform set up, and vanished on
+        # reload when it was not (@chairstacker, #84: "no longer being
+        # provided by the roomba_plus integration").
+        if existing != before:
+            from homeassistant.helpers.dispatcher import (  # noqa: PLC0415
+                async_dispatcher_send,
+            )
+
+            _hass = getattr(config_entry, "hass", None)
+            if _hass is not None:
+                async_dispatcher_send(
+                    _hass, SIGNAL_PRIME_ROOM_NAMES.format(config_entry.entry_id)
+                )
 
     plan = PrimeFloorPlan(
         p2map_id=p2map_id,

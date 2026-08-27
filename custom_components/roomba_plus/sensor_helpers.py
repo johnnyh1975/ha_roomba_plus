@@ -96,6 +96,40 @@ def _not_ready_value(entity: "IRobotEntity") -> str:
     return label if label else f"Not ready ({raw})"
 
 
+def recent_pause_reasons(entity: "IRobotEntity") -> list[int]:
+    """The robot's own list of what stopped its last ten runs.
+
+    `bbpause.pauses` is a rolling ten-entry history of abort reasons,
+    and nothing read it. @utkjmitch's Y351020 carried
+    `[1010, 1010, 46, 1010, 1010, 46, 46, 33, 33, 48]` -- four docking
+    failures in ten runs -- while he experienced each as a one-off.
+
+    TWO SHAPES. Some robots nest it (`bbpause.bbpause.pauses`), others
+    do not (`bbpause.pauses`). Both appear in field captures from the
+    same week, so both are read rather than one being called correct.
+
+    Deliberately raw codes and no interpretation: nobody knows yet what
+    counts as a lot. Four 1010s on a robot that spent a week at an
+    unpowered dock is probably normal, and a threshold picked without
+    field values would be a guess dressed as a warning.
+    """
+    raw = entity.vacuum_state.get("bbpause")
+    if not isinstance(raw, dict):
+        return []
+    inner = raw.get("bbpause")
+    if isinstance(inner, dict) and isinstance(inner.get("pauses"), list):
+        nested = [v for v in inner["pauses"] if isinstance(v, int) and v >= 0]
+    else:
+        nested = []
+    flat = raw.get("pauses")
+    outer = (
+        [v for v in flat if isinstance(v, int) and v >= 0]
+        if isinstance(flat, list) else []
+    )
+    # The outer list is the longer one where both exist.
+    return outer or nested
+
+
 def _error_value(entity: "IRobotEntity") -> str:
     """Error label — suppressed when the robot is docked/idle after a mission.
 

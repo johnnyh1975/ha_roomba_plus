@@ -1277,7 +1277,7 @@
         }
       },
       "region_last_cleaned": {
-        "name": "{region} – última limpeza"
+        "name": "Última limpeza – {region}"
       },
       "part_edge_brush": {
         "name": "Manutenção – Escova lateral"

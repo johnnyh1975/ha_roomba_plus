@@ -35,6 +35,7 @@ import datetime as dt_stdlib
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ERROR_CATALOGUE,
     CARPET_BOOST_SLUGS,
     CLEAN_BASE_STATUS_SLUGS,
     CLEAN_MODE_SLUGS,
@@ -63,6 +64,7 @@ from .schedule_parser import (
     parse_schedule_occurrences,
 )
 from .sensor_helpers import (
+    recent_pause_reasons,
     _ACTIVE_PHASES,
     _area_cleaned_today,
     _battery_age_days,
@@ -193,6 +195,28 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Status – Error",
         entity_category=None,
         value_fn=_error_value,
+        # THE ROBOT'S OWN ABORT HISTORY, as attributes rather than a
+        # second entity. `bbpause.pauses` is a rolling ten-entry list of
+        # what stopped the last ten runs, and nothing read it --
+        # @utkjmitch's carried four docking failures in ten runs while
+        # he experienced each as a one-off.
+        #
+        # Raw codes, most frequent named, and no judgement about what
+        # counts as a lot: nobody has field values for that yet, and a
+        # threshold picked without them would be a guess dressed as a
+        # warning.
+        extra_attributes_fn=lambda e: (
+            {
+                "recent_pause_reasons": _pauses,
+                "most_frequent_pause_reason": (
+                    ERROR_CATALOGUE.get(
+                        max(set(_pauses), key=_pauses.count), {}
+                    ).get("label")
+                    or max(set(_pauses), key=_pauses.count)
+                ),
+            }
+            if (_pauses := recent_pause_reasons(e)) else {}
+        ),
     ),
 
     # GROUP 2 — Operational (DIAGNOSTIC, enabled)
