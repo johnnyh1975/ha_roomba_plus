@@ -742,3 +742,52 @@ class TestMissionElapsedValue:
 from custom_components.roomba_plus.const import ERROR_CODE_LABELS
 
 
+
+
+class TestTheRobotsOwnAbortHistory:
+    """`bbpause.pauses` is a rolling ten-entry list of what stopped the
+    last ten runs, and nothing read it.
+
+    @utkjmitch's Y351020 carried four docking failures in ten runs while
+    he experienced each as a one-off. The pattern was in every
+    diagnostics download he had ever sent.
+
+    Values below are real, from captures on both generations.
+    """
+
+    @staticmethod
+    def _read(bbpause):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_helpers import (
+            recent_pause_reasons,
+        )
+
+        entity = MagicMock()
+        entity.vacuum_state = {"bbpause": bbpause}
+        return recent_pause_reasons(entity)
+
+    def test_the_flat_shape(self):
+        """@utkjmitch's Y351020."""
+        assert self._read(
+            {"pauses": [1010, 1010, 46, 1010, 1010, 46, 46, 33, 33, 48]}
+        ) == [1010, 1010, 46, 1010, 1010, 46, 46, 33, 33, 48]
+
+    def test_the_nested_shape(self):
+        """@chairstacker's G185020 nests it, and carries both. Two
+        shapes from the same week, so neither is 'the' correct one."""
+        assert self._read(
+            {"bbpause": {"pauses": [29, -1]},
+             "pauses": [48, 48, 48, 48, 1, 48, 48, 48, 48, 48]}
+        ) == [48, 48, 48, 48, 1, 48, 48, 48, 48, 48]
+
+    def test_nested_only(self):
+        assert self._read({"bbpause": {"pauses": [29, 46]}}) == [29, 46]
+
+    def test_placeholders_are_dropped(self):
+        """-1 fills an unused slot; reporting it as an abort reason
+        would invent a failure."""
+        assert self._read({"pauses": [29, -1, -1]}) == [29]
+
+    def test_a_robot_without_the_field(self):
+        assert self._read(None) == []

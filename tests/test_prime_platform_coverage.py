@@ -339,7 +339,7 @@ class TestRegionSensorsGrowWithTheMap:
 
     @pytest.mark.asyncio
     async def test_a_zone_added_later_gets_its_sensor(self):
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         from custom_components.roomba_plus.sensor import async_setup_entry
         from tests import prime_fixtures
@@ -363,7 +363,14 @@ class TestRegionSensorsGrowWithTheMap:
         )
 
         created: list = []
-        await async_setup_entry(MagicMock(), entry, created.extend)
+        with patch(
+            # Patched where sensor.py BINDS it, not where it lives: the
+            # import moved to module level, so patching the source no
+            # longer affects the already-bound name.
+            "custom_components.roomba_plus.sensor.async_dispatcher_connect",
+            lambda _h, _sig, cb: listeners.append(cb) or (lambda: None),
+        ):
+            await async_setup_entry(MagicMock(), entry, created.extend)
 
         before = sum(
             1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"

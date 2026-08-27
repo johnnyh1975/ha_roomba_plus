@@ -33,8 +33,10 @@ def _make_tracker(map_capability_value: str = "smart"):
     return tracker, roomba, entry
 
 
-def _set_state(roomba, phase: str = "", pose: dict | None = None):
-    reported: dict = {"cleanMissionStatus": {"phase": phase}}
+def _set_state(
+    roomba, phase: str = "", pose: dict | None = None, error: int = 0
+):
+    reported: dict = {"cleanMissionStatus": {"phase": phase, "error": error}}
     if pose is not None:
         reported["pose"] = pose
     roomba.master_state = {"state": {"reported": reported}}
@@ -520,3 +522,48 @@ class TestAStuckRobotDoesNotSayCleaning:
         _set_state(roomba, phase="charge")
 
         assert tracker.state == "Docked"
+
+
+class TestAnErrorIsNotAnArrival:
+    """@utkjmitch: his robot finished a mission, drove home, aborted the
+    final approach two inches short of a powered dock, and sat there
+    flashing red with error 1010.
+
+    `device_tracker` said **"Docked."**
+
+    `stop` is a mission-end phase and a failed docking reports exactly
+    that, so the entity concluded arrival from the mission having ended.
+    Last week the same entity said "Cleaning" for nine days about a
+    robot that had stopped transmitting: one root, states derived from
+    what should follow rather than from what the robot reports.
+    """
+
+    def test_an_error_is_reported_as_an_error(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stop", error=1010)
+
+        assert tracker.state == "Error"
+
+    def test_it_does_not_claim_docked(self):
+        """The regression itself."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stop", error=1010)
+
+        assert tracker.state != "Docked"
+
+    def test_a_clean_dock_still_says_docked(self):
+        """A mission that ended without error is an arrival."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="charge", error=0)
+
+        assert tracker.state == "Docked"
+
+    def test_an_error_mid_mission_wins_over_the_room(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="run", error=6)
+
+        assert tracker.state == "Error"

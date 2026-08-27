@@ -2317,3 +2317,58 @@ class TestBothGenerationsReportTheSameStates:
 
         assert "charging_mid_mission" in sensor.options
         assert "no_contact" in sensor.options
+
+
+class TestAPrimeRegionSensorFindsItsTimestamp:
+    """@chairstacker (#84): every per-region sensor read Unknown —
+    including the zone a mission had just finished.
+
+    `region_last_cleaned()` keys `{pmap_id}/{rid}` when the record knows
+    a map, and bare `rid` when it does not. A Prime sensor carries no
+    pmap, because region ids are unique across a Prime robot's maps —
+    so `None/107` missed, bare `107` missed, and the value was never
+    found.
+    """
+
+    @staticmethod
+    def _sensor(history, pmap_id=None):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeRegionLastCleanedSensor,
+        )
+
+        s = PrimeRegionLastCleanedSensor.__new__(PrimeRegionLastCleanedSensor)
+        s._region_id = "107"
+        s._pmap_id = pmap_id
+        entry = MagicMock()
+        entry.runtime_data.mission_store.region_last_cleaned.return_value = history
+        s._config_entry = entry
+        return s
+
+    def test_a_qualified_record_is_found_without_a_pmap(self):
+        """His exact case: the store knows the map, the sensor does
+        not."""
+        s = self._sensor({"MAP-A/107": "2026-08-27T07:10:00+00:00"})
+
+        assert s.native_value is not None
+
+    def test_a_bare_record_still_works(self):
+        s = self._sensor({"107": "2026-08-27T07:10:00+00:00"})
+
+        assert s.native_value is not None
+
+    def test_another_region_is_not_borrowed(self):
+        s = self._sensor({"MAP-A/108": "2026-08-27T07:10:00+00:00"})
+
+        assert s.native_value is None
+
+    def test_a_sensor_with_a_pmap_stays_strict(self):
+        """The multi-map rule @dduff617 found: with a map of its own,
+        matching on the region alone would show a clean on a different
+        floor."""
+        s = self._sensor(
+            {"MAP-B/107": "2026-08-27T07:10:00+00:00"}, pmap_id="MAP-A"
+        )
+
+        assert s.native_value is None

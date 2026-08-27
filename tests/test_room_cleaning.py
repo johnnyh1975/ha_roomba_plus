@@ -587,7 +587,7 @@ class TestCleanRoomUsesTheBackend:
         backend = MagicMock()
         backend.available_rooms = AsyncMock(return_value={})
 
-        with pytest.raises(ServiceValidationError, match="no named rooms"):
+        with pytest.raises(ServiceValidationError, match="No rooms with names"):
             await _async_clean_rooms_via_backend(
                 backend, "vacuum.test", ["Salon"], True, [], self._call(["Salon"])
             )
@@ -1816,3 +1816,69 @@ class TestPrimeOffersZonesForAreaMapping:
         await backend.clean_segments(["zid_107"])
 
         assert backend.clean_rooms.await_args[0][0] == ["107"]
+
+
+class TestStoredZonesSurviveWithoutCloud:
+    """Stored zone data lives in the config entry options and needs no
+    cloud. A guard clause discarded it anyway.
+
+    The comment inside this method says a first version "lost every
+    user-named room on installs without cloud credentials" and that six
+    tests caught it. It came back four lines higher as
+    `if coordinator is None: return {}` — and nothing caught it the
+    second time, because every test builds a coordinator.
+
+    @Young9898 reported that local-only installs have no way to get
+    region ids, and proposed discovering them by launching real
+    missions one id at a time. The ids were already there.
+    """
+
+    @staticmethod
+    def _backend(zone_data, with_cloud):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        b = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        entry = MagicMock()
+        entry.options = {"smart_zone_data": zone_data}
+        b._config_entry = entry
+        data = MagicMock()
+        if with_cloud:
+            data.cloud_coordinator.regions = [
+                {"id": "10", "name": "Kitchen", "pmap_id": "MAP"}
+            ]
+            data.cloud_coordinator.zones = []
+        else:
+            data.cloud_coordinator = None
+        b._data = data
+        return b
+
+    @pytest.mark.asyncio
+    async def test_a_local_only_install_still_gets_its_rooms(self):
+        """The regression, in one assertion."""
+        b = self._backend(
+            {"107": {"name": "Guest Zone", "pmap_id": "MAP"}}, with_cloud=False
+        )
+
+        rooms = await b.available_rooms()
+
+        assert rooms == {"Guest Zone": "107"}
+
+    @pytest.mark.asyncio
+    async def test_cloud_names_still_layer_on_top(self):
+        b = self._backend(
+            {"107": {"name": "Guest Zone", "pmap_id": "MAP"}}, with_cloud=True
+        )
+
+        rooms = await b.available_rooms()
+
+        assert rooms == {"Guest Zone": "107", "Kitchen": "10"}
+
+    @pytest.mark.asyncio
+    async def test_nothing_anywhere_is_still_empty(self):
+        b = self._backend({}, with_cloud=False)
+
+        assert await b.available_rooms() == {}

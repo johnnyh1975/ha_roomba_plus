@@ -2352,3 +2352,91 @@ class TestCleaningModeIsTierAware:
         assert set(_modes_for_backend(self._backend(True))) == set(
             _modes_for_backend(self._backend(False))
         )
+
+
+class TestASwallowedCommandIsReported:
+    """@Young9898 documented three routes to the same signature on one
+    i3+ in a single day: a command accepted into `lastCommand`, with
+    `notReady: 0` and `error: 0`, and nothing happening.
+
+    A stale `user_pmapv_id`. A region start sent off the dock — 6/6
+    from the dock, 0/2 mid-floor. And `notReady: 1` after a false cliff
+    reading on a dark rug, which swallows every motion command until
+    the robot is physically moved.
+
+    Enumerating causes does not scale: the first was diagnosed and
+    written down, and the other two are indistinguishable from it
+    without a capture. Watching for the symptom covers all three.
+    """
+
+    @staticmethod
+    async def _run(status, caplog):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import (
+            _async_warn_if_swallowed,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.roomba = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            return_value={"cleanMissionStatus": status},
+        ), patch(
+            "custom_components.roomba_plus.services."
+            "_SWALLOWED_COMMAND_GRACE_SEC",
+            0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
+        return caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_cycle_after_the_grace_window_warns(self, caplog):
+        text = await self._run(
+            {"cycle": "none", "phase": "stop", "notReady": 0, "error": 0},
+            caplog,
+        )
+
+        assert "no mission started" in text
+
+    @pytest.mark.asyncio
+    async def test_a_running_cycle_says_nothing(self, caplog):
+        """The command worked. Silence is the whole point."""
+        text = await self._run(
+            {"cycle": "clean", "phase": "run", "notReady": 0}, caplog
+        )
+
+        assert "no mission started" not in text
+
+    @pytest.mark.asyncio
+    async def test_the_readiness_value_is_in_the_message(self, caplog):
+        """His cliff case: notReady 1 is the answer, and a user reading
+        the log should not have to go looking for it."""
+        text = await self._run(
+            {"cycle": "none", "phase": "stop", "notReady": 1, "error": 0},
+            caplog,
+        )
+
+        assert "notReady=1" in text
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_state_does_not_raise(self, caplog):
+        """This runs in a background task after the service returned.
+        Anything it raises surfaces as an unretrieved task exception
+        pointing at nothing the user can act on."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import (
+            _async_warn_if_swallowed,
+        )
+
+        entry = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            side_effect=RuntimeError("no state"),
+        ), patch(
+            "custom_components.roomba_plus.services."
+            "_SWALLOWED_COMMAND_GRACE_SEC",
+            0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
