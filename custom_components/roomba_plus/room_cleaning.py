@@ -584,18 +584,61 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         except ImportError:
             return []
 
-        return [
+        # ONE CALL. A test caught a second await here -- it hits the
+        # cloud, and asking twice for a list that has not changed is a
+        # request nobody asked for.
+        rooms = await self.available_rooms()
+        segments = [
             Segment(id=f"{self._SEGMENT_PREFIX}{room_id}", name=name, group="Room")
-            for name, room_id in sorted((await self.available_rooms()).items())
+            for name, room_id in sorted(rooms.items())
         ]
+
+        # ZONES TOO, WHICH THIS NEVER OFFERED.
+        #
+        # `available_rooms()` reads `rooms_metadata`, and that carries
+        # rooms and not zones -- so a zone could not be mapped to a Home
+        # Assistant area, because it was never in the list the mapping
+        # dialog shows. Classic has offered its zones all along, with a
+        # `zid_` id, in this same file.
+        #
+        # The omission was not a decision: when this was written
+        # `available_rooms()` was the only name source Prime had.
+        # `prime_room_names` came later, for the map, and the places
+        # already reading the older source were never revisited -- the
+        # same root as four other bugs this week.
+        #
+        # `zid_`, not `rid_`: `area_resolver` distinguishes them, and a
+        # zone mapped under a room's prefix would collide with a room of
+        # the same id.
+        known = {seg.id for seg in segments}
+        entry = getattr(self, "_config_entry", None)
+        names = getattr(
+            getattr(entry, "runtime_data", None), "prime_room_names", None
+        ) or {}
+        rooms_by_id = {v: k for k, v in rooms.items()}
+        for region_id, region_name in sorted(names.items()):
+            if str(region_id) in rooms_by_id or not region_name:
+                continue
+            seg_id = f"{ZID_PREFIX}{region_id}"
+            if seg_id in known:
+                continue
+            segments.append(
+                Segment(id=seg_id, name=str(region_name), group="Zone")
+            )
+        return segments
 
     async def clean_segments(self, segment_ids: list[str]) -> None:
         """Decode HA segment ids back to room ids and clean them."""
-        room_ids = [
-            seg_id[len(self._SEGMENT_PREFIX):]
-            for seg_id in segment_ids
-            if seg_id.startswith(self._SEGMENT_PREFIX)
-        ]
+        # BOTH PREFIXES. get_segments() now offers zones as well, and a
+        # `zid_` id decoded by the room rule would drop its first four
+        # characters and clean whatever room happened to share the
+        # remainder.
+        room_ids: list[str] = []
+        for seg_id in segment_ids:
+            for prefix in (self._SEGMENT_PREFIX, ZID_PREFIX):
+                if seg_id.startswith(prefix):
+                    room_ids.append(seg_id[len(prefix):])
+                    break
         if not room_ids:
             # A stale area mapping, or segments belonging to another
             # vacuum. Cleaning nothing quietly would look like success.

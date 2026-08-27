@@ -501,9 +501,20 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 if device.blid not in already_configured and not _is_prime_sku(device.sku)
             },
             None: "Add manually (I know my robot's local IP)",
+            # THIS IS ALSO THE FALLBACK, and the old wording said the
+            # opposite. It read "for newer models with no local setup,
+            # e.g. Combo" -- which tells an i7 owner this is not for
+            # them, when it is exactly what they need if the password
+            # cannot be fetched automatically.
+            #
+            # A forum user with two i7s on the same network read that,
+            # concluded the option did not apply, and ran a third-party
+            # script to extract his password by hand. He did the right
+            # thing and the interface told him not to.
             _CLOUD_ACCOUNT_SENTINEL: (
-                "Set up with my iRobot account (for newer models with no "
-                "local setup, e.g. Combo)"
+                "Set up with my iRobot account (works for any robot -- "
+                "and the way to go if the password could not be found "
+                "automatically)"
             ),
         }
 

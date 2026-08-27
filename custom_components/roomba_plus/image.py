@@ -3522,6 +3522,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             self._attr_unique_id = f"{self.robot_unique_id}_rooms_map"
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
         self._polygons: dict[str, list[tuple[float, float]]] = {}
+        self._zone_polygons: dict[str, list[tuple[float, float]]] = {}
         self._names: dict[str, str] = {}
         self._floor_plan: Any = None
         self._live_bundle: Any = None
@@ -3814,6 +3815,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # which is why its map is complete before the first mission.
         rings = [
             *self._polygons.values(),
+            *getattr(self, "_zone_polygons", {}).values(),
             *getattr(self._floor_plan, "floor_plan", ()),
             *self._floor_plan.carpet,
             *self._floor_plan.borders,
@@ -3882,6 +3884,22 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # detailed saved-map geometry the iRobot app uses for interior
         # walls and doorways.  It shares the map coordinate system, so it
         # must use the same fit transform rather than a second registration.
+        # ZONES ON TOP, OUTLINED, NEVER FILLED.
+        #
+        # A clean zone sits inside a room. Filled, it would hide the
+        # room it belongs to and read as a separate space; dashed and
+        # unfilled, it reads as what it is -- a marked-out part of a
+        # room you can send the robot to on its own.
+        #
+        # Drawn after the rooms so the outline stays visible over a
+        # room fill.
+        # getattr: tests build this entity without __init__, and a
+        # missing attribute must not take the whole render down.
+        for ring in getattr(self, "_zone_polygons", {}).values():
+            points = [to_px(x, y) for x, y in ring]
+            if len(points) >= 2:
+                draw.line(points + [points[0]], fill=(120, 190, 255), width=2)
+
         for ring in getattr(self._floor_plan, "floor_plan", ()):
             points = [to_px(x, y) for x, y in ring]
             draw.line(points, fill=(175, 175, 175), width=2)

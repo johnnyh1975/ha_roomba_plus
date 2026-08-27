@@ -254,6 +254,15 @@ class PrimeFloorPlan:
     #: unparsed. The renderer knows their shape; this only has to keep
     #: them so they are available when no mission is running.
     zone_layers: dict[str, Any] = dataclasses.field(default_factory=dict)
+    #: Saved clean zones, same shape as `room_polygons`.
+    #:
+    #: Separate from rooms because a zone sits INSIDE one -- drawing
+    #: them together would put a filled shape on top of the room it
+    #: belongs to. They are outlined instead.
+    zone_polygons: dict[str, list[tuple[float, float]]] = dataclasses.field(
+        default_factory=dict
+    )
+
     #: Which map this plan describes.
     #:
     #: NEEDED FOR THE MULTI-MAP CASE. The renderer prefers the LIVE
@@ -626,6 +635,15 @@ async def async_build_prime_floor_plan(
             **_room_names_from_bundle(parsed.get("rooms")),
         },
         room_polygons=_room_polygons_from_bundle(parsed.get("rooms")),
+        # ZONES HAVE GEOMETRY TOO. `CleanZoneFeature` carries a Polygon
+        # beside its name, and nothing read it -- so a zone had a name
+        # in `prime_room_names` and no shape to attach it to, which is
+        # why @chairstacker's map showed zone names nowhere while his
+        # diagnostics carried all of them (#84).
+        #
+        # `_room_polygons_from_bundle` is already generic: it keys on
+        # `feature.id`, which a zone has.
+        zone_polygons=_room_polygons_from_bundle(parsed.get("cleanZones")),
         floor_plan=lines_mm(parsed.get("floorPlan")),
         borders=rings_mm(parsed.get("borders")),
         carpet=_carpet_rings_mm(parsed.get("floorTypes")),

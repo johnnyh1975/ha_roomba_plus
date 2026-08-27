@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Inicia sesión con tu cuenta de iRobot",
-        "description": "Para modelos más nuevos sin configuración local (p. ej. robots Combo/generación V4). Ingresa tu email y contraseña de la app iRobot — esto también descubre cualquier robot Classic en la misma cuenta, que se puede completar después a través de tu red local.",
+        "description": "Funciona con cualquier robot. Necesario para los modelos Combo/V4, que no tienen configuración local, y también la vía adecuada para cualquier robot cuya contraseña no se haya encontrado automáticamente. Introduce el correo y la contraseña de tu cuenta iRobot; así se detectan también otros robots de la misma cuenta.",
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Contraseña iRobot"

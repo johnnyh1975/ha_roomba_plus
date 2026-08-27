@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Mit deinem iRobot-Konto anmelden",
-        "description": "Für neuere Modelle ohne lokale Einrichtung (z. B. Combo-/V4-Generation-Roboter). Gib deine iRobot-App-E-Mail und dein Passwort ein — dabei werden auch eventuelle Classic-Roboter auf demselben Konto gefunden, die anschließend über dein lokales Netzwerk fertiggestellt werden können.",
+        "description": "Funktioniert für jeden Roboter. Für Combo-/V4-Modelle ohne lokale Einrichtung erforderlich — und der richtige Weg für jeden Roboter, dessen Passwort nicht automatisch gefunden wurde. Gib E-Mail und Passwort deines iRobot-Kontos ein; damit werden auch weitere Roboter desselben Kontos gefunden.",
         "data": {
           "irobot_username": "iRobot E-Mail",
           "irobot_password": "iRobot Passwort"

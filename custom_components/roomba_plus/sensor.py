@@ -375,40 +375,57 @@ async def async_setup_entry(
         # leave every new zone without an entity until he reloaded the
         # integration, which is exactly the manual step this feature
         # exists to remove. Same pattern as the schedule switches.
-        if (
-            data.has_cloud
-            and data.cloud_coordinator is not None
-            and config_entry.options.get(
-                CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
-            )
+        # A PRIME ENTRY HAS NO `cloud_coordinator`. That is the Classic
+        # cloud client; Prime keeps its region names in
+        # `runtime_data.prime_room_names`, keyed `{region_id: name}`.
+        #
+        # Gating this block on a coordinator that cannot exist here made
+        # the option do nothing at all on Prime -- @chairstacker ticked
+        # it, ran a zone mission, reloaded, and got not one entity
+        # (#84). The same wrong source appears in the Classic branch
+        # below, where it is correct.
+        if config_entry.options.get(
+            CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
         ):
-            coordinator = data.cloud_coordinator
             known: set[str] = set()
 
             def _sync_region_sensors() -> None:
                 new: list[SensorEntity] = []
-                by_pmap = getattr(coordinator, "regions_by_pmap", None)
-                if not isinstance(by_pmap, dict):
+                # FLAT, not per-map. `prime_room_names` is
+                # {region_id: name} for every region the coordinator has
+                # seen -- rooms and zones together, which is what makes
+                # this cover zones at all.
+                names = getattr(data, "prime_room_names", None)
+                if not isinstance(names, dict) or not names:
                     return
-                for pmap_id, names in by_pmap.items():
-                    for region_id, region_name in sorted(names.items()):
-                        key = f"{pmap_id}/{region_id}"
-                        if key in known:
-                            continue
-                        known.add(key)
-                        new.append(
-                            PrimeRegionLastCleanedSensor(
-                                data.blid, config_entry,
-                                pmap_id, region_id, region_name,
-                            )
+                for region_id, region_name in sorted(names.items()):
+                    key = str(region_id)
+                    if key in known:
+                        continue
+                    known.add(key)
+                    new.append(
+                        PrimeRegionLastCleanedSensor(
+                            data.blid, config_entry,
+                            # No pmap here: `prime_room_names` is flat,
+                            # and a Prime robot's regions are unique
+                            # across its maps -- the ids in a command
+                            # carry no map either.
+                            None, region_id, region_name,
                         )
+                    )
                 if new:
                     async_add_entities(new)
 
             _sync_region_sensors()
-            config_entry.async_on_unload(
-                coordinator.async_add_listener(_sync_region_sensors)
-            )
+            # RE-RUN WHEN NAMES ARRIVE. `prime_room_names` fills from
+            # the status coordinator, so a robot that has not reported
+            # regions yet at setup time gets its sensors on the first
+            # update rather than never.
+            _coordinator = data.prime_status_coordinator
+            if _coordinator is not None:
+                config_entry.async_on_unload(
+                    _coordinator.async_add_listener(_sync_region_sensors)
+                )
 
         async_add_entities(entities)
 

@@ -372,14 +372,21 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
 
     def _room_name(self, region_id: str) -> str | None:
         """The display name for a region id, if the cloud knows one."""
+        # `prime_room_names`, NOT the Classic cloud coordinator.
+        #
+        # A Prime entry has no `cloud_coordinator` at all, so this
+        # returned None for every region -- and it feeds the `room_name`
+        # field of the event a caller automates on. "Kitchen finished"
+        # arrived without the kitchen.
+        #
+        # `prime_room_names` is flat and holds rooms and zones together,
+        # which also makes this work for a zone clean.
         data = getattr(self.entry, "runtime_data", None)
-        coordinator = getattr(data, "cloud_coordinator", None)
-        by_pmap = getattr(coordinator, "regions_by_pmap", None)
-        if not isinstance(by_pmap, dict):
+        names = getattr(data, "prime_room_names", None)
+        if not isinstance(names, dict):
             return None
-        for names in by_pmap.values():
-            if region_id in names:
-                return str(names[region_id])
+        name = names.get(str(region_id))
+        return str(name) if name else None
         return None
 
     def _request_parts_refresh_on_mission_end(self, report: Any) -> None:

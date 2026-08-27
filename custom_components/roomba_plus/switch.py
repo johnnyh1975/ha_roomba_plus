@@ -1044,7 +1044,7 @@ class PrimePadDrySwitch(IRobotEntity, SwitchEntity):
         # correctly all along, which is why his screenshot showed "Pad
         # dry in progress" while the switch showed off. Two entities,
         # one dock, two fields.
-        return dock.pd_state == DockState.PAD_DRY_IN_PROGRESS
+        return bool(dock.pd_state == DockState.PAD_DRY_IN_PROGRESS)
 
     async def _send(self, command: str) -> None:
         robot = self._config_entry.runtime_data.prime_robot

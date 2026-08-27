@@ -283,6 +283,23 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             if backend is not None:
                 self._prime_rooms = await backend.available_rooms()
 
+                # ZONES TOO. `available_rooms()` reads `rooms_metadata`,
+                # which carries rooms and not zones -- so a zone mission
+                # produced a region id matching nothing here and the
+                # tracker showed the raw id. @chairstacker (#70), whose
+                # own diagnostics carried every zone name.
+                #
+                # `prime_room_names` is flat and holds both. A room wins
+                # a name collision: its name comes from the map's own
+                # metadata, a zone's from whatever the last command
+                # called it.
+                zones = getattr(
+                    self._config_entry.runtime_data, "prime_room_names", None
+                ) or {}
+                for region_id, name in zones.items():
+                    if name and str(name) not in self._prime_rooms:
+                        self._prime_rooms[str(name)] = str(region_id)
+
                 # ZONES ARE PLACES THE ROBOT CAN BE.
                 #
                 # `available_rooms()` reads `rooms_metadata` from each

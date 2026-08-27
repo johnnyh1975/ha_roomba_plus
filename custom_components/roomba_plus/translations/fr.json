@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Connectez-vous avec votre compte iRobot",
-        "description": "Pour les modèles plus récents sans configuration locale (par ex. robots Combo/génération V4). Entrez votre e-mail et mot de passe iRobot — cela détecte aussi tout robot Classic sur le même compte, qui pourra être complété ensuite via votre réseau local.",
+        "description": "Fonctionne avec n'importe quel robot. Nécessaire pour les modèles Combo/V4, qui n'ont pas de configuration locale — et la voie à suivre pour tout robot dont le mot de passe n'a pas pu être trouvé automatiquement. Saisissez l'e-mail et le mot de passe de votre compte iRobot ; les autres robots du même compte seront également détectés.",
         "data": {
           "irobot_username": "E-mail iRobot",
           "irobot_password": "Mot de passe iRobot"

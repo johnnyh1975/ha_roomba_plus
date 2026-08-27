@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Sign in with your iRobot account",
-        "description": "For newer models with no local setup (e.g. Combo/V4-generation robots). Enter your iRobot app email and password — this also discovers any Classic robots on the same account, which can be completed via your local network afterward.",
+        "description": "Works for any robot. Required for Combo/V4-generation models, which have no local setup — and the way to go for any robot whose password could not be found automatically. Enter your iRobot app email and password; this also discovers other robots on the same account.",
         "data": {
           "irobot_username": "iRobot email",
           "irobot_password": "iRobot password"

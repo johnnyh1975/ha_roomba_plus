@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Zaloguj się przy użyciu konta iRobot",
-        "description": "Dla nowszych modeli bez lokalnej konfiguracji (np. roboty Combo/generacji V4). Wprowadź adres e-mail i hasło aplikacji iRobot — spowoduje to również wykrycie ewentualnych robotów Classic na tym samym koncie, które można później dokończyć konfigurować przez sieć lokalną.",
+        "description": "Działa z każdym robotem. Wymagane dla modeli Combo/V4, które nie mają konfiguracji lokalnej — i właściwa droga dla każdego robota, którego hasła nie udało się znaleźć automatycznie. Podaj e-mail i hasło konta iRobot; zostaną też wykryte inne roboty na tym koncie.",
         "data": {
           "irobot_username": "Adres e-mail iRobot",
           "irobot_password": "Hasło iRobot"

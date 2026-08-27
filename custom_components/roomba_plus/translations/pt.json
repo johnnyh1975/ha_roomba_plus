@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Inicia sessão com a tua conta iRobot",
-        "description": "Para modelos mais recentes sem configuração local (por ex. robôs Combo/geração V4). Insere o teu email e palavra-passe da app iRobot — isto também descobre quaisquer robôs Classic na mesma conta, que podem ser concluídos depois através da tua rede local.",
+        "description": "Funciona com qualquer robô. Necessário para os modelos Combo/V4, que não têm configuração local — e o caminho certo para qualquer robô cuja palavra-passe não tenha sido encontrada automaticamente. Introduza o e-mail e a palavra-passe da sua conta iRobot; serão também detetados outros robôs da mesma conta.",
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Palavra-passe iRobot"

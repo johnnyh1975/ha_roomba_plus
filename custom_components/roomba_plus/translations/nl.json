@@ -75,7 +75,7 @@
       },
       "prime_account": {
         "title": "Log in met je iRobot-account",
-        "description": "Voor nieuwere modellen zonder lokale installatie (bijv. Combo/V4-generatie robots). Voer je iRobot-app-e-mailadres en wachtwoord in — hiermee worden ook eventuele Classic-robots op hetzelfde account gevonden, die je daarna via je lokale netwerk kunt voltooien.",
+        "description": "Werkt voor elke robot. Vereist voor Combo/V4-modellen, die geen lokale installatie hebben — en de juiste route voor elke robot waarvan het wachtwoord niet automatisch gevonden kon worden. Voer het e-mailadres en wachtwoord van je iRobot-account in; hiermee worden ook andere robots op hetzelfde account gevonden.",
         "data": {
           "irobot_username": "iRobot e-mail",
           "irobot_password": "iRobot wachtwoord"

@@ -2305,7 +2305,7 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
         self,
         blid: str,
         config_entry: RoombaConfigEntry,
-        pmap_id: str,
+        pmap_id: str | None,
         region_id: str,
         region_name: str,
     ) -> None:
@@ -2322,6 +2322,12 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
         self._attr_translation_key = "region_last_cleaned"
         self._attr_translation_placeholders = {"region": region_name}
         self._attr_unique_id = (
+            # NO MAP SEGMENT WHEN THERE IS NO MAP. `prime_room_names`
+            # is flat -- region ids are unique across a Prime robot's
+            # maps, and a command carries no map either -- so "None"
+            # would otherwise be baked into the unique id as text.
+            f"{self.robot_unique_id}_last_cleaned_{region_id}"
+            if pmap_id is None else
             f"{self.robot_unique_id}_last_cleaned_{pmap_id}_{region_id}"
         )
 
