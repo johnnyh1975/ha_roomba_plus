@@ -456,6 +456,65 @@ entities at all. If they are still missing after updating, a diagnostics
 download will show whether the region names have arrived —
 `region_names.merged` lists every room and zone the integration knows.
 
+## The robot accepts a command and does nothing
+
+No error, no phase change, no mission. The command appears to have been
+received — and in fact it was.
+
+Home Assistant logs a warning about twenty seconds later saying no
+mission started, with the readiness value *(v4.0.0b1)*. Three situations
+produce this:
+
+**The readiness sensor reads "Cliff".** A cliff sensor has decided the
+floor is a drop-off, and the robot will not move until it is physically
+picked up and put somewhere else. A reboot does not clear it — the
+sensor reads the same surface again within a minute.
+
+This does not need an actual drop-off. **Dark patterned rugs trigger it**
+— reported on an i3+, reproducible on the same rug every time. If the
+robot is stopped on a dark floor and refuses every command, move it by
+hand.
+
+**A room clean sent while the robot is away from its dock.** Cameraless
+i-series robots (i3, i3+) use the dock as their localisation reference.
+Away from it the robot does not know where it is relative to the map, so
+it cannot navigate to a region — only a plain whole-house clean works.
+The official iRobot app behaves the same way.
+
+Send the robot home first, or use a plain start.
+
+**A stale map version.** Rare, and the integration resolves the map
+version at send time to avoid it.
+
+## Room names are missing on a local-only install
+
+Fixed in v4.0.0b1. Zone names you have saved live in the integration's
+own options and need no cloud — but they were being discarded when no
+cloud credentials were configured.
+
+If you have never configured cloud credentials at all, there is nothing
+stored to recover. Region ids can be discovered by sending a room clean
+with a candidate id while the robot is docked: a valid id starts a
+mission within about ten seconds, an invalid one does nothing at all.
+Recall the robot and try the next.
+
+That launches real missions and advances the robot's mission and
+evacuation counters, so it is a last resort rather than a setup step.
+
+## Why does my robot keep stopping?
+
+The error sensor carries two attributes the robot itself provides
+*(v4.0.0b1)*:
+
+- **`recent_pause_reasons`** — the reasons the last ten runs ended, as
+  the robot's own codes
+- **`most_frequent_pause_reason`** — the commonest of them, named
+
+A robot that has aborted four of its last ten runs for the same reason
+is telling you something a single incident does not. There is no
+threshold attached: nobody has enough field data yet to say what counts
+as a lot, and a warning without one would be a guess.
+
 ## Sending a diagnostics download
 
 Settings → Devices & Services → Roomba+ → the three dots → Download
