@@ -272,6 +272,10 @@ DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
 
 DEFAULT_FILTER_HOURS: Final = 60    # iRobot recommendation: every 2 months
 DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
+# Local fallback only, from the i3+ cloud full-life capture (~157h/~29h)
+# in tests/fixtures/irobot_parts_i3plus.json.
+DEFAULT_SIDE_BRUSH_HOURS: Final = 150
+DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 30
 
 # ── Cloud consumable parts (/v1/robots/{blid}/parts) ─────────────────────────
 #
@@ -322,14 +326,69 @@ IROBOT_PART_ROLES: Final[dict[str, str]] = {
     "139": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
 }
 
-# Which cloud role hydrates which legacy MaintenanceStore slot. The store
-# only ever modelled a single "brush" lifecycle, so the main brushes own
-# that slot — they are the part the brush sensors were always about, and
-# the side brush gets its own cloud-backed entity rather than being
-# averaged into a shared number.
+#: Everything the four maintenance consumables differ in, in one place.
+#:
+#: `slot` is the MaintenanceStore field prefix; every role has one, so
+#: wear-rate/days-until-due keep a baseline through a cloud outage. The
+#: main brushes keep the legacy "brush" slot name because a Braava's pad
+#: shares it -- hence `due_key` and `mop_due_key` differing for that one
+#: role. `conf_key` is None for the two roles with no configuration
+#: option, which is what makes `default_hours` their only threshold.
+@dataclass(frozen=True)
+class ConsumableRole:
+    slot: str
+    due_key: str
+    conf_key: str | None
+    default_hours: int
+    action_slug: str
+    mop_due_key: str | None = None
+
+
+CONSUMABLE_ROLES: Final[dict[str, ConsumableRole]] = {
+    IROBOT_PART_ROLE_FILTER: ConsumableRole(
+        slot="filter",
+        due_key="filter",
+        conf_key=CONF_FILTER_HOURS,
+        default_hours=DEFAULT_FILTER_HOURS,
+        action_slug="replace_filter",
+    ),
+    IROBOT_PART_ROLE_MAIN_BRUSH: ConsumableRole(
+        slot="brush",
+        due_key="brush",
+        conf_key=CONF_BRUSH_HOURS,
+        default_hours=DEFAULT_BRUSH_HOURS,
+        action_slug="replace_main_brushes",
+        mop_due_key="pad",
+    ),
+    IROBOT_PART_ROLE_SIDE_BRUSH: ConsumableRole(
+        slot="side_brush",
+        due_key="side_brush",
+        conf_key=None,
+        default_hours=DEFAULT_SIDE_BRUSH_HOURS,
+        action_slug="replace_side_brush",
+    ),
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG: ConsumableRole(
+        slot="clean_base_bag",
+        due_key="clean_base_bag",
+        conf_key=None,
+        default_hours=DEFAULT_CLEAN_BASE_BAG_HOURS,
+        action_slug="replace_clean_base_bag",
+    ),
+}
+
 IROBOT_PART_ROLE_TO_STORE_SLOT: Final[dict[str, str]] = {
-    IROBOT_PART_ROLE_FILTER:     "filter",
-    IROBOT_PART_ROLE_MAIN_BRUSH: "brush",
+    role: spec.slot for role, spec in CONSUMABLE_ROLES.items()
+}
+
+#: The action slug for a due consumable key, for the `required_actions`
+#: attribute. Prose lives in strings.json/translations, not here.
+MAINTENANCE_ACTION_SLUGS: Final[dict[str, str]] = {
+    **{spec.due_key: spec.action_slug for spec in CONSUMABLE_ROLES.values()},
+    **{
+        spec.mop_due_key: "replace_mop_pad"
+        for spec in CONSUMABLE_ROLES.values()
+        if spec.mop_due_key
+    },
 }
 
 
@@ -342,6 +401,7 @@ def part_role(part_id: Any) -> str | None:
     if part_id is None:
         return None
     return IROBOT_PART_ROLES.get(str(part_id).strip())
+
 
 
 ROOMBA_SESSION: Final = "roomba_session"
@@ -1497,20 +1557,6 @@ BIN_LABELS: Final[dict[bool, str]] = {True: "Full", False: "Not full"}
 
 YES_NO_LABELS: Final[dict[bool, str]] = {True: "Yes", False: "No"}
 
-CLEAN_BASE_LABELS: Final[dict[int, str]] = {
-    -2: "Not available",
-    -1: "Unknown",
-    300: "Ready",
-    301: "Ready",
-    302: "Empty",
-    303: "Empty",
-    350: "Bag missing",
-    351: "Clogged",
-    352: "Sealing problem",
-    353: "Bag full",
-    360: "IR comms problem",
-    364: "Bin full — sensors not cleared",
-}
 
 JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     # A SCHEDULED MISSION MAY NOT REPORT `schedule`. @chairstacker's
@@ -1576,12 +1622,6 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     "unknown": "Unknown",
 }
 
-MOP_RANK_LABELS: Final[dict[int, str]] = {
-    15: "No mop",
-    25: "Extended",
-    67: "Standard",
-    85: "Deep",
-}
 
 #: `detectedPad` wire values.
 #:
@@ -1623,6 +1663,82 @@ CLEAN_MODE_LABELS: Final[dict[str, str]] = {
     "one": "One pass",
     "two": "Two passes",
     "n-a": "Not available",
+}
+
+CLEAN_BASE_STATUS_SLUGS: Final[dict[int, str]] = {
+    -2: "not_available",
+    -1: "unknown",
+    300: "ready",
+    301: "ready",
+    302: "empty",
+    303: "empty",
+    350: "bag_missing",
+    351: "clogged",
+    352: "sealing_problem",
+    353: "bag_full",
+    360: "ir_comms_problem",
+    364: "bin_full_sensors_not_cleared",
+}
+
+JOB_INITIATOR_SLUGS: Final[dict[str, str]] = {
+    "schedule": "schedule",
+    "rmtApp": "remote_app",
+    "manual": "manual",
+    "localApp": "local_app",
+    "demand": "demand",
+    "none": "none",
+    "dockBtn": "dock_button",
+    "alexa": "alexa",
+    "siri": "siri",
+    "ifttt": "ifttt",
+    "iftttc": "ifttt",
+    "homey": "homey",
+    "openHAB": "openhab",
+    "yonomi": "yonomi",
+    "bosch": "bosch",
+    "swisscom": "swisscom",
+    "alismart": "alismart",
+    "team": "teamed_robot",
+    "cloud": "cloud",
+    "rmtAuto": "remote_automation",
+    "loclAuto": "local_automation",
+    "simAuto": "simulated_automation",
+    "wifi": "wifi",
+    "shell": "shell",
+    "internal": "internal",
+    "unknown": "unknown",
+}
+
+MOP_PAD_SLUGS: Final[dict[str, str]] = {
+    "reusableDry": "reusable_dry",
+    "reusableWet": "reusable_wet",
+    "reusablewet": "reusable_wet",
+    "dispDry": "disposable_dry",
+    "dispWet": "disposable_wet",
+    "padPlate": "plate_fitted",
+    "noPad": "no_plate",
+    "invalid": "no_pad",
+}
+
+MOP_BEHAVIOR_SLUGS: Final[dict[int, str]] = {
+    15: "no_mop",
+    25: "extended",
+    67: "standard",
+    85: "deep",
+}
+
+CARPET_BOOST_SLUGS: Final[dict[str, str]] = {
+    "auto": "auto",
+    "performance": "performance",
+    "eco": "eco",
+    "n-a": "not_available",
+}
+
+CLEAN_MODE_SLUGS: Final[dict[str, str]] = {
+    "auto": "auto",
+    "one": "one_pass",
+    "two": "two_passes",
+    "n-a": "not_available",
 }
 
 # ── Attributes ────────────────────────────────────────────────────────────────
@@ -2195,3 +2311,30 @@ PRIME_ERROR_SEVERITY: Final[dict[int, tuple[str, int]]] = {
     4003: ('maintanance', 0),
     4004: ('p3', 0),
 }
+
+
+# READINESS_STATE_LABELS and JOB_INITIATOR_LABELS above stay English:
+# test_const.py asserts their values directly, and sensor_core.py/
+# sensor_helpers.py read them as Classic display text. sensor_prime.py's
+# V4/Prime sensors (prime_dock_status, prime_pad_wash_status,
+# prime_pad_dry_status, readiness, job_initiator) need a stable
+# `[a-z0-9_]+` slug instead, for Home Assistant's translated-state
+# lookup (see PrimeDetectedPadSensor's own _PAD_STATE_SLUGS) -- derived
+# here rather than duplicated, so neither table can drift from the
+# other.
+def state_slug(value: str) -> str:
+    """An English label ("Wheel drop both") or a camelCase wire value
+    ("dockBtn") -> a stable `[a-z0-9_]+` Home Assistant state slug.
+
+    Splits camelCase boundaries before collapsing everything else --
+    spaces, punctuation, runs of either -- to single underscores, so one
+    function handles both kinds of input this project has: hand-written
+    English descriptions and the vendor's own bare identifiers. An empty
+    result falls back to "unknown" rather than "" -- Home Assistant's
+    state machine rejects an empty state outright.
+    """
+    import re as _re  # noqa: PLC0415
+
+    with_boundaries = _re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    slug = _re.sub(r"[^a-zA-Z0-9]+", "_", with_boundaries).strip("_").lower()
+    return slug or "unknown"

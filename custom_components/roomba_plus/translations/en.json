@@ -356,10 +356,43 @@
         "name": "Status – Error"
       },
       "job_initiator": {
-        "name": "Status – Started by"
+        "name": "Status – Started by",
+        "state": {
+          "schedule": "iRobot schedule",
+          "remote_app": "iRobot app",
+          "manual": "Robot",
+          "local_app": "Home Assistant",
+          "demand": "Demand clean",
+          "none": "None",
+          "dock_button": "Dock button",
+          "alexa": "Alexa",
+          "siri": "Siri",
+          "ifttt": "IFTTT",
+          "homey": "Homey",
+          "openhab": "openHAB",
+          "yonomi": "Yonomi",
+          "bosch": "Bosch",
+          "swisscom": "Swisscom",
+          "alismart": "AliSmart",
+          "teamed_robot": "Teamed robot",
+          "cloud": "iRobot cloud",
+          "remote_automation": "iRobot automation",
+          "local_automation": "Local automation",
+          "simulated_automation": "Simulated automation",
+          "wifi": "Wi-Fi",
+          "shell": "Shell",
+          "internal": "Robot (internal)",
+          "unknown": "Unknown"
+        }
       },
       "clean_mode": {
-        "name": "Setting – Cleaning passes"
+        "name": "Setting – Cleaning passes",
+        "state": {
+          "auto": "Auto",
+          "one_pass": "One pass",
+          "two_passes": "Two passes",
+          "not_available": "Not available"
+        }
       },
       "scrubs_count": {
         "name": "Dirt detect events"
@@ -374,10 +407,28 @@
         "name": "Maintenance – Brushes"
       },
       "carpet_boost_mode": {
-        "name": "Setting – Carpet boost"
+        "name": "Setting – Carpet boost",
+        "state": {
+          "auto": "Auto",
+          "performance": "Performance",
+          "eco": "Eco",
+          "not_available": "Not available"
+        }
       },
       "clean_base_status": {
-        "name": "Clean Base status"
+        "name": "Clean Base status",
+        "state": {
+          "not_available": "Not available",
+          "unknown": "Unknown",
+          "ready": "Ready",
+          "empty": "Empty",
+          "bag_missing": "Bag missing",
+          "clogged": "Clogged",
+          "sealing_problem": "Sealing problem",
+          "bag_full": "Bag full",
+          "ir_comms_problem": "IR comms problem",
+          "bin_full_sensors_not_cleared": "Bin full — sensors not cleared"
+        }
       },
       "dock_tank_level": {
         "name": "Dock tank level"
@@ -386,16 +437,109 @@
         "name": "Tank level"
       },
       "mop_pad": {
-        "name": "Mop pad"
+        "name": "Mop pad",
+        "state": {
+          "reusable_dry": "Dry (reusable)",
+          "reusable_wet": "Wet (reusable)",
+          "disposable_dry": "Dry (disposable)",
+          "disposable_wet": "Wet (disposable)",
+          "plate_fitted": "Plate fitted",
+          "no_plate": "No plate",
+          "no_pad": "No pad",
+          "unknown": "Unknown"
+        }
       },
       "mop_behavior": {
-        "name": "Mop – Clean passes (legacy)"
+        "name": "Mop – Clean passes (legacy)",
+        "state": {
+          "no_mop": "No mop",
+          "extended": "Extended",
+          "standard": "Standard",
+          "deep": "Deep",
+          "unknown": "Unknown"
+        }
       },
       "mop_tank_level": {
         "name": "Mop tank level"
       },
       "readiness": {
-        "name": "Status – Readiness"
+        "name": "Status – Readiness",
+        "state": {
+          "none": "None",
+          "cliff": "Cliff",
+          "wheel_drop_both": "Wheel drop both",
+          "wheel_drop_left": "Wheel drop left",
+          "wheel_drop_right": "Wheel drop right",
+          "final_docking": "Final docking",
+          "brush_stall": "Brush stall",
+          "no_bin": "No bin",
+          "nav_crash": "Nav crash",
+          "misconfigured": "Misconfigured",
+          "in_rcon": "In rcon",
+          "invalid_command": "Invalid command",
+          "insufficient_charge": "Insufficient charge",
+          "bin_full": "Bin full",
+          "nav_comms_down": "Nav comms down",
+          "in_cloud_upgrade": "In cloud upgrade",
+          "charging_sleep": "Charging sleep",
+          "invalid_pad": "Invalid pad",
+          "safety_offline": "Safety offline",
+          "gyro": "Gyro",
+          "lid_open": "Lid open",
+          "bumped": "Bumped",
+          "map_version_mismatch": "Map version mismatch",
+          "tank_low": "Tank low",
+          "no_pad": "No pad",
+          "bumper_offline": "Bumper offline",
+          "power_offline": "Power offline",
+          "new_cleaning_head": "New cleaning head",
+          "schedule_no_clock": "Schedule no clock",
+          "battery_auth_error": "Battery auth error",
+          "mobility_offline": "Mobility offline",
+          "invalid_cal": "Invalid cal",
+          "in_dock_halo": "In dock halo",
+          "pad_detection_timeout": "Pad detection timeout",
+          "auto_evacuation_clogged": "Auto evacuation clogged",
+          "sm_bus_permanent_failure": "SM bus permanent failure",
+          "charge_timeout": "Charge timeout",
+          "saving_map": "Saving map",
+          "dead_camera": "Dead camera",
+          "backup_refused": "Backup refused",
+          "safety_fault_confinement": "Safety fault confinement",
+          "safety_fault_tilt": "Safety fault tilt",
+          "safety_fault_rollover": "Safety fault rollover",
+          "safety_fault_lift": "Safety fault lift",
+          "safety_fault_emergency_stop": "Safety fault emergency stop",
+          "safety_fault_hardware": "Safety fault hardware",
+          "safety_fault_unknown": "Safety fault unknown",
+          "safety_fault_handle_lift": "Safety fault handle lift",
+          "localization_failed": "Localization failed",
+          "low_beacon_count": "Low beacon count",
+          "precheck_refused": "Precheck refused",
+          "safety_fault_drive_stall_left": "Safety fault drive stall left",
+          "safety_fault_drive_stall_right": "Safety fault drive stall right",
+          "not_docked": "Not docked",
+          "bridge_not_confined": "Bridge not confined",
+          "bridge_does_not_reach_dock": "Bridge does not reach dock",
+          "bridge_does_not_reach_yard": "Bridge does not reach yard",
+          "wheel_motor_overtemp": "Wheel motor overtemp",
+          "wheel_motor_undertemp": "Wheel motor undertemp",
+          "blade_motor_overtemp": "Blade motor overtemp",
+          "blade_motor_undertemp": "Blade motor undertemp",
+          "fleet_disabled": "Fleet disabled",
+          "subscription_expired": "Subscription expired",
+          "dead_navigation_board": "Dead navigation board",
+          "downloading_map": "Downloading map",
+          "off_dock": "Off dock",
+          "tank_leaking": "Tank leaking",
+          "robot_fluid_level_sensor_broken": "Robot fluid level sensor broken",
+          "tank_fluid_level_sensor_broken": "Tank fluid level sensor broken",
+          "cleaning_head_hw_mismatch": "Cleaning head hw mismatch",
+          "dead_floor_type_sensor": "Dead floor type sensor",
+          "unknown": "Unknown",
+          "ota_update": "Ota update",
+          "unrecognized": "Unrecognized"
+        }
       },
       "next_clean": {
         "name": "Status – Next clean"
@@ -516,6 +660,18 @@
       },
       "pad_days_until_due": {
         "name": "Maintenance – Pad days until due"
+      },
+      "side_brush_wear_rate": {
+        "name": "Maintenance – Side brush wear rate"
+      },
+      "clean_base_bag_wear_rate": {
+        "name": "Maintenance – Clean Base bag wear rate"
+      },
+      "side_brush_days_until_due": {
+        "name": "Maintenance – Side brush days until due"
+      },
+      "clean_base_bag_days_until_due": {
+        "name": "Maintenance – Clean Base bag days until due"
       },
       "battery_capacity_mah": {
         "name": "Battery capacity"
@@ -754,7 +910,11 @@
         "name": "Mission event"
       },
       "prime_connection_health": {
-        "name": "Connection health"
+        "name": "Connection health",
+        "state": {
+          "ok": "OK",
+          "error": "Error"
+        }
       },
       "prime_detected_pad": {
         "name": "Detected pad",
@@ -775,13 +935,286 @@
         "name": "Firmware version"
       },
       "prime_dock_status": {
-        "name": "Dock status"
+        "name": "Dock status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
       },
       "prime_pad_wash_status": {
-        "name": "Pad wash status"
+        "name": "Pad wash status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
       },
       "prime_pad_dry_status": {
-        "name": "Pad dry status"
+        "name": "Pad dry status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
       },
       "prime_suction_level": {
         "name": "Suction level",
@@ -883,6 +1316,18 @@
         "state": {
           "on": "Due",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Required actions",
+            "state": {
+              "replace_filter": "Replace the filter.",
+              "replace_main_brushes": "Replace the main brushes.",
+              "replace_mop_pad": "Replace the mop pad.",
+              "replace_side_brush": "Replace the side brush.",
+              "replace_clean_base_bag": "Replace the Clean Base bag."
+            }
+          }
         }
       },
       "start_blocked": {
@@ -1000,10 +1445,10 @@
         "name": "Start pad drying"
       },
       "reset_side_brush": {
-        "name": "Reset side brush"
+        "name": "Maintenance – Confirm side brush replacement"
       },
       "reset_clean_base_bag": {
-        "name": "Reset Clean Base bag"
+        "name": "Maintenance – Confirm Clean Base bag replacement"
       }
     },
     "switch": {

@@ -1138,6 +1138,92 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
         assert payload["component"] == "battery"
 
 
+def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"):
+    """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
+    from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
+    roomba = MagicMock()
+    state: dict = {"bbrun": {"hr": hr}}
+    if mop:
+        state["detectedPad"] = "wet"
+    roomba.master_state = {"state": {"reported": state}}
+    config_entry = MagicMock()
+    config_entry.runtime_data.maintenance_store = store
+    config_entry.options = options or {}
+    entity = RoombaMaintenanceDue(roomba, "test_blid", config_entry)
+    entity.hass = MagicMock()
+    entity.hass.config.language = language
+    return entity
+
+
+class TestRoombaMaintenanceDueRequiredActions:
+    """required_actions exposes a stable action slug per due consumable."""
+
+    def _due_store(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+        store = MaintenanceStore()
+        store.reset_filter(0)
+        store.reset_brush(0)
+        store.hydrate_from_cloud_parts([
+            {"part_id": "36", "count_used": 0, "count_remaining": 0,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+            {"part_id": "139", "count_used": 0, "count_remaining": 0,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 0)
+        return store
+
+    def test_covers_all_four_due_consumables_in_english(self):
+        entity = _make_maintenance_due(
+            self._due_store(),
+            options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
+            hr=50,
+        )
+        attrs = entity.extra_state_attributes
+        assert set(attrs["due"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
+        assert attrs["required_actions"] == {
+            "filter": "replace_filter",
+            "brush": "replace_main_brushes",
+            "side_brush": "replace_side_brush",
+            "clean_base_bag": "replace_clean_base_bag",
+        }
+        assert set(attrs["overdue_by_hours"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
+
+    def test_empty_when_nothing_due(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        attrs = _make_maintenance_due(MaintenanceStore(), hr=0).extra_state_attributes
+        assert attrs["due"] == []
+        assert attrs["required_actions"] == {}
+
+    def test_pad_key_used_for_mop_devices(self):
+        store = self._due_store()
+        entity = _make_maintenance_due(
+            store,
+            options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
+            hr=50,
+            mop=True,
+        )
+        attrs = entity.extra_state_attributes
+        assert "pad" in attrs["due"]
+        assert attrs["required_actions"]["pad"] == "replace_mop_pad"
+
+    def test_action_slugs_have_translation_entries(self):
+        import json
+        from pathlib import Path
+
+        states = json.loads(
+            Path("custom_components/roomba_plus/strings.json").read_text()
+        )["entity"]["binary_sensor"]["maintenance_due"]["state_attributes"][
+            "required_actions"
+        ]["state"]
+        assert set(states) == {
+            "replace_filter",
+            "replace_main_brushes",
+            "replace_mop_pad",
+            "replace_side_brush",
+            "replace_clean_base_bag",
+        }
+
+
 def _make_layout_change_sensor(grid_store=None):
     """Return a RoombaLayoutChangeDetected with the given GridStore
     wired into runtime_data (or None to test the no-grid_store path)."""

@@ -216,14 +216,14 @@ class TestRoombaSensorNativeValue:
     optional and the arithmetic differs between the two paths."""
 
     def _sensor(self, key, *, run_stats=None, options=None, store=None):
-        from custom_components.roomba_plus.sensor_core import RoombaSensor
+        from custom_components.roomba_plus.sensor_core import RoombaSensor, SENSORS
 
         sensor = object.__new__(RoombaSensor)
         entry = MagicMock()
         entry.options = options or {}
         entry.runtime_data.maintenance_store = store
         sensor._config_entry = entry
-        sensor.entity_description = MagicMock(key=key)
+        sensor.entity_description = next(d for d in SENSORS if d.key == key)
         type(sensor).run_stats = PropertyMock(return_value=run_stats or {})
         return sensor
 
@@ -252,7 +252,7 @@ class TestRoombaSensorNativeValue:
         # No cloud counter for this part — this test is about the local
         # threshold/store fallback, which only runs when the cloud has none.
         store.cloud_remaining_hours.return_value = None
-        store.filter_remaining.return_value = 42
+        store.remaining_hours.return_value = 42
 
         sensor = self._sensor(
             "filter_remaining_hours", run_stats={"hr": 30},
@@ -260,15 +260,15 @@ class TestRoombaSensorNativeValue:
         )
 
         assert sensor.native_value == 42
-        store.filter_remaining.assert_called_once_with(30, 100)
+        store.remaining_hours.assert_called_once_with("filter", 30, 100)
 
-    def test_brush_hours_use_their_own_threshold_and_store_method(self):
+    def test_brush_hours_use_their_own_threshold_and_role(self):
         """Filter and brush wear at different rates and are replaced
         independently -- crossing the two would be silently wrong."""
         store = MagicMock()
         # As above: local-path test, so no cloud counter.
         store.cloud_remaining_hours.return_value = None
-        store.brush_remaining.return_value = 11
+        store.remaining_hours.return_value = 11
 
         sensor = self._sensor(
             "brush_remaining_hours", run_stats={"hr": 60},
@@ -276,8 +276,7 @@ class TestRoombaSensorNativeValue:
         )
 
         assert sensor.native_value == 11
-        store.brush_remaining.assert_called_once_with(60, 200)
-        store.filter_remaining.assert_not_called()
+        store.remaining_hours.assert_called_once_with("main_brush", 60, 200)
 
     def test_missing_runtime_hours_are_treated_as_zero(self):
         """A freshly connected robot has no 'hr' yet; the sensor must
@@ -287,6 +286,117 @@ class TestRoombaSensorNativeValue:
         )
 
         assert sensor.native_value == 100
+
+
+class TestRoombaSensorMaxHoursAttribute:
+    """max_hours in extra_state_attributes: cloud full-life hours when a
+    cloud record exists, else the learned-or-hardcoded/configured
+    threshold for every role alike."""
+
+    def _sensor(self, key, *, options=None, store=None):
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        sensor = object.__new__(RoombaSensor)
+        sensor.entity_description = next(d for d in SENSORS if d.key == key)
+        entry = MagicMock()
+        entry.options = options or {}
+        entry.runtime_data.maintenance_store = store
+        sensor._config_entry = entry
+        return sensor
+
+    def test_filter_remaining_hours_max_hours_falls_back_to_local_threshold(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor(
+            "filter_remaining_hours",
+            options={"filter_threshold_hours": 80},
+            store=MaintenanceStore(),
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["threshold_hours"] == 80
+        assert attrs["max_hours"] == 80
+
+    def test_filter_remaining_hours_max_hours_prefers_cloud_full_life(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "35", "count_used": 600, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor(
+            "filter_remaining_hours", options={"filter_threshold_hours": 80}, store=store,
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60  # (600+3000)/60, overrides the 80h configured threshold
+
+    def test_part_edge_brush_falls_back_to_hardcoded_threshold_without_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor("part_edge_brush", store=MaintenanceStore())
+        attrs = sensor.extra_state_attributes
+        assert attrs["threshold_hours"] == 150
+        assert attrs["max_hours"] == 150
+
+    def test_part_edge_brush_exposes_max_hours_with_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "36", "count_used": 600, "count_remaining": 3000,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor("part_edge_brush", store=store)
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60
+        assert attrs["threshold_hours"] == 150
+
+    def test_part_dirt_bag_falls_back_to_hardcoded_threshold_without_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        sensor = self._sensor("part_dirt_bag", store=MaintenanceStore())
+        attrs = sensor.extra_state_attributes
+        assert attrs["threshold_hours"] == 30
+        assert attrs["max_hours"] == 30
+
+    def test_part_dirt_bag_exposes_max_hours_with_cloud_data(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "139", "count_used": 1200, "count_remaining": 2400,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 500)
+        sensor = self._sensor("part_dirt_bag", store=store)
+        attrs = sensor.extra_state_attributes
+        assert attrs["max_hours"] == 60
+        assert attrs["threshold_hours"] == 30
+
+
+class TestNewConsumableSensorDescriptors:
+    """side_brush/clean_base_bag get the same wear-rate/days-until-due
+    descriptor shape filter/main_brush already have."""
+
+    def test_all_four_wear_rate_and_days_until_due_keys_present(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        keys = {d.key for d in SENSORS}
+        for key in (
+            "side_brush_wear_rate", "side_brush_days_until_due",
+            "clean_base_bag_wear_rate", "clean_base_bag_days_until_due",
+        ):
+            assert key in keys, f"Missing sensor key: {key}"
+
+    def test_new_descriptors_are_gated_on_robot_capability(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        for key in (
+            "side_brush_wear_rate", "side_brush_days_until_due",
+            "clean_base_bag_wear_rate", "clean_base_bag_days_until_due",
+        ):
+            desc = next(d for d in SENSORS if d.key == key)
+            assert desc.filter_fn is not None
+            assert desc.translation_key == key
 
 
 class TestRoombaSensorCountdownTick:
@@ -439,8 +549,6 @@ class TestRoombaSensorAvailability:
         assert "return super().available" in source
 
 
-
-
 class TestClassicStatusReportsTheSameTwoStates:
     """The Classic side of the same pair Prime got.
 
@@ -491,3 +599,97 @@ class TestClassicStatusReportsTheSameTwoStates:
         assert self._status(
             "run", cycle="clean", last_ts=time.time() - 300
         ) == "running"
+class _FakeEntity:
+    def __init__(self, vacuum_state=None, clean_mission_status=None):
+        self.vacuum_state = vacuum_state or {}
+        self.clean_mission_status = clean_mission_status or {}
+
+
+def _descriptor(key):
+    from custom_components.roomba_plus.sensor_core import SENSORS
+
+    return next(d for d in SENSORS if d.key == key)
+
+
+class TestEnumSensorsReturnTranslationReadySlugs:
+    """A Polish install must see "Gotowy", not "Ready" -- but the sensor
+    can only supply a slug for HA to translate, not the English word
+    itself. Each case below pairs a raw robot/cloud value with the slug
+    its descriptor's value_fn must produce.
+    """
+
+    def test_job_initiator_maps_known_and_unknown_values(self):
+        value_fn = _descriptor("job_initiator").value_fn
+
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "schedule"})) == "schedule"
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "rmtApp"})) == "remote_app"
+        assert value_fn(_FakeEntity(clean_mission_status={"initiator": "dockBtn"})) == "dock_button"
+        assert value_fn(_FakeEntity(clean_mission_status={})) == "none"
+
+    def test_clean_base_status_maps_dock_state_codes(self):
+        value_fn = _descriptor("clean_base_status").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"dock": {"state": 300}})) == "ready"
+        assert value_fn(_FakeEntity(vacuum_state={"dock": {"state": 353}})) == "bag_full"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_mop_pad_maps_detected_pad_including_the_lowercase_variant(self):
+        value_fn = _descriptor("mop_pad").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "reusableWet"})) == "reusable_wet"
+        # reusablewet (all-lowercase) is the Braava jet m6's own spelling
+        # of reusableWet -- same pad, different case.
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "reusablewet"})) == "reusable_wet"
+        assert value_fn(_FakeEntity(vacuum_state={"detectedPad": "padPlate"})) == "plate_fitted"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "no_pad"
+
+    def test_mop_behavior_legacy_maps_rank_overlap(self):
+        value_fn = _descriptor("mop_behavior").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 67})) == "standard"
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 15})) == "no_mop"
+        assert value_fn(_FakeEntity(vacuum_state={"rankOverlap": 999})) == "unknown"
+
+    def test_clean_mode_derives_a_slug_from_the_two_bit_flags(self):
+        value_fn = _descriptor("clean_mode").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": True, "twoPass": True})) == "two_passes"
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": True, "twoPass": False})) == "one_pass"
+        assert value_fn(_FakeEntity(vacuum_state={"noAutoPasses": False, "twoPass": False})) == "auto"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_carpet_boost_mode_derives_a_slug_from_vac_high_and_carpet_boost(self):
+        value_fn = _descriptor("carpet_boost_mode").value_fn
+
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 1, "vacHigh": 0})) == "auto"
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 0, "vacHigh": 1})) == "performance"
+        assert value_fn(_FakeEntity(vacuum_state={"carpetBoost": 0, "vacHigh": 0})) == "eco"
+        assert value_fn(_FakeEntity(vacuum_state={})) == "not_available"
+
+    def test_every_slug_is_a_legal_ha_state_key(self):
+        """hassfest requires translation_key state keys to match
+        [a-z0-9_]+ -- no spaces, dashes, or uppercase."""
+        import re
+
+        from custom_components.roomba_plus.const import (
+            CARPET_BOOST_SLUGS,
+            CLEAN_BASE_STATUS_SLUGS,
+            CLEAN_MODE_SLUGS,
+            JOB_INITIATOR_SLUGS,
+            MOP_BEHAVIOR_SLUGS,
+            MOP_PAD_SLUGS,
+        )
+
+        legal = re.compile(r"[a-z0-9_]+")
+        offenders = [
+            slug
+            for mapping in (
+                CARPET_BOOST_SLUGS, CLEAN_BASE_STATUS_SLUGS, CLEAN_MODE_SLUGS,
+                JOB_INITIATOR_SLUGS, MOP_BEHAVIOR_SLUGS, MOP_PAD_SLUGS,
+            )
+            for slug in mapping.values()
+            if not legal.fullmatch(slug)
+        ]
+
+        assert not offenders
+
