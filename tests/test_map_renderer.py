@@ -1322,3 +1322,58 @@ class TestSelfCalibratingThreshold:
         idle = self._drive(5.0, 1.8)
 
         assert idle._observed_speed_mm_s() >= idle._MAX_SPEED_MM_S
+
+
+class TestBothImagesShareOneFrame:
+    """@Thonno wanted to overlay the cleaning path on the room map in
+    xiaomi-vacuum-map-card and found it rendered as a standalone
+    full-canvas image.
+
+    His diagnosis was right: "the shape and proportions correspond, the
+    problem is that the Cleaning Path is rendered independently". Each
+    image auto-fitted to its own content — the room map to all rooms,
+    the cleaning path to one mission's area — so each published
+    `calibration_points` correct for itself and incompatible with the
+    other.
+
+    Not an option. Two views of the same home at different scales is a
+    consequence of them being built separately, not something anyone
+    would choose: it also makes three rooms out of eight look like the
+    whole house.
+    """
+
+    @staticmethod
+    def _renderer(points, bounds=None):
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        r = MapRenderer(RendererConfig(), None, None)
+        r._points = list(points)
+        r._fit_bounds_px = bounds
+        return r
+
+    def test_a_shared_frame_changes_the_transform(self):
+        """The regression, stated as the difference it makes."""
+        small = [(300, 300), (310, 310)]
+        own = self._renderer(small)._compute_fit()
+        shared = self._renderer(small, bounds=[(0, 0), (600, 600)])._compute_fit()
+
+        assert own != shared
+
+    def test_two_different_contents_in_one_frame_agree(self):
+        """The point of the whole thing: what a card needs to overlay
+        one image on the other."""
+        frame = [(0, 0), (600, 600)]
+        a = self._renderer([(100, 100), (200, 200)], bounds=frame)._compute_fit()
+        b = self._renderer([(400, 400), (500, 500)], bounds=frame)._compute_fit()
+
+        assert a == b
+
+    def test_without_a_frame_they_do_not(self):
+        """Negative control — proves the frame is doing the work."""
+        a = self._renderer([(100, 100), (200, 200)])._compute_fit()
+        b = self._renderer([(400, 400), (500, 500)])._compute_fit()
+
+        assert a != b

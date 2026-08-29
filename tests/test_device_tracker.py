@@ -481,7 +481,7 @@ class TestAZoneCleanIsNamedToo:
 
 
 class TestAStuckRobotDoesNotSayCleaning:
-    """@utkjmitch's S9+ went `stuck` at 11:52, drained for six hours,
+    """@utkjmitch's Combo (Y3-series) went `stuck` at 11:52, drained for six hours,
     declared battery-low, and stopped transmitting at 36%.
 
     Nine days later this entity still read "Cleaning" — because `stuck`

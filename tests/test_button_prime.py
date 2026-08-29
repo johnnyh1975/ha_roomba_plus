@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -402,7 +403,6 @@ class TestDockButtons:
     async def test_unknown_capabilities_still_get_buttons(self):
         """Only an explicit 0 means absent. A robot that has not reported
         its dock yet must not silently lose the controls."""
-        from unittest.mock import MagicMock
 
         from custom_components.roomba_plus.button_prime import (
             PrimeDockButton,
@@ -894,3 +894,42 @@ class TestBothFavouritePathsFilterByRobot:
         assert _raw_favorite_is_for(raw, self.MINE) == _favorite_is_for(
             parsed, self.MINE
         )
+
+
+class TestTheSupersededPadDryButtons:
+    """@chairstacker asked for the pad-dry button PAIR to be replaced by
+    one switch. A switch was built beside them instead, so he ended up
+    with three entities for one action — and the logbook noise he was
+    trying to get rid of.
+
+    Hidden by default rather than deleted: an automation already calling
+    one of these keeps working, and Home Assistant applies this default
+    only at first registration, so nobody loses a button they already
+    have.
+    """
+
+    @staticmethod
+    def _spec(key):
+        from custom_components.roomba_plus.button_prime import (
+            PRIME_DOCK_COMMANDS,
+        )
+
+        return next(c for c in PRIME_DOCK_COMMANDS if c.key == key)
+
+    def test_both_buttons_name_their_replacement(self):
+        for key in ("prime_start_pad_dry", "prime_stop_pad_dry"):
+            assert self._spec(key).deprecated_by is not None, key
+
+    def test_a_current_button_is_not_marked(self):
+        """The marker must mean something — if everything carried it,
+        it would say nothing."""
+        assert self._spec("prime_empty_bin").deprecated_by is None
+
+    def test_the_replacement_switch_actually_exists(self):
+        """A marker pointing at an entity nobody built would be worse
+        than no marker."""
+        from custom_components.roomba_plus import switch as switch_mod
+
+        source = Path(switch_mod.__file__).read_text(encoding="utf-8")
+
+        assert "prime_pad_dry" in source

@@ -62,15 +62,21 @@ def test_roombapy_prime_requirement_is_pinned_to_a_tag() -> None:
     roombapy_prime_reqs = [r for r in manifest["requirements"] if r.startswith("roombapy-prime")]
     assert len(roombapy_prime_reqs) == 1, "expected exactly one roombapy-prime requirement entry"
     requirement = roombapy_prime_reqs[0]
-    assert "git+" in requirement, "expected a git-based requirement"
+    # AN INDEX PIN OR A GIT TAG, both are exact. The library went to
+    # PyPI, so `roombapy-prime[map]==0.3.1` is now the normal form; the
+    # git spelling stays valid for installing an unpublished
+    # prerelease. What must never appear is an unpinned name, which
+    # would let a Home Assistant install pick up a different version
+    # from the one this release was tested against.
+    assert "==" in requirement or "git+" in requirement, (
+        "expected an exact pin: either `==<version>` or a git tag"
+    )
     # The git URL itself always ends in ".git" -- a tag/ref pin, if present,
     # is a second "@" AFTER that, e.g. "....git@v0.1.11a6".
-    assert ".git@" in requirement, (
-        f'"{requirement}" has no "@<ref>" pin after the .git URL -- this is exactly the '
-        "unpinned-dependency gap this project already hit once. Every install would pull "
-        "whatever the default branch happens to be at install time, not a specific, "
-        "reproducible version."
-    )
+    if "git+" in requirement:
+        assert ".git@" in requirement, (
+            "a git requirement must name a tag, not a branch"
+        )
 
 
 # ── from test_store_encapsulation_guard.py ──────────────────────────────

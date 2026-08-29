@@ -910,3 +910,65 @@ class TestSuggestedIntervalsResolveAcrossMaps:
         )
 
         assert attrs["suggested_interval_days"] == {"99": 5}
+
+
+class TestTheRegionMapCoversZonesAndPrime:
+    """@ibernstone asked how to enumerate map zones in a template. The
+    only place that list exists is the `rooms` attribute on the overdue
+    sensor — and it was built from `cloud_coordinator.regions` alone.
+
+    That property holds **rooms**. Clean zones live in a separate
+    `zones` property, so no zone ever appeared. And a Prime robot has no
+    cloud coordinator at all, so it got an empty list.
+
+    Sixth instance of the shape a build guard was written for this week:
+    a better-populated source appeared later and the readers of the
+    older one were never revisited.
+    """
+
+    @staticmethod
+    def _map(regions=(), zones=(), prime=None, has_cloud=True):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.sensor_rooms import (
+            _region_maps_for,
+        )
+
+        coordinator = SimpleNamespace(regions=list(regions), zones=list(zones))
+        data = SimpleNamespace(
+            has_cloud=has_cloud,
+            cloud_coordinator=coordinator if has_cloud else None,
+            prime_room_names=prime or {},
+        )
+        return _region_maps_for(data)[0]
+
+    def test_zones_are_included(self):
+        """The regression: a zone that existed and never appeared."""
+        result = self._map(
+            regions=[{"id": "10", "name": "Kitchen"}],
+            zones=[{"id": "101", "name": "Under the table"}],
+        )
+
+        assert result == {"10": "Kitchen", "101": "Under the table"}
+
+    def test_a_prime_robot_gets_its_rooms_and_zones(self):
+        result = self._map(
+            has_cloud=False, prime={"10": "Kitchen", "101": "Testing Zone 1"}
+        )
+
+        assert result == {"10": "Kitchen", "101": "Testing Zone 1"}
+
+    def test_a_cloud_name_wins_over_a_prime_one(self):
+        """Both sources on one entry: the cloud name is the per-map,
+        user-set one."""
+        result = self._map(
+            regions=[{"id": "10", "name": "Kitchen"}],
+            prime={"10": "Room 00"},
+        )
+
+        assert result["10"] == "Kitchen"
+
+    def test_an_unnamed_region_is_skipped(self):
+        result = self._map(regions=[{"id": "10"}, {"id": "11", "name": "Den"}])
+
+        assert result == {"11": "Den"}

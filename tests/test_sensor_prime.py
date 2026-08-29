@@ -1746,7 +1746,7 @@ class TestPrimeReadinessSensor:
 
     @staticmethod
     def _sensor(not_ready):
-        from unittest.mock import MagicMock, PropertyMock, patch
+        from unittest.mock import PropertyMock, patch
         from types import SimpleNamespace
 
         from custom_components.roomba_plus.sensor_prime import (
@@ -2250,7 +2250,7 @@ class TestBothGenerationsReportTheSameStates:
     with its cycle still live. @chairstacker's timeline read Cleaning,
     Docked, Cleaning three times in one morning.
 
-    `noContact` -- @utkjmitch's S9+ stopped transmitting at 36% and
+    `noContact` -- @utkjmitch's Combo (Y3-series) stopped transmitting at 36% and
     every entity held its last value for nine days. This sensor said
     `stuck` as if it had just arrived.
     """
@@ -2262,10 +2262,23 @@ class TestBothGenerationsReportTheSameStates:
         from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
 
         sensor = PrimePhaseSensor.__new__(PrimePhaseSensor)
+        # A SimpleNamespace CARRYING WHAT THE COORDINATORS ACTUALLY
+        # WRITE, and a bare namespace for the coordinator so a phantom
+        # attribute read fails loudly.
+        #
+        # This used to set `coordinator.last_message_ts` on a MagicMock
+        # -- the exact attribute the code asked for, on an object that
+        # answers to anything. So the test described the code instead of
+        # the coordinator, and `no_contact` could not fire on any Prime
+        # robot while this passed (@utkjmitch, third instance of the
+        # same seam).
+        from types import SimpleNamespace
+
         entry = MagicMock()
-        coordinator = MagicMock()
-        coordinator.last_message_ts = last_ts
-        entry.runtime_data.prime_status_coordinator = coordinator
+        entry.runtime_data = SimpleNamespace(
+            last_mqtt_message_ts=last_ts,
+            prime_status_coordinator=SimpleNamespace(),
+        )
         sensor._config_entry = entry
         sensor._last_phase = phase
 
@@ -2372,3 +2385,66 @@ class TestAPrimeRegionSensorFindsItsTimestamp:
         )
 
         assert s.native_value is None
+
+
+class TestSilenceThatPredatesTheRestart:
+    """A robot that went quiet BEFORE Home Assistant started never gets
+    a message timestamp — nothing arrives to set one — so the staleness
+    check had nothing to measure and reported the last known phase.
+
+    @utkjmitch's robot was silent for nine days, and every restart in
+    that window put it back to a confident `stuck`.
+
+    It now falls back to when the config entry was set up. An hour of
+    uptime with no message is an hour of silence, and that reading
+    cannot false-positive at startup because the elapsed time there is
+    zero.
+    """
+
+    @staticmethod
+    def _phase(last_ts, setup_ts=0.0):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import PrimePhaseSensor
+
+        sensor = PrimePhaseSensor.__new__(PrimePhaseSensor)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            last_mqtt_message_ts=last_ts,
+            setup_ts=setup_ts,
+            prime_status_coordinator=SimpleNamespace(),
+        )
+        sensor._config_entry = entry
+        sensor._last_phase = "stuck"
+
+        status = MagicMock()
+        status.phase = "stuck"
+        status.cycle = "none"
+        state = MagicMock()
+        state.clean_mission_status = status
+        type(sensor)._current_state = property(lambda s: state)
+        return sensor.native_value
+
+    def test_a_long_uptime_with_no_message_is_silence(self):
+        """The nine-day robot, one hour after a restart."""
+        import time
+
+        assert self._phase(0.0, setup_ts=time.time() - 9 * 3600) == "no_contact"
+
+    def test_a_fresh_start_is_not(self):
+        """The failure mode a connection-state check would have had:
+        every robot briefly unreachable before its first message."""
+        import time
+
+        assert self._phase(0.0, setup_ts=time.time() - 5) == "stuck"
+
+    def test_a_real_timestamp_still_wins(self):
+        import time
+
+        assert self._phase(time.time() - 5) == "stuck"
+
+    def test_a_stale_real_timestamp_still_fires(self):
+        import time
+
+        assert self._phase(time.time() - 9 * 86400) == "no_contact"

@@ -1315,3 +1315,77 @@ class TestRoomsWaitForEnoughCoverage:
         store = RoomSegStore()
 
         assert store.maybe_recompute(self._cells(), missions_seen=None) is True
+
+
+class TestARefutedRoomIsDeleted:
+    """A room whose cells the new segmentation divided differently used
+    to survive forever.
+
+    The staleness check asked whether 80% of its cells were absorbed by
+    **matched** rooms. When those cells had scattered across clusters
+    that were themselves new, nothing absorbed 80%, and the room stayed.
+
+    `maybe_recompute()` receives the whole cumulative visited grid, not
+    one mission's slice — so a room that fails to match was not
+    unobserved. Its cells were in the input and the segmentation chose
+    to divide them differently. **Refuted, not unseen.**
+
+    Field evidence (R980040, 445 missions): four rooms with
+    `recompute_count == 0` and 931 cells between them, never once
+    re-recognised. Total room cells 8814 against a grid of 6614.
+    """
+
+    @staticmethod
+    def _store():
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        return RoomSegStore()
+
+    @staticmethod
+    def _result(rooms):
+        from custom_components.roomba_plus.room_segmentation import (
+            RoomSegmentationResult,
+        )
+
+        return RoomSegmentationResult(rooms=rooms, doors=[], dist={}, seeds=[])
+
+    def test_cells_scattered_across_new_clusters_delete_the_old_room(self):
+        """The case the matched-only check missed."""
+        store = self._store()
+        store._match_rooms(self._result({1: {(x, 0) for x in range(12)}}))
+        assert "room_1" in store.rooms
+
+        # THE SAME TWELVE CELLS, split four ways. Each new cluster
+        # shares 3 of 12 with the old room -- Jaccard 0.25, under the
+        # 0.30 match threshold -- so none of them matches it, and none
+        # of them absorbs 80% of it alone either. Checking matched
+        # rooms only, nothing absorbs anything and room_1 survives
+        # forever on cells that no longer describe a room.
+        store._match_rooms(self._result({
+            i + 1: {(x, 0) for x in range(i * 3, (i + 1) * 3)}
+            for i in range(4)
+        }))
+
+        assert "room_1" not in store.rooms, "the refuted room should be gone"
+        assert len(store.rooms) == 4
+
+    def test_a_room_created_this_round_is_not_deleted(self):
+        """Every new room is 100% inside one of this round's clusters,
+        so a naive check deletes all of them on creation."""
+        store = self._store()
+
+        store._match_rooms(self._result({
+            1: {(x, 0) for x in range(10)},
+            2: {(x, 5) for x in range(10)},
+        }))
+
+        assert len(store.rooms) == 2
+
+    def test_a_matched_room_survives(self):
+        store = self._store()
+        cells = {(x, 0) for x in range(10)}
+        store._match_rooms(self._result({1: cells}))
+        store._match_rooms(self._result({1: cells}))
+
+        assert len(store.rooms) == 1
+        assert next(iter(store.rooms.values())).recompute_count == 1

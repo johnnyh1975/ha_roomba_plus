@@ -772,7 +772,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive, run_stats_sqft=1000)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(92.9, abs=0.1)
+        assert result == pytest.approx(9290.3, abs=0.1)
 
     def test_uses_onboard_counter_when_no_archive_at_all(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -781,7 +781,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive=None, run_stats_sqft=1000)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(92.9, abs=0.1)
+        assert result == pytest.approx(9290.3, abs=0.1)
 
     def test_uses_onboard_counter_when_it_is_larger_than_archive_sum(self):
         """v2.9.0 — explicit user request: the raw onboard counter should
@@ -797,11 +797,13 @@ class TestTotalCleanedAreaArchiveSource:
         desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
 
         archive = self._make_archive(cumulative_sqft=200.0)  # ≈18.6 m² — smaller
-        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+        # ≈17 481 m² once scaled: `bbrun.sqft` counts in units of
+        # 100 ft², so the onboard counter dwarfs a small archive.
+        entity = self._make_entity(archive, run_stats_sqft=1882)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(174.8, abs=0.1), (
-            "Onboard counter (174.8 m²) is larger than the archive's "
+        assert result == pytest.approx(17484.4, abs=0.1), (
+            "Onboard counter (17 484 m²) is larger than the archive's "
             "cumulative total (18.6 m²) and must win — never show a "
             "smaller number than either source independently supports"
         )
@@ -813,11 +815,17 @@ class TestTotalCleanedAreaArchiveSource:
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
 
-        archive = self._make_archive(cumulative_sqft=50_000.0)  # ≈4645 m²
-        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+        # ≈27 871 m². Raised from 50 000 ft² when `bbrun.sqft` gained
+        # its ×100 scaling: the onboard counter now reads 17 484 m²
+        # from the same 1882, so the archive has to clear that to
+        # still be the larger source this test is about.
+        archive = self._make_archive(cumulative_sqft=300_000.0)
+        # ≈17 481 m² once scaled: `bbrun.sqft` counts in units of
+        # 100 ft², so the onboard counter dwarfs a small archive.
+        entity = self._make_entity(archive, run_stats_sqft=1882)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(4645.2, abs=1.0)
+        assert result == pytest.approx(27870.9, abs=1.0)
 
     def test_returns_none_when_neither_source_has_data(self):
         """Genuine 'no data anywhere' case (e.g. brand-new install before
@@ -839,7 +847,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive, run_stats_sqft=1882)
 
         attrs = desc.extra_attributes_fn(entity)
-        assert attrs["onboard_counter_m2"] == pytest.approx(174.8, abs=0.1)
+        assert attrs["onboard_counter_m2"] == pytest.approx(17484.4, abs=0.1)
         assert attrs["archived_mission_count"] == 5
 
     def test_extra_attributes_staleness_fields_present(self):
@@ -2238,3 +2246,42 @@ class TestSensorValueFnResilience:
             assert isinstance(REAL_980_STATE[key], dict)
         assert REAL_980_STATE["bbrun"]["hr"] == 438
         assert REAL_980_STATE["bbmssn"]["nMssn"] == 425
+
+
+class TestTheOnboardAreaCounterIsScaled:
+    """`bbrun.sqft` is not square feet. It counts in units of 100 ft².
+
+    A 900-series reporting `sqft: 1947` over `hr: 450` gives 0.40 m² per
+    operating hour read as square feet. A 980 cleans 30–60. The time
+    counters on the same robot are consistent, so the fault is in the
+    area field alone.
+
+    dorita980's own README example — `sqft: 251` over `hr: 103` on a
+    different robot — gives 0.23 m²/h the same way, and 22.6 with the
+    factor. Two robots, one plausible reading.
+
+    Not protocol-proven: two field observations and one prior
+    implementation (@ia74's `roomba_rest980`, which applies the factor
+    in one code path and not in another). Applied because the
+    uncorrected value has no reading under which it is true.
+    """
+
+    def test_the_real_robots_numbers_come_out_plausible(self):
+        """The two values this was derived from, as a regression fence."""
+        from custom_components.roomba_plus.const import (
+            BBRUN_SQFT_SCALE,
+            SQFT_TO_M2,
+        )
+
+        ours = 1947 * BBRUN_SQFT_SCALE * SQFT_TO_M2 / 450.5
+        theirs = 251 * BBRUN_SQFT_SCALE * SQFT_TO_M2 / 103.0
+
+        assert 30 < ours < 60, f"{ours:.1f} m²/h is not a plausible rate"
+        assert 15 < theirs < 60, f"{theirs:.1f} m²/h is not a plausible rate"
+
+    def test_without_the_factor_both_are_absurd(self):
+        """The negative control: proves the factor is doing work."""
+        from custom_components.roomba_plus.const import SQFT_TO_M2
+
+        assert 1947 * SQFT_TO_M2 / 450.5 < 1.0
+        assert 251 * SQFT_TO_M2 / 103.0 < 1.0
