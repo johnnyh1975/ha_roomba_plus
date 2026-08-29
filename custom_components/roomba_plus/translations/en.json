@@ -145,6 +145,7 @@
           "map_management": "Zone management",
           "presence_scheduling": "Presence-aware scheduling",
           "demand_cleaning": "Demand cleaning",
+          "room_schedule": "Cleaning frequency per room",
           "rooms": "Rooms & zones",
           "rest980_migrate": "Import rooms from roomba_rest980"
         }

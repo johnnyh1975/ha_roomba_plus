@@ -1339,7 +1339,12 @@ async def _build_diagnostics(
     # ── Room subsystem (ROOM-SEG Stage 6 — RoomSegStore, not ZoneStore) ─────────
     room_diag: dict[str, Any] = {"available": data.room_seg_store is not None}
     if data.room_seg_store is not None:
-        room_diag.update(data.room_seg_store.diagnostic_info())
+        room_diag.update(data.room_seg_store.diagnostic_info(
+            grid_cell_count=(
+                len(data.grid_store.cells)
+                if data.grid_store is not None else None
+            ),
+        ))
 
     diag: dict[str, Any] = {
         "integration": DOMAIN,

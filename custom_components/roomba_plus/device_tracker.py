@@ -229,7 +229,7 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         #
         # `stuck` is not a mission-end phase -- correctly, the mission
         # has not ended -- so this fell through to the active label.
-        # @utkjmitch's S9+ went `stuck` at 11:52, drained for six hours,
+        # @utkjmitch's Combo (Y3-series) went `stuck` at 11:52, drained for six hours,
         # declared battery-low, and stopped transmitting. Nine days
         # later this entity still read "Cleaning", because the last
         # value any entity received simply stays until a new one

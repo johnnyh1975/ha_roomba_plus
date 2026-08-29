@@ -73,8 +73,15 @@ def clean_area_status(config_entry: Any, state: dict[str, Any]) -> dict[str, Any
             "offered": False,
             "reason": "no_room_data",
             "detail": (
-                "No room list is available. On a locally-connected Classic "
-                "robot this comes from the iRobot cloud login or from stored "
+                "No list of ADDRESSABLE rooms is available. This is "
+                "separate from the rooms the integration derives from "
+                "coverage: those are for display, and the robot cannot be "
+                "sent to one of them. A diagnostics download can show a "
+                "dozen segmented rooms and this reason at the same time "
+                "without either being wrong.\n\n"
+                "On a locally-connected Classic "
+                "robot the addressable list comes from the iRobot cloud "
+                "login or from stored "
                 "smart-zone data; the robot knowing its own rooms is not "
                 "enough."
             ),

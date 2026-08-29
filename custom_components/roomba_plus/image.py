@@ -1325,6 +1325,25 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 # here would put keepout boxes in the wrong place.
                 return cloud_png
 
+        # SHARED FRAME, when the option is on and the room map has
+        # rendered at least once. Both images then fit to the same
+        # extent, so their calibration_points agree and one can be
+        # overlaid on the other (@Thonno).
+        _rt = getattr(self._config_entry, "runtime_data", None)
+        _extent = getattr(_rt, "room_map_extent_mm", None)
+        # Length-checked, not just None-checked: runtime_data is a
+        # MagicMock in much of the test suite and returns one for any
+        # attribute, so `is not None` is true for a value that cannot be
+        # unpacked. A guard that a mock satisfies guards nothing.
+        if isinstance(_extent, (tuple, list)) and len(_extent) == 4:
+            _x0, _x1, _y0, _y1 = _extent
+            self._renderer._fit_bounds_px = [
+                self._renderer._mm_to_px(_x0, _y1),
+                self._renderer._mm_to_px(_x1, _y0),
+            ]
+        else:
+            self._renderer._fit_bounds_px = None
+
         png = await self.hass.async_add_executor_job(self._renderer.render)
 
         # v2.3.0 Step 6 — keepout zone overlay (Amendment 4)
@@ -3175,6 +3194,12 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         self._last_y_min = y_min
         self._last_y_max = y_max
         self._last_size  = size
+        # SHARE IT. The cleaning path fits to its own content otherwise,
+        # so the two images publish calibration_points that describe
+        # different frames and cannot be overlaid.
+        _rt = getattr(self._config_entry, "runtime_data", None)
+        if _rt is not None:
+            _rt.room_map_extent_mm = (x_min, x_max, y_min, y_max)
         if aligned:
             self._rendered_once = True
         else:

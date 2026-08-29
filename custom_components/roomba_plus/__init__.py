@@ -9,6 +9,8 @@ v2.0: __init__.py is now the thin setup/teardown shell. Business logic lives in:
 """
 from __future__ import annotations
 
+import time
+
 from collections.abc import Mapping
 
 import asyncio
@@ -832,6 +834,7 @@ def _build_runtime_data(ctx: _SetupContext) -> RoombaData:
     """Assemble RoombaData from the fully populated _SetupContext."""
     return RoombaData(
         roomba=ctx.roomba,
+        setup_ts=time.time(),
         blid=ctx.config_entry.data[CONF_BLID],
         map_capability=ctx.map_capability,
         renderer=ctx.renderer,
@@ -1478,6 +1481,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     config_entry.runtime_data = RoombaData(
         blid=blid,
         roomba=None,
+        setup_ts=time.time(),
         connection_type=ConnectionType.CLOUD_ONLY,
         prime_robot=prime_robot,
         prime_coordinator=coordinator,

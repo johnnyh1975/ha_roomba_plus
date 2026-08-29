@@ -2121,12 +2121,36 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
 
         # AND A ROBOT THAT STOPPED TALKING IS NOT STILL DOING THIS.
         #
-        # @utkjmitch's S9+ stopped transmitting at 36% battery and every
+        # @utkjmitch's Combo (Y3-series) stopped transmitting at 36% battery and every
         # entity held its final value for nine days -- this sensor said
         # `stuck` as if it had just arrived. The silence was recorded
         # already; nothing surfaced it where the state is read.
-        _coord = self._config_entry.runtime_data.prime_status_coordinator
-        _last = getattr(_coord, "last_message_ts", None)
+        # `runtime_data.last_mqtt_message_ts`, NOT a coordinator
+        # attribute. Neither coordinator has `last_message_ts`; both
+        # write the timestamp onto runtime_data, which is what
+        # diagnostics.py, binary_sensor.py and the Classic mirror of
+        # this very check all read.
+        #
+        # So this read `None` on every robot, the type check turned that
+        # into "never stale", and `no_contact` could not fire on Prime
+        # at all -- in the release that added it, and in the same file
+        # as four other bugs of exactly this shape (@utkjmitch).
+        #
+        # The Classic side, `sensor_helpers._phase_value`, has read the
+        # right source since it was written. One feature, one release,
+        # one generation working.
+        _last = getattr(
+            self._config_entry.runtime_data, "last_mqtt_message_ts", None
+        )
+        if not _last:
+            # NOTHING HAS ARRIVED SINCE SETUP. Fall back to when this
+            # entry came up: an hour of uptime with no message is an
+            # hour of silence, and it is the only reading available
+            # after a restart, when a robot that was already quiet
+            # never gets a timestamp at all.
+            _last = getattr(
+                self._config_entry.runtime_data, "setup_ts", None
+            )
         # Type-checked, not truth-checked: this runs against whatever a
         # coordinator happens to expose, and a non-numeric value must
         # not raise out of a status read.

@@ -1251,11 +1251,31 @@ def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] 
     room-history/overdue sensors resolve names the same way."""
     region_map: dict[str, str] = {}
     if runtime_data.has_cloud and runtime_data.cloud_coordinator is not None:
+        # ROOMS **AND** ZONES. `regions` holds rooms; the coordinator
+        # keeps clean zones in a separate `zones` property, and reading
+        # only the first left every zone out of the overdue sensor's
+        # `rooms` attribute -- the one place a template can enumerate
+        # them from (@ibernstone asked how).
+        #
+        # Sixth instance of this shape: a better-populated source
+        # appeared later and the places reading the older one were never
+        # revisited. See `scripts/check_prime_sources.py`.
         region_map = {
             r["id"]: r["name"]
-            for r in runtime_data.cloud_coordinator.regions
-            if r.get("id")
+            for source in (
+                runtime_data.cloud_coordinator.regions or [],
+                runtime_data.cloud_coordinator.zones or [],
+            )
+            for r in source
+            if r.get("id") and r.get("name")
         }
+    # PRIME HAS NO CLOUD COORDINATOR AT ALL. `prime_room_names` is flat
+    # and holds rooms and zones together, so a Prime robot's template
+    # gets the same list a Classic one does.
+    for rid, name in (
+        getattr(runtime_data, "prime_room_names", None) or {}
+    ).items():
+        region_map.setdefault(str(rid), name)
     umf_regions: dict[str, str] | None = None
     if not region_map and runtime_data.umf_aligner and runtime_data.umf_aligner.aligned:
         umf_regions = runtime_data.umf_aligner.rid_to_name()

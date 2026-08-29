@@ -135,6 +135,16 @@ class PrimeDockCommand:
     #: Dock sub-state values in which the app offers this control, taken
     #: from its own res/raw availability specs. None means no state rule
     #: was found for this control.
+    #: Superseded by another entity. The button still works; it is
+    #: hidden by default and slated for removal.
+    #:
+    #: @chairstacker asked for the pad-dry button PAIR to be replaced by
+    #: one switch, and a switch was built BESIDE them -- so he got a
+    #: third entity for the same thing, plus the logbook noise he was
+    #: trying to get rid of. Deprecating rather than deleting outright
+    #: because an automation calling one of these should keep working
+    #: through at least one release.
+    deprecated_by: str | None = None
     ready_states: tuple[int, ...] | None = None
     #: Which DockInfo field carries that sub-state.
     state_attr: str | None = None
@@ -196,7 +206,7 @@ PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
         ready_states=(601,), state_attr="pw_state",
     ),
     PrimeDockCommand(
-        key="prime_stop_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry",
+        key="prime_stop_pad_dry", deprecated_by="switch.<robot>_pad_dry", command="stoppaddry", dock_cap_attr="pad_dry",
         # spec_dock_control_stop_pad_dry_status: Available at 702 -- the
         # state that means drying is actually running. Stopping something
         # that is not running is the one control where the app's rule is
@@ -227,7 +237,7 @@ PRIME_DOCK_COMMANDS: tuple[PrimeDockCommand, ...] = (
         ready_states=(702,), state_attr="pd_state",
     ),
     PrimeDockCommand(
-        key="prime_start_pad_dry", command="drypad", dock_cap_attr="pad_dry",
+        key="prime_start_pad_dry", deprecated_by="switch.<robot>_pad_dry", command="drypad", dock_cap_attr="pad_dry",
         # spec_dock_control_pad_dry_status: Available at 701, 703.
         # Disabled across 749-757.
         ready_states=(701, 703), state_attr="pd_state",
@@ -260,6 +270,17 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
         self._command = command
         self._attr_translation_key = command.key
         self._attr_unique_id = f"{self.robot_unique_id}_{command.key}"
+        if command.deprecated_by is not None:
+            # HIDDEN, NOT DELETED. An automation already calling this
+            # keeps working; it simply stops appearing in pickers and
+            # on auto-generated dashboards, which is where the confusion
+            # of having three entities for one action actually bites.
+            #
+            # Existing installations are unaffected -- Home Assistant
+            # only applies this default at first registration -- so a
+            # user who already has the button keeps it until it is
+            # removed outright.
+            self._attr_entity_registry_enabled_default = False
 
     @property
     def suggested_object_id(self) -> str:

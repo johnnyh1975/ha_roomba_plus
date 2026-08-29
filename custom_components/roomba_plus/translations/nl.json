@@ -145,6 +145,7 @@
           "map_management": "Zonebeheer",
           "presence_scheduling": "Aanwezigheidsgestuurde planning",
           "demand_cleaning": "Reinigen op aanvraag",
+          "room_schedule": "Schoonmaakfrequentie per kamer",
           "rooms": "Kamers en zones",
           "rest980_migrate": "Kamers importeren uit roomba_rest980"
         }

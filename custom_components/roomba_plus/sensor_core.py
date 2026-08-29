@@ -35,6 +35,7 @@ import datetime as dt_stdlib
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BBRUN_SQFT_SCALE,
     ERROR_CATALOGUE,
     CARPET_BOOST_SLUGS,
     CLEAN_BASE_STATUS_SLUGS,
@@ -558,7 +559,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
                     else None
                 ) or 0.0,
                 (
-                    round(sqft * SQFT_TO_M2, 1)
+                    # SCALED. `bbrun.sqft` counts in units of 100 ft²
+                    # -- see BBRUN_SQFT_SCALE for the evidence. The
+                    # archive branch above is NOT scaled: it sums
+                    # per-mission areas, which are genuine square feet.
+                    round(sqft * BBRUN_SQFT_SCALE * SQFT_TO_M2, 1)
                     if (sqft := e.run_stats.get("sqft"))
                     else None
                 ) or 0.0,
@@ -573,7 +578,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         extra_attributes_fn=lambda e: (
             lambda rps, arc: {
                 "onboard_counter_m2": (
-                    round(sqft * SQFT_TO_M2, 1)
+                    # Same scaling as the state above -- this attribute
+                    # exists to show the robot's own counter beside our
+                    # archive sum, so it has to be in the same unit or
+                    # the comparison is meaningless.
+                    round(sqft * BBRUN_SQFT_SCALE * SQFT_TO_M2, 1)
                     if (sqft := e.run_stats.get("sqft"))
                     else None
                 ),

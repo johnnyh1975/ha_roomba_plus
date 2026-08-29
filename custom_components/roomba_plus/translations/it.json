@@ -145,6 +145,7 @@
           "map_management": "Gestione zone",
           "presence_scheduling": "Pianificazione in base alla presenza",
           "demand_cleaning": "Pulizia su richiesta",
+          "room_schedule": "Frequenza di pulizia per stanza",
           "rooms": "Stanze e zone",
           "rest980_migrate": "Importa stanze da roomba_rest980"
         }

@@ -350,6 +350,10 @@ class RoomSegStore:
         label) to an existing persisted room id, or assign a fresh one.
         Returns the label -> persisted-id mapping (used by _match_doors)."""
         matched_existing: set[str] = set()
+        #: Rooms this round created. They are 100% inside one of this
+        #: round's clusters by construction, so the staleness check
+        #: below would delete every one of them immediately.
+        created_this_round: set[str] = set()
         label_to_id: dict[int, str] = {}
 
         # Match in descending cluster-size order: bigger, more confident
@@ -378,6 +382,7 @@ class RoomSegStore:
                 rid = f"room_{self._next_room_n}"
                 self._next_room_n += 1
                 self.rooms[rid] = SegRoom(id=rid, cells=set(new_cells))
+                created_this_round.add(rid)
                 label_to_id[label] = rid
 
         # v3.2.1 STALE-ROOM CLEANUP — see STALE_ABSORPTION_RATIO docstring
@@ -404,11 +409,38 @@ class RoomSegStore:
         # extra and is correct either way).
         stale_ids = []
         for rid, room in self.rooms.items():
-            if rid in matched_existing or not room.cells:
+            if (
+                rid in matched_existing
+                or rid in created_this_round
+                or not room.cells
+            ):
                 continue
+            # EVERY NEW CLUSTER, not only the matched ones.
+            #
+            # `maybe_recompute()` is handed `grid_store.cells` -- the
+            # whole cumulative visited grid, not one mission's slice. So
+            # a room that fails to match was NOT unobserved: its cells
+            # were in the input and the segmentation chose to divide
+            # them differently. It is refuted, not merely unseen.
+            #
+            # Checking only matched rooms missed the case where those
+            # cells are now spread across clusters that are themselves
+            # new -- none of them absorbs 80%, so nothing absorbs 80%,
+            # and the old room survives forever.
+            #
+            # Field evidence (R980040, 445 missions): four rooms with
+            # `recompute_count == 0` and 931 cells between them, never
+            # once re-recognised. Total room cells 8814 against a grid
+            # of 6614 -- a third of the room list was stale.
+            #
+            # This is the same widening as the v3.2.1 fix below, one
+            # step further: from "one absorber" to "all matched rooms"
+            # to "all of this round's output".
             absorbed = set()
             for mid in matched_existing:
                 absorbed |= (room.cells & self.rooms[mid].cells)
+            for new_cells in result.rooms.values():
+                absorbed |= (room.cells & new_cells)
             if len(absorbed) / len(room.cells) >= STALE_ABSORPTION_RATIO:
                 stale_ids.append(rid)
         for rid in stale_ids:
@@ -611,7 +643,9 @@ class RoomSegStore:
     def has_unconfirmed_rooms(self) -> bool:
         return bool(self.unconfirmed_rooms)
 
-    def diagnostic_info(self) -> dict[str, Any]:
+    def diagnostic_info(
+        self, grid_cell_count: int | None = None
+    ) -> dict[str, Any]:
         return {
             "room_count": len(self.rooms),
             "door_count": len(self.doors),

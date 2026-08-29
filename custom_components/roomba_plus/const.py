@@ -162,6 +162,7 @@ DEFAULT_MAP_ROOM_LABELS: Final = False
 #: and where it must not mop -- and somebody who wants keep-out zones on
 #: screen does not necessarily want clean zones there too.
 CONF_MAP_CLEAN_ZONES: Final = "map_clean_zones"
+
 CONF_MAP_KEEPOUT_ZONES: Final = "map_keepout_zones"
 CONF_MAP_NOMOP_ZONES: Final = "map_nomop_zones"
 DEFAULT_MAP_ZONES: Final = False
@@ -550,6 +551,40 @@ ROOMBA_CLEAN_WIDTH_MM: Final = 320  # 980 AeroForce cleaning path width
 
 # ── Unit conversion ───────────────────────────────────────────────────────────
 SQFT_TO_M2: Final = 0.09290304   # exact SI definition: 1 ft² = 0.09290304 m²
+
+#: `bbrun.sqft` is not square feet. It counts in units of 100 ft².
+#:
+#: A 900-series reporting `sqft: 1947` over `hr: 450` gives 0.40 m² per
+#: operating hour if read as square feet. A 980 cleans 30-60. The time
+#: counters on the same robot are consistent (445 missions × 77 min
+#: average = 571 h against 450 reported), so the fault is in the area
+#: field alone.
+#:
+#: With ×100 it comes to 40.2 m²/h. dorita980's own README example --
+#: `sqft: 251` over `hr: 103` on a different robot -- gives 22.6 m²/h
+#: the same way, and 0.23 without. Two robots, one plausible reading.
+#:
+#: The mission count does not explain it either: 1947 ft² over the 135
+#: successful missions would be 1.34 m² each.
+#:
+#: PRIOR ART, and it disagrees with itself. @ia74's `roomba_rest980`
+#: applies exactly this factor in `LegacyCompatibility.py`
+#: (`sqft / 10.764 * 100`) and NOT in its newer `sensor.py`, which
+#: emits the raw value labelled as square metres. Which of those is the
+#: later understanding is unknown.
+#:
+#: The official iRobot app does not read `bbrun.sqft` at all, so it
+#: documents no unit -- an APK search established that and nothing more.
+#:
+#: NOT PROTOCOL-PROVEN. Two field observations and one prior
+#: implementation. Applied anyway because the uncorrected value has no
+#: reading under which it is true, and a lifetime-area sensor showing
+#: 181 m² after 450 hours is wrong in a way a user can see.
+#:
+#: To settle it: a diagnostics download before and after one completed
+#: mission. The prediction is that `sqft` rises by about 0.108 per
+#: square metre actually cleaned.
+BBRUN_SQFT_SCALE: Final = 100
 
 # ── RF0 — Robot manufacturer reference profiles ────────────────────────────────
 # Prior data for all self-calibrating learning features.  Consumed by L1–L8
@@ -1483,6 +1518,18 @@ CYCLE_LABELS: Final[dict[str, str]] = {
 #: the map is updating is wire 67, index 64, DownloadingMap.
 #: Wire 68 is OffDock.
 #:
+#: CONFIRMED IN THE FIELD (@Young9898, i3+, own capture pipeline).
+#: Two independent observations, neither compatible with "Updating map":
+#: 68 flashed during a docking sequence in exactly the moments the robot
+#: was off the dock between contact attempts, with no map update in
+#: progress; and a 40-second run of 68 after a reboot mid-floor, filed
+#: at the time as a boot transient, reads simply as a robot that was not
+#: on its dock.
+#:
+#: So the replacement table is not only better sourced than the nine
+#: guesses it replaced -- this entry is now field-verified behaviourally
+#: as well as read from the app.
+#:
 #: Names are transliterated, not translated: "Wheel drop both"
 #: rather than an invented phrase. Less fluent than the old
 #: labels and traceable to a source, which the old ones were not.
@@ -1523,6 +1570,18 @@ READINESS_STATE_LABELS: Final[dict[int, str]] = {
     33: 'Pad detection timeout',
     34: 'Auto evacuation clogged',
     35: 'SM bus permanent failure',
+    # 36 -- FIELD BEHAVIOUR DOES NOT OBVIOUSLY MATCH THIS NAME.
+    # @AlakazipLabs inventoried 65 occurrences of wire 39 over two weeks
+    # on an i3+: 44 on a docked, charging, healthy-battery robot, 17
+    # briefly after stop commands, 4 mid-evacuation. Always transient,
+    # always self-clearing, present from day one before any command was
+    # sent.
+    #
+    # The name comes from `RobotReadinessState` in the app and stays --
+    # a vendor enum outranks one robot's behaviour, and "charge timeout"
+    # may describe an internal condition that is benign in most
+    # contexts. Recorded so nobody reads the label as a fault and goes
+    # looking for a charging problem that is not there.
     36: 'Charge timeout',
     37: 'Saving map',
     38: 'Dead camera',

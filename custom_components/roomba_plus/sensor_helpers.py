@@ -164,7 +164,7 @@ def _phase_value(entity: "IRobotEntity") -> str:
     """Phase label with Idle, Stopped and silence detection."""
     # A ROBOT THAT STOPPED TALKING IS NOT STILL DOING THE LAST THING.
     #
-    # @utkjmitch's S9+ went `stuck`, drained for six hours off its dock,
+    # @utkjmitch's Combo (Y3-series) went `stuck`, drained for six hours off its dock,
     # and stopped transmitting at 36% battery. Nine days later every
     # entity still read its final value -- the status said "Stuck" as if
     # it had just arrived, because the last value any entity receives
@@ -180,6 +180,17 @@ def _phase_value(entity: "IRobotEntity") -> str:
     _entry = getattr(entity, "_config_entry", None)
     _data = getattr(_entry, "runtime_data", None)
     _last = getattr(_data, "last_mqtt_message_ts", 0.0) or 0.0
+    if not _last:
+        # NOTHING SINCE SETUP -- measure from then. `last_mqtt_message_ts`
+        # is in-memory and starts at zero, so a robot that was already
+        # silent before a Home Assistant restart never gets one and this
+        # check could not fire at all. @utkjmitch's robot was quiet for
+        # nine days and every restart put it back to a confident phase.
+        #
+        # An hour of uptime with no message is an hour of silence. It
+        # cannot false-positive at startup, where the elapsed time is
+        # zero.
+        _last = getattr(_data, "setup_ts", 0.0) or 0.0
     if _last:
         _quiet = _time_mod.time() - _last
         if _quiet > _SILENCE_BEFORE_STATUS_SAYS_SO_SEC:

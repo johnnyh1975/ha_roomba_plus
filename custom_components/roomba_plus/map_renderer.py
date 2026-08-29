@@ -228,6 +228,9 @@ class MapRenderer:
         self._last_png: bytes | None = None           # cached output (not persisted)
         # Auto-fit state — recomputed at the start of each render().
         self._fit_scale: float = self._cfg.scale
+        #: Optional pixel-space extent to fit to instead of own content.
+        #: Two corner points; see _compute_fit().
+        self._fit_bounds_px: list[tuple[int, int]] | None = None
         self._fit_cx: int = self._cfg.size_px // 2
         self._fit_cy: int = self._cfg.size_px // 2
         # v2.9.0 — see _MAX_POSE_JUMP_MM rationale below. Counts consecutive
@@ -547,8 +550,26 @@ class MapRenderer:
             return identity
 
         # Build bounding box from all content: path, stuck, robot.
-        all_px = list(self._points)
-        all_px.extend(self._stuck_px)
+        # A SHARED FRAME, when one is given.
+        #
+        # Every image auto-fits to its OWN content: the room map to all
+        # rooms, the cleaning path to the area one mission covered. Both
+        # then publish `calibration_points` that are correct for
+        # themselves and incompatible with each other, so
+        # xiaomi-vacuum-map-card cannot overlay one on the other -- it
+        # gets two valid, different coordinate systems.
+        #
+        # @Thonno: "the shape and proportions correspond, the problem is
+        # that the Cleaning Path is rendered independently". Exactly
+        # right, and this is where.
+        #
+        # With `fit_bounds_px` set, the fit uses that extent instead, so
+        # every image sharing it lands on one transform.
+        if self._fit_bounds_px is not None:
+            all_px = list(self._fit_bounds_px)
+        else:
+            all_px = list(self._points)
+            all_px.extend(self._stuck_px)
         if self._robot_px:
             all_px.append(self._robot_px)
 

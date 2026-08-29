@@ -145,6 +145,7 @@
           "map_management": "Zarządzanie strefami",
           "presence_scheduling": "Harmonogramowanie zależne od obecności",
           "demand_cleaning": "Sprzątanie na żądanie",
+          "room_schedule": "Częstotliwość sprzątania na pokój",
           "rooms": "Pomieszczenia i strefy",
           "rest980_migrate": "Importuj pomieszczenia z roomba_rest980"
         }

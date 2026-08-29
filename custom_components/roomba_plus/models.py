@@ -350,6 +350,38 @@ class RoombaData:
     # float reads/writes atomic so no explicit locking is needed.
     # 0.0 = no message received yet (watchdog must not fire until first message).
     last_mqtt_message_ts: float = 0.0
+    #: Wall-clock time this entry was set up. Set once, never updated.
+    #:
+    #: SILENCE HAS TO SURVIVE A RESTART. `last_mqtt_message_ts` lives in
+    #: memory and starts at 0.0, so after a Home Assistant restart a
+    #: robot that was ALREADY silent never gets a timestamp -- nothing
+    #: arrives to set one -- and the staleness check has nothing to
+    #: measure against. @utkjmitch's robot was silent for nine days and
+    #: every restart in that window put it back to a confident `stuck`.
+    #:
+    #: Measuring from setup instead says something true and narrower:
+    #: if this entry has been up for an hour and nothing has arrived,
+    #: that is an hour of silence. It cannot false-positive at startup
+    #: because the elapsed time is zero there.
+    #:
+    #: NOT used by the MQTT watchdog, which relies on 0.0 meaning
+    #: "no message yet" to stay quiet before the first one.
+    setup_ts: float = 0.0
+    #: Extent of the room map's last render, in its own coordinate
+    #: space: (x_min, x_max, y_min, y_max) in mm.
+    #:
+    #: PUBLISHED SO THE CLEANING PATH CAN SHARE IT. Every image auto-fits
+    #: to its own content -- the room map to all rooms, the cleaning path
+    #: to the area one mission covered -- and each then publishes
+    #: `calibration_points` correct for itself and incompatible with the
+    #: other. xiaomi-vacuum-map-card gets two valid, different coordinate
+    #: systems and cannot overlay one on the other (@Thonno).
+    #:
+    #: The two images do not share a renderer: the room map draws
+    #: polygons with Pillow directly, the cleaning path goes through
+    #: MapRenderer. Sharing the extent is the small fix; merging the
+    #: render paths would be a large one.
+    room_map_extent_mm: tuple[float, float, float, float] | None = None
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh
