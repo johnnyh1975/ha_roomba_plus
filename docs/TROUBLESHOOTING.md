@@ -498,6 +498,12 @@ with a candidate id while the robot is docked: a valid id starts a
 mission within about ten seconds, an invalid one does nothing at all.
 Recall the robot and try the next.
 
+**From the dock only, and re-dock between probes.** This is not a
+convenience — off the dock, a region-targeted start does nothing
+whatever the id, so a valid id and an invalid one look identical and
+the probe reads the entire id space as invalid. Measured across eight
+sends in four different states (@Young9898).
+
 That launches real missions and advances the robot's mission and
 evacuation counters, so it is a last resort rather than a setup step.
 
@@ -514,6 +520,44 @@ A robot that has aborted four of its last ten runs for the same reason
 is telling you something a single incident does not. There is no
 threshold attached: nobody has enough field data yet to say what counts
 as a lot, and a warning without one would be a guess.
+
+## A paused mission disappeared on its own
+
+Pausing sets an expiry, and the robot drops the mission when it runs
+out. **Ninety minutes** on the firmware this was measured on
+(`daredevil 2.6.0`, i3+) — the robot sets `expireTm` to now plus 5400
+seconds the moment you pause.
+
+After that the mission is gone, not paused. Resuming does nothing
+because there is nothing to resume.
+
+The mission expiry sensor shows the countdown, so a paused robot tells
+you how long it will wait. A paused robot also drains at roughly
+0.3% battery per minute, which over ninety minutes is most of a
+charge — pausing is not a way to park a robot.
+
+Measured by @Young9898 on a dedicated test unit. Other firmwares may
+use a different window; the sensor reads the robot's own value rather
+than assuming ninety minutes.
+
+## The robot will not drive home on a low battery
+
+Below a certain charge the robot refuses **`dock` as well as mission
+starts** — so a robot stranded mid-floor will not accept the one command
+you most want it to take. The readiness sensor reads *Insufficient
+charge*.
+
+**If you automate a recall on low battery, it has to fire before the
+threshold**, not at it.
+
+Where the threshold sits is not known. Every recorded occurrence was at
+or below roughly 21% on one i3+ (`daredevil 2.6.0`), but whether that is
+a fixed percentage, computed against the distance home, or subject to
+hysteresis is unmeasured — and whether `start` and `dock` share the same
+gate is unknown too. Treat 21% as the only number anyone has seen rather
+than as the boundary.
+
+Observed by @AlakazipLabs across two weeks of lossless shadow logs.
 
 ## Sending a diagnostics download
 

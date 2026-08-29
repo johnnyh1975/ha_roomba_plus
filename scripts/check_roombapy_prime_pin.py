@@ -35,9 +35,22 @@ VALIDATE_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "validate.yml"
 #: Worth noting the failure mode: it did not say "the pin looks wrong",
 #: it said the pin was ABSENT. A pattern that cannot match reports the
 #: same thing as a missing line, and the two need different fixes.
+#: AND AGAIN, for the same reason. The pattern matched a git URL, which
+#: was the only way to depend on this library until it went to PyPI.
+#: The day the manifest said `roombapy-prime[map]==0.3.1` instead, the
+#: pattern reported the pin as ABSENT rather than as changed -- exactly
+#: the failure mode described above, one release later.
+#:
+#: Matches both spellings now: an index pin, and the git URL, since a
+#: prerelease may still be installed that way while it is unpublished.
 PIN_PATTERN = re.compile(
-    r"roombapy-prime(?:\[map\])?@git\+https://github\.com/johnnyh1975/"
-    r"roombapy-prime\.git@(v[\d.]+(?:a\d+|b\d+|rc\d+)?)"
+    r"roombapy-prime(?:\[map\])?"
+    r"(?:"
+    r"==([\d.]+(?:a\d+|b\d+|rc\d+)?)"
+    r"|"
+    r"@git\+https://github\.com/johnnyh1975/"
+    r"roombapy-prime\.git@v([\d.]+(?:a\d+|b\d+|rc\d+)?)"
+    r")"
 )
 
 

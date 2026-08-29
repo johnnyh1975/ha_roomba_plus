@@ -218,6 +218,23 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 
 - Room and zone names come directly from the Smart Map — no manual naming required
 
+**Both map images share one coordinate frame** *(v4.0.0b2)*. The room
+map and the cleaning path render into the same extent and publish the
+same `calibration_points`, so one can be overlaid on the other in
+`xiaomi-vacuum-map-card`. A mission that covered part of the house shows
+as that part, not stretched to fill the image.
+
+**Enumerating rooms and zones in a template.** The *Rooms overdue*
+sensor carries a `rooms` attribute — rooms and zones together, keyed by
+the same names the `clean_room` and `clean_zone` services expect — plus
+`overdue_rooms`, a plain list already sorted worst-first:
+
+```jinja
+{% for name in state_attr('sensor.YOUR_ROBOT_rooms_overdue', 'overdue_rooms') %}
+  {{ name }}
+{% endfor %}
+```
+
 **Zones on the rooms map** *(v4.0.0a47)*. Saved clean zones are drawn as
 outlines rather than filled shapes — a zone sits inside a room, and
 filling it would hide the room it belongs to. Controlled by the
