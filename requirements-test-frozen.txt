@@ -9,7 +9,7 @@ aiohttp-cors==0.7.0
 aiohttp-fast-zlib==0.2.0
 aiooui==0.1.9
 aiosignal==1.4.0
-aiozoneinfo==0.2.1
+aiozoneinfo==0.2.3
 annotated-types==0.7.0
 anyio==4.14.1
 astral==2.2
