@@ -64,7 +64,7 @@ mashumaro==3.22
 mock-open==1.4.0
 multidict==6.7.1
 netifaces==0.11.0
-numpy==2.2.0
+numpy==2.5.2
 orjson==3.10.12
 packaging==26.2
 paho-mqtt==1.6.1
