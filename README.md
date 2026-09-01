@@ -88,9 +88,9 @@ deliberately not built:
 | Curated notification blueprints, incl. demand-clean alert, vacuum-then-mop, smart-start-on-away *(v3.4.2/v3.4.3)* | ✅ Shipped — see [Automations](docs/AUTOMATIONS.md) |
 | Multi-robot fleet health rollup *(v3.4.3)* | ✅ Shipped — see [API → GET /household](docs/API.md#get-household) |
 | Gentle mode switch *(v3.4.3)* | ✅ Shipped |
-| Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](RELEASE_NOTES_v3.4.3.md))* |
-| Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
-| Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
+| Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.4.3))* |
+| Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.5.0) |
+| Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.5.0) |
 | Device tracker — which room the robot is in, and the matching Home Assistant **area** *(v2.9.0, areas in v4.0.0a14)* | ✅ Shipped — see [Device tracker](#device-tracker) |
 | V4/Prime support — cloud-only robots (400-series) *(v4.0.0b3)* | 🧪 Beta — see [V4/Prime support (beta)](#v4prime-support-beta) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
