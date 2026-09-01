@@ -27,6 +27,15 @@ select = ["F"]
 # be caught.
 
 [tool.pytest.ini_options]
+# ASYNC FIXTURES NEED THIS. `pytest-homeassistant-custom-component`
+# ships `hass` as an async fixture; under strict mode a test marked
+# `@pytest.mark.asyncio` still receives the async generator rather than
+# the instance, and fails with `'async_generator' object has no
+# attribute ...` several frames later.
+#
+# Auto mode resolves them. It also makes the explicit `asyncio` markers
+# throughout the suite redundant rather than wrong.
+asyncio_mode = "auto"
 markers = [
     # ASSERTS ON SOMETHING NOT FIELD-CONFIRMED.
     #

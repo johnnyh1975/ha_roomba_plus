@@ -98,19 +98,23 @@ NO_VENDOR_ENUM: dict[str, str] = {
         "`precheck.readiness` instead."
     ),
     "sensor_prime.READINESS_STATE_LABELS": "Re-export of the same table.",
-    "const.CLEAN_BASE_LABELS": (
+    "const.CLEAN_BASE_STATUS_SLUGS": (
         "Twelve dock state codes. `DockMode` names dock TYPES, not "
-        "states, and no vendor enum covers the 3xx state space."
+        "states, and no vendor enum covers the 3xx state space. "
+        "(Renamed from CLEAN_BASE_LABELS when the values became "
+        "translation slugs.)"
     ),
-    "sensor_prime._FIELD_OBSERVED_DOCK_STATES": (
+    "const.MOP_BEHAVIOR_SLUGS": (
+        "Four mop rank values. The vendor's RankOverlap names three "
+        "DEEP_CLEAN-style constants over a different space. "
+        "(Renamed from MOP_RANK_LABELS when the values became "
+        "translation slugs.)"
+    ),
+    "sensor_prime._FIELD_OBSERVED_DOCK_STATE_SLUGS": (
         "A single field-observed code kept apart from the spec table on "
         "purpose -- observed and undocumented is a different claim from "
-        "documented."
-    ),
-    "const.MOP_RANK_LABELS": (
-        "Four mop rank values. The vendor's RankOverlap names three "
-        "DEEP_CLEAN-style constants over a different space, and its "
-        "wireValues map is empty."
+        "documented. (Renamed from _FIELD_OBSERVED_DOCK_STATES when the "
+        "values became translation slugs.)"
     ),
     "select_prime.PAD_WETNESS_LEVELS": (
         "NO SOURCE ANYWHERE, and this is the only value set in that file "

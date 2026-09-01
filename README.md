@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0b2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0b3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -15,17 +15,17 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 | Your robot | Install | Why |
 |---|---|---|
-| **i · s · j · 900 · e-series · Braava** | **v3.5.2** (stable) — the default in HACS | Fully supported. The v4 alphas add nothing for you |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.0.0aNN** — enable *Show beta versions* in HACS | The stable line **cannot connect to your robot at all** |
+| **i · s · j · 900 · e-series · Braava** | **v3.5.2** (stable) — the default in HACS | Fully supported. The v4 betas add nothing for you |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.0.0bNN** — enable *Show beta versions* in HACS | The stable line **cannot connect to your robot at all** |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
 > [Troubleshooting → Installing](docs/TROUBLESHOOTING.md#installing). Nothing is wrong
 > with your setup.
 
-> 🔬 **V4/Prime is alpha.** These robots don't speak the local MQTT protocol everything
+> 🔬 **V4/Prime is beta.** These robots don't speak the local MQTT protocol everything
 > below is built on, so it is a genuinely separate and less mature path. See
-> [V4/Prime support (alpha) →](#v4prime-support-alpha) before assuming everything on
+> [V4/Prime support (beta) →](#v4prime-support-beta) before assuming everything on
 > this page applies to your robot.
 
 **Why Roomba+?**
@@ -44,7 +44,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - [What you get](#what-you-get)
 - [Feature status](#feature-status)
 - [Supported hardware & capability matrix](#supported-hardware--capability-matrix)
-- [V4/Prime support (alpha)](#v4prime-support-alpha)
+- [V4/Prime support (beta)](#v4prime-support-beta)
 - [Known limitations](#known-limitations)
 - [Installation](#installation)
 - [Getting started](#getting-started)
@@ -92,7 +92,7 @@ deliberately not built:
 | Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
 | Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](RELEASE_NOTES_v3.5.0.md) |
 | Device tracker — which room the robot is in, and the matching Home Assistant **area** *(v2.9.0, areas in v4.0.0a14)* | ✅ Shipped — see [Device tracker](#device-tracker) |
-| V4/Prime support — cloud-only robots (400-series) *(v4.0.0a0)* | 🔬 Alpha — see [V4/Prime support (alpha)](#v4prime-support-alpha) |
+| V4/Prime support — cloud-only robots (400-series) *(v4.0.0b3)* | 🧪 Beta — see [V4/Prime support (beta)](#v4prime-support-beta) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
 | Room shape / door-position export | 🔲 Backlog, not yet scheduled |
 | Voice commands ("clean the kitchen", etc.) | ❌ Evaluated, not pursued — see [Known limitations](#known-limitations) |
@@ -111,7 +111,7 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 | **s-series** | s9+ | ✅ **S9+** |
 | **j-series** | j7, j7+ | ✅ **j-series** |
 | **Braava** | m6 | ✅ **Braava jet m6** |
-| **V4/Prime** *(alpha, v4.0.0a0)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
+| **V4/Prime** *(beta, v4.0.0b3)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
 
 **What works on your robot** — the fast answer to the most common setup question:
 
@@ -181,7 +181,7 @@ value_template: "{{ state_attr('device_tracker.roomba', 'area_id') == 'kitchen' 
 The property will be removed a release *before* the deadline rather than on it, with a repair
 notification rather than only a release note.
 
-## V4/Prime support (alpha)
+## V4/Prime support (beta)
 
 iRobot's newer-generation robots (Combo/Plus 400-series and similar, on the "Prime" cloud
 protocol) don't speak the local MQTT protocol every other feature on this page is built on —
@@ -189,7 +189,7 @@ they're cloud-only. Support for them was added in **v4.0.0a0** as a genuinely se
 path, not an extension of the existing one, using the companion
 [roombapy-prime](https://github.com/johnnyh1975/roombapy-prime) library.
 
-**This is a real alpha, not a preview label on finished work.** It's been tested against
+**This is a real beta, not a preview label on finished work.** It's been tested against
 multiple real robots on separate accounts and works for what it does — but the feature set is
 deliberately narrower than everything described above.
 
@@ -325,15 +325,15 @@ protocol: [Release notes →](release-notes/)
 1. HACS → Integrations → ⋮ → Custom repositories
 2. URL: `https://github.com/johnnyh1975/ha_roomba_plus` · Category: Integration
 3. **Open Roomba+ → ⋮ → Redownload → enable "Show beta versions"**
-4. Pick the newest `v4.0.0aNN` → restart HA
+4. Pick the newest `v4.0.0bNN` → restart HA
 
-> ⚠️ **Step 3 is not optional for the v4 alpha.** Every v4 release is a
+> ⚠️ **Step 3 is not optional for the v4 beta.** Every v4 release is a
 > pre-release, so without beta versions enabled HACS will not offer you one.
 >
 > **Without betas you get v3.5.2**, the stable line — which is the right choice
 > for an i-series, s-series, 900-series, e-series or Braava, and which does
 > **not support Prime-generation robots at all**. If you have a Roomba Max or a
-> Combo 405/415, the v4 alpha is the only version that will connect.
+> Combo 405/415, the v4 beta is the only version that will connect.
 >
 > If HACS offers you only **`main`** and downloading it hangs, you are on a
 > checkout from before v3.5.2 was tagged. Selecting `main` fails with a 404:
@@ -359,7 +359,7 @@ Copy `custom_components/roomba_plus/` into your HA `config/` directory, then res
 3. Hold the **HOME** button on the robot for ~2 seconds until it plays tones
 4. *(Smart Map robots, optional)* Enter your iRobot app email and password to enable cloud features
 
-> **V4/Prime robots** (Combo/Plus 400-series, alpha — see [above](#v4prime-support-alpha)): pick
+> **V4/Prime robots** (Combo/Plus 400-series, beta — see [above](#v4prime-support-beta)): pick
 > "sign in with your iRobot cloud account" instead of the discovery flow above — there's nothing
 > to discover locally for these, they're cloud-only. Classic robots on the same account are set
 > up automatically alongside any Prime ones found.

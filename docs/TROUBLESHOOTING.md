@@ -120,7 +120,14 @@ the rest gives you pause.
 
 **Smart Map zones not appearing (i/s/j-series)**
 
-Check that `"cap": {"pose": ...}` in the diagnostics download shows a value ≥ 1. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
+Check the diagnostics download for `"position"` carrying actual
+coordinates, **not** `"cap": {"pose": ...}`.
+
+`cap.pose` is a compile-time constant on lewis firmware — it says
+nothing about whether a robot publishes a position. Four robots across
+three firmware families report `pose: 2` and have never sent one; a
+900-series reports `pose: 1` and sends them continuously. The split
+looks like cause and is a correlation with model generation. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
 
 ---
 

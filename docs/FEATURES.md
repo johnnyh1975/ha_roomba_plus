@@ -325,7 +325,31 @@ Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-
 
 All three are withheld in fallback (not-yet-aligned) mode, since the underlying data is pose-space and would be spatially wrong overlaid on a UMF-space fallback render.
 
-The cleaning map overlays keep-out zones (red, semi-transparent) when the UMF aligner is active. **Observed obstacle zones** (v3.0.0) are also overlaid as orange circles — these represent positions where the robot has repeatedly detected obstacles over time, sourced from the UMF `observed_zones` data.
+### What the colours on the map mean
+
+Four kinds of zone are drawn, and the distinction that matters is not
+visible from the map itself: **two of them you created, two the robot
+worked out on its own.**
+
+| Colour | Zone | Origin |
+|---|---|---|
+| 🟢 green | Clean zones | **You** — created in the iRobot app |
+| 🔴 red | Keep-out zones | **You** — created in the iRobot app |
+| 🟣 purple | Carpet zones | **The robot** — detected while cleaning |
+| 🟠 orange | Observed obstacles | **The robot** — inferred from repeated bumps |
+
+Clean zones and keep-out zones are outlines, because they have shapes
+you drew. **Observed obstacles are circles**, because they arrive as a
+centre point and a radius rather than a polygon — the robot recorded a
+cluster of contacts, not a boundary.
+
+Orange circles often sit on the white, unmapped areas of the raw live
+map. That is the same cause seen twice: an obstacle the robot could not
+get past leaves a hole in the map *and* produces a contact cluster on
+top of it.
+
+Keep-out zones and observed obstacles are drawn when the UMF aligner is
+active; the observed ones come from the UMF `observed_zones` data.
 
 The native **Roomba+ platform was merged into xiaomi-vacuum-map-card in v2.4.1** (June 2026). On that version or newer, pick **Roomba+** as the `vacuum_platform` in the card editor and use the **"Generate Room Configs"** button — it reads the `rooms` attribute and builds the room overlay for you, no manual coordinates:
 
@@ -580,7 +604,22 @@ A multi-room mission waits briefly (typically up to ~90 seconds, occasionally le
 
 `sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and effective mission time (wall-clock duration minus robot-confirmed recharge time — see below). The timer persists across HA restarts.
 
-Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
+Attributes: `current_room` · `current_room_source` *(v4.0.0b3)* · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
+
+**`current_room` is derived, not measured.** It comes from elapsed
+mission time against per-room estimates — the robot does not report
+which room it is in. A room that runs longer or shorter than estimated
+moves the value on while the robot has not.
+
+`current_room_source` says which path produced it:
+
+| Value | Meaning |
+|---|---|
+| `estimate` | elapsed time against per-room estimates |
+| `mission_timer` | the mission timer's own value, when no estimates exist |
+
+An automation that should only act on a verified room can check the
+source; one that is happy with an estimate carries on unchanged.
 
 **Time tracking (v2.9.0):** `elapsed_run_min` is now `mission_duration_min` (pure wall-clock time since mission start) minus `recharge_min` (robot-confirmed mid-mission recharge time) — no more fixed time-based cutoff. Navigation and room-to-room transitions correctly count as active mission time even when they take several minutes; only confirmed recharging is excluded. `mission_duration_min` and `recharge_min` are also exposed directly so you can see the breakdown. In **Auto pass mode**, per-room cloud estimates aren't available at all — percentage and `estimated_remaining_min` now fall back to your robot's rolling average mission duration instead of staying "Unknown" for the whole mission.
 
