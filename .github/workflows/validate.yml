@@ -45,6 +45,44 @@ jobs:
   # changes — same triggers already cover push/PR/nightly/manual for these
   # too.
 
+  # A SECOND COMBINATION, deliberately not a matrix. `requirements-test-frozen.txt`
+  # pins Home Assistant 2025.1.4, which is the newest release that installs
+  # on Python 3.12 -- so the version pair is fixed, not free to vary.
+  #
+  # This job proves the integration still works against a much newer HA
+  # (2026.8 on Python 3.14, about eighteen months ahead of the pin).
+  # Verified locally: the whole suite passes on both.
+  #
+  # Tests only. Type checking stays on the pinned version, because the
+  # `type: ignore` comments that bridge the two HA APIs are required by
+  # one and redundant on the other -- mypy cannot be satisfied by both
+  # at once, and `warn_unused_ignores` is worth keeping.
+  test-newer-ha:
+    name: Test Suite (HA 2026.8 / Python 3.14)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install a recent Home Assistant and test tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install "homeassistant==2026.8.3" \
+                      pytest-homeassistant-custom-component \
+                      "roombapy==1.9.1" aiomqtt aiohttp pillow
+
+      - name: Install roombapy-prime (--no-deps, same reasoning as above)
+        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+
+      - name: Run full test suite
+        run: python -m pytest tests/ -q -p no:randomly
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
@@ -265,6 +303,32 @@ jobs:
       # cycle -- the opposite of what the refactoring plan assumed.
       - name: Check late imports
         run: python3 scripts/check_late_imports.py
+
+      # THE MESSAGE IS THE POINT. All three of these also run inside the
+      # test suite, so coverage is not the reason they are here -- a
+      # failure there reads as "one test in test_quality_scale.py
+      # failed", which says nothing about which files are wrong or why.
+      #
+      # Each of these scripts prints the offending file, the line and an
+      # explanation of the mistake it exists for. That output is half
+      # their value and is invisible behind a pytest assertion.
+      - name: Check Prime code reads Prime sources
+        run: python3 scripts/check_prime_sources.py
+
+      - name: Check runtime data reads are declared
+        run: python3 scripts/check_runtime_data_reads.py
+
+      # This one had drifted: three entries named tables that had since
+      # been renamed -- `CLEAN_BASE_LABELS` to `CLEAN_BASE_STATUS_SLUGS`
+      # and so on, when the values became translation slugs. The guard
+      # reported them as missing and the renamed tables as
+      # undocumented, and exited non-zero.
+      #
+      # Nobody noticed because its own test reads the script's source
+      # rather than running it. Wiring it up here is what makes a rename
+      # like that show up next time.
+      - name: Check vendor value tables
+        run: python3 scripts/check_vendor_value_tables.py
 
       # An inventory rather than a gate: prints which tests assert on
       # values nobody has confirmed. Fails only if a marker carries no
