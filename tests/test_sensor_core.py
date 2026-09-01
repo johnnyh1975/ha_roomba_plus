@@ -693,3 +693,49 @@ class TestEnumSensorsReturnTranslationReadySlugs:
 
         assert not offenders
 
+
+
+class TestPoseCapabilityVersusActualPose:
+    """`cap.pose` is a compile-time constant on lewis firmware. It says
+    nothing about whether a robot publishes a position.
+
+    Seven robots showed a perfect split — 1 reports, 2 does not — which
+    read like causation and is a correlation with model generation. The
+    integration treated `cap.pose >= 1` as "reports position" and was
+    wrong on every one of them, costing three weeks on @pk-1966's i7 and
+    surfacing again on @ScenicSystemsLLC's three robots across two more
+    firmware families.
+    """
+
+    def test_the_declaration_is_not_the_fact(self):
+        from custom_components.roomba_plus.const import (
+            has_pose,
+            reports_local_pose,
+        )
+
+        # An S9+ on soho: claims the capability, sends nothing.
+        state = {"cap": {"pose": 2}}
+
+        assert has_pose(state)
+        assert not reports_local_pose(state)
+
+    def test_an_arriving_pose_is_what_counts(self):
+        from custom_components.roomba_plus.const import reports_local_pose
+
+        assert reports_local_pose({"pose": {"theta": 0, "point": {"x": 1, "y": 2}}})
+
+    def test_nav_quality_gates_on_its_own_field(self):
+        """An R980040 reports `cap.pose: 1` and has no `mssnNavStats` —
+        55 state keys, that one absent. Gating on the flag created a
+        sensor that could never have a value."""
+        from custom_components.roomba_plus.sensor_core import (
+            SENSORS,
+        )
+
+        nav = next(
+            d for d in SENSORS if d.key == "nav_quality"
+        )
+
+        assert nav.filter_fn is not None
+        assert not nav.filter_fn({"cap": {"pose": 1}})
+        assert nav.filter_fn({"mssnNavStats": {"l_squal": 50}})

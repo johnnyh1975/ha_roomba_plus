@@ -801,14 +801,18 @@ class TestCleanStreak:
         await store.async_append(_make_record(days_ago=1, result="completed"))
         assert store.clean_streak() == 1
 
-    async def test_a_full_day_missed_does_break_it(self):
+    @pytest.mark.asyncio
+
+    async def test_a_full_day_missed_does_break_it(self, hass):
         """Yesterday empty and nothing today: the run is genuinely
         broken, and the streak is 0."""
         store = MissionStore()
         await store.async_append(_make_record(days_ago=2, result="completed"))
         assert store.clean_streak() == 0
 
-    async def test_today_and_yesterday_chain(self):
+    @pytest.mark.asyncio
+
+    async def test_today_and_yesterday_chain(self, hass):
         store = MissionStore()
         await store.async_append(_make_record(days_ago=0, result="completed"))
         await store.async_append(_make_record(days_ago=1, result="completed"))
@@ -3933,3 +3937,108 @@ class TestOverdueAndCountsResolvePerMap:
 
         assert "Guest room" in health
         assert "2" not in health
+
+
+class TestStuckRecoveryReadsTheRecord:
+    """@ScenicSystemsLLC's Braava got stuck, was freed by hand 16 minutes
+    later, then cleaned four more rooms and docked — 168 minutes, 524
+    sqft, a genuine `dest: dock` finish. Recorded
+    `stuck_and_abandoned`.
+
+    The classifier measured elapsed time since `stuck_cleared_ts`,
+    reading it as "when the robot resumed". It is not: the edge that
+    sets it fires on **every** re-entry into an active phase after a
+    stuck, so the last one wins. His final room ran under five minutes,
+    and that is all the clock was measuring.
+
+    His own suggestion: decide from what the mission recorded. Rooms
+    finished after the stuck, or a real dock finish.
+    """
+
+    @staticmethod
+    def _verdict(events, mission_id="M1", record_id=None):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import (
+            _mission_recovered_after_stuck,
+        )
+
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                cloud_coordinator=SimpleNamespace(
+                    raw_records=[
+                        {"missionId": record_id or mission_id,
+                         "timeline": {"finEvents": events}}
+                    ]
+                )
+            )
+        )
+        return _mission_recovered_after_stuck(entry, {"missionId": mission_id})
+
+    def test_his_mission_reads_as_resumed(self):
+        """Four rooms finished and a dock finish — both signals present."""
+        events = [
+            {"type": "room", "room": {"status": 0, "rid": "1"}},
+            {"type": "room", "room": {"status": 0, "rid": "2"}},
+            {"type": "room", "room": {"status": 6, "rid": "3"}},
+            {"type": "room", "room": {"status": 0, "rid": "4"}},
+            {"type": "travel", "travel": {"dest": "dock"}},
+        ]
+
+        assert self._verdict(events) is True
+
+    def test_a_genuine_abandon_reads_as_abandoned(self):
+        """Stuck, nothing finished, no drive home."""
+        assert self._verdict([]) is False
+
+    def test_dock_finish_alone_is_enough(self):
+        """It drove home under its own power."""
+        events = [{"type": "travel", "travel": {"dest": "dock"}}]
+
+        assert self._verdict(events) is True
+
+    def test_rooms_alone_are_enough(self):
+        """Finished rooms after being freed, then ran out of battery —
+        it did not abandon, whatever the ending."""
+        events = [{"type": "room", "room": {"status": 0, "rid": "1"}}]
+
+        assert self._verdict(events) is True
+
+    def test_no_record_means_no_verdict(self):
+        """None, not False. A Prime robot or a local-only setup has no
+        cloud record, and the caller falls back rather than guessing."""
+        assert self._verdict([], record_id="A_DIFFERENT_MISSION") is None
+
+
+class TestABatteryAbortIsNotAnEntrapment:
+    """@AlakazipLabs walked an i3 down to 6%, sent `dock`, and watched it
+    accept, set off, and give up 13 seconds later:
+
+        14:11:26  phase=hmUsrDock  error=0   notReady=0
+        14:11:39  phase=stuck      error=46  notReady=15
+
+    `nStuck` went 111 → 112. So the robot's own counter scores a flat
+    battery identically to being trapped under a sofa — and this
+    integration derives its problem-zone figure and its mission results
+    from exactly that counter.
+
+    `error 46` is Low battery, and it arrives in the same message.
+    """
+
+    @staticmethod
+    def _is_battery_abort(mission):
+        """The condition, as the callback evaluates it."""
+        return mission.get("error") == 46
+
+    def test_his_abort_is_recognised(self):
+        assert self._is_battery_abort(
+            {"phase": "stuck", "error": 46, "notReady": 15}
+        )
+
+    def test_a_real_entrapment_is_not(self):
+        """Trapped under furniture: stuck, but no battery error."""
+        assert not self._is_battery_abort({"phase": "stuck", "error": 0})
+
+    def test_another_error_is_not(self):
+        """Deliberately narrow — only code 46, not any error at all."""
+        assert not self._is_battery_abort({"phase": "stuck", "error": 1010})

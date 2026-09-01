@@ -972,3 +972,50 @@ class TestTheRegionMapCoversZonesAndPrime:
         result = self._map(regions=[{"id": "10"}, {"id": "11", "name": "Den"}])
 
         assert result == {"11": "Den"}
+
+
+class TestCurrentRoomSaysHowItKnows:
+    """@ScenicSystemsLLC reported `current_room` disagreeing with where
+    the robot physically was — twice, once late in a mission and once
+    early.
+
+    He read the source and found the cause himself: the value comes from
+    elapsed mission time against per-room estimates and never checks a
+    position. A room that runs long moves the display on while the robot
+    has not, and the error persists.
+
+    The obvious fix is a position-based resolver. It would produce
+    nothing on his S9+: `cap.pose` reads 2 and no position has ever
+    arrived — the same lie that cost three weeks on lewis firmware, on
+    soho this time.
+
+    So the estimate is the ceiling on that hardware, and the attribute
+    says which of the two sources produced the value instead of
+    asserting a room nobody verified.
+    """
+
+    def test_the_source_is_reported(self):
+        """Reads the source rather than building the whole entry: the
+        resolver needs a mission timer store, per-room estimates and a
+        planned order, and a MagicMock standing in for any of them
+        answers to anything — which is how three other guards in this
+        project passed while proving nothing."""
+        from pathlib import Path
+
+        source = Path(
+            "custom_components/roomba_plus/sensor_rooms.py"
+        ).read_text(encoding="utf-8")
+
+        assert '"current_room_source"' in source
+
+    def test_both_sources_are_named(self):
+        """`estimate` and `mission_timer` are the two paths that can
+        produce a value, and a reader has to be able to tell them
+        apart."""
+        from pathlib import Path
+
+        source = Path(
+            "custom_components/roomba_plus/sensor_rooms.py"
+        ).read_text(encoding="utf-8")
+
+        assert '"estimate" if current_room is not None else "mission_timer"' in source

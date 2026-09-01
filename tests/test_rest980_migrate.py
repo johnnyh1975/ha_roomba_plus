@@ -127,6 +127,12 @@ def _make_flow(discovered_rooms: dict, existing_labels: dict | None = None,
     config_entry.options = {"smart_zone_labels": existing_labels or {}}
     config_entry.runtime_data.roomba = MagicMock()
     flow._config_entry = config_entry
+    # HA 2026.x resolves `config_entry` through `handler` plus a lookup
+    # on hass; the setter is gone. Same shape as _make_options_flow in
+    # test_config_flow.py.
+    flow.handler = config_entry.entry_id
+    flow.hass = getattr(flow, "hass", None) or MagicMock()
+    flow.hass.config_entries.async_get_known_entry.return_value = config_entry
 
     flow._discovered = discovered_rooms  # stashed for patch target below
     flow._state = state or {"lastCommand": {"pmap_id": "map_a"}}
@@ -220,6 +226,11 @@ class TestRest980MigrateMenuVisibility:
         config_entry.runtime_data.map_capability = MapCapability.SMART
         config_entry.runtime_data.has_cloud = True
         flow._config_entry = config_entry
+        flow.handler = config_entry.entry_id
+        flow.hass = getattr(flow, "hass", None) or MagicMock()
+        flow.hass.config_entries.async_get_known_entry.return_value = (
+            config_entry
+        )
 
         with patch(
             "custom_components.roomba_plus.config_flow.roomba_reported_state",
@@ -239,6 +250,11 @@ class TestRest980MigrateMenuVisibility:
         config_entry.runtime_data.map_capability = MapCapability.SMART
         config_entry.runtime_data.has_cloud = True
         flow._config_entry = config_entry
+        flow.handler = config_entry.entry_id
+        flow.hass = getattr(flow, "hass", None) or MagicMock()
+        flow.hass.config_entries.async_get_known_entry.return_value = (
+            config_entry
+        )
 
         with patch(
             "custom_components.roomba_plus.config_flow.roomba_reported_state",
@@ -260,6 +276,11 @@ class TestRest980MigrateMenuVisibility:
         config_entry.runtime_data.map_capability = MapCapability.EPHEMERAL
         config_entry.runtime_data.has_cloud = True
         flow._config_entry = config_entry
+        flow.handler = config_entry.entry_id
+        flow.hass = getattr(flow, "hass", None) or MagicMock()
+        flow.hass.config_entries.async_get_known_entry.return_value = (
+            config_entry
+        )
 
         with patch(
             "custom_components.roomba_plus.config_flow.roomba_reported_state",

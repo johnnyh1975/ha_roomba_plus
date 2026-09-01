@@ -105,7 +105,14 @@ def _make_vacuum_entity(state: dict | None = None, runtime_data=None):
         entry.runtime_data = runtime_data
     else:
         entry.runtime_data = _make_smart_data()
-    v = object.__new__(IRobotVacuum)
+    # HA 2026.x made `last_seen_segments` a @final @property with no
+    # setter. The integration only ever READS it -- assigning to it is
+    # what broke every vacuum entity in a38 -- but these tests need to
+    # control the value, so the subclass gives them somewhere to put it.
+    class _Settable(IRobotVacuum):  # noqa: N801
+        last_seen_segments = None
+
+    v = object.__new__(_Settable)
     v.vacuum = roomba
     v.vacuum_state = state or {}
     v._config_entry = entry

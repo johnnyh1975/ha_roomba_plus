@@ -567,3 +567,62 @@ class TestAnErrorIsNotAnArrival:
         _set_state(roomba, phase="run", error=6)
 
         assert tracker.state == "Error"
+
+
+class TestZonesReachTheNameCacheToo:
+    """@chairstacker: rooms resolved to names, zones stayed as
+    `Room 100`.
+
+    The cache merges two sources — `available_rooms()` for rooms, and
+    the flat `prime_room_names` for zones. The merge was correct. The
+    **refetch gate** was not: it fired only while the cache was empty.
+
+    Rooms arrive first, from map metadata. Zones arrive later, once a
+    map build has filled `prime_room_names`. So the first room to land
+    closed the gate, and no zone was ever picked up.
+    """
+
+    @staticmethod
+    def _should_refetch(cached, flat, seen=frozenset()):
+        """The gate, as the tracker evaluates it.
+
+        Compares against the region ids the merge has SEEN, not against
+        the cache. Two earlier versions of this fix got it wrong:
+
+        - counting entries: `cached` is keyed by name and `flat` by
+          region id, so two regions sharing a name made the flat table
+          permanently larger
+        - subtracting the cache: the merge legitimately skips unnamed
+          regions and names a room already holds, so those stayed
+          "missing" forever
+
+        Both refetched on every coordinator message.
+        """
+        return not cached or bool({str(r) for r in flat} - seen)
+
+    def test_rooms_present_but_zones_pending_still_refetches(self):
+        """His exact state: eight rooms cached, zones now available."""
+        cached = {f"Room {i}": str(i) for i in range(10, 18)}
+        flat = {**{str(i): f"Room {i}" for i in range(10, 18)},
+                "100": "Clean Kitchen", "101": "Testing Zone 01"}
+
+        assert self._should_refetch(cached, flat, seen=set(map(str, range(10, 18))))
+
+    def test_an_empty_cache_still_refetches(self):
+        assert self._should_refetch({}, {})
+
+    def test_a_complete_cache_does_not(self):
+        """The behaviour the old gate was protecting: no refetch on
+        every coordinator message once everything is known."""
+        cached = {"Kitchen": "10", "Clean Kitchen": "100"}
+        flat = {"10": "Kitchen", "100": "Clean Kitchen"}
+
+        assert not self._should_refetch(cached, flat, seen={"10", "100"})
+
+    def test_two_regions_sharing_a_name_settle(self):
+        """The bug in the first fix: by count this stays true forever,
+        because the cache can only hold one entry per name."""
+        flat = {"10": "Kitchen", "11": "Kitchen"}
+        cached = {"Kitchen": "MAP-A/10"}
+
+        assert not self._should_refetch(cached, flat, seen={"10", "11"})

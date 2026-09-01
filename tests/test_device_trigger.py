@@ -186,15 +186,23 @@ class TestEventBasedV290Triggers:
     event_data={"entry_id": ...} exact-match filter."""
 
     @pytest.mark.asyncio
-    async def test_room_completed_filters_by_entry_id(self):
+    async def test_room_completed_filters_by_entry_id(self, hass):
         from custom_components.roomba_plus import device_trigger as dt_mod
         from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
 
+        # HA 2026.x refuses to validate an event-trigger schema without a
+        # hass registered in the current context -- `async_attach_trigger`
+        # builds one through `TRIGGER_SCHEMA`. `async_set_hass` is what a
+        # running instance does at startup.
+        from homeassistant.helpers import config_validation as cv
+
+        cv._hass.hass = hass
         with patch.object(dt_mod, "_entry_id_for_device", return_value="entry_abc"), \
              patch.object(dt_mod.event_trigger, "async_attach_trigger") as mock_attach:
             mock_attach.return_value = lambda: None
             await async_attach_trigger(
-                MagicMock(),
+                hass,  # HA 2026.x validates trigger schemas against a
+                # registered hass; a MagicMock is not one.
                 {"device_id": "dev1", "type": TRIGGER_ROOM_COMPLETED},
                 MagicMock(),
                 _trigger_info(),
@@ -205,15 +213,23 @@ class TestEventBasedV290Triggers:
         assert called_config["event_data"] == {"entry_id": "entry_abc"}
 
     @pytest.mark.asyncio
-    async def test_map_retrain_started_filters_by_entry_id(self):
+    async def test_map_retrain_started_filters_by_entry_id(self, hass):
         from custom_components.roomba_plus import device_trigger as dt_mod
         from custom_components.roomba_plus.const import EVENT_MAP_RETRAIN_STARTED
 
+        # HA 2026.x refuses to validate an event-trigger schema without a
+        # hass registered in the current context -- `async_attach_trigger`
+        # builds one through `TRIGGER_SCHEMA`. `async_set_hass` is what a
+        # running instance does at startup.
+        from homeassistant.helpers import config_validation as cv
+
+        cv._hass.hass = hass
         with patch.object(dt_mod, "_entry_id_for_device", return_value="entry_abc"), \
              patch.object(dt_mod.event_trigger, "async_attach_trigger") as mock_attach:
             mock_attach.return_value = lambda: None
             await async_attach_trigger(
-                MagicMock(),
+                hass,  # HA 2026.x validates trigger schemas against a
+                # registered hass; a MagicMock is not one.
                 {"device_id": "dev1", "type": TRIGGER_MAP_RETRAIN_STARTED},
                 MagicMock(),
                 _trigger_info(),

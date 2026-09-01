@@ -115,3 +115,17 @@ from unittest.mock import patch as _patch
 # functionality is lost by removing the global version. Any other test
 # that newly trips the original warning should patch it locally too,
 # scoped to just that test, the same way.
+
+
+# pytest 9 + pytest-homeassistant-custom-component: the plugin ships an
+# async autouse fixture (`enable_event_loop_debug`) that synchronous
+# tests cannot consume. In pytest 9 that stopped being a warning and
+# became an error, so every sync test in the suite errored at collection.
+#
+# Overriding it with a synchronous no-op keeps the plugin's other
+# fixtures available. Async tests that genuinely want loop debugging are
+# unaffected -- none here do.
+@pytest.fixture(autouse=True)
+def enable_event_loop_debug():  # noqa: PT004
+    """Neutralise the plugin's async autouse fixture. See note above."""
+    return None

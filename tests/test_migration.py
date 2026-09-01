@@ -108,6 +108,13 @@ class TestMigrateEntryV1ToV2:
                 with patch(
                     "homeassistant.helpers.entity_registry.async_get",
                     return_value=fake_reg,
+                ), patch(
+                    # HA 2026.x: migrations reach the device registry as
+                    # well, and it raises rather than returning None when
+                    # no hass has set it up. Older versions tolerated the
+                    # bare MagicMock hass these tests use.
+                    "homeassistant.helpers.device_registry.async_get",
+                    return_value=MagicMock(devices={}),
                 ):
                     result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -161,6 +168,9 @@ class TestMigrateEntryV1ToV2:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -272,6 +282,9 @@ class TestMigrationV11ToV12:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -349,6 +362,9 @@ class TestMigrationV11ToV12SlugFix:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -466,6 +482,9 @@ class TestMigrationV12ToV13:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
