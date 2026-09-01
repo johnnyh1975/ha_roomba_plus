@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Manutenzione – Sacchetto della polvere"
+      },
+      "last_charge": {
+        "name": "Ultima ricarica"
       }
     },
     "binary_sensor": {

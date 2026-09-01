@@ -1875,8 +1875,69 @@ def has_carpet_boost(state: dict[str, Any]) -> bool:
 
 
 def has_pose(state: dict[str, Any]) -> bool:
-    """Return True if this robot reports pose (position) data."""
+    """Return True if this robot CLAIMS to report pose data.
+
+    NOT THE SAME AS REPORTING IT. `cap.pose` is a declaration, and on
+    two separate firmware families it is false:
+
+      - an i7 on **lewis** reports 2 and sends no position
+        (@pk-1966 — cost three weeks, because everything downstream
+        looked correctly gated)
+      - an S9+ on **soho** reports 2 with `position: null` and
+        `point_count: 0` after months of missions (@ScenicSystemsLLC)
+
+    Two families, so it is not a lewis quirk. Anything that needs an
+    actual position must check for one -- `state.get("pose") is not
+    None` -- rather than trusting this.
+
+    CONSTANT ON LEWIS. The firmware sets `cap.pose` to a fixed 2 there,
+    so it carries no information about whether that robot publishes a
+    position -- the perfect split observed across seven robots
+    (1 = reports, 2 = does not) is a correlation with model generation,
+    not a cause.
+
+    Where it is still used, it is standing in for "not a 600-series",
+    which it does correctly because the constant differs by generation.
+    Those call sites are commented as such.
+
+    For "does a position actually exist", use `reports_local_pose()`.
+    """
     return bool((state.get("cap") or {}).get("pose", 0) >= 1)
+
+
+def reports_local_pose(state: dict[str, Any]) -> bool:
+    """Return True if this robot is actually publishing a position.
+
+    THE ONE THAT ANSWERS THE QUESTION. `has_pose()` reads a declaration
+    that is a compile-time constant on lewis firmware; this reads what
+    arrived.
+
+    Local only, and deliberately: a Classic robot either publishes
+    `pose` into its own MQTT shadow or it does not. The cloud live-map
+    stream is a Prime path -- `/v1/p2maps/livemap` answers HTTP 400
+    "This robot doesn't support P2Maps" for Classic robots, measured on
+    three of them (@AlakazipLabs) -- and the cloud coverage fallback is
+    a last-mission render, not a live position.
+
+    AND IT IS NOT THE WHOLE PICTURE. Newer Classic generations do not
+    carry position in the shadow at all: it is requested over the `rrtp`
+    channel (`{"reqId": ..., "reqType": "current", "conType": "local"}`)
+    and answered on a separate report topic, map-bound -- the reply
+    carries `pmap_id`, `pmapv_id` and `xyt` triples.
+
+    Request and response field names are code-proven from the app's
+    serializer and the robot's response builder. What is NOT resolved:
+    the units and coordinate frame of `xyt` (explicitly not assumed to
+    match the 900-series millimetres-from-dock), and the exact local MQTT
+    topic. Nothing has been verified against hardware.
+
+    So a robot returning False here is behaving correctly and may still
+    have a position available on request. This function answers "is there
+    a pose in the shadow", which is the right gate for everything built
+    on the shadow -- it is not an answer to "does this robot know where
+    it is".
+    """
+    return state.get("pose") is not None
 
 
 def has_smart_map(state: dict[str, Any]) -> bool:

@@ -490,6 +490,23 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         # for when no per-room estimates exist.
         "current_room": current_room if current_room is not None else mts.current_room,
         "next_room":    next_room    if current_room is not None else mts.next_room,
+        # HOW THIS ROOM WAS ARRIVED AT, since it is not a measurement.
+        #
+        # `current_room` comes from elapsed mission time against per-room
+        # estimates. It never checks where the robot is -- so a room that
+        # takes longer or shorter than estimated moves the value on while
+        # the robot has not, and the error persists for the rest of the
+        # run (@ScenicSystemsLLC, reported twice, once early-mission and
+        # once late).
+        #
+        # A position-based resolver is the obvious fix and would produce
+        # nothing on his S9+: `cap.pose` reads 2 and no position has ever
+        # arrived. So the estimate is the ceiling on that hardware, and
+        # the honest thing is to say so rather than assert a room nobody
+        # verified. His framing, and it is the right one.
+        "current_room_source": (
+            "estimate" if current_room is not None else "mission_timer"
+        ),
         "elapsed_run_min": round(elapsed / 60, 1),
         "estimated_remaining_min": estimated_remaining_min,
         "room_sequence": planned_order,

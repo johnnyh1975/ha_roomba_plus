@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Maintenance – Sac à poussière"
+      },
+      "last_charge": {
+        "name": "Dernière charge"
       }
     },
     "binary_sensor": {

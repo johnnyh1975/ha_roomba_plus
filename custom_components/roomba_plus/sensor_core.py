@@ -682,7 +682,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=has_pose,
+        # THE FIELD IT READS, not a capability flag. `mssnNavStats` and
+        # `cap.pose` are independent: an R980040 reports `cap.pose: 1`
+        # and carries no `mssnNavStats` at all -- 55 state keys, that one
+        # not among them -- so this sensor was created and permanently empty on it.
+        #
+        # And `cap.pose` is a compile-time constant on lewis firmware,
+        # so it could not have gated this correctly in any case.
+        filter_fn=lambda s: bool(s.get("mssnNavStats")),
         value_fn=lambda e: e.vacuum_state.get("mssnNavStats", {}).get("l_squal"),
     ),
 
@@ -1141,7 +1148,16 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=1,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        filter_fn=lambda s: has_pose(s),   # 600-series reports no sqft
+        # A MODEL FILTER, not a capability check. `area_cleaned_today`
+        # reads `area_sqft` out of the mission archive and needs no
+        # position at all -- `has_pose` is standing in for "not a
+        # 600-series", which is what the original comment meant.
+        #
+        # It works, and it is not what it says. `cap.pose` is also
+        # unreliable: an S9+ on soho and an i7 on lewis both report 2
+        # and never send a position (@ScenicSystemsLLC, @pk-1966).
+        # Nothing breaks here because this sensor does not use one.
+        filter_fn=lambda s: has_pose(s),
         value_fn=lambda e: _mission_store_value(e, _area_cleaned_today),
     ),
     RoombaSensorDescription(
@@ -1221,7 +1237,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="problem_zone",
         name="Error – Problem zone",
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: has_pose(s),   # requires zone tracking — excludes 600-series
+        # Same again: `problem_zone` reads stuck records from the
+        # mission store, not positions. `has_pose` excludes the
+        # 600-series, which is the actual intent.
+        filter_fn=lambda s: has_pose(s),
         value_fn=_problem_zone_value,
         available_fn=lambda e: bool(
             e._config_entry.runtime_data.mission_store

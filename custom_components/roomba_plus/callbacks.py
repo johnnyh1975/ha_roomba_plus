@@ -175,6 +175,67 @@ def _room_transition_confidence_ok(
 
 # ── Partial-message-safe top-level key lookup ───────────────────────────────
 
+def _mission_recovered_after_stuck(
+    entry: RoombaConfigEntry, mission: dict[str, Any]
+) -> bool | None:
+    """Did this mission carry on after its stuck event?
+
+    Answered from what the mission RECORDED rather than from a live
+    clock, because the clock it replaces was measuring the wrong thing:
+    `stuck_cleared_ts` is rewritten on every re-entry into an active
+    phase, so a mission that resumed and then cleaned for hours read as
+    abandoned whenever its final room ran short.
+
+    Two signals, both already in the cloud record:
+
+      - rooms the robot finished (`finEvents` entries with a completed
+        status), which a robot that gave up does not accumulate
+      - a `travel` event whose destination is the dock, which is how a
+        mission ends when the robot drove home rather than being
+        cancelled or expiring
+
+    Returns None when the record is not available -- a Prime robot, a
+    local-only setup, or the cloud simply not having caught up. The
+    caller then falls back to the old elapsed-time test, which is wrong
+    in one direction but better than refusing to classify.
+    """
+    cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+    if cc is None:
+        return None
+    mission_id = mission.get("missionId") or mission.get("mission_id")
+    if not mission_id:
+        return None
+
+    for record in getattr(cc, "raw_records", None) or []:
+        if not isinstance(record, dict):
+            continue
+        if record.get("missionId") != mission_id:
+            continue
+        timeline = record.get("timeline")
+        if not isinstance(timeline, dict):
+            return None
+        events = timeline.get("finEvents") or []
+
+        rooms_done = sum(
+            1 for ev in events
+            if isinstance(ev, dict)
+            and ev.get("type") == "room"
+            and (ev.get("room") or {}).get("status") in (0, 6)
+        )
+        docked = any(
+            isinstance(ev, dict)
+            and ev.get("type") == "travel"
+            and (ev.get("travel") or {}).get("dest") == "dock"
+            for ev in events
+        )
+        # EITHER is enough. A mission that finished rooms after being
+        # freed did not abandon, whatever its ending; and one that drove
+        # home under its own power did not abandon either.
+        return rooms_done > 0 or docked
+
+    return None
+
+
 def _merged_top_level(
     entry: RoombaConfigEntry,
     reported: dict[str, Any],
@@ -1111,9 +1172,59 @@ def make_mission_callback(
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
             npicks_delta = max(0, bbrun_end.get("nPicks", 0) - npicks_at_start)
 
+            # A FLAT BATTERY IS NOT AN ENTRAPMENT, and the robot's own
+            # counter cannot tell them apart.
+            #
+            # @AlakazipLabs walked an i3 down to 6%, sent `dock`, and
+            # watched it accept, set off, and give up 13 seconds later
+            # with `error 46` (Low battery) -- and `nStuck` went 111 to
+            # 112. So a robot that repeatedly runs itself flat scores
+            # identically to one that repeatedly gets trapped, in the
+            # problem-zone sensor and in every mission result.
+            #
+            # `error 46` separates them, and it is in the same message.
+            # Deliberately narrow: only this one code, only when the
+            # stuck delta would otherwise have decided the result.
+            _battery_abort = (mission.get("error") == 46)
+
             # F6h — classify stuck recovery outcome
             result_override: str | None = None
-            if had_stuck_event and nstuck_delta > 0:
+            if _battery_abort and had_stuck_event and nstuck_delta > 0:
+                # Ran out of charge mid-drive. The mission ended, but not
+                # because anything trapped the robot.
+                result_override = "error"
+            if not _battery_abort and had_stuck_event and nstuck_delta > 0:
+                # WHAT THE MISSION DID, not when its phase last changed.
+                #
+                # The elapsed-time test below reads `stuck_cleared_ts` as
+                # "when the robot resumed". It is not: the edge that sets
+                # it fires on EVERY re-entry into an active phase after a
+                # stuck, so over a long mission the last one wins.
+                #
+                # @ScenicSystemsLLC's Braava got stuck, was freed by hand
+                # 16 minutes later, then cleaned four more rooms and
+                # docked -- 168 minutes, 524 sqft, a genuine `dest: dock`
+                # finish. It was recorded `stuck_and_abandoned`, because
+                # the last room before docking took under five minutes
+                # and that is all the clock was measuring.
+                #
+                # His own suggestion, and it is the right one: decide
+                # retrospectively from what the mission recorded. Rooms
+                # completed after the stuck, plus a real dock finish,
+                # answer the question directly -- elapsed time was only
+                # ever a proxy for both.
+                _resumed = _mission_recovered_after_stuck(entry, mission)
+                if _resumed is not None:
+                    result_override = (
+                        "stuck_and_resumed" if _resumed
+                        else "stuck_and_abandoned"
+                    )
+            if (
+                result_override is None
+                and not _battery_abort
+                and had_stuck_event
+                and nstuck_delta > 0
+            ):
                 # stuck_and_resumed: robot had stuck event but kept cleaning
                 # (stuck_cleared_ts was reset when it re-entered run phase)
                 # We distinguish by whether total run time is > 5 min post-stuck,

@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Manutenção – Saco de pó"
+      },
+      "last_charge": {
+        "name": "Último carregamento"
       }
     },
     "binary_sensor": {

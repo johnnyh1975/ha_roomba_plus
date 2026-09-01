@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Wartung – Staubbeutel"
+      },
+      "last_charge": {
+        "name": "Zuletzt geladen"
       }
     },
     "binary_sensor": {

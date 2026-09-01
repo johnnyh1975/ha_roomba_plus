@@ -121,6 +121,9 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
     ) -> None:
         super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
+        #: Region ids the name merge has already looked at, whether or
+        #: not they produced a cache entry. See _handle_coordinator_update.
+        self._seen_region_ids: set[str] = set()
         self._attr_unique_id = f"{self.robot_unique_id}_position"
         #: Prime room names, {name: qualified_id}. Empty for Classic,
         #: which resolves names through its own tier-specific paths.
@@ -293,7 +296,34 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         not refetch the list on every message.
         """
         self.async_write_ha_state()
-        if not self._prime_rooms:
+        # "EMPTY" IS THE WRONG GATE. Rooms arrive first, from the map's
+        # own metadata; zones arrive later, once `prime_room_names` has
+        # been filled by a map build. Refetching only while empty means
+        # the cache stops updating the moment the first room lands --
+        # so rooms resolve to names and zones stay as `Room 100`
+        # forever (@chairstacker).
+        #
+        # Refetch while either source could still add something: no
+        # rooms yet, or the flat name table has entries this cache has
+        # not picked up.
+        _flat = getattr(
+            getattr(
+                getattr(self, "_config_entry", None), "runtime_data", None
+            ),
+            "prime_room_names", None,
+        ) or {}
+        # COMPARE REGION IDS, not counts. `_prime_rooms` is keyed by
+        # NAME and `prime_room_names` by region id, so two regions
+        # sharing a name make the flat table permanently larger -- and a
+        # count comparison would then refetch on every single
+        # coordinator message, forever.
+        # REGIONS NOT YET CONSIDERED. Not "not in the cache": the merge
+        # legitimately skips some (unnamed, or a name a room already
+        # holds), and those would otherwise keep the gate open forever.
+        _unseen = {str(rid) for rid in _flat} - getattr(
+            self, "_seen_region_ids", set()
+        )
+        if not self._prime_rooms or _unseen:
             self.hass.async_create_task(self._async_refresh_prime_rooms())
 
     async def _async_refresh_prime_rooms(self) -> None:
@@ -326,6 +356,14 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
                 for region_id, name in zones.items():
                     if name and str(name) not in self._prime_rooms:
                         self._prime_rooms[str(name)] = str(region_id)
+                # WHAT WAS CONSIDERED, not what landed. A region can be
+                # skipped above for good reasons -- no name, or a name a
+                # room already holds -- and deriving "still missing"
+                # from the cache alone would then never settle, so the
+                # refetch gate would fire on every coordinator message.
+                if not hasattr(self, "_seen_region_ids"):
+                    self._seen_region_ids = set()
+                self._seen_region_ids |= {str(r) for r in zones}
 
                 # ZONES ARE PLACES THE ROBOT CAN BE.
                 #

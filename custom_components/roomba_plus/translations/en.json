@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Maintenance – Dust Bag"
+      },
+      "last_charge": {
+        "name": "Last charged"
       }
     },
     "binary_sensor": {

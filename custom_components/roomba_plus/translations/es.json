@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Mantenimiento – Bolsa para polvo"
+      },
+      "last_charge": {
+        "name": "Última carga"
       }
     },
     "binary_sensor": {

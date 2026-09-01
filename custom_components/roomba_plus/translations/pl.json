@@ -1285,6 +1285,9 @@
       },
       "part_dirt_bag": {
         "name": "Konserwacja – Worek na kurz"
+      },
+      "last_charge": {
+        "name": "Ostatnie ładowanie"
       }
     },
     "binary_sensor": {

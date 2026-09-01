@@ -12,6 +12,8 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import importlib
+
 import logging
 import statistics
 from collections.abc import Sequence
@@ -1791,11 +1793,25 @@ class MissionStore:
                 StatisticData,
                 StatisticMetaData,
             )
-            # mean_type required from HA 2026.11 — pass as integer (0 = NONE)
-            # to avoid import dependency on StatisticsMeanType which may not
-            # exist in older HA versions. StatisticMetaData is a TypedDict so
-            # it accepts any value without type checking.
-            _mean_type_none = 0
+            # mean_type is required from HA 2026.11 and the enum that
+            # names its values does not exist in older releases, so the
+            # import is attempted and falls back to the literal.
+            #
+            # 0 is StatisticMeanType.NONE. Passing the bare int worked
+            # until mypy checked against a HA new enough to declare the
+            # field's type -- at which point "TypedDicts accept any
+            # value" stopped being true for this key.
+            # Resolved at runtime rather than imported: the name does
+            # not exist on older HA, and a `try: import` still has to
+            # type-check against whichever version mypy is pointed at --
+            # so it fails on one of the two no matter which way round.
+            _models = importlib.import_module(
+                "homeassistant.components.recorder.models"
+            )
+            _mean_type_none = getattr(_models, "StatisticMeanType", None)
+            _mean_type_none = (
+                _mean_type_none.NONE if _mean_type_none is not None else 0
+            )
         except ImportError:
             _LOGGER.debug(
                 "MissionStore: recorder not available -- skipping statistics backfill"
