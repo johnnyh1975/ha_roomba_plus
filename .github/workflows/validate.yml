@@ -69,6 +69,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
+          # This job installs a full Home Assistant and its dependency
+          # tree from scratch, so it is the slowest one here and was
+          # the only large job without a cache.
+          cache: "pip"
 
       - name: Install a recent Home Assistant and test tooling
         run: |
