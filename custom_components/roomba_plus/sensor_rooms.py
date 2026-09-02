@@ -39,7 +39,7 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
     F12d (v2.4.0) — a low ratio with high total coverage indicates the robot
     is over-cleaning the centre and under-covering room edges/walls.
 
-    State: float 0.0–1.0 (edge cells / total cells), or None when < 10 cells.
+    State: float 0.0–1.0 from the current grid or its last valid measurement.
     entity_category: DIAGNOSTIC.
     Unit: None (dimensionless ratio).
     """
@@ -61,7 +61,7 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        """Return edge_coverage_ratio from GridStore, or None when insufficient data."""
+        """Return the current or retained edge_coverage_ratio from GridStore."""
         gs = self._config_entry.runtime_data.grid_store
         if gs is None:
             return None

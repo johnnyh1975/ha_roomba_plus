@@ -643,6 +643,7 @@ class TestTotalEnergyConsumed:
         entity = MagicMock()
         entity.battery_stats = {"estCap": 2500, "nLithChrg": 100}
         entity._config_entry.runtime_data.robot_profile = None
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         # 2500 mAh × 14.8 V × 100 cycles = 3.7 kWh
         result = desc.value_fn(entity)
         assert result is not None
@@ -660,6 +661,7 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 0,
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000 ≈ 0.0475 kWh
@@ -677,6 +679,7 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 1,
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000
@@ -701,11 +704,26 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 1,       # first NiMH cycle
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # Must use NiMH scale (÷ 1.87), not Li-ion (÷ 3.73)
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000
         assert abs(result - round(3300 * 14.4 * 1 / 1_000_000, 3)) < 0.005
+
+    def test_energy_never_decreases_below_high_water_mark(self):
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        entity = MagicMock()
+        entity.battery_stats = {"estCap": 2500, "nLithChrg": 10}
+        entity._config_entry.runtime_data.robot_profile = None
+        store = RobotProfileStore()
+        store.lifetime_energy_kwh_high_water = 5.0
+        entity._config_entry.runtime_data.robot_profile_store = store
+        # 2500 mAh × 14.8 V × 10 cycles / 1_000_000 = 0.37 kWh, below the
+        # stored high-water mark.
+        result = _total_energy_consumed_kwh(entity)
+        assert result == 5.0
+        assert store.lifetime_energy_kwh_high_water == 5.0
 
     def test_returns_none_when_no_cycles(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -750,8 +768,11 @@ class TestRecordCleanEventWiring:
         import inspect
         from custom_components.roomba_plus import callbacks
         src = inspect.getsource(callbacks)
-        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag
-        phase_idx = src.find('_ACTIVE_CLEANING_PHASES and not had_cleaning_phase')
+        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag;
+        # v4.0.0b3 live-investigation fix: the guard additionally rejects
+        # post-terminal replay pulses (_mission_already_terminal), so the
+        # exact-string match anchors on the phase list membership check.
+        phase_idx = src.find('phase in _ACTIVE_CLEANING_PHASES')
         record_idx = src.find('record_clean_event')
         assert phase_idx != -1, "_ACTIVE_CLEANING_PHASES mission-start guard not found in callbacks.py"
         assert record_idx != -1, "record_clean_event not found in callbacks.py"
@@ -761,10 +782,12 @@ class TestRecordCleanEventWiring:
         )
         # v2.9.0 — threshold bumped 800→900: F4e's current_leg_rechrgM
         # double-counting bugfix added one legitimate reset line to this
-        # exact span (mission-start block). record_clean_event's actual
-        # placement (still immediately after the phase-guard block) is
-        # unchanged — this is proximity slack, not a placement regression.
-        assert record_idx - phase_idx < 900, (
+        # exact span (mission-start block); the v4.0.0b3 live-fix added the
+        # _mission_already_terminal replay-guard condition to the same guard
+        # (1100 now). record_clean_event's actual placement (still
+        # immediately after the phase-guard block) is unchanged — this is
+        # proximity slack, not a placement regression.
+        assert record_idx - phase_idx < 1100, (
             "record_clean_event is too far from the mission-start transition — check placement"
         )
 

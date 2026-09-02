@@ -886,9 +886,6 @@
       "last_mission_team_id": {
         "name": "Missions – Last mission team ID"
       },
-      "reset_diagnostics": {
-        "name": "Reset diagnostics"
-      },
       "health_score_trend": {
         "name": "Health score trend",
         "state": {
@@ -1288,6 +1285,9 @@
       },
       "last_charge": {
         "name": "Last charged"
+      },
+      "reset_diagnostics_summary": {
+        "name": "Diagnostics reset counters"
       }
     },
     "binary_sensor": {

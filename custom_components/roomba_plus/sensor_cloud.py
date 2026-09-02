@@ -155,7 +155,7 @@ def _raw_completion_rate(records: list[dict[str, Any]]) -> StateType:
     """Return completion rate (%) across the API window records."""
     if not records:
         return None
-    completed = sum(1 for r in records if r.get("done") == "done")
+    completed = sum(1 for r in records if r.get("classified_result") == "completed")
     return round(completed / len(records) * 100, 1)
 
 
@@ -180,46 +180,66 @@ def _raw_dirt_events(records: list[dict[str, Any]]) -> StateType:
     return sum(int(r.get("dirt", 0) or 0) for r in records)
 
 
-def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
-    """Return the pauseId from the most recent failed mission record."""
+def _cloud_last_error_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Newest failed/stuck record within the entity's 30-day framing.
+
+    `records` is a count-based API window (cloud_api.get_mission_history),
+    not itself bounded to 30 days, so a candidate older than
+    event_counts_30d's own framing is skipped rather than surfaced as if it
+    were recent. Shared by state, timestamp and catalogue attributes so the
+    three never disagree about which error (if any) is current.
+    """
+    cutoff = dt_util.utcnow() - datetime.timedelta(days=30)
     for r in records:
         classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            pause_id = int(r.get("pauseId", 0) or 0)
-            return pause_id if pause_id > 0 else None
+        if not (classified.startswith("error_") or classified == "stuck"):
+            continue
+        ts = r.get("timestamp")
+        if ts:
+            error_time = datetime.datetime.fromtimestamp(
+                int(ts), tz=datetime.timezone.utc
+            )
+            if error_time < cutoff:
+                continue
+        return r
     return None
+
+
+def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
+    """Return the pauseId from the most recent failed mission record."""
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return None
+    pause_id = int(r.get("pauseId", 0) or 0)
+    return pause_id if pause_id > 0 else None
 
 
 def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> datetime.datetime | None:
     """Return the end timestamp of the most recent failed mission as a datetime."""
-    for r in records:
-        classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            ts = r.get("timestamp")
-            if ts:
-                import datetime
-                return datetime.datetime.fromtimestamp(
-                    int(ts), tz=datetime.timezone.utc
-                )
-    return None
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return None
+    ts = r.get("timestamp")
+    if not ts:
+        return None
+    return datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc)
 
 
 def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Return ERROR_CATALOGUE label + action for the most recent cloud error."""
     from .const import ERROR_CATALOGUE
-    for r in records:
-        classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            pause_id = int(r.get("pauseId", 0) or 0)
-            catalogue = ERROR_CATALOGUE.get(pause_id, {})
-            return {
-                "error_code": pause_id or None,
-                "label": catalogue.get("label", ""),
-                "description": catalogue.get("description", ""),
-                "action": catalogue.get("action", ""),
-                "source": "cloud_pauseId",
-            }
-    return {}
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return {}
+    pause_id = int(r.get("pauseId", 0) or 0)
+    catalogue = ERROR_CATALOGUE.get(pause_id, {})
+    return {
+        "error_code": pause_id or None,
+        "label": catalogue.get("label", ""),
+        "description": catalogue.get("description", ""),
+        "action": catalogue.get("action", ""),
+        "source": "cloud_pauseId",
+    }
 
 
 import statistics as _statistics

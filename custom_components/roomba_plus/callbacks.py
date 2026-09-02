@@ -301,6 +301,37 @@ def _capture_zone_names(
     return []  # NONE (600-series) or SMART without cloud
 
 
+def _mission_already_terminal(entry: RoombaConfigEntry, mssn_strt_tm: int) -> bool:
+    """MissionStore already holds a terminal record for this mssnStrtTm
+    whose ended_at is within the MQTT re-delivery window -- i.e. a phase
+    flipping back to run/hmMidMsn/evac under the same mssnStrtTm is a
+    post-terminal replay pulse, not a new mission start.
+
+    A terminal record older than the window means a genuine new segment
+    (980/900-series multi-recharge keeps mssnStrtTm across segments), so
+    older terminal records do not suppress.
+    """
+    if not mssn_strt_tm:
+        return False
+    data: RoombaData = entry.runtime_data
+    store = data.mission_store
+    if store is None:
+        return False
+    from .mission_store import MissionStore
+    candidate_id = f"m_{mssn_strt_tm}"
+    now = dt_util.utcnow()
+    for r in store.records:
+        if (
+            MissionStore.base_mission_id(r.get("id")) == candidate_id
+            and MissionStore.is_terminal_result(r.get("result"))
+        ):
+            ended = r.get("ended_at")
+            ended_dt = dt_util.parse_datetime(ended) if ended else None
+            if ended_dt is None or (now - ended_dt).total_seconds() <= _CLOUD_CATCHUP_MISSION_MATCH_SEC:
+                return True
+    return False
+
+
 # ── Mission record builder ────────────────────────────────────────────────────
 
 async def async_record_mission(
@@ -459,7 +490,8 @@ async def async_record_mission(
         "npicks_delta": npicks_delta,   # v3.2.0 ANOMALY-EXPLAIN
     }
 
-    await data.mission_store.async_append(record)
+    if not data.mission_store.update_terminal_fields(record["id"], record):
+        await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
 
     # v3.1.0 L9-MAP — update the personal relocalisation baseline.
@@ -495,6 +527,7 @@ async def async_record_mission(
         # would mix in mid-mission jitter unrelated to charge-cycle deltas.
         bbchg3 = _merged_top_level(entry, reported, "bbchg3")
         raw_estcap = bbchg3.get("estCap")
+        cycles_energy = active_charge_cycles(bbchg3)
         if raw_estcap:
             profile = data.robot_profile
             if profile is not None:
@@ -506,6 +539,16 @@ async def async_record_mission(
                 )
                 if estcap_mah is not None:
                     rps.record_estcap_observation(estcap_mah)
+                    # F12e — advance the lifetime energy high-water here,
+                    # where RobotProfileStore is already being persisted:
+                    # the sensor read path stays side-effect-free and a
+                    # restart between polls cannot lose the floor.
+                    voltage = profile.battery_voltage if profile else 14.8
+                    energy_kwh = round(
+                        estcap_mah * voltage * int(cycles_energy or 0) / 1_000_000, 3
+                    )
+                    if energy_kwh:
+                        rps.update_energy_high_water(energy_kwh)
                     await rps.async_save(hass, entry.entry_id)
 
     # v2.9.0 EVENT-BUS — fire roomba_plus_mission_completed for automations.
@@ -728,10 +771,20 @@ def make_mission_callback(
         # to 0 in the mission-end MQTT message.
         # v2.6.3 D — guard with had_cleaning_phase so stuck → run (recovery)
         # does NOT re-fire this block and corrupt mission_start_ts/nstuck_at_start.
-        if phase in _ACTIVE_CLEANING_PHASES and not had_cleaning_phase:
+        #
+        # A same mssnStrtTm reappearing here after MissionStore already
+        # holds a terminal record for it is a post-terminal replay pulse
+        # (stale/re-delivered MQTT state), not a genuine resume — treat it
+        # as inert enrichment instead of re-opening the mission.
+        _candidate_mission_start_ts = mission.get("mssnStrtTm") or 0
+        if (
+            phase in _ACTIVE_CLEANING_PHASES
+            and not had_cleaning_phase
+            and not _mission_already_terminal(entry, _candidate_mission_start_ts)
+        ):
             had_cleaning_phase = True
             current_mission_zones = _capture_zone_names(entry, reported)
-            mission_start_ts = mission.get("mssnStrtTm") or 0
+            mission_start_ts = _candidate_mission_start_ts
             bbrun = _merged_top_level(entry, reported, "bbrun")
             nstuck_at_start = bbrun.get("nStuck", 0)
             npicks_at_start = bbrun.get("nPicks", 0)

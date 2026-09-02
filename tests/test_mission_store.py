@@ -638,6 +638,150 @@ class TestAsyncAppend:
         # After trim, latest should be the last-appended
         assert store.latest()["id"] == f"m_{MAX_RECORDS + 4}"
 
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_merges_additive_fields_in_place(self):
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=None, zones=[])
+        existing["id"] = "m_1700000000"
+        existing["npicks_delta"] = 0
+        existing["ended_at"] = "2099-01-01T01:59:00+00:00"
+        await store.async_append(existing)
+
+        incoming = {
+            "id": "m_1700000000",
+            "started_at": "2099-01-01T00:00:00+00:00",
+            "ended_at": "2099-01-01T02:00:00+00:00",
+            "duration_min": 999,
+            "initiator": "manual",
+            "result": "cancelled",
+            "area_sqft": 250.0,
+            "zones": ["Kitchen"],
+            "error_code": 17,
+            "npicks_delta": 3,
+        }
+        merged = store.update_terminal_fields("m_1700000000", incoming)
+
+        assert merged is True
+        rec = store.latest()
+        assert rec["area_sqft"] == 250.0
+        assert rec["zones"] == ["Kitchen"]
+        assert rec["npicks_delta"] == 3
+        assert rec["error_code"] == 17
+        assert rec["duration_min"] == existing["duration_min"]
+        assert rec["initiator"] == "schedule"
+        assert rec["result"] == "completed"
+        assert rec["started_at"] == existing["started_at"]
+        assert rec["ended_at"] == existing["ended_at"]
+        assert rec["id"] == "m_1700000000"
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_returns_false_when_no_match(self):
+        store = MissionStore()
+        await store.async_append(_make_record(result="completed"))
+        merged = store.update_terminal_fields(
+            "m_does_not_exist", {"id": "m_does_not_exist"}
+        )
+        assert merged is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_returns_false_for_non_terminal_result(self):
+        store = MissionStore()
+        placeholder = _make_record(result=None)
+        placeholder["id"] = "m_1700000000"
+        await store.async_append(placeholder)
+        merged = store.update_terminal_fields(
+            "m_1700000000", {"id": "m_1700000000", "area_sqft": 10}
+        )
+        assert merged is False
+        assert store.latest()["area_sqft"] != 10
+        assert MissionStore.is_terminal_result("unknown") is True
+        assert MissionStore.is_terminal_result("in_progress") is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_matches_across_recharge_segment_suffix(self):
+        store = MissionStore()
+        segment = _make_record(result="completed", area_sqft=None)
+        segment["id"] = "m_1700000000_r1"
+        await store.async_append(segment)
+        merge_rec = _make_record(result="completed")
+        merge_rec["ended_at"] = segment["ended_at"]
+        merge_rec["area_sqft"] = 42
+        merge_rec["zones"] = []
+        merged = store.update_terminal_fields("m_1700000000", merge_rec)
+        assert merged is True
+        assert store.latest()["area_sqft"] == 42
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_does_not_overwrite_existing_area_sqft(self):
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=100.0)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "area_sqft": 999,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["area_sqft"] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_falls_through_for_later_recharge_segment(self):
+        """A terminal record far older than the replay window is a genuine
+        980/900-series recharge-segment resume: update_terminal_fields must
+        NOT merge in place, so async_append's _r<N> segment path stays
+        reachable and segment 2 keeps its own duration/area."""
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=100.0)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+
+        later = _make_record(result="completed")
+        later["id"] = "m_1700000000"
+        later["ended_at"] = "2099-01-01T02:00:00+00:00"  # hours later than existing
+        later["area_sqft"] = 250.0
+        merged = store.update_terminal_fields("m_1700000000", later)
+
+        assert merged is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_replay_within_window_merges(self):
+        """A terminal re-delivery arriving within the replay window merges in
+        place (additive fields only) — no new segment record is created."""
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=None)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+
+        replay = _make_record(result="completed")
+        replay["id"] = "m_1700000000"
+        replay["ended_at"] = existing["ended_at"]  # re-delivery of same terminal event
+        replay["area_sqft"] = 42.0
+        merged = store.update_terminal_fields("m_1700000000", replay)
+
+        assert merged is True
+        assert len(store.query(365)) == 1
+        assert store.latest()["area_sqft"] == 42.0
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_keeps_larger_npicks_delta(self):
+        store = MissionStore()
+        existing = _make_record(result="completed")
+        existing["id"] = "m_1700000000"
+        existing["npicks_delta"] = 1
+        await store.async_append(existing)
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "npicks_delta": 4,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["npicks_delta"] == 4
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "npicks_delta": 2,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["npicks_delta"] == 4
+
 
 class TestQuery:
     @pytest.mark.asyncio
@@ -1651,6 +1795,55 @@ class TestL6Helpers:
 
         assert _presence_utilisation(_FakeEntity(), 7) is None
 
+    @pytest.mark.asyncio
+    async def test_presence_utilisation_used_matches_opportunities_population(self):
+        """`used` must apply the same duration_min >= avg_duration filter as
+        `opportunities`, otherwise a short away-window that still resulted in
+        a clean inflates the numerator without inflating the denominator and
+        the percentage can exceed 100.
+        """
+        from custom_components.roomba_plus.sensor import _presence_utilisation
+
+        store = MissionStore()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=6)
+        gaps_min = [10, 10, 10, 50]  # three short, one >= the 45-min avg_duration
+        t = start
+        for i, gap in enumerate(gaps_min):
+            ended = t + datetime.timedelta(minutes=45)
+            await store.async_append({
+                "id": f"m_{i}",
+                "started_at": t.isoformat(),
+                "ended_at": ended.isoformat(),
+                "duration_min": 45,
+                "area_sqft": 400.0,
+                "result": "completed",
+                "initiator": "schedule",
+                "zones": [],
+                "error_code": None,
+                "bbrun_hr": 100,
+            })
+            t = ended + datetime.timedelta(minutes=gap)
+        await store.async_append({
+            "id": "m_last",
+            "started_at": t.isoformat(),
+            "ended_at": (t + datetime.timedelta(minutes=45)).isoformat(),
+            "duration_min": 45,
+            "area_sqft": 400.0,
+            "result": "completed",
+            "initiator": "schedule",
+            "zones": [],
+            "error_code": None,
+            "bbrun_hr": 100,
+        })
+
+        entity = self._make_entity_with_store(store)
+        result = _presence_utilisation(entity, 7)
+
+        assert result is not None
+        assert result <= 100.0
+        assert result == 100.0
+
 
 class TestMssnStrtTmCaching:
     """Verify the closure caches start_ts at mission start, not end."""
@@ -1916,8 +2109,13 @@ class TestErrorRestoreLogic:
         last_error_zone = None
         for _rec in reversed(records):
             _res = _rec.get("result")
-            if _res in ("error", "stuck") and _rec.get("error_code"):
+            if _res in MissionStore.ERROR_RESULTS and _rec.get("error_code"):
                 last_error_code = _rec["error_code"]
+                last_error_at   = _rec.get("ended_at")
+                last_error_zone = (_rec.get("zones") or [None])[0]
+                break
+            elif _res in MissionStore.STUCK_RESULTS:
+                last_error_code = None
                 last_error_at   = _rec.get("ended_at")
                 last_error_zone = (_rec.get("zones") or [None])[0]
                 break
@@ -1996,6 +2194,26 @@ class TestErrorRestoreLogic:
         ]
         code, _, _ = self._restore_error(records)
         assert code == 15
+
+    def test_stuck_without_error_code_restores_triplet(self):
+        """Code-less stuck: at/zone still restored, code stays None (not skipped)."""
+        records = [
+            {**_make_record_v192_fixes(1, result="stuck", error_code=None), "zones": ["Kitchen"]},
+        ]
+        code, at, zone = self._restore_error(records)
+        assert code is None
+        assert at is not None
+        assert zone == "Kitchen"
+
+    def test_stuck_without_error_code_not_shadowed_by_older_coded_error(self):
+        """Most-recent code-less stuck wins over an older coded error."""
+        records = [
+            _make_record_v192_fixes(2, result="error", error_code=17),
+            {**_make_record_v192_fixes(1, result="stuck_and_abandoned", error_code=None), "zones": ["Hallway"]},
+        ]
+        code, at, zone = self._restore_error(records)
+        assert code is None
+        assert zone == "Hallway"
 
 
 class TestLastMissionFromStore:
@@ -2161,6 +2379,46 @@ class TestBackfillBasicCorrection:
         )
 
 
+    def test_same_terminal_record_cannot_be_result_corrected_twice(self):
+        """Cloud truth applies once: after B1-EXT corrects 'completed' to
+        'error' (done==bat), a later merge with a contradictory cloud record
+        must not flip the same record again (no error<->cancelled
+        oscillation). Timing/identity fields stay frozen throughout."""
+        store = MissionStore()
+        local = _local_rec(started_ts=1700000000, ended_ts=1700003600)
+        local["result"] = "completed"
+        store = _make_store([local])
+
+        store.backfill_from_cloud([{**_cloud_rec(1700000000, 1700003600),
+                                     "done": "bat", "done_raw": "bat"}])
+        assert store._records[0]["result"] == "error"
+
+        # A later, contradictory cloud record for the same end-time.
+        store.backfill_from_cloud([{
+            "startTime": 1700000000, "timestamp": 1700003600,
+            "done": "cncl", "done_raw": "usrEnd", "pauseId": 5,
+        }])
+        assert store._records[0]["result"] == "error", (
+            "once cloud-corrected, a terminal result is immutable"
+        )
+
+    def test_terminal_result_rewrite_is_exempt_only_for_first_cloud_truth(self):
+        """merge_latest_from_cloud applies the same once-only rule."""
+        store = MissionStore()
+        local = _local_rec(started_ts=1700000000, ended_ts=1700003600)
+        local["result"] = "completed"
+        store = _make_store([local])
+
+        store.merge_latest_from_cloud([{**_cloud_rec(1700000000, 1700003600),
+                                           "done": "bat", "done_raw": "bat"}])
+        assert store._records[0]["result"] == "error"
+        store.merge_latest_from_cloud([{
+            "startTime": 1700000000, "timestamp": 1700003600,
+            "done": "cncl", "done_raw": "usrEnd", "pauseId": 5,
+        }])
+        assert store._records[0]["result"] == "error"
+
+
 class TestBackfillMatching:
 
     def test_matches_within_tolerance(self):
@@ -2223,9 +2481,7 @@ class TestBackfillMatching:
         ]
         n = store.backfill_from_cloud(cloud)
         assert n.corrected == 1
-        # local1 unchanged
         assert store._records[0]["started_at"] == _utc(start_accurate)
-        # local2 corrected
         assert store._records[1]["started_at"] == _utc(1700003700)
 
 

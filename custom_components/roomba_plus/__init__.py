@@ -579,8 +579,14 @@ async def _phase_data(ctx: _SetupContext) -> None:
         "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
     })
     for _rec in reversed(mission_store.records):
-        if _rec.get("result") in _ERROR_RESULTS and _rec.get("error_code"):
+        _res = _rec.get("result")
+        if _res in _ERROR_RESULTS and _rec.get("error_code"):
             last_error_code = _rec["error_code"]
+            last_error_at   = _rec.get("ended_at")
+            last_error_zone = (_rec.get("zones") or [None])[0]
+            break
+        elif _res in MissionStore.STUCK_RESULTS:
+            last_error_code = None
             last_error_at   = _rec.get("ended_at")
             last_error_zone = (_rec.get("zones") or [None])[0]
             break

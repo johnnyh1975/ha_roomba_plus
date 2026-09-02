@@ -543,6 +543,19 @@ def _raw_favorite_is_for(favorite: dict[str, Any], blid: str) -> bool:
     return blid in attributed
 
 
+def _is_internal_favorite_name(name: str) -> bool:
+    """Whether a favourite name is a firmware-internal id rather than
+    something a user named in the app.
+
+    Confirmed case: `_mission_init_config_9A37307A20804F0CABE9B6011B82DDBE`.
+    Every such name starts with an underscore, and no favourite in this
+    project's fixtures or reports ever has -- iRobot's own app does not
+    let a user start a routine name that way -- so the check is the
+    general prefix rather than a match on that one string.
+    """
+    return name.startswith("_")
+
+
 def build_prime_favorite_buttons(
     config_entry: RoombaConfigEntry,
 ) -> list[PrimeFavoriteButton]:
@@ -583,11 +596,14 @@ def build_prime_favorite_buttons(
             # identified -- a button for it would be a dead one whose
             # unique_id collides with the next such entry.
             continue
+        name = favorite.get("name") or ""
+        if _is_internal_favorite_name(name):
+            continue
         buttons.append(PrimeFavoriteButton(
             data.blid,
             config_entry,
             str(favorite_id),
-            favorite.get("name") or "",
+            name,
         ))
     return buttons
 
@@ -693,6 +709,7 @@ async def async_favorites_attribute(
         if getattr(f, "favorite_id", None)
         and not getattr(f, "is_deleted", False)
         and not getattr(f, "is_hidden", False)
+        and not _is_internal_favorite_name(getattr(f, "name", "") or "")
         and _favorite_is_for(f, config_entry.runtime_data.blid)
     ]
 

@@ -1237,6 +1237,41 @@ class TestSelectSetupEntryRouting:
         mqtt_selects = [e for e in created if isinstance(e, SmartZoneSelect)]
         assert len(cloud_selects) == 0
         assert len(mqtt_selects) == 1, f"Expected 1 SmartZoneSelect, got {created}"
+        # entity_registry_enabled_default is only read once, at registry
+        # creation — enabled_default must not depend on region data timing.
+        assert mqtt_selects[0].entity_registry_enabled_default is True
+        assert mqtt_selects[0].available is False
+
+    @pytest.mark.asyncio
+    async def test_no_cloud_with_existing_region_data_is_available(self):
+        from custom_components.roomba_plus import select as sel_mod
+        from custom_components.roomba_plus.select import SmartZoneSelect
+        from custom_components.roomba_plus.models import MapCapability
+
+        state = {
+            "pmaps": [{"map1": "v1"}],
+            "lastCommand": {"regions": [{"region_id": "3"}]},
+        }
+        entry = _make_config_entry(has_cloud=False)
+        entry.runtime_data.map_capability = MapCapability.SMART
+
+        roomba = _make_roomba()
+        roomba.master_state = {"state": {"reported": state}}
+        entry.runtime_data.roomba = roomba
+        entry.runtime_data.blid = "test_blid"
+        entry.runtime_data.zone_store = None
+
+        created = []
+        def sync_add(entities, **kw): created.extend(entities)
+
+        with patch.object(sel_mod, "roomba_reported_state", return_value=state):
+            with patch.object(sel_mod, "has_smart_map", return_value=True):
+                await sel_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        mqtt_selects = [e for e in created if isinstance(e, SmartZoneSelect)]
+        assert len(mqtt_selects) == 1
+        assert mqtt_selects[0].entity_registry_enabled_default is True
+        assert mqtt_selects[0].available is True
 
     @pytest.mark.asyncio
     async def test_cloud_active_suppresses_repair_issue(self):

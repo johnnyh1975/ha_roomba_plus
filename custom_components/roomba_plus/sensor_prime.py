@@ -1371,10 +1371,10 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
             return None
         # Same rule Classic uses -- see this class's own docstring.
         if (status.cycle or "none") == "none" and (status.phase or "") in ("charge", "stop", "idle", ""):
-            return "None"
+            return None
         code = status.error or 0
         if code == 0:
-            return "None"
+            return None
         return f"Error {code}"
 
     @property

@@ -130,12 +130,12 @@ def recent_pause_reasons(entity: "IRobotEntity") -> list[int]:
     return outer or nested
 
 
-def _error_value(entity: "IRobotEntity") -> str:
+def _error_value(entity: "IRobotEntity") -> str | None:
     """Error label — suppressed when the robot is docked/idle after a mission.
 
     cleanMissionStatus.error persists across missions: the firmware does not
     reset it to 0 when the robot docks after a failure. Showing the stale error
-    while the robot charges would be misleading, so we return "None" whenever
+    while the robot charges would be misleading, so we return None whenever
     cycle is "none" (no active or queued mission) and phase indicates rest.
     """
     status = entity.clean_mission_status
@@ -145,9 +145,10 @@ def _error_value(entity: "IRobotEntity") -> str:
 
     # No active mission and robot is resting — suppress stale error.
     if cycle == "none" and phase in ("charge", "stop", "idle", ""):
-        return "None"
+        return None
 
-    return ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or "None")
+    label = ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or None)
+    return label if label and label != "None" else None
 
 
 #: How long a robot may go quiet before the status says so rather than
@@ -494,8 +495,16 @@ def _presence_utilisation(entity: "IRobotEntity", days: int) -> StateType:
     opportunities = _presence_opportunities(entity, days) or 0
     if opportunities == 0:
         return 0.0
-    used = sum(1 for w in windows if w.resulted_in_clean)
-    return round(used / opportunities * 100, 1)
+    recent = store.query(30, result="completed")
+    avg_duration = (
+        sum(r["duration_min"] for r in recent) / len(recent)
+        if recent else 45
+    )
+    used = sum(
+        1 for w in windows
+        if w.duration_min >= avg_duration and w.resulted_in_clean
+    )
+    return round(min(used / opportunities * 100, 100.0), 1)
 
 
 def _next_likely_clean_window(entity: "IRobotEntity") -> StateType | datetime.datetime:
@@ -1209,6 +1218,10 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
     Cycle count is also chemistry-aware: uses nNimhChrg when NiMH is detected
     (nNimhChrg > 0), nLithChrg otherwise — important when the user has replaced
     the OEM Li-ion pack with NiMH aftermarket (nLithChrg stays at the OEM count).
+
+    Clamped to a persisted high-water mark: estCap/cycle-count can shift
+    downward between polls, which would otherwise violate this sensor's
+    declared TOTAL_INCREASING state_class.
     """
     actual_mah = _estcap_to_mah(entity)
     if actual_mah is None:
@@ -1222,7 +1235,17 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
         return None
     profile = entity._config_entry.runtime_data.robot_profile
     voltage = profile.battery_voltage if profile is not None else 14.8
-    return round(actual_mah * voltage * int(cycles) / 1_000_000, 3)
+    raw_kwh = round(actual_mah * voltage * int(cycles) / 1_000_000, 3)
+
+    rps = getattr(entity._config_entry.runtime_data, "robot_profile_store", None)
+    if rps is None:
+        return raw_kwh
+    # value_fn stays side-effect-free: the high-water mark is advanced at
+    # mission end (callbacks._async_update_robot_profile_store), never on
+    # a sensor read. Reading the stored floor keeps the TOTAL_INCREASING
+    # contract across HA restarts.
+    stored_floor = cast(float, rps.lifetime_energy_kwh_high_water)
+    return max(raw_kwh, stored_floor)
 
 
 def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:

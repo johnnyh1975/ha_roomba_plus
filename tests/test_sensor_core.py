@@ -57,6 +57,14 @@ class TestAreaSensorsCanBeConverted:
 
         assert len(found) >= 2
 
+    def test_total_cleaned_area_declares_total_increasing(self):
+        from homeassistant.components.sensor import SensorStateClass
+
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        desc = next(d for d in SENSORS if d.key == "total_cleaned_area")
+        assert desc.state_class == SensorStateClass.TOTAL_INCREASING
+
 
 class TestCountsAreNotMeasurements:
     """@chairstacker's graph showed `9.89725` for `clean_streak` — a
@@ -599,6 +607,33 @@ class TestClassicStatusReportsTheSameTwoStates:
         assert self._status(
             "run", cycle="clean", last_ts=time.time() - 300
         ) == "running"
+
+
+class TestErrorValueReturnsRealNone:
+    """HA renders the literal string "None" as a displayed state instead of
+    the entity going unavailable/unknown — _error_value must return the
+    Python object None, never the string "None".
+    """
+
+    @staticmethod
+    def _error(cycle, phase, error=0, error_message=None):
+        from custom_components.roomba_plus.sensor_helpers import _error_value
+
+        entity = MagicMock()
+        entity.clean_mission_status = {"cycle": cycle, "phase": phase, "error": error}
+        entity.vacuum.error_message = error_message
+        return _error_value(entity)
+
+    def test_suppressed_stale_error_is_none(self):
+        result = self._error("none", "charge", error=17)
+        assert result is None
+        assert result != "None"
+
+    def test_no_error_fallback_is_none(self):
+        result = self._error("clean", "run", error=0, error_message=None)
+        assert result is None
+        assert result != "None"
+
 class _FakeEntity:
     def __init__(self, vacuum_state=None, clean_mission_status=None):
         self.vacuum_state = vacuum_state or {}

@@ -478,6 +478,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.AREA,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=0,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         # v2.9.0 (J) — same AREA-ZERO-FIX family as v2.8.2's
         # mission.get("sqft") or None fix in callbacks.py: confirmed on the
@@ -1113,7 +1114,18 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
-            e, lambda s: len(s.query(30, result="completed"))
+            e,
+            lambda s: len(
+                {
+                    base
+                    for r in s.query(30, result="completed")
+                    if (base := s.base_mission_id(r.get("id")))
+                }
+            )
+            + sum(
+                1 for r in s.query(30, result="completed")
+                if not s.base_mission_id(r.get("id"))
+            ),
         ),
     ),
     RoombaSensorDescription(
@@ -1651,8 +1663,6 @@ _MISSION_STORE_SENSORS: frozenset[str] = frozenset({
     "stuck_count_30d", "problem_zone",
     "last_error_code", "last_error_at", "last_error_zone",
 })
-
-
 
 class RoombaSensor(IRobotEntity, SensorEntity):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
