@@ -310,6 +310,11 @@ class RobotProfileStore:
     lifetime_sqft_last_value: float | None = None
     lifetime_sqft_last_changed_at: str | None = None
 
+    # F12e — floor for total_energy_consumed (TOTAL_INCREASING contract):
+    # estCap/cycle-count can shift downward between polls, so the raw
+    # computed kWh alone isn't safe to report directly.
+    lifetime_energy_kwh_high_water: float = 0.0
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -403,6 +408,8 @@ class RobotProfileStore:
             lsv = data.get("lifetime_sqft_last_value")
             self.lifetime_sqft_last_value = float(lsv) if lsv is not None else None
             self.lifetime_sqft_last_changed_at = data.get("lifetime_sqft_last_changed_at")
+            lekw = data.get("lifetime_energy_kwh_high_water")
+            self.lifetime_energy_kwh_high_water = float(lekw) if lekw is not None else 0.0
 
             _LOGGER.debug(
                 "RobotProfileStore: loaded — rooms=%d coverage_baseline=%s",
@@ -455,6 +462,7 @@ class RobotProfileStore:
             "health_score_history": self.health_score_history,
             "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
             "lifetime_sqft_last_changed_at": self.lifetime_sqft_last_changed_at,
+            "lifetime_energy_kwh_high_water": self.lifetime_energy_kwh_high_water,
         })
 
     async def async_reset(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -491,6 +499,7 @@ class RobotProfileStore:
         self.health_score_history = []
         self.lifetime_sqft_last_value = None
         self.lifetime_sqft_last_changed_at = None
+        self.lifetime_energy_kwh_high_water = 0.0
         await self.async_save(hass, entry_id)
         _LOGGER.info("RobotProfileStore: reset for entry %s", entry_id)
 
@@ -1074,6 +1083,15 @@ class RobotProfileStore:
         self.lifetime_sqft_last_value = current_sqft
         self.lifetime_sqft_last_changed_at = dt_util.now().isoformat()
         return True
+
+    def update_energy_high_water(self, candidate_kwh: float) -> float:
+        """Floor for total_energy_consumed's TOTAL_INCREASING contract —
+        the raw kWh recomputed from estCap/cycle-count can drop between
+        polls, which would otherwise violate that state_class.
+        """
+        if candidate_kwh > self.lifetime_energy_kwh_high_water:
+            self.lifetime_energy_kwh_high_water = candidate_kwh
+        return self.lifetime_energy_kwh_high_water
 
     @property
     def lifetime_sqft_days_unchanged(self) -> float | None:

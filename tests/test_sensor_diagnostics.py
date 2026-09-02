@@ -158,6 +158,26 @@ class TestResetDiagnosticsSensor:
         })
         assert "oom_resets" not in sensor.extra_state_attributes
 
+    def test_translation_key_is_summary_noun_phrase(self):
+        """The prior key ("reset_diagnostics") resolved to an imperative-
+        looking display name for a passive counter sensor.
+        """
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        sensor = RoombaResetDiagnosticsSensor(roomba, "test_blid")
+        assert sensor.translation_key == "reset_diagnostics_summary"
+
+    def test_unique_id_and_entity_id_construction_unchanged(self):
+        """The translation_key rename affects display name only; unique_id
+        (and thus the initial entity_id) must stay byte-for-byte identical
+        so existing entity registrations are not broken.
+        """
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        sensor = RoombaResetDiagnosticsSensor(roomba, "test_blid")
+        assert sensor.unique_id == "roomba_plus_test_blid_reset_diagnostics"
+        assert sensor.suggested_object_id == "reset_diagnostics"
+
 
 def _make_health_trend_sensor(rps):
     """Return a RoombaHealthScoreTrendSensor with the given robot_profile_store

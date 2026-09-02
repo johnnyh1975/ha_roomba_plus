@@ -1001,6 +1001,68 @@ class TestGridStoreEdgeRatioCache:
         assert 300.0 in gs._edge_ratio_cache
 
 
+class TestEdgeCoverageRatioRetainedAcrossSparseMissions:
+    def test_sparse_update_retains_prior_valid_ratio(self):
+        gs = _make_grid_with_cells(100)
+        valid = gs.edge_coverage_ratio()
+        assert valid is not None
+
+        gs.update_from_mission([(0.0, 0.0)], [])
+        gs._cells = {(0, 0): 0.5}
+
+        assert gs.edge_coverage_ratio() == valid
+
+    def test_non_default_depth_does_not_use_retained_ratio(self):
+        gs = _make_grid_with_cells(300)
+        gs.edge_coverage_ratio()
+        gs._cells = {(0, 0): 0.5}
+
+        assert gs.edge_coverage_ratio(edge_depth_mm=500.0) is None
+
+    def test_fresh_valid_ratio_overwrites_retained_value(self):
+        gs = _make_grid_with_cells(100)
+        first = gs.edge_coverage_ratio()
+        gs.update_from_mission([(0.0, 0.0)], [])
+        gs._cells = {
+            (i, i): 0.5 for i in range(30)
+        }
+        second = gs.edge_coverage_ratio()
+        assert second is not None
+        assert second != first
+        gs._cells = {(0, 0): 0.5}
+        assert gs.edge_coverage_ratio() == second
+
+    @pytest.mark.asyncio
+    async def test_retained_ratio_survives_save_load_roundtrip(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        gs = _make_grid_with_cells(100)
+        valid = gs.edge_coverage_ratio()
+        gs._cells = {(0, 0): 0.5}
+        assert gs.edge_coverage_ratio() == valid
+
+        saved_data: dict = {}
+        hass = MagicMock()
+        store_mock = AsyncMock()
+
+        async def _capture_save(data):
+            saved_data.update(data)
+
+        store_mock.async_save = _capture_save
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(hass, "test_entry")
+        assert saved_data["last_valid_edge_coverage_ratio"] == valid
+
+        gs2 = GridStore()
+        store_mock.async_load = AsyncMock(return_value=saved_data)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs2.async_load(hass, "test_entry")
+
+        assert gs2._cells == {(0, 0): pytest.approx(0.5)}
+        assert gs2.edge_coverage_ratio() == valid
+
+
+
 class TestGridStoreL7Format:
     """_stuck dict uses new structured format."""
 

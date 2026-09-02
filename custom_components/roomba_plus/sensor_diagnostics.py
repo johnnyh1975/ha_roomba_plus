@@ -318,7 +318,7 @@ class RoombaResetDiagnosticsSensor(IRobotEntity, SensorEntity):
     field presence.
     """
 
-    _attr_translation_key = "reset_diagnostics"
+    _attr_translation_key = "reset_diagnostics_summary"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT

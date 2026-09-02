@@ -1019,3 +1019,34 @@ class TestCurrentRoomSaysHowItKnows:
         ).read_text(encoding="utf-8")
 
         assert '"estimate" if current_room is not None else "mission_timer"' in source
+
+
+class TestRoombaEdgeCoverageSensorRetainsLastValidRatio:
+    @staticmethod
+    def _sensor(grid_store):
+        from custom_components.roomba_plus.sensor_rooms import (
+            RoombaEdgeCoverageSensor,
+        )
+
+        sensor = object.__new__(RoombaEdgeCoverageSensor)
+        entry = _make_entry()
+        entry.runtime_data.grid_store = grid_store
+        entry.runtime_data.robot_profile_store = None
+        sensor._config_entry = entry
+        return sensor
+
+    def test_native_value_retains_ratio_while_attrs_reflect_current_grid(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+
+        gs = GridStore()
+        for gx in range(10):
+            for gy in range(10):
+                gs._cells[(gx, gy)] = 0.5
+        valid = gs.edge_coverage_ratio()
+        assert valid is not None
+
+        gs._cells = {(0, 0): 0.5}
+
+        sensor = self._sensor(gs)
+        assert sensor.native_value == valid
+        assert sensor.extra_state_attributes["total_cells"] == 1

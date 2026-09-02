@@ -896,6 +896,41 @@ class TestBothFavouritePathsFilterByRobot:
         )
 
 
+class TestInternalFavouritesAreHidden:
+    """Firmware-internal favourites like
+    `_mission_init_config_9A37307A20804F0CABE9B6011B82DDBE` are not
+    something a user created in the app and must not appear as a button
+    or in the `favorites` attribute -- the ownership filter only ever
+    checked which robot a favourite belongs to, never whether it was a
+    real one."""
+
+    def test_build_prime_favorite_buttons_excludes_internal_name(self):
+        from custom_components.roomba_plus.button_prime import (
+            build_prime_favorite_buttons,
+        )
+
+        entry = _entry([
+            _favorite("f1", "Kitchen"),
+            _favorite("f2", "_mission_init_config_ABCDEF"),
+        ])
+        buttons = build_prime_favorite_buttons(entry)
+
+        assert {b._favorite_id for b in buttons} == {"f1"}
+
+    @pytest.mark.asyncio
+    async def test_async_favorites_attribute_excludes_internal_name(self):
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        result = await async_favorites_attribute(_entry([
+            _favorite("f1", "Kitchen"),
+            _favorite("f2", "_mission_init_config_ABCDEF"),
+        ]))
+
+        assert result == [{"id": "f1", "name": "Kitchen"}]
+
+
 class TestTheSupersededPadDryButtons:
     """@chairstacker asked for the pad-dry button PAIR to be replaced by
     one switch. A switch was built beside them instead, so he ended up

@@ -13,8 +13,8 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import importlib
-
 import logging
+import re
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -32,6 +32,17 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_KEY_PREFIX = "roomba_plus_missions"
 STORAGE_VERSION = 1
 MAX_RECORDS = 365
+
+_SEGMENT_SUFFIX_RE = re.compile(r"_r\d+$")
+# Replay pulses (stale MQTT re-delivery of a terminal event) arrive within
+# seconds of the terminal record; a genuine 980/900-series multi-recharge
+# segment resume happens after minutes of charging. Mirrors callbacks.py's
+# _CLOUD_CATCHUP_MISSION_MATCH_SEC (120 s).
+_MISSION_REPLAY_MATCH_SEC = 120
+
+_TERMINAL_REPLAY_IMMUTABLE_FIELDS = frozenset({
+    "id", "started_at", "ended_at", "duration_min", "initiator", "result",
+})
 
 
 class BackfillResult(NamedTuple):
@@ -229,6 +240,70 @@ class MissionStore:
             self._record_ids.add(record["id"])
         self._trim()
 
+    def update_terminal_fields(self, mission_id: str, incoming: dict[str, Any]) -> bool:
+        """Merge a replay/enrichment pulse into mission_id's existing
+        terminal record, in place.
+
+        A same-id append with a fresh ended_at is not always a genuine
+        multi-recharge segment (see async_append above): once a record's
+        own result is already terminal, a later call for the same base id
+        is the mission replaying or self-enriching post-completion, not a
+        new segment — duration_min, initiator, started_at, ended_at, id
+        and result are exactly what a stale replay's re-derived wall-clock
+        would corrupt, so only additive fields are merged.
+
+        Returns True if a terminal record was found and merged into
+        (caller must not also call async_append); False if no record for
+        this id exists yet, the matching record's own result is not yet
+        terminal (still-completing multi-recharge segment — caller falls
+        back to the normal async_append segment logic), or the terminal
+        record's ended_at is far enough from the incoming record that
+        this is a genuine later recharge segment rather than a replay.
+        """
+        for existing in reversed(self._records):
+            if self.base_mission_id(existing.get("id")) != mission_id:
+                continue
+            if not self.is_terminal_result(existing.get("result")):
+                continue
+            if not self._is_replay_window(existing, incoming):
+                continue
+            for field, value in incoming.items():
+                if (
+                    field in _TERMINAL_REPLAY_IMMUTABLE_FIELDS
+                    or field == "npicks_delta"
+                    or value is None
+                ):
+                    continue
+                if existing.get(field) is None or (
+                    field == "zones" and not existing.get(field)
+                ):
+                    existing[field] = value
+            incoming_npicks = incoming.get("npicks_delta") or 0
+            if incoming_npicks > (existing.get("npicks_delta") or 0):
+                existing["npicks_delta"] = incoming_npicks
+            return True
+        return False
+
+    @staticmethod
+    def _is_replay_window(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+        """True when incoming is a re-delivery of existing's terminal event
+        rather than a genuine later recharge segment: a replay arrives
+        within MQTT re-delivery latency of the terminal record, while a
+        real segment resume happens after minutes of charging.
+        """
+        if not isinstance(incoming.get("ended_at"), str):
+            return False
+        if not isinstance(existing.get("ended_at"), str):
+            return False
+        existing_dt = dt_util.parse_datetime(existing["ended_at"])
+        incoming_dt = dt_util.parse_datetime(incoming["ended_at"])
+        if existing_dt is None or incoming_dt is None:
+            return False
+        return (
+            abs((incoming_dt - existing_dt).total_seconds())
+            <= _MISSION_REPLAY_MATCH_SEC
+        )
+
     def append_validated(self, record: dict[str, Any]) -> bool:
         """Append with FULL-history id dedup + MAX_RECORDS trim.
 
@@ -389,6 +464,30 @@ class MissionStore:
     ERROR_RESULTS: frozenset[str] = frozenset({
         "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
     })
+
+    @staticmethod
+    def is_terminal_result(result: Any) -> bool:
+        """True once a mission has a settled result.
+
+        Cloud import persists ``unknown`` for unrecognised but completed
+        vendor outcomes; it is settled too. Only the explicit in-progress
+        placeholder remains eligible for normal multi-segment append logic.
+        """
+        return (
+            isinstance(result, str)
+            and bool(result)
+            and result != "in_progress"
+        )
+
+    @staticmethod
+    def base_mission_id(record_id: Any) -> str:
+        """Strip a trailing multi-recharge-segment "_rN" suffix (see
+        async_append), returning the id every segment of one physical
+        mission shares.
+        """
+        if not isinstance(record_id, str):
+            return ""
+        return _SEGMENT_SUFFIX_RE.sub("", record_id)
 
     def query(
         self,
@@ -1243,10 +1342,18 @@ class MissionStore:
         return round(max(0.0, rate), 2)
 
     @staticmethod
-    def _merge_cloud_fields(local: dict[str, Any], cloud: dict[str, Any]) -> bool:
+    def _merge_cloud_fields(
+        local: dict[str, Any],
+        cloud: dict[str, Any],
+        allow_result_rewrite: bool = True,
+    ) -> bool:
         """Copy missing analytics fields from a cloud record into a local record.
 
         Only copies when the local field is absent or None — never overwrites.
+
+        allow_result_rewrite=False freezes a settled result against the
+        B1/B1-EXT corrections below — used when the local record is already
+        terminal and nothing may rewrite its identity.
 
         B1 — error 224 result correction: when the cloud record reveals
         pauseId=224 and the local result is 'stuck', correct the result to
@@ -1284,11 +1391,14 @@ class MissionStore:
         Returns True if any field was written.
         """
         wrote = False
+        already_corrected = bool(local.get("result_corrected_from_cloud"))
+        rewrite_allowed = allow_result_rewrite and not already_corrected
 
         # B1 — error 224 result correction (before generic scalar merge).
         pause_id = int(cloud.get("pauseId", 0) or 0)
-        if pause_id == 224 and local.get("result") == "stuck":
+        if rewrite_allowed and pause_id == 224 and local.get("result") == "stuck":
             local["result"] = "error"
+            local["result_corrected_from_cloud"] = True
             if local.get("error_code") is None:
                 local["error_code"] = 224
             wrote = True
@@ -1298,14 +1408,16 @@ class MissionStore:
         done_raw = (cloud.get("done_raw") or "").strip()
         local_result = local.get("result")
 
-        if done == "bat" and local_result in ("completed", "stuck_and_resumed"):
+        if rewrite_allowed and done == "bat" and local_result in ("completed", "stuck_and_resumed"):
             local["result"] = "error"
+            local["result_corrected_from_cloud"] = True
             if local.get("error_code") is None and pause_id > 0:
                 local["error_code"] = pause_id
             wrote = True
 
-        elif done_raw == "usrEnd" and local_result in ("completed", "stuck_and_resumed"):
+        elif rewrite_allowed and done_raw == "usrEnd" and local_result in ("completed", "stuck_and_resumed"):
             local["result"] = "cancelled"
+            local["result_corrected_from_cloud"] = True
             wrote = True
 
         for field in _CLOUD_MERGE_SCALAR:
@@ -1667,6 +1779,16 @@ class MissionStore:
                 delta_start = float("inf")
 
             # Always merge analytics fields regardless of timestamp delta.
+            # A settled result is frozen: the B1/B1-EXT corrections may only
+            # apply to records that are not yet terminal (see
+            # update_terminal_fields' freeze contract).
+            # Result corrections (B1/B1-EXT) are EXEMPT from the terminal
+            # freeze by design: the local MQTT classification is provably
+            # wrong (battery death / user cancel / 224-abort) and the cloud
+            # is the first authoritative truth — a correction applies once
+            # per record. The freeze protects timing/identity fields below;
+            # _merge_cloud_fields' result_corrected_from_cloud marker makes
+            # repeat mutation impossible (no error<->cancelled oscillation).
             merge_wrote = self._merge_cloud_fields(local, best_cr)
 
             # area_sqft is the canonical local name; "sqft" above is the
@@ -1685,8 +1807,21 @@ class MissionStore:
             if merge_wrote or area_wrote:
                 enriched += 1
 
+            terminal = self.is_terminal_result(local.get("result"))
+            # 980/900-series firmware resets mssnStrtTm to 0 at mission end:
+            # the local record may be stuck with started_at == ended_at and
+            # duration_min == 0 forever. That degenerate signature is exactly
+            # what the cloud correction below exists for, so it stays eligible
+            # even once terminal.
+            degenerate_980 = (
+                local.get("started_at") == local.get("ended_at")
+                or not local.get("duration_min")
+            )
+
             # Only correct timestamps when they differ meaningfully (> 5 min).
             if delta_start < 300:
+                continue
+            if terminal and not degenerate_980:
                 continue
 
             new_duration = max(0, round(

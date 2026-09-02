@@ -213,6 +213,7 @@ class GridStore:
         # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
         # can coexist safely if future callers use non-default parameters.
         self._edge_ratio_cache: dict[float, float] = {}
+        self._last_valid_edge_coverage_ratio: float | None = None
         # v3.2.0 FURNITURE — rolling per-cell coverage-history bitmask
         # (bit 0 = most recent mission) + a companion age counter so a
         # freshly-tracked cell (fewer than _FURNITURE_WINDOW_BITS missions
@@ -344,6 +345,15 @@ class GridStore:
             # legitimate backfill candidate, which is the correct behaviour
             # for a robot upgrading onto this feature for the first time).
             self._last_processed_nmssn = int(data.get("last_processed_nmssn", 0) or 0)
+            last_valid_ratio = data.get("last_valid_edge_coverage_ratio")
+            self._last_valid_edge_coverage_ratio = (
+                float(last_valid_ratio)
+                if isinstance(last_valid_ratio, (int, float))
+                and not isinstance(last_valid_ratio, bool)
+                and math.isfinite(last_valid_ratio)
+                and 0.0 <= last_valid_ratio <= 1.0
+                else None
+            )
         except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
@@ -353,6 +363,7 @@ class GridStore:
             self._furniture_dismissed_at = {}
             self._structure_cells = {}
             self._last_processed_nmssn = 0
+            self._last_valid_edge_coverage_ratio = None
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
@@ -378,6 +389,7 @@ class GridStore:
                 f"{gx},{gy}": w for (gx, gy), w in self._structure_cells.items()
             },
             "last_processed_nmssn": self._last_processed_nmssn,
+            "last_valid_edge_coverage_ratio": self._last_valid_edge_coverage_ratio,
         })
 
     # ── Write ──────────────────────────────────────────────────────────────────
@@ -612,36 +624,29 @@ class GridStore:
         bounding box. A low ratio with high total coverage indicates
         the robot is over-cleaning the centre and under-covering edges.
 
-        Returns None when fewer than 10 cells exist (insufficient data), or
-        when the bounding box itself is too small for the edge/centre
-        distinction to be meaningful — v2.8.2: a robot confined to e.g. a
-        1m x 1m patch (heavily fragmented exploration, or genuinely a tiny
-        space) would otherwise have *every* cell within edge_depth_mm of
-        some side, producing a near-1.0 ratio that looks like "excellent
-        edge coverage" but is really just "there is no centre region to
-        compare against". Requiring each bbox dimension to exceed
-        4 * edge_depth_mm guarantees a real interior exists.
-        P3: result is cached by edge_depth_mm and invalidated by update_from_mission;
-        safe to call repeatedly during a mission without re-computing on every pose
-        update. Keyed by edge_depth_mm so different callers with different parameters
-        each get their own correct cached value.
+        Returns the most recently valid default-depth ratio when the current
+        grid lacks enough cells or extent for a meaningful calculation.
+        Non-default depths return None for non-computable grids.
+        Results are cached by edge_depth_mm and invalidated by
+        update_from_mission.
         """
-        # P3: return cached result when available (invalidated by update_from_mission)
         cached = self._edge_ratio_cache.get(edge_depth_mm)
         if cached is not None:
             return cached
+        last_valid = (
+            self._last_valid_edge_coverage_ratio
+            if edge_depth_mm == 300.0
+            else None
+        )
         if len(self._cells) < 10:
-            return None
+            return last_valid
         bbox = self.bounding_box_mm()
         if bbox is None:
-            return None
+            return last_valid
         x_min, x_max, y_min, y_max = bbox
-        # v2.8.2 — bbox too small for the edge/centre distinction to mean
-        # anything (see docstring). Mirrors the "insufficient data" None
-        # return above rather than caching a misleading number.
         _min_span = 4.0 * edge_depth_mm
         if (x_max - x_min) < _min_span or (y_max - y_min) < _min_span:
-            return None
+            return last_valid
         edge_count = 0
         for (gx, gy) in self._cells:
             x_mm, y_mm = _cell_to_mm(gx, gy)
@@ -654,6 +659,8 @@ class GridStore:
                 edge_count += 1
         result = round(edge_count / len(self._cells), 4)
         self._edge_ratio_cache[edge_depth_mm] = result
+        if edge_depth_mm == 300.0:
+            self._last_valid_edge_coverage_ratio = result
         return result
 
     def hotspots(

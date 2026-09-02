@@ -148,8 +148,10 @@ def _mission_checkpoint_storage_key(entry_id: str) -> str:
     return f"roomba_plus_map_checkpoint_{entry_id}"
 
 
-# v2.6.3 E — dispatcher signal fired by RoombaMapImage after GridStore update.
-# RoombaCoverageImage listens to bump image_last_updated so the frontend re-fetches.
+# Fired by RoombaMapImage._refresh_terminal_mission_images() at every
+# terminal mission, including pose-less ones GridStore never sees — the
+# only way RoombaRoomsImage (new_state_filter always False) ever learns a
+# mission ended.
 _SIGNAL_COVERAGE_UPDATED = "roomba_plus_coverage_updated_{}"
 
 
@@ -1272,6 +1274,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # resolves it (resume or salvage) — see _consume_pending_checkpoint().
         self._mission_checkpoint_mssn_strt_tm: int = 0
         self._pending_checkpoint: dict[str, Any] | None = None
+        self._last_terminal_mission_key: str | None = None
 
         # Initial timestamp so frontend knows an image exists from the start
         self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
@@ -1926,6 +1929,39 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self.schedule_update_ha_state()
 
     # ── Private helpers ───────────────────────────────────────────────────────
+    def _refresh_terminal_mission_images(self) -> None:
+        state = getattr(self, "vacuum_state", {})
+        mission_status = state.get("cleanMissionStatus") or {}
+        mssn_strt_tm = mission_status.get("mssnStrtTm") or getattr(
+            self, "_mission_checkpoint_mssn_strt_tm", 0
+        )
+        if mssn_strt_tm:
+            mission_key: str | None = f"mssnStrtTm:{mssn_strt_tm}"
+        else:
+            mission_number = (state.get("bbmssn") or {}).get("nMssn")
+            mission_start = getattr(self, "_mission_start_ts", None)
+            mission_key = (
+                f"nMssn:{mission_number}"
+                if mission_number
+                else f"started:{mission_start}" if mission_start else None
+            )
+        if (
+            mission_key is not None
+            and mission_key == getattr(self, "_last_terminal_mission_key", None)
+        ):
+            return
+        if mission_key is not None:
+            self._last_terminal_mission_key = mission_key
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._cache = None
+        if self._config_entry is not None:
+            asyncio.run_coroutine_threadsafe(
+                _async_send_coverage_signal(
+                    self.hass, self._config_entry.entry_id
+                ),
+                self.hass.loop,
+            )
+
 
     def _handle_pose(self, pose: dict[str, Any]) -> None:
         """Add pose point and signal frontend to re-fetch image.
@@ -2229,6 +2265,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._async_clear_mission_checkpoint(), loop
             )
 
+        self._refresh_terminal_mission_images()
         if not self._mission_points:
             return
 
@@ -2566,13 +2603,6 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 _LOGGER.debug(
                     "GridStore: updated from mission — %d pose pts, %d stuck pts",
                     len(self._mission_points), len(self._stuck_mission_points),
-                )
-                # v2.6.3 E — notify RoombaCoverageImage so it bumps its
-                # image_last_updated timestamp and the frontend re-fetches.
-                _eid = self._config_entry.entry_id
-                asyncio.run_coroutine_threadsafe(
-                    _async_send_coverage_signal(self.hass, _eid),
-                    loop,
                 )
 
         self._mission_points = []
@@ -3081,6 +3111,22 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         data = self._config_entry.runtime_data
         if data.umf_aligner and data.umf_aligner.room_polygons_umf:
             await self.hass.async_add_executor_job(self._render_rooms_png)
+
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+        @callback
+        def _on_mission_images_updated() -> None:
+            self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+            self._cache = None
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                _SIGNAL_COVERAGE_UPDATED.format(self._config_entry.entry_id),
+                _on_mission_images_updated,
+            )
+        )
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return False  # Cloud entity — no MQTT updates

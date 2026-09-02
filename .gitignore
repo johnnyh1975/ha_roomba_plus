@@ -1,0 +1,4 @@
+# Local test tooling artifacts (not part of the integration)
+.venv-test/
+__pycache__/
+*.pyc

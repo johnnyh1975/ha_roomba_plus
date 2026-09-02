@@ -638,6 +638,229 @@ class TestCoverageMapSignal:
         assert asyncio.iscoroutinefunction(_async_send_coverage_signal)
 
 
+class TestTerminalMissionImageRefresh:
+    @pytest.mark.asyncio
+    async def test_empty_terminal_refreshes_all_images_once(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import (
+            RoombaCoverageImage,
+            RoombaMapImage,
+            RoombaRoomsImage,
+            _SIGNAL_COVERAGE_UPDATED,
+        )
+        from homeassistant.util import dt as dt_util
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        entry.runtime_data.grid_store = GridStore()
+        entry.runtime_data.umf_aligner = None
+        hass = MagicMock()
+        hass.loop = MagicMock()
+        before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        listeners: dict[str, list[Any]] = {}
+
+        def connect(_hass, signal, listener):
+            listeners.setdefault(signal, []).append(listener)
+            return lambda: None
+
+        coverage = RoombaCoverageImage.__new__(RoombaCoverageImage)
+        coverage._config_entry = entry
+        coverage._grid_store = entry.runtime_data.grid_store
+        coverage._cache = b"old"
+        coverage._attr_image_last_updated = before
+        coverage.hass = hass
+        coverage.async_update_token = MagicMock()
+        coverage.async_on_remove = MagicMock()
+        coverage.async_write_ha_state = MagicMock()
+
+        rooms = RoombaRoomsImage.__new__(RoombaRoomsImage)
+        rooms._config_entry = entry
+        rooms._cache = b"old"
+        rooms._attr_image_last_updated = before
+        rooms.hass = hass
+        rooms.async_update_token = MagicMock()
+        rooms.async_on_remove = MagicMock()
+        rooms.async_write_ha_state = MagicMock()
+
+        with (
+            patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()),
+            patch(
+                "homeassistant.helpers.dispatcher.async_dispatcher_connect",
+                side_effect=connect,
+            ),
+        ):
+            await coverage.async_added_to_hass()
+            await rooms.async_added_to_hass()
+
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass
+        route._config_entry = entry
+        route._mission_points = []
+        route._mission_thetas = []
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-09-02T10:00:00+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 987654
+        route._last_terminal_mission_key = None
+        route.vacuum_state = {
+            "cleanMissionStatus": {"mssnStrtTm": 987654},
+        }
+        route._cache = b"old"
+        route._attr_image_last_updated = before
+
+        scheduled = []
+
+        def schedule(coro, _loop):
+            scheduled.append(coro)
+            return MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+            side_effect=schedule,
+        ):
+            route._handle_mission_end()
+            route._handle_mission_end()
+
+        refresh_coroutines = [
+            coro
+            for coro in scheduled
+            if coro.cr_code.co_name == "_async_send_coverage_signal"
+        ]
+        assert len(refresh_coroutines) == 1
+        signal = _SIGNAL_COVERAGE_UPDATED.format(entry.entry_id)
+
+        def send(_hass, dispatched_signal):
+            for listener in listeners[dispatched_signal]:
+                listener()
+
+        with patch(
+            "homeassistant.helpers.dispatcher.async_dispatcher_send",
+            side_effect=send,
+        ):
+            await refresh_coroutines[0]
+
+        for coro in scheduled:
+            if coro not in refresh_coroutines:
+                coro.close()
+
+        assert route._attr_image_last_updated > before
+        assert route._cache is None
+        assert coverage._attr_image_last_updated > before
+        assert coverage._cache is None
+        coverage.async_write_ha_state.assert_called_once()
+        assert rooms._attr_image_last_updated > before
+        assert rooms._cache is None
+        rooms.async_write_ha_state.assert_called_once()
+        assert len(listeners[signal]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pose_present_terminal_still_feeds_grid_and_refreshes_images(self):
+        """A mission WITH pose data must both feed GridStore (unchanged
+        live path) and fire the same terminal image-refresh signal — the
+        refresh call moved earlier in _handle_mission_end but nothing
+        after it changed."""
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import (
+            RoombaCoverageImage,
+            RoombaMapImage,
+            _SIGNAL_COVERAGE_UPDATED,
+        )
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        gs = GridStore()
+        entry.runtime_data.grid_store = gs
+        entry.runtime_data.umf_aligner = None
+        hass = MagicMock()
+        hass.loop = MagicMock()
+        before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        listeners: dict[str, list[Any]] = {}
+
+        def connect(_hass, signal, listener):
+            listeners.setdefault(signal, []).append(listener)
+            return lambda: None
+
+        coverage = RoombaCoverageImage.__new__(RoombaCoverageImage)
+        coverage._config_entry = entry
+        coverage._grid_store = gs
+        coverage._cache = b"old"
+        coverage._attr_image_last_updated = before
+        coverage.hass = hass
+        coverage.async_update_token = MagicMock()
+        coverage.async_on_remove = MagicMock()
+        coverage.async_write_ha_state = MagicMock()
+
+        with (
+            patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()),
+            patch(
+                "homeassistant.helpers.dispatcher.async_dispatcher_connect",
+                side_effect=connect,
+            ),
+        ):
+            await coverage.async_added_to_hass()
+
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass
+        route._config_entry = entry
+        route._renderer = MagicMock()
+        route._renderer._cfg.robot_diameter_mm = 300
+        route._zone_store = None
+        route._map_capability = None
+        route._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        route._mission_thetas = [0.0, 0.0]
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-09-02T10:00:00+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 987654
+        route._last_terminal_mission_key = None
+        route.vacuum_state = {
+            "cleanMissionStatus": {"mssnStrtTm": 987654},
+            "bbmssn": {"nMssn": 77},
+        }
+        route._cache = b"old"
+        route._attr_image_last_updated = before
+
+        scheduled = []
+
+        def schedule(coro, _loop):
+            scheduled.append(coro)
+            return MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+            side_effect=schedule,
+        ):
+            route._handle_mission_end()
+
+        assert gs.last_processed_nmssn == 77
+
+        refresh_coroutines = [
+            coro for coro in scheduled
+            if coro.cr_code.co_name == "_async_send_coverage_signal"
+        ]
+        assert len(refresh_coroutines) == 1
+        signal = _SIGNAL_COVERAGE_UPDATED.format(entry.entry_id)
+
+        def send(_hass, dispatched_signal):
+            for listener in listeners[dispatched_signal]:
+                listener()
+
+        with patch(
+            "homeassistant.helpers.dispatcher.async_dispatcher_send",
+            side_effect=send,
+        ):
+            await refresh_coroutines[0]
+
+        for coro in scheduled:
+            if coro not in refresh_coroutines:
+                coro.close()
+
+        assert route._attr_image_last_updated > before
+        assert coverage._attr_image_last_updated > before
+        assert coverage._cache is None
+        coverage.async_write_ha_state.assert_called_once()
+
+
 class TestXvmcCoords:
     """rooms.outline and x/y must be in vacuum mm, not image pixels."""
 

@@ -644,17 +644,17 @@ class TestPrimeErrorSensor:
         from a finished mission, robot back on the dock."""
         sensor = self._entity(cycle="none", phase="charge", error=671)
 
-        assert sensor.native_value == "None"
+        assert sensor.native_value is None
 
     def test_suppresses_stale_error_when_idle_too(self):
         sensor = self._entity(cycle="none", phase="idle", error=671)
 
-        assert sensor.native_value == "None"
+        assert sensor.native_value is None
 
     def test_no_error_during_a_mission_reports_none_label(self):
         sensor = self._entity(cycle="clean", phase="run", error=0)
 
-        assert sensor.native_value == "None"
+        assert sensor.native_value is None
 
     def test_exposes_readiness_fields_as_attributes(self):
         """A readiness-based START REFUSAL leaves `error` at 0 and puts

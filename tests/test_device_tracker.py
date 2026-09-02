@@ -80,6 +80,60 @@ class TestLocationNameNullRegression:
         assert tracker.state == "Docked"
 
 
+class TestLocaleLabelsCoverAllShippedTranslations:
+    """de/en were the only tables filled in; the other six shipped
+    locales (es/fr/it/nl/pl/pt) silently fell back to English state
+    text regardless of the user's Home Assistant language."""
+
+    def test_docked_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="charge")
+        assert tracker.state == "Zadokowany"
+
+    def test_stuck_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="stuck")
+        assert tracker.state == "Utknął"
+
+    def test_error_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="stop", error=1010)
+        assert tracker.state == "Błąd"
+
+    def test_active_fallback_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="run")
+        assert tracker.state == "Sprzątanie"
+
+    def test_docked_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="charge")
+        assert tracker.state == "Acoplado"
+
+    def test_stuck_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="stuck")
+        assert tracker.state == "Atascado"
+
+    def test_error_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="stop", error=1010)
+        assert tracker.state == "Error"
+
+    def test_active_fallback_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="run")
+        assert tracker.state == "Limpiando"
+
+
 class TestLocationNameSmartTier:
     """SMART-tier robots get room-level granularity, shared with
     RoombaMissionProgress's current_room via _resolve_smart_tier_room_state."""

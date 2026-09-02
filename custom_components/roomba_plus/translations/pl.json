@@ -886,9 +886,6 @@
       "last_mission_team_id": {
         "name": "Misje – ID zespołu ostatniej misji"
       },
-      "reset_diagnostics": {
-        "name": "Resetuj diagnostykę"
-      },
       "health_score_trend": {
         "name": "Trend kondycji robota",
         "state": {
@@ -1288,6 +1285,9 @@
       },
       "last_charge": {
         "name": "Ostatnie ładowanie"
+      },
+      "reset_diagnostics_summary": {
+        "name": "Liczniki resetów diagnostycznych"
       }
     },
     "binary_sensor": {

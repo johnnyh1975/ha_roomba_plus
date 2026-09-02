@@ -64,12 +64,24 @@ PARALLEL_UPDATES = 0
 _DOCKED_LABEL: dict[str, str] = {
     "de": "Angedockt",
     "en": "Docked",
+    "es": "Acoplado",
+    "fr": "Sur la base",
+    "it": "Sulla base",
+    "nl": "Gedockt",
+    "pl": "Zadokowany",
+    "pt": "Na base",
 }
 #: Shown while the robot reports `stuck`. Its own state, not a place --
 #: which is the point: "Cleaning" was actively wrong there.
 _STUCK_LABEL: dict[str, str] = {
     "de": "Steckt fest",
     "en": "Stuck",
+    "es": "Atascado",
+    "fr": "Coincé",
+    "it": "Bloccato",
+    "nl": "Vastgelopen",
+    "pl": "Utknął",
+    "pt": "Preso",
 }
 
 #: Shown when the robot reports an error. Not a place -- which is the
@@ -77,11 +89,23 @@ _STUCK_LABEL: dict[str, str] = {
 _ERROR_LABEL: dict[str, str] = {
     "de": "Fehler",
     "en": "Error",
+    "es": "Error",
+    "fr": "Erreur",
+    "it": "Errore",
+    "nl": "Fout",
+    "pl": "Błąd",
+    "pt": "Erro",
 }
 
 _ACTIVE_FALLBACK_LABEL: dict[str, str] = {
     "de": "Unterwegs",
     "en": "Cleaning",
+    "es": "Limpiando",
+    "fr": "Nettoyage",
+    "it": "Pulizia",
+    "nl": "Schoonmaken",
+    "pl": "Sprzątanie",
+    "pt": "Limpando",
 }
 
 

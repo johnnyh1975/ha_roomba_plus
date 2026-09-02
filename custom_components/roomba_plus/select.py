@@ -262,7 +262,8 @@ async def async_setup_entry(
                         )
                     )
         else:
-            entities.append(SmartZoneSelect(roomba, blid, config_entry))
+            smart_zone_select = SmartZoneSelect(roomba, blid, config_entry)
+            entities.append(smart_zone_select)
 
     # v1.9.0 — Braava Pad Wetness selects
     if "padWetness" in state:

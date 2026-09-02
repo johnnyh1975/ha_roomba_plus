@@ -487,8 +487,11 @@ class TestCloudHistorySensorUniqueId:
 
 
 def _rec(done="done", done_raw="done", pause_id=0, chrgs=0, evacs=0,
-         dirt=0, timestamp=1700000000, classified=None):
+         dirt=0, timestamp=None, classified=None):
     """Build a minimal raw record dict with classified_result pre-computed."""
+    if timestamp is None:
+        import datetime as _dt
+        timestamp = int(_dt.datetime.now(_dt.timezone.utc).timestamp())
     r = {
         "done":      done,
         "done_raw":  done_raw,
@@ -553,11 +556,12 @@ class TestCloudLastErrorTime:
     def test_returns_datetime_from_timestamp(self):
         import datetime
         from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        records = [_rec(done="stuck", pause_id=17, timestamp=1700000000)]
+        ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) - 3600
+        records = [_rec(done="stuck", pause_id=17, timestamp=ts)]
         result = _raw_cloud_last_error_time(records)
         assert result is not None
         assert isinstance(result, datetime.datetime)
-        assert result.year == 2023
+        assert result == datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
         assert result.tzinfo == datetime.timezone.utc
 
     def test_none_when_no_failed_missions(self):
@@ -573,13 +577,64 @@ class TestCloudLastErrorTime:
         import datetime
         from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
         # Records newest-first — first error timestamp wins
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         records = [
-            _rec(done="stuck", pause_id=17, timestamp=1700010000),
-            _rec(done="stuck", pause_id=18, timestamp=1700000000),
+            _rec(done="stuck", pause_id=17, timestamp=now - 3600),
+            _rec(done="stuck", pause_id=18, timestamp=now - 7200),
         ]
         result = _raw_cloud_last_error_time(records)
-        expected = datetime.datetime.fromtimestamp(1700010000, tz=datetime.timezone.utc)
+        expected = datetime.datetime.fromtimestamp(now - 3600, tz=datetime.timezone.utc)
         assert result == expected
+
+    def test_none_when_only_failed_record_is_older_than_30_days(self):
+        """event_counts_30d's error_time attribute must honour its own
+        30-day framing — `records` is a count-based API window, not itself
+        bounded to 30 days.
+        """
+        import datetime
+        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        stale_ts = now - 31 * 86400
+        records = [
+            _rec(done="done", timestamp=now - 3600),
+            _rec(done="stuck", pause_id=17, timestamp=stale_ts),
+        ]
+        assert _raw_cloud_last_error_time(records) is None
+
+    def test_state_code_none_when_only_failed_record_is_older_than_30_days(self):
+        """event_counts_30d's headline STATE must agree with its error_time
+        attribute: a failure older than the 30-day framing is not surfaced
+        as a code either."""
+        import datetime
+        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        stale_ts = now - 31 * 86400
+        records = [
+            _rec(done="done", timestamp=now - 3600),
+            _rec(done="stuck", pause_id=17, timestamp=stale_ts),
+        ]
+        assert _raw_cloud_last_error_code(records) is None
+
+    def test_state_code_and_attrs_recent_error_agree(self):
+        """Within the 30-day window the newest failed record drives state,
+        timestamp and attrs identically (shared selection)."""
+        import datetime
+        from custom_components.roomba_plus.sensor import (
+            _raw_cloud_last_error_attrs,
+            _raw_cloud_last_error_code,
+            _raw_cloud_last_error_time,
+        )
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        recent = now - 3600
+        records = [
+            _rec(done="done", timestamp=now - 7200),
+            _rec(done="stuck", pause_id=17, timestamp=recent),
+        ]
+        assert _raw_cloud_last_error_code(records) == 17
+        assert _raw_cloud_last_error_time(records) is not None
+        attrs = _raw_cloud_last_error_attrs(records)
+        assert attrs.get("error_code") == 17
+
 
 
 class TestCloudLastErrorAttrs:
@@ -604,6 +659,13 @@ class TestCloudLastErrorAttrs:
         records = [_rec(done="stuck", pause_id=0)]
         attrs = _raw_cloud_last_error_attrs(records)
         assert attrs.get("error_code") is None
+
+    def test_empty_when_only_failed_record_is_older_than_30_days(self):
+        import datetime
+        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_attrs
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        records = [_rec(done="stuck", pause_id=17, timestamp=now - 31 * 86400)]
+        assert _raw_cloud_last_error_attrs(records) == {}
 
 
 # ============================================================================
@@ -733,15 +795,26 @@ class TestCleaningPerformanceSensor:
 
     def test_returns_completion_rate_with_records(self):
         records = [
-            {"done": "done", "sqft": 300, "runM": 40},
-            {"done": "done", "sqft": 280, "runM": 38},
-            {"done": "hmPostMsn"},
+            {"done": "done", "classified_result": "completed", "sqft": 300, "runM": 40},
+            {"done": "done", "classified_result": "completed", "sqft": 280, "runM": 38},
+            {"done": "hmPostMsn", "classified_result": "unknown"},
         ]
         s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=records)
         val = s.native_value
         assert val is not None
         assert isinstance(val, float)
         assert 0 <= val <= 100
+
+    def test_counts_done_ok_as_completed(self):
+        """Cloud API reports some completions as done="ok" rather than "done" —
+        classify_mission_result already maps both to "completed"; the sensor
+        must use that classification, not a raw done == "done" check.
+        """
+        records = [_rec(done="ok"), _rec(done="ok"), _rec(done="hmPostMsn", classified="unknown")]
+        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=records)
+        val = s.native_value
+        assert val is not None
+        assert val == round(2 / 3 * 100, 1)
 
     def test_attributes_include_trend(self):
         # Need ≥6 records for trend to be non-unknown
