@@ -1050,3 +1050,83 @@ class TestRoombaEdgeCoverageSensorRetainsLastValidRatio:
         sensor = self._sensor(gs)
         assert sensor.native_value == valid
         assert sensor.extra_state_attributes["total_cells"] == 1
+
+
+class TestPassSettingsAreReadWhereTheyLive:
+    """@Thonno's two-pass mission got single-pass estimates.
+
+    `noAutoPasses` and `twoPass` are top-level keys of `reported` on
+    every robot we have a download from — three machines, three
+    generations, none nested inside `cleanMissionStatus`. `button.py`
+    and `room_cleaning.py` both read them from the top level; this was
+    the only place that looked inside.
+
+    The failure was silent: the lookup missed, defaults said
+    single-pass, and every two-pass mission got estimates about half the
+    size it needed. Only visible once `lastCommand` had been overwritten
+    by a later command — his said `querydock` — so it looked
+    intermittent rather than constant.
+    """
+
+    @staticmethod
+    def _passes(reported):
+        """The lookup, as the estimator performs it."""
+        cms = reported.get("cleanMissionStatus") or {}
+        src = reported if "noAutoPasses" in reported else cms
+        return src.get("noAutoPasses", True), src.get("twoPass", False)
+
+    def test_top_level_two_pass_is_seen(self):
+        """His shape: both keys beside cleanMissionStatus, not in it."""
+        reported = {
+            "noAutoPasses": True,
+            "twoPass": True,
+            "cleanMissionStatus": {"phase": "run", "cycle": "clean"},
+        }
+
+        assert self._passes(reported) == (True, True)
+
+    def test_nested_still_works(self):
+        """Kept as a fallback rather than dropped — no robot has been
+        seen carrying them there, and removing an untested lookup would
+        be a guess in the other direction."""
+        reported = {
+            "cleanMissionStatus": {"noAutoPasses": True, "twoPass": True},
+        }
+
+        assert self._passes(reported) == (True, True)
+
+    def test_neither_present_falls_back_to_defaults(self):
+        """A negative control: auto mode really does produce no estimate."""
+        assert self._passes({"cleanMissionStatus": {}}) == (True, False)
+
+
+class TestRoomNamesDoNotFlicker:
+    """@Thonno watched `last_cleaned_rooms` populate, go `unknown`, then
+    populate again — and reported it twice, the second time to correct
+    himself.
+
+    The data never left. Both attributes need a rid->name map from the
+    cloud coordinator, and on a robot with more than one map that
+    resolves to nothing while the active map is unsettled. An attribute
+    that looks like data loss gets reported as data loss.
+    """
+
+    @staticmethod
+    def _attrs(resolved, remembered):
+        """The fallback, as the vacuum entity applies it."""
+        if resolved:
+            return resolved
+        return remembered or None
+
+    def test_a_failed_lookup_keeps_the_last_value(self):
+        """What he saw go blank now holds."""
+        assert self._attrs(None, ["Cucina", "Studio"]) == ["Cucina", "Studio"]
+
+    def test_a_fresh_value_replaces_it(self):
+        """Not a permanent latch — a new mission overwrites."""
+        assert self._attrs(["Bagno"], ["Cucina"]) == ["Bagno"]
+
+    def test_nothing_ever_resolved_stays_empty(self):
+        """A negative control: no invented value before the first
+        mission."""
+        assert self._attrs(None, None) is None
