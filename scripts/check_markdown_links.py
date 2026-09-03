@@ -15,20 +15,31 @@ Verifies two things per link:
      anchor rules (lowercase, strip most punctuation, each space -> one
      hyphen, un-collapsed).
 
-KNOWN LIMITATION, found and left honest rather than "fixed" with an
-unverified guess: headings containing emoji or an em-dash sometimes don't
-round-trip through this script's slugify() the way GitHub's real
-(unpublished, reverse-engineered) algorithm handles those specific
-Unicode codepoints. This was caught on this repo's own docs — several
-flagged links involve emoji-prefixed headings (docs/COMPARISON.md) or an
-em-dash (docs/FEATURES.md, docs/xiaomi-vacuum-map-card.md) where this
-script can't be fully sure GitHub agrees. Confirmed reliable for the
-common case: a missing file, or a plain-ASCII heading that was renamed
-or never existed (caught a real instance of the latter in this repo:
-docs/FEATURES.md linked to "#migration", a heading that doesn't exist in
-that file at all). When in doubt on a flagged non-ASCII heading, do a
-30-second manual click-check on the actual rendered GitHub page rather
-than trusting this script's verdict blindly.
+Verified against github-slugger 2.0.0, the widely-used reverse-engineering
+of GitHub's own unpublished anchor algorithm, rather than against a guess.
+slugify() below matches it for every heading in this repo. Two cases were
+checked explicitly because an earlier version of this docstring called
+them unreliable:
+
+  * EM-DASH headings round-trip correctly. "Path A — XVMC v2.4.1+" gives
+    "path-a--xvmc-v241" in both. The seven links that touch such headings
+    (docs/FEATURES.md, docs/TROUBLESHOOTING.md,
+    docs/xiaomi-vacuum-map-card.md) were never wrong.
+
+  * EMOJI-PREFIXED headings do NOT. GitHub strips the emoji but keeps the
+    space it leaves behind, so "## 🔌 Setup" anchors as "#-setup" with a
+    leading hyphen -- and a variation selector (U+FE0F, as in 🗺️)
+    survives the strip entirely, producing an anchor with an invisible
+    leading character. Six COMPARISON.md headings carried emoji and their
+    links were broken on the rendered page. The emoji were removed from
+    those headings rather than the links being written around the
+    artefact; the other headings in that file never had any, so it is
+    also more consistent now.
+
+The remaining unverified corner is a heading whose emoji is not at the
+start. Nothing in this repo has one. If one is added and this script
+flags it, check the rendered page before changing anything -- and change
+the heading, not this script.
 
 Exit 0 = no problems found. Exit 1 = at least one problem (see output).
 """
@@ -44,21 +55,26 @@ HEADING_PATTERN = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
 
 
 def slugify(heading: str) -> str:
+    # Mirrors github-slugger (the reverse-engineering of GitHub's own,
+    # unpublished algorithm) exactly: lowercase, drop the punctuation/
+    # symbol classes, then every remaining space becomes one hyphen.
+    #
+    # DO NOT re-trim after the substitution. An emoji-prefixed heading
+    # like "## 🔌 Setup & Prerequisites" leaves a LEADING SPACE once the
+    # emoji is gone, and GitHub turns that into a LEADING HYPHEN:
+    # "-setup--prerequisites". A trim here produces
+    # "setup--prerequisites" and is wrong.
+    #
+    # That trim was in this script, and it cost real links. Six
+    # COMPARISON.md anchors had been rewritten to match it and were
+    # broken on the rendered page for as long as the trim made this
+    # script agree with them. Verified against github-slugger 2.0.0
+    # rather than by guessing a second time. The emoji have since been
+    # removed from those headings, so no anchor in this repo depends on
+    # the leading-hyphen case any more -- but the rule stands for the
+    # next one added.
     heading = heading.strip().lower()
     heading = re.sub(r"[^\w\s-]", "", heading)
-    # TRIM AGAIN after stripping non-word characters.
-    #
-    # An emoji heading like "## 🔌 Setup & Prerequisites" leaves a
-    # LEADING SPACE once the emoji is gone, which then becomes a leading
-    # hyphen -- so this produced "-setup--prerequisites" where GitHub
-    # produces "setup--prerequisites".
-    #
-    # The symptom was misleading: the script reported the anchor as
-    # missing, and its own error message suggested verifying emoji
-    # headings by hand. Four correct links in COMPARISON.md were
-    # "fixed" to match the script before the script turned out to be
-    # the one that was wrong.
-    heading = heading.strip()
     heading = re.sub(r" ", "-", heading)
     return heading
 
@@ -106,7 +122,7 @@ def main() -> int:
                     problems.append(
                         f"{md_file.relative_to(ROOT)}: link '[{link_text}]({target})' "
                         f"-> no heading matching '#{fragment}' in {resolved.relative_to(ROOT)} "
-                        f"(if that heading has an emoji or em-dash, verify by hand — see docstring)"
+                        f"(check the rendered page before editing either side — see docstring)"
                     )
 
     if problems:

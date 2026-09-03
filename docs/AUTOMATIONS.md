@@ -388,6 +388,48 @@ https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/aut
 
 One blueprint import covers all your robots — repeat step 1 to create one automation instance per robot, each pointing at that robot's own entities.
 
+## Robot went silent (v4.0.0b4)
+
+Notifies you when the robot stops reporting — **the failure that looks
+like nothing is wrong.**
+
+A robot that goes quiet does not clear its entities. Battery keeps
+showing its last percentage, phase keeps showing its last phase, and
+none of it looks stale. One field tester's robot sat undiscovered for
+nine days that way: off its dock, dock unpowered, battery falling, while
+every entity showed a plausible value from the moment it went silent.
+
+Triggers on the status sensor reaching `no_contact`, which the
+integration sets after an hour with no message. There is no event for
+this — silence is the absence of messages, so nothing fires; the
+integration turns that absence into a state, and the blueprint watches
+it.
+
+Survives a restart: when no message has ever arrived, silence is
+measured from when the config entry came up.
+
+```text
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/robot_went_silent.yaml
+```
+
+The extra wait (default 15 minutes, on top of the integration's hour)
+covers a robot carried to another room or a router restart — gaps that
+resolve themselves. Set it to zero to be told immediately.
+
+## Exception notifications (v4.0.0b4)
+
+The opposite of the curated set: **nothing after a normal mission**, and
+a notification only when something is actually wrong.
+
+Covers stuck-and-abandoned missions, consecutive clean skips,
+performance degradation, and possible floor-accident detection. At most
+one notification per event type per day, so a robot having a bad week
+does not become a notification stream.
+
+```text
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/roomba_plus_exceptions.yaml
+```
+
 ## Three more blueprints (v3.4.3)
 
 ### Demand clean alert

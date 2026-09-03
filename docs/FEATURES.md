@@ -420,7 +420,7 @@ data:
 
 **First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate. **With cloud credentials configured this assumption is replaced by the real thing** — see cloud consumable counters below.
 
-#### Cloud-synced consumables ☁️
+#### Cloud-synced consumables
 
 > ☁️ Requires cloud credentials. Applies to whichever consumables your robot's account reports.
 

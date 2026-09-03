@@ -239,6 +239,22 @@ The error state clears automatically when the next mission completes successfull
 
 ---
 
+**Lifetime energy went backwards, or utilisation read above 100%**
+
+Fixed in v4.0.0b4. Both sensors could violate their own contracts: the
+lifetime energy figure is a `total_increasing` statistic, and one that
+decreases corrupts long-run history in a way that only shows up months
+later as a wrong-looking graph.
+
+Energy now floors at a persisted high-water mark, so a source value that
+drops no longer drags the total down with it. Utilisation is capped at
+100%.
+
+If your history already contains a dip, the statistic will pick up from
+the high-water mark rather than repairing the recorded past — Home
+Assistant's own statistics tools can adjust historical values if that
+matters to you.
+
 **Total energy consumed shows an unexpected value after upgrading to v2.5 on a Roomba 980**
 
 Expected — v2.5 corrects the energy calculation for 900-series robots. The 980/985 firmware reports a raw BMS value approximately 3.73× the actual mAh; previous versions used this raw value directly. After upgrading, the sensor shows the correct lower value and continues accumulating from that point.

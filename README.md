@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Version](https://img.shields.io/badge/Version-4.0.0b3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.0.0b4-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -85,14 +85,14 @@ deliberately not built:
 | Room rhythms, overdue-room cleaning, mission cleaning maps *(SMART + cloud)* | ✅ Shipped |
 | Cleaning schedule as HA calendar, maintenance as HA to-do list | ✅ Shipped *(v3.4.0)* |
 | Coverage analytics for pose-less lewis-firmware robots | ✅ Shipped *(v3.4.0)* |
-| Curated notification blueprints, incl. demand-clean alert, vacuum-then-mop, smart-start-on-away *(v3.4.2/v3.4.3)* | ✅ Shipped — see [Automations](docs/AUTOMATIONS.md) |
+| Six blueprints: curated notifications, demand-clean alert, vacuum-then-mop, smart-start-on-away, robot-went-silent, exception notifications *(v3.4.2 onwards)* | ✅ Shipped — see [Automations](docs/AUTOMATIONS.md) |
 | Multi-robot fleet health rollup *(v3.4.3)* | ✅ Shipped — see [API → GET /household](docs/API.md#get-household) |
 | Gentle mode switch *(v3.4.3)* | ✅ Shipped |
 | Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.4.3))* |
 | Full backup & restore (`create_backup`/`restore_backup` actions) *(v3.5.0)* | ✅ Shipped — see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.5.0) |
 | Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.5.0) |
 | Device tracker — which room the robot is in, and the matching Home Assistant **area** *(v2.9.0, areas in v4.0.0a14)* | ✅ Shipped — see [Device tracker](#device-tracker) |
-| V4/Prime support — cloud-only robots (400-series) *(v4.0.0b3)* | 🧪 Beta — see [V4/Prime support (beta)](#v4prime-support-beta) |
+| V4/Prime support — cloud-only robots (400-series) *(v4.0.0b4)* | 🧪 Beta — see [V4/Prime support (beta)](#v4prime-support-beta) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
 | Room shape / door-position export | 🔲 Backlog, not yet scheduled |
 | Voice commands ("clean the kitchen", etc.) | ❌ Evaluated, not pursued — see [Known limitations](#known-limitations) |
@@ -111,7 +111,7 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 | **s-series** | s9+ | ✅ **S9+** |
 | **j-series** | j7, j7+ | ✅ **j-series** |
 | **Braava** | m6 | ✅ **Braava jet m6** |
-| **V4/Prime** *(beta, v4.0.0b3)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
+| **V4/Prime** *(beta, v4.0.0b4)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
 
 **What works on your robot** — the fast answer to the most common setup question:
 

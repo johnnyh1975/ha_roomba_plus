@@ -68,7 +68,7 @@ does not apply to those robots at all.
 
 ---
 
-## 🔌 Setup & Prerequisites
+## Setup & Prerequisites
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
@@ -86,7 +86,7 @@ does not apply to those robots at all.
 
 ---
 
-## 📊 Sensors & Monitoring
+## Sensors & Monitoring
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
@@ -125,7 +125,7 @@ does not apply to those robots at all.
 
 ---
 
-## 🎮 Controls
+## Controls
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
@@ -155,7 +155,7 @@ does not apply to those robots at all.
 
 ---
 
-## 🗺️ Map & Rooms
+## Map & Rooms
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
@@ -181,7 +181,7 @@ does not apply to those robots at all.
 
 ---
 
-## 🧠 Intelligence & Scheduling
+## Intelligence & Scheduling
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
@@ -209,7 +209,7 @@ does not apply to those robots at all.
 
 ---
 
-## 🏆 HA Integration Quality
+## HA Integration Quality
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
