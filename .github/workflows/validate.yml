@@ -53,6 +53,15 @@ jobs:
   # (2026.8 on Python 3.14, about eighteen months ahead of the pin).
   # Verified locally: the whole suite passes on both.
   #
+  # A REAL GATE, not advisory. It carried `continue-on-error: true` while
+  # the combination was new and unproven. It no longer is: the full suite
+  # passes here (6145 passed / 4 skipped) on 2026.8.3 and, checked
+  # separately, on 2026.9.0 as well -- the same counts as the pinned
+  # 2025.1.4 job. This is also the ONLY job that runs against the HA
+  # version the field actually runs; the a38 breakage that hit every
+  # installation on HA 2026.7+ is exactly the class of failure it exists
+  # to catch, and an advisory job would have gone unread.
+  #
   # Tests only. Type checking stays on the pinned version, because the
   # `type: ignore` comments that bridge the two HA APIs are required by
   # one and redundant on the other -- mypy cannot be satisfied by both
@@ -60,7 +69,6 @@ jobs:
   test-newer-ha:
     name: Test Suite (HA 2026.8 / Python 3.14)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -74,14 +82,34 @@ jobs:
           # the only large job without a cache.
           cache: "pip"
 
+      # ONE version number, not two. Every phahc release pins Home
+      # Assistant EXACTLY (0.13.357 -> homeassistant==2026.8.3), so
+      # naming both is redundant -- and worse, naming only HA leaves the
+      # phahc version implicit: pip picks the newest release compatible
+      # with the HA pin, which silently drags pytest, pytest-asyncio and
+      # syrupy along with it. Harmless while this job was advisory; now
+      # that it gates, a new phahc release could break an unrelated PR
+      # with no change to this repo or to HA. Pinning phahc fixes both
+      # halves at once and makes an upgrade a deliberate edit.
+      #
+      # This mirrors what requirements-test-frozen.txt already does for
+      # the 3.12 side (phahc 0.13.205 / HA 2025.1.4).
+      #
+      # aiomqtt is deliberately NOT installed: roombapy 1.9.1 does not
+      # use it (that arrives with roombapy 2.0), and nothing else here
+      # imports it.
       - name: Install a recent Home Assistant and test tooling
         run: |
           python -m pip install --upgrade pip
-          pip install "homeassistant==2026.8.3" \
-                      pytest-homeassistant-custom-component \
-                      "roombapy==1.9.1" aiomqtt aiohttp pillow
+          pip install "pytest-homeassistant-custom-component==0.13.357" \
+                      "roombapy==1.9.1" aiohttp pillow
 
-      - name: Install roombapy-prime (--no-deps, same reasoning as above)
+      # Unlike the pinned-2025.1.4 jobs, --no-deps is NOT required here:
+      # phahc 0.13.357 allows paho-mqtt 2.x, so roombapy-prime's own
+      # constraint (>=2.0,<3.0) is satisfiable and `pip check` is clean.
+      # Kept anyway, so both test jobs install it identically and the
+      # roombapy-prime pin guard sees the same string in both.
+      - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
         run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
 
       - name: Run full test suite
@@ -282,16 +310,22 @@ jobs:
         with:
           python-version: "3.12"
 
-      # continue-on-error: true, deliberately — 7 of 8 currently-flagged
-      # links involve emoji/em-dash headings where this script's GitHub-
-      # anchor reimplementation isn't confidently verified (see the
-      # script's own docstring). One confirmed-real broken link (a
-      # "#migration" anchor pointing at a heading that didn't exist) was
-      # found and fixed during this same session. Recommended: manually
-      # click-check the remaining 7 against the live rendered pages, fix
-      # or accept each, then remove continue-on-error here.
+      # A REAL GATE. It ran with `continue-on-error: true` while the
+      # script's GitHub-anchor reimplementation was unverified against
+      # emoji and em-dash headings. It has since been checked against
+      # github-slugger 2.0.0 over all 245 headings in README.md and
+      # docs/*.md: zero divergence.
+      #
+      # Getting there found a real defect. The em-dash suspicion was
+      # unfounded, but six COMPARISON.md anchors WERE broken on the
+      # rendered page -- GitHub keeps the space an emoji leaves behind
+      # and turns it into a leading hyphen. A trim in slugify() had been
+      # added to make the script agree with the already-broken links,
+      # which is why this job stayed green while the docs were wrong.
+      # The emoji were removed from those headings (and from one in
+      # FEATURES.md), the trim was removed, and the two now agree by
+      # construction.
       - name: Check relative markdown links
-        continue-on-error: true
         run: python3 scripts/check_markdown_links.py
 
       # STAGE 0 GUARDS. Each was written after a real bug of its own
