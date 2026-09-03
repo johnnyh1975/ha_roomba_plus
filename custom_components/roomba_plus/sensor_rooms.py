@@ -289,11 +289,31 @@ def _compute_room_time_estimates(
         # reading the global defaults from a dict that is empty by design
         # meant every Prime estimate used the hardcoded fallbacks below,
         # not the robot's own settings.
+        # TOP LEVEL FIRST -- that is where these actually live.
+        #
+        # Every diagnostics download we have carries `noAutoPasses` and
+        # `twoPass` as top-level keys of `reported`, never inside
+        # `cleanMissionStatus`: three robots, three generations, none
+        # nested. `button.py` and `room_cleaning.py` both read them from
+        # the top level; this was the only place that did not.
+        #
+        # The effect was silent: the lookup missed, the defaults said
+        # single-pass, and every two-pass mission got estimates roughly
+        # half the size it needed -- but only once `lastCommand` had
+        # been overwritten by a later command, so it looked intermittent.
+        # @Thonno's mission had `lastCommand: querydock` by the time it
+        # mattered.
+        #
+        # cleanMissionStatus is kept as a second place to look rather
+        # than dropped: no robot has been seen carrying them there, and
+        # removing a lookup nobody has disproved would be a guess in the
+        # other direction.
         _cms = (reported.get("cleanMissionStatus") or {}) or _prime_pass_settings(
             config_entry.runtime_data
         )
-        noap = _cms.get("noAutoPasses", True)
-        two_pass = _cms.get("twoPass", False)
+        _passes = reported if "noAutoPasses" in reported else _cms
+        noap = _passes.get("noAutoPasses", True)
+        two_pass = _passes.get("twoPass", False)
         if not noap:
             pass_key = None
         elif two_pass:
@@ -618,7 +638,33 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         # The last figure is held until the next mission starts, which
         # is also the useful answer for an aborted run: whatever it had
         # reached when it stopped.
-        if phase not in ("run", "hmMidMsn", "evac"):
+        # THE GUARD IS FOR AFTER THE MISSION, NOT DURING IT.
+        #
+        # Holding the cached value whenever the phase is not one of the
+        # three active ones assumes the phase is current. On lewis it is
+        # not: that firmware sends `cleanMissionStatus` only on state
+        # changes, so between rooms the sensor reads whatever arrived
+        # last -- and if that is not `run`, the percentage freezes while
+        # elapsed_run_min and estimated_remaining_min keep moving
+        # (@Thonno: 20% held against 32.7 minutes elapsed, the two
+        # implying mission averages of 164 and 56 minutes).
+        #
+        # An active mission is known independently of the phase: the
+        # timer store holds a mission_id until the mission ends. So the
+        # cache is now only consulted once that is gone, which is the
+        # case it was built for.
+        # TERMINAL PHASES STILL COMPLETE THE MISSION. `charge` and
+        # `hmPostMsn` mean the robot went home -- that is the case this
+        # guard was built for, and the timer store can still be holding
+        # a mission_id at that moment.
+        #
+        # Everything else that is not an active phase is the lewis
+        # reporting gap, and there the cached value is wrong.
+        _terminal = phase in ("charge", "hmPostMsn", "stop", "cancelled")
+        _mission_active = mts is not None and mts.mission_id is not None
+        if _terminal or (
+            not _mission_active and phase not in ("run", "hmMidMsn", "evac")
+        ):
             # A FINISHED MISSION IS 100%, NOT WHATEVER THE CLOCK SAID.
             #
             # @chairstacker (#72 follow-up): a favourite that completed

@@ -738,9 +738,34 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             if not region_map and _data.umf_aligner and _data.umf_aligner.aligned:
                 umf_regions = _data.umf_aligner.rid_to_name()
 
+            # THE DATA NEVER LEFT; THE NAMES DID.
+            #
+            # Both attributes need a rid->name map, and that comes from
+            # the cloud coordinator via `active_pmap_id`. On a robot
+            # with more than one map, or while the cloud is between
+            # refreshes, the map resolves to nothing and both attributes
+            # went to `unknown` -- then came back minutes later.
+            #
+            # @Thonno reported it twice, the second time to correct
+            # himself when the values reappeared. That is the cost of an
+            # attribute that looks like data loss: it gets reported as
+            # one.
+            #
+            # The mission store had the rooms throughout. Keeping the
+            # last resolved value means the attribute reflects what was
+            # cleaned rather than whether a name lookup happened to
+            # succeed on this particular update.
             if region_map or umf_regions:
-                attrs["last_cleaned_rooms"] = _store.latest_cleaned_rooms(region_map, umf_regions)
-                attrs["room_coverage"]      = _store.latest_room_coverage(region_map, umf_regions)
+                _rooms = _store.latest_cleaned_rooms(region_map, umf_regions)
+                _coverage = _store.latest_room_coverage(region_map, umf_regions)
+                if _rooms:
+                    self._last_resolved_rooms = _rooms
+                    self._last_resolved_coverage = _coverage
+                attrs["last_cleaned_rooms"] = _rooms
+                attrs["room_coverage"]      = _coverage
+            elif getattr(self, "_last_resolved_rooms", None):
+                attrs["last_cleaned_rooms"] = self._last_resolved_rooms
+                attrs["room_coverage"]      = self._last_resolved_coverage
                 # planned_room_order and mission_destination: only update from
                 # MissionStore when not in an active cleaning phase. During a
                 # mission the live source (lastCommand/cmd.regions) is authoritative;

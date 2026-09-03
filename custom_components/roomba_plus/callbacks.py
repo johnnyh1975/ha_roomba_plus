@@ -342,6 +342,7 @@ async def async_record_mission(
     zones: list[str],
     start_ts: int,
     nstuck_delta: int,
+    mission_error_code: int = 0,
     recharge_min: int = 0,
     result_override: str | None = None,
     npicks_delta: int = 0,
@@ -391,7 +392,12 @@ async def async_record_mission(
         )
 
     phase = mission.get("phase", "")
-    error_code: int = mission.get("error", 0) or 0
+    # THE MISSION, NOT THE LAST FRAME. `mission.error` is whatever the
+    # end message carried; `mission_error_code` is whatever appeared at
+    # any point. An error that fires mid-drive and clears itself -- the
+    # 42 that filed a failed mission as `completed` -- is only in the
+    # second.
+    error_code: int = (mission.get("error", 0) or 0) or mission_error_code
 
     # F6c — result_override takes precedence (e.g. "blocked_timeout")
     if result_override:
@@ -711,6 +717,10 @@ def make_mission_callback(
     _last_mirrored_recharge_min: int = 0
     # F6h — stuck recovery tracking
     had_stuck_event: bool = False
+    #: Any error seen during the mission, not the one in its last
+    #: message. A code that fires and clears -- error 42 on the way to
+    #: dock, filed as `completed` -- leaves no trace in the end state.
+    mission_error_code: int = 0
     stuck_cleared_ts: float = 0.0
     # v2.6.3 A+D — True once robot enters an active cleaning phase in this mission.
     # Replaces the last_phase-in-_CLEANING_PHASES guard so that:
@@ -724,6 +734,7 @@ def make_mission_callback(
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
+        nonlocal mission_error_code
         nonlocal npicks_at_start
         nonlocal end_signal_streak, end_signal_first_ts
 
@@ -793,6 +804,7 @@ def make_mission_callback(
             last_recharge_phase_ts = 0.0
             _last_mirrored_recharge_min = 0
             had_stuck_event = False
+            mission_error_code = 0
             stuck_cleared_ts = 0.0
             _LOGGER.debug(
                 "MissionStore: mission started ts=%s nstuck_baseline=%d",
@@ -910,6 +922,11 @@ def make_mission_callback(
         # v2.6.3 A — check whenever mission is active (had_cleaning_phase=True),
         # not just during specific phases. This catches nStuck increments that
         # arrive while the robot is in the 'stuck' phase itself.
+        # Whenever it appears -- see mission_error_code above.
+        _err = mission.get("error") or 0
+        if isinstance(_err, int) and _err > 0:
+            mission_error_code = _err
+
         if had_cleaning_phase and "bbrun" in reported and not had_stuck_event:
             bbrun_now = reported["bbrun"]
             current_nstuck = bbrun_now.get("nStuck", nstuck_at_start)
@@ -1301,6 +1318,7 @@ def make_mission_callback(
                     list(current_mission_zones),
                     start_ts=mission_start_ts,
                     nstuck_delta=nstuck_delta,
+                    mission_error_code=mission_error_code,
                     recharge_min=recharge_min_accumulator + current_leg_rechrgM,  # F4e
                     result_override=result_override,         # F6h
                     npicks_delta=npicks_delta,                # v3.2.0 ANOMALY-EXPLAIN
