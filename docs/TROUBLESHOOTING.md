@@ -15,21 +15,23 @@ Download failed - Got status code 404 when trying to download
 .../releases/download/main/ha_roomba_plus.zip
 ```
 
-**Enable beta versions in HACS** — Roomba+ → ⋮ → Redownload → "Show beta
-versions" — then pick the newest `v4.0.0aNN`. That is the working install
-today.
+**Fixed by v4.0.0.** Update normally — no beta channel, no manual download.
+4.0.0 is a normal release rather than a pre-release, so it is the newest thing
+HACS can see and offer, and the fallback that produced the 404 no longer
+happens.
 
-**Why `main` fails:** with betas off HACS finds no eligible release and offers
-the default branch instead. It then looks for a release asset on a tag called
-`main`, which does not exist — so the download 404s and the wheel spins
-forever. Nothing is wrong with your setup.
+**Why `main` used to fail:** with betas off HACS found no eligible release and
+offered the default branch instead. It then looked for a release asset on a tag
+called `main`, which does not exist — so the download 404'd and the wheel spun
+forever. Nothing was wrong with your setup.
 
-**Every v4 release is a pre-release**, because v4 is in alpha. With betas off,
-HACS has nothing in the v4 line to offer.
+**Every v4 release before 4.0.0 was a pre-release**, because the whole v4 line
+ran through alphas and betas. With betas off, HACS had nothing in the v4 line
+to offer at all.
 
-**Fixed in v3.5.2**, confirmed installable from HACS's picker. If you are
-seeing this on an older checkout: v3.5.1 became unreachable, and v3.5.2 is the
-same code re-tagged so HACS can find it. Update normally.
+The rest of this section is kept because the mechanism will recur the next time
+a long pre-release series runs — and because it explains why the problem
+appeared when it did.
 
 The rest of this section explains why, because it will recur.
 
@@ -38,13 +40,14 @@ The rest of this section explains why, because it will recur.
 filters what comes back — it does not paginate. GitHub returns 30 releases per
 page by default, so HACS only ever sees the 30 most recent.
 
-There are now **37 v4 pre-releases** on top of v3.5.1. All thirty HACS sees are
-pre-releases, every one is skipped when betas are off, and it ends up with an
-empty list — hence the fallback to the default branch. With betas on you get a
-v4 alpha instead, not v3.
+By the end of the beta there were **49 v4 pre-releases** on top of v3.5.2. All
+thirty HACS saw were pre-releases, every one skipped when betas were off, and
+it ended up with an empty list — hence the fallback to the default branch.
 
 This is also why it used to work: the stable release stayed reachable until the
-**thirtieth** alpha pushed it out of the window.
+**thirtieth** alpha pushed it out of the window. And it is why publishing 4.0.0
+fixes it outright rather than merely improving it — there is a non-pre-release
+inside the window again.
 
 **Install v3.5.1 manually:** download the `ha_roomba_plus.zip` asset from the
 [v3.5.1 release](https://github.com/johnnyh1975/ha_roomba_plus/releases), unpack
@@ -508,6 +511,27 @@ Send the robot home first, or use a plain start.
 
 **A stale map version.** Rare, and the integration resolves the map
 version at send time to avoid it.
+
+**A room clean sent while the robot is PAUSED** *(v4.0.0)*. A paused
+robot refuses a region-targeted start and takes `resume` from the same
+state instantly. This is not about localisation: it was tested
+deliberately on a robot with its best localisation reading in weeks, and
+it still refused. Resume the mission first, or stop it and send the room
+clean from idle.
+
+> ⚠️ **You will get no warning for this one.** The twenty-second watcher
+> asks whether a mission started, which is only the right question when
+> none was running — a paused robot already has an open cycle before and
+> after the command, so a swallowed one looks exactly like success.
+> Detecting it needs a signature of what acceptance looks like, and no
+> accepted region start from a paused robot has ever been recorded to
+> compare against.
+
+**The robot has been ignoring everything for hours or days.** A different
+fault that looks identical from Home Assistant, and it has its own
+section: see [A Prime robot that says it is cleaning and is
+not](#a-prime-robot-that-says-it-is-cleaning-and-is-not). The tell is
+`phase` reading `stale`, and only a power cycle clears it.
 
 ## Room names are missing on a local-only install
 

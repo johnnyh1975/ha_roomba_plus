@@ -250,6 +250,13 @@ names come from a different source than room names — a room is named in
 the map's own metadata, while a zone is named by whatever the last
 command called it — so a zone you have never cleaned by name may show
 its id instead *(v4.0.0a44)*.
+
+**`Dock busy` is a third state** *(v4.0.0)*, shown while the dock empties
+the bin or washes and dries the pad. The robot is docked throughout, so
+this is not `Cleaning` — but a pad wash runs for minutes and is audible,
+so a tracker sitting on `Docked` through it would look stuck. Before
+this, that phase fell through to the active branch and the tracker read
+`Cleaning` about a robot parked in its dock.
 - One select entity per floor; multiple Smart Maps supported
 - Each saved iRobot app routine appears as a button entity
 - `clean_room` uses cloud names directly; map version changes trigger an immediate refresh
@@ -875,6 +882,13 @@ The numbers are kept here rather than translated to High/Medium/Low for two
 reasons: **the sets differ per robot series**, so the same word would mean a
 different area on different hardware, and a robot can report a value outside
 its own set — which has no position to name.
+
+> ⚠️ **The upper values are not confirmed on every dock.** At least one
+> dock appears not to accept the top of its own offered range: the value
+> is sent, acknowledged, and does not stick. The sets come from the
+> vendor's own tables, so this is more likely a per-dock limit than a
+> wrong table — but if a high value reverts on you, that is what is
+> happening, and a report naming your dock would settle it.
 
 #### Pad wetness (V4/Prime, a35)
 

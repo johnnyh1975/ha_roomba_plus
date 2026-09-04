@@ -47,6 +47,11 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "Prime-only path inside a module shared by both generations"
     ),
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
+    "sensor -> prime_coordinator": (
+        "Prime-only path inside a module shared by both generations -- the "
+        "Classic branch must not pay for the Prime coordinator's imports"
+    ),
+    "button -> prime_coordinator": "as sensor -> prime_coordinator",
     "__init__ -> button_prime": "as button -> button_prime",
     "switch -> prime_schedule_switch": "Prime-only entities",
     "calendar -> prime_room_map": (
